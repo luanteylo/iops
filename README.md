@@ -1,92 +1,92 @@
-# IO-PS
+# I/O Performance Evaluation benchmark Suite (IOPS)
+
+The I/O Performance Evaluation Suite, or IOPS, is a tool that aims to answer one and only one question: **What parameters do you need to reach the peak I/O performance of your Parallel File System (PFS)?**
+
+The true is, IOPS is not a benchmark tool (or a suite, whatever that means we only need a word starting in S to have a nice name). IOPS utilizes open-source benchmarks, like IOR, and performs a parameter search considering the following factors:
+
+- Number of compute nodes and processes performing I/O
+- Data volume
+- Access pattern
+- Striping parameters
+
+And the most important part is that it conducts this search, processes the results, generates nice graphs, and does it all automatically! No more bash scripts to perform multiple IOR experiments. No sir! Not on my watch!
+
+
+## Where Do We Stand in the Sum?
+
+You may be asking, why would I need to know this? Who cares about the parameters required to achieve maximum bandwidth for my PFS? Well, my friend, you need to know for at least three reasons:
+
+1. To fine-tune your application and extract the maximum performance from your parallel file system.
+2. To ensure that your system is delivering the expected I/O performance.
+3. To identify possible bottlenecks.
+
+
+The inspiration for IOPS came from this paper: [Attention, PDF!](https://inria.hal.science/hal-03753813/)
+
+In this paper, we conducted numerous IOR executions and discovered many interesting things about our system, including incorrect configurations that were limiting the performance of our cluster (read the paper, you'll enjoy it).
+
+But back then, we spent a lot of time writing scripts, and the automation of this process was almost non-existent. It was very error-prone, and the scripts were not portable to other machines: it was a nightmare when we tried to perform the same tests on another machine.
+
+Moreover, it was extremely time-consuming to start the tests, wait for completion, process the data, generate the graphs, and so on. Honestly, we had a postdoc who was doing all that for us, so it wasn't really a big problem because we didn't care much about him, but now he has a permanent position, so we are forced to improve his working conditions (Damn left-wing!).
+
+## Ok! I'm Convinced. How Does It Work?
+
+Well, we can't show you due to a minor detail that we forgot to tell you: it doesn't exist yet.
+
+Of course, we have the scripts from the paper, and some steps like data parsing and graph generation are already in place, but it lacks the glue that IOPS aims to be. Anyway, let me explain how it will work and the architecture behind it.
+
+In practice, to reach the maximum I/O bandwidth of an HPC platform, you need a recipe with four main elements:
+
+1. Sufficient volume in the I/O operation
+2. Enough compute nodes (and processes per node) participating in the operation
+3. A network fast enough
+4. A file system that uses enough Object Storage Targets and Object Storage Servers
+
+The equation is simple: if any of these parameters are set up in the wrong way, it will become the I/O bottleneck. Slow network? The network is the bottleneck. Too few compute nodes? The compute nodes will be the bottleneck. So, the idea is that we adjust these parameters in a way that we find the bottlenecks of the bottlenecks. 
+
+The catch is that to evaluate each of these parameters, we first need to find the right balance. For example, to determine the right number of compute nodes, we must first establish the appropriate file size, and so on.
+
+For instance, let's say we need to find the right number of compute nodes. Initially, we use a fixed number of nodes (say, 4) and plot the curve of file sizes to find the right data volume:
+
+![Find the Right Data Volume](images/findthevolume.png)
+
+Then, after we've found the plateau, we begin running tests with a fixed file size—let's say 32GB—while varying the number of computing nodes:
+
+![Find the Number of Compute Nodes](images/findthecnode.png)
+
+At this point, we observe that the maximum bandwidth in the file size test was actually limited by the number of nodes, as we achieve significantly more bandwidth with 16 nodes. This raises the question: is 32GB the right file size when using 16 nodes? The answer is: we don't know.
+
+Therefore, once we've determined the optimal number of nodes, we revisit the file size to see if the graph changes with the newly discovered optimal node count. This process repeats until we identify the ideal parameters.
+
+And that's just for two parameters! We have other variables to consider, such as the number of processes, distinct striping configurations, and file patterns. So, this search for the right parameters can be very time-consuming for you—especially if you don't have a postdoc to exploit. Furthermore, we're expending energy and using resource hours that you'd generally want to conserve for others to use as well.
+
+Consequently, IOPS can't merely be a dispatch tool. It needs to be smart, like you and me. Instead of testing all possible parameter combinations as shown in the previous graphs, IOPS will test only the strictly necessary cases. **We aim to plot a complete characterization of the file systems, showing how these parameters affect performance, while doing so both efficiently and quickly.**
+
+
+## Brainstorm
+
+This section will list a series of features, ideas, and things that we want in IOPS, so we can start thinking about its development.
+
+### It Needs to Be Modular from Day One
+
+Whether I want to add a new set of tests for another parameter or implement tests using another I/O benchmark, it should be easy to do.
+
+### It Needs to Be AC-DC
+
+- Amazingly Easy to Configure
+- Definitely Easy to Commence
+
+We should be able to go to any machine, change a couple of lines in a setup file, and deploy it immediately using the machine's job manager.
+
+### It Will Follow Good Practices of the I/O Community
+
+Tests need to be repeated temporally and spatially to minimize the effects of concurrent applications. In other words, we won't stop a cluster to run an IOPS analysis, so we'll need sufficient repetitions to ensure unbiased results.
+
+
+### It will work in Steps: Run, then process, then decide the next Test
+
+After running everything, IOPS will perform **Data Aggregation and Analysis**: It will generate graphs and evaluate the results, producing a report on the impact of each parameter on the system under evaluation.
 
 
 
-## Getting started
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.inria.fr/lgouveia/io-ps.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-- [ ] [Set up project integrations](https://gitlab.inria.fr/lgouveia/io-ps/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
