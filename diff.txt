@@ -1,0 +1,124 @@
+diff --git a/README.md b/README.md
+index 473e566..97e2e64 100644
+--- a/README.md
++++ b/README.md
+@@ -48,11 +48,11 @@ The catch is that to evaluate each of these parameters, we first need to find th
+ 
+ For instance, let's say we need to find the right number of compute nodes. Initially, we use a fixed number of nodes (say, 4) and plot the curve of file sizes to find the right data volume:
+ 
+-![Find the Right Data Volume](images/findthevolume.png)
++![Find the Right Data Volume](.images/findthevolume.png)
+ 
+ Then, after we've found the plateau, we begin running tests with a fixed file size—let's say 32GB—while varying the number of computing nodes:
+ 
+-![Find the Number of Compute Nodes](images/findthecnode.png)
++![Find the Number of Compute Nodes](.images/findthecnode.png)
+ 
+ At this point, we observe that the maximum bandwidth in the file size test was actually limited by the number of nodes, as we achieve significantly more bandwidth with 16 nodes. This raises the question: is 32GB the right file size when using 16 nodes? The answer is: we don't know.
+ 
+@@ -90,3 +90,97 @@ After running everything, IOPS will perform **Data Aggregation and Analysis**: I
+ 
+ 
+ 
++
++---
++
++## Dependencies
++
++The following packages are required to run the code:
++
++### Core Dependencies
++
++1. **IOR**: The I/O performance benchmark suite.
++    - Source code can be found [here](https://github.com/hpc/ior)
++    - Follow the installation instructions in their README or build from source.
++    - Optionally, IOPS offers an `install_ior.sh` script to simplify the installation process.
++
++2. **libopenmpi-dev**: Open MPI development libraries.
++    - **Ubuntu**: 
++        ```
++        sudo apt-get install libopenmpi-dev
++        ```
++    - **CentOS/RHEL**: 
++        ```
++        sudo yum install openmpi-devel
++        ```
++
++### Optional Dependencies
++
++1. **Conda**: For environment isolation, though not strictly necessary.
++    - Download and install from [here](https://docs.conda.io/en/latest/miniconda.html)
++
++
++## Installation
++
++This section provides a step-by-step guide for installing and setting up the project. We recommend using Conda for environment isolation. If you don't have Conda installed, you can download it from [here](https://docs.conda.io/en/latest/miniconda.html).
++
++### Steps
++
++#### 1. Clone the Repository
++
++First, clone the project repository to your local machine.
++
++```bash
++git clone https://gitlab.inria.fr/lgouveia/iops
++```
++
++#### 2. Create Conda Environment
++
++To create a new Conda environment, run the following command:
++
++```bash
++conda env create -f environment.yml
++```
++
++This will create a new Conda environment and install all the dependencies listed in the `environment.yml` file.
++
++#### 3. Activate the Environment
++
++Activate your new Conda environment with:
++
++```bash
++conda activate your_environment_name
++```
++
++Replace `your_environment_name` with the name you've given to your Conda environment in the `environment.yml` file.
++
++#### 3. Install IOR 
++
++If you haven't installed IOR yet, you can use the provided `install_ior.sh` script to do so. Before running the script, make sure to give it the necessary permissions:
++
++```bash
++chmod +x install_ior.sh
++```
++
++Note: Run it in the Conda environment so it will automatically update the $PATH variable.
++
++Then, run the script:
++
++```bash
++./install_ior.sh
++```
++
++### Verifying the Installation
++
++To verify that everything is set up correctly, you can run the following command:
++
++```bash
++iops --check_setup
++```
++
++If everything is installed correctly, you should see the expected output:
++
++```bash
++Ready to Go!
++```
++
+diff --git a/images/findthecnode.png b/images/findthecnode.png
+deleted file mode 100644
+index d73e9a3..0000000
+Binary files a/images/findthecnode.png and /dev/null differ
+diff --git a/images/findthevolume.png b/images/findthevolume.png
+deleted file mode 100644
+index 7b8d887..0000000
+Binary files a/images/findthevolume.png and /dev/null differ
