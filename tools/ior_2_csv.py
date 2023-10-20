@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-from commons.ssh.get_files import GetFiles
-
 import argparse
 import os
 from argparse import RawTextHelpFormatter
@@ -9,6 +7,8 @@ from datetime import date
 from pathlib import Path
 import csv
 import glob
+import paramiko
+from stat import S_ISDIR as isdir
 
 app_version = "2.0.0"
 app_name = "ior_2_csv"
@@ -46,6 +46,128 @@ app_description = f"""
     
     
     """
+
+# Step 1: Import dotenv
+from dotenv import load_dotenv
+
+class GetFiles:
+    """
+    A class able to connect to a server and download files using sftp
+    """
+
+    def __init__(self, host_name, remote_dir: str, local_dir: str, verbose: bool = False):
+        self.host_name = host_name
+        self.remote_dir = remote_dir
+        self.local_dir = local_dir
+        self.verbose = verbose
+
+        try:
+
+            self.client = self.__connect()
+            self.sftp = self.client.open_sftp()
+
+            # Set the cipher to use
+            self.sftp.get_channel().get_transport().get_security_options().ciphers = ['aes256-cbc']
+
+
+            if self.verbose:
+                print(f"Connected to {self.host_name}")
+        except Exception as e:
+            print(e)
+            raise
+
+    def __get_files(self, checker_function):
+        """
+        get files testing a condition defined in the checker_function
+        :param checker_function: a function that receives the file name and return True or False.
+        Used to determine if a file will be or not downloaded
+        :return:
+        """
+        # Create the local dir, if it does not exist
+        Path(self.local_dir).mkdir(parents=True, exist_ok=True)
+
+        # for each element in the remote_dir, check if it is a valid file
+        try:
+            for remote_file_name in self.sftp.listdir(self.remote_dir):
+                # check if is a file
+                if not isdir(self.sftp.stat(os.path.join(self.remote_dir, remote_file_name)).st_mode):
+                    # considers a function pass as argument
+                    if checker_function(remote_file_name):
+                        if self.verbose:
+                            print(f"Downloading file {remote_file_name}...")
+                        self.sftp.get(os.path.join(self.remote_dir, remote_file_name),
+                                      os.path.join(self.local_dir, remote_file_name))
+                    elif self.verbose:
+                        print(f"File {remote_file_name} will not be downloaded.")
+        except FileNotFoundError:
+            print("File not Found!")
+            exit(1)
+
+    def get_all_files(self):
+        """
+        download all remote files from the remote_dir
+        :return:
+        """
+        try:
+            # ALl files condition is all true
+            def checker_funtion(file_name):
+                return True
+
+            self.__get_files(checker_funtion)
+
+        except Exception as e:
+            print(e)
+            raise
+
+    def get_files_per_extension(self, exts):
+        """
+        download remote files from remote_dir considering its extension.
+        :param exts: list of file extension (ex: [.txt, .out, .bin]).
+        If extensions is empty all files will be transferred
+        :return:
+        """
+
+        # define a function that checks if file extension is in the exts list
+        def checker_funtion(file_name): return Path(file_name).suffix in exts
+
+        self.__get_files(checker_funtion)
+
+    def get_a_file(self, file):
+        """
+        download file_name from remote_dir.
+        :param file: the file that will be downloaded
+        :return:
+        """
+
+        # define a function that checks if file extension is in the exts list
+        def checker_funtion(file_name): return file_name == file
+
+        self.__get_files(checker_funtion)
+
+    def __connect(self):
+        """
+        connects to the server considering the .ssh/config file
+        :return: paramiko client
+        """
+        conf = paramiko.SSHConfig()
+        conf.parse(open(os.path.expanduser('~/.ssh/config')))
+        host = conf.lookup(self.host_name)
+
+        client = paramiko.SSHClient()
+        client.load_system_host_keys()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        # print(host)
+        client.connect(
+            host['hostname'], username=host['user'],
+            # if you have a key file
+            # key_filename=host['identityfile'],
+            # password='yourpassword',
+            sock=paramiko.ProxyCommand(host.get('proxycommand'))
+        )
+
+        return client
+
 
 
 class Loader:
@@ -236,21 +358,25 @@ def main():
 
     print(hello_msg)
 
-    # First, prepare the local and remote dir
-    local_dir = os.environ.get('WORKDIR_LOCAL')
-    remote_dir = os.environ.get('WORKDIR_REMOTE')
-    host_name = os.environ.get('HOST_REMOTE')
+    # Step 2: Load the .env file
+    load_dotenv()
+
+    # Step 3: Optionally, set default values for env vars
+    local_dir = os.environ.get('WORKDIR_LOCAL', "default_local_dir")
+    remote_dir = os.environ.get('WORKDIR_REMOTE', "default_remote_dir")
+    host_name = os.environ.get('HOST_REMOTE', "default_host_name")
+   
+    local_dir = os.path.join(local_dir, args.path)
 
     if local_dir is None or remote_dir is None or host_name is None:
-        print("Error: set env vars WORKDIR_LOCAL WORKDIR_REMOTE and HOST_REMOTE")
-        exit(1)
-
-    local_dir = os.path.join(local_dir, args.path)
+            print("Error: set env vars WORKDIR_LOCAL WORKDIR_REMOTE and HOST_REMOTE")
+            exit(1)
 
     if args.verbose:
         print(f"Local Dir: {local_dir}")
 
-    if args.get_files:
+    if args.get_files:       
+
         remote_dir = os.path.join(remote_dir, args.path)
         if args.verbose:
             print(f"Remote dir: {remote_dir}")
