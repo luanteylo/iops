@@ -47,9 +47,6 @@ app_description = f"""
     
     """
 
-# Step 1: Import dotenv
-from dotenv import load_dotenv
-
 class GetFiles:
     """
     A class able to connect to a server and download files using sftp
@@ -358,25 +355,21 @@ def main():
 
     print(hello_msg)
 
-    # Step 2: Load the .env file
-    load_dotenv()
-
-    # Step 3: Optionally, set default values for env vars
-    local_dir = os.environ.get('WORKDIR_LOCAL', "default_local_dir")
-    remote_dir = os.environ.get('WORKDIR_REMOTE', "default_remote_dir")
-    host_name = os.environ.get('HOST_REMOTE', "default_host_name")
-   
-    local_dir = os.path.join(local_dir, args.path)
+    # First, prepare the local and remote dir
+    local_dir = os.environ.get('WORKDIR_LOCAL')
+    remote_dir = os.environ.get('WORKDIR_REMOTE')
+    host_name = os.environ.get('HOST_REMOTE')
 
     if local_dir is None or remote_dir is None or host_name is None:
-            print("Error: set env vars WORKDIR_LOCAL WORKDIR_REMOTE and HOST_REMOTE")
-            exit(1)
+        print("Error: set env vars WORKDIR_LOCAL WORKDIR_REMOTE and HOST_REMOTE")
+        exit(1)
+
+    local_dir = os.path.join(local_dir, args.path)
 
     if args.verbose:
         print(f"Local Dir: {local_dir}")
 
-    if args.get_files:       
-
+    if args.get_files:
         remote_dir = os.path.join(remote_dir, args.path)
         if args.verbose:
             print(f"Remote dir: {remote_dir}")

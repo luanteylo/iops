@@ -277,28 +277,38 @@ A simple command-line client that uses Gmail to send emails. This tool is partic
 
 ### `ior_2_csv.py`
 
-Certainly, here is a description for your code that you can include in your README file:
-
----
-
-### `ior_2_csv.py`
-
 `ior_2_csv` is a Python tool designed to process and aggregate IOR benchmark results. The tool reads all IOR batch files from a specified folder and exports the extracted data to a CSV file. It provides a command-line interface with various options to customize the operation. 
 
 #### Features
 
 - **Flexible File Search**: The script accepts different file extensions and can even search by a specific filename.
 - **Remote File Fetching**: An optional `--get_files` argument allows the tool to download files from a remote host via SSH.
-
-
-
-
----
-
-Feel free to add this description to your README file for a detailed overview of what `ior_2_csv.py` does.
-
 ---
 
 
 ### `file_tracker.py`
+
+
+The `FileTracker` serves as a utility to monitor and log information about files in a specific directory. The script captures various file attributes and appends them to a CSV (Comma-Separated Values) file. It has an optional feature to delete files after tracking.
+
+#### Features
+
+- **File Tracking**: Scans all the files in the directory specified by the `--path` argument.
+- **Information Logging**: Logs the following details about each file in CSV format:  
+  - Tracker ID
+  - Timestamp
+  - File name
+  - File size
+  - Creation time (ctime)
+  - Modification time (mtime)
+  - Storage targets (specific to BeeGFS)
+- **File Deletion**: Optional feature to delete files after tracking.
+- **Verbose Mode**: Displays ongoing operations if `--verbose` flag is enabled.
+
+#### Execution Example
+
+```bash
+python file_tracker /beegfs/ior_2 --append_to ./tracker_file.csv --v
+```
+
 
