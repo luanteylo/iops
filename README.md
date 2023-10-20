@@ -193,7 +193,9 @@ These tools were previously tucked away in a very old project folder deep within
 
 Why? Because some of them will be incorporated (or at least called) by `iops.py`. Moreover, we can now justify the use of the word "suite."
 
-## `code_shooter.py`
+---
+
+### `code_shooter.py`
 
 This tool generates and writes a randomized sequence of commands in bash files. Those commands are written based on the baseline command (`base_cmd`) provided by the user. The baseline command should include a markdown (for example, `#[<name>]`) to indicate where the code should insert parameter values.
 
@@ -214,6 +216,7 @@ Example of execution:
 code_shooter.py "mpirun --mca mtl psm2 ior -w  -b #[0]m -o  /beegfs/testFile" --d '{{"#[0]":[["seq", 1, 10, 1]]}}' --verbose    
 ```
 
+---
 
 ### `hourglass.py`
 
@@ -247,11 +250,32 @@ In this example, `hourglass.py` will create a script where the command `echo "he
 For the sake of reproducibility, the sequence of commands, along with sleep intervals, is saved in an output script file (default is `./launcher.sh` unless specified otherwise).
 
 
-### `MailMe.py`
+---
+
+### `GmailMe.py`
+
+A simple command-line client that uses Gmail to send emails. This tool is particularly useful when you want to notify yourself that a test has finished. To use this script, you'll need to create an App Password for your Google account.
+
+#### How to Create a Google App Password
+
+1. **Enable Two-Step Verification**: Before you can create an App Password, Two-Step Verification must be enabled for your Google account. If you haven't done so yet, follow [this guide](https://support.google.com/accounts/answer/185839) to enable it.
+
+2. **Visit Google Account Settings**: Sign in to your Google Account and navigate to the [Google Account settings page](https://myaccount.google.com/).
+
+3. **Go to the Security Tab**: Click on the "Security" tab located on the left-hand side.
+
+4. **Locate App Passwords**: Scroll down to the "Signing in to Google" section and find "App passwords". Click on it. You might be prompted to enter your Google password at this stage.
+
+5. **Generate App Password**: 
+    - From the "Select app" dropdown menu, choose "Mail."
+    - From the "Select device" dropdown menu, select the device where you plan to run the script.
+    - Click "Generate."
+
+6. **Save Your App Password**: A 16-character password will be generated for you. Save this password in a secure location; you will need it to use the `GmailMe.py` tool.
+
+---
 
 ### `ior_2_csv.py`
-
-### `generator.py`
 
 
 ### `file_tracker.py`

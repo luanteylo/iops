@@ -6,4 +6,6 @@ dependencies:
   - matplotlib
   - numpy
   - pandas
-
+  - scipy
+  - seaborn
+  - readline
