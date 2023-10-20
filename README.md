@@ -184,3 +184,75 @@ If everything is installed correctly, you should see the expected output:
 Ready to Go!
 ```
 
+
+# The Tools Folder
+
+The `tools` folder contains several tools that were developed during the work reported in [Attention, PDF!](https://inria.hal.science/hal-03753813/). In essence, these are tools designed to perform some of the steps that will be carried out in `iops.py`. Others, like `hourglass.py` and `codeshot.py`, are useful for creating experiments.
+
+These tools were previously tucked away in a very old project folder deep within the recesses of my hard drive. I have decided to make this repository their new home from now on.
+
+Why? Because some of them will be incorporated (or at least called) by `iops.py`. Moreover, we can now justify the use of the word "suite."
+
+## `code_shooter.py`
+
+This tool generates and writes a randomized sequence of commands in bash files. Those commands are written based on the baseline command (`base_cmd`) provided by the user. The baseline command should include a markdown (for example, `#[<name>]`) to indicate where the code should insert parameter values.
+
+Users also need to pass a dictionary of operations (`dict_op`).
+
+The dictionary of operations has the following structure: `{{mkd: [[op1, ...], ..., [opn, ...]]}}`, where `mkd` is the markdown at which parameters will be included. `op1` is the first operation name, and `opn` is the nth operation. Each operation is provided in a list along with its values.
+
+Currently, the supported operations are:
+
+- `['seq', start:int, end:int, step:int]` -> generate parameters `[start ... end]` by incrementing: `start = start + step`
+- `['mul', start:int, end:int, factor:int]` -> generate parameters `[start ... end]` by multiplication: `start = start * factor`
+- `['cp', value:any, N:int]` -> copy the 'value' N times.
+- `['div', start:int, end:int, div:float]` -> generate parameters `[start ... end]` by division: `start = start / div`
+
+Example of execution:
+
+```bash
+code_shooter.py "mpirun --mca mtl psm2 ior -w  -b #[0]m -o  /beegfs/testFile" --d '{{"#[0]":[["seq", 1, 10, 1]]}}' --verbose    
+```
+
+
+### `hourglass.py`
+
+`hourglass.py` serves as a complement to `code_shooter.py`. While `code_shooter.py` is responsible for generating test commands, `hourglass.py` manages the number of repetitions of each test and introduces the concept of temporal spacing between tests. The idea is to run tests multiple times to generate statistically significant results, while avoiding executing all tests consecutively. This is essential because it's not possible to control other applications running concurrently in an HPC environment. By introducing wait times between test repetitions, the tests can cover different periods of the day.
+
+The notion of temporal spacing originates from the I/O community, which recognizes the need to repeat tests at various times throughout the day. Otherwise, the results could be biased by background applications that might be performing I/O operations at the time of the tests.
+
+
+Certainly, here's your "Usage" section updated based on the new options for `hourglass.py`:
+
+#### Usage:
+
+The user has several options for configuring the behavior of `hourglass.py`:
+
+- Provide a list of commands using `--cmd_list` or specify a file containing commands separated by new lines using `--cmd_file`.
+- Specify the number of repetitions using the `-r` or `--repeat` option.
+- Define the start (`-s` or `--start`) and end (`-e` or `--end`) of the time range within which the wait times will be randomly selected.
+- Optionally, specify the output script file name with the `-o` or `--output` option (default is `./launcher.sh`).
+- Choose the unit of time for the wait intervals with `-u` or `--unit`. Acceptable units are `hr`, `min`, and `sec`.
+- Enable email notifications at the end of the test using `-m` or `--mailMe` (Note: You must configure the email settings in `hourglass.py`).
+- For detailed output, use the verbose option `-v` or `--verbose`.
+
+For example:
+
+```bash
+hourglass.py --cmd_list 'echo "hello world"' -r 10 -s 1 -e 10 -u hr
+```
+
+In this example, `hourglass.py` will create a script where the command `echo "hello world"` will be executed 10 times. Between each execution, the tool will select a random wait time ranging from 1 to 10 hours (`hr`).
+
+For the sake of reproducibility, the sequence of commands, along with sleep intervals, is saved in an output script file (default is `./launcher.sh` unless specified otherwise).
+
+
+### `MailMe.py`
+
+### `ior_2_csv.py`
+
+### `generator.py`
+
+
+### `file_tracker.py`
+
