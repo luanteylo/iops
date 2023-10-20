@@ -1,0 +1,7 @@
+jupyter
+matplotlib
+pandas
+numpy
+scipy
+seaborn
+readline
