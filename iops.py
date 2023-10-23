@@ -5,6 +5,7 @@ from argparse import RawTextHelpFormatter
 import logging
 import subprocess
 import configparser
+from iops.setup.checkers import Checker
 
 app_version = "1.0"
 app_name = "IOPS"
@@ -29,7 +30,7 @@ app_description = f"""
     iops config.ini
 
     
-    For a complete list of options and more detailed information, visit [Project URL]
+    For a complete list of options and more detailed information, visit https://gitlab.inria.fr/lgouveia/iops
 
 
      
@@ -69,16 +70,7 @@ def configure_logging(verbose):
         logger.setLevel(logging.INFO)
 
 
-def check_setup():
-    try:
-        # Check if 'ior' binary is available
-        subprocess.run(["ior", "-h"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logging.info("Ready to Go!")
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Error: {e}")
-        logging.warning(f"If you are able to run 'ior -h' from the command line, it may actually be working.")
-    except FileNotFoundError:
-        logging.error("Error: ior binary not found. Make sure it is installed and available in $PATH.")
+
 
 def generate_ini_file(file_name='default_config.ini'):
     logging.info("Generating default configuration file...")
@@ -126,7 +118,7 @@ def main():
     configure_logging(args.verbose)
 
     if args.check_setup:
-        check_setup()
+        Checker.check_ior_installation()            
         return  # Exit after running setup checks
 
     if args.generate_ini:
