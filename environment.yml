@@ -11,3 +11,4 @@ dependencies:
   - readline
   - python-dotenv
   - paramiko
+  - rich

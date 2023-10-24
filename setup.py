@@ -18,6 +18,7 @@ setup(
         'readline>=6.2',
         'python-dotenv>=0.10',
         'paramiko>=2.7',
+        'rich',
     ],
     python_requires='>=3.8',
 )

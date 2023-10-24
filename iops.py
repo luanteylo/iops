@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-
 import argparse
 from argparse import RawTextHelpFormatter
-import logging
-import subprocess
-import configparser
 from iops.setup.checkers import Checker
+from iops.setup.generator import Generator
+from iops.setup.iops_config import IOPSConfig
+
+from rich.progress import Progress
+from rich.console import Console
+from rich.table import Table
+from rich import box
+from rich.panel import Panel
+from rich.prompt import Prompt
+import time
+
 
 app_version = "1.0"
 app_name = "IOPS"
@@ -40,74 +47,75 @@ app_description = f"""
     """
 
 
-class ColoredFormatter(logging.Formatter):
-    COLORS = {
-        'WARNING': '\033[0m \033[1;33m',
-        'INFO': '\033[0m \033[1;32m',
-        'DEBUG': '\033[0m \033[1;34m',
-        'CRITICAL': '\033[0m \033[1;41m',
-        'ERROR': '\033[0m \033[1;31m'
-    }
 
-    def format(self, record):
-        log_message = super(ColoredFormatter, self).format(record)
-        return f"{self.COLORS.get(record.levelname)}{record.levelname}\033[0m - {log_message}"
-
-def configure_logging(verbose):
-    log_format = "%(message)s"
-    
-    formatter = ColoredFormatter(log_format)
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
-
-    logger = logging.getLogger()
-    logger.addHandler(handler)
-    
-    if verbose:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
-
-
-
-
-def generate_ini_file(file_name='default_config.ini'):
-    logging.info("Generating default configuration file...")
-    config_nodes = configparser.ConfigParser()
-    config_storage = configparser.ConfigParser()
-   
-    config_nodes['nodes'] = {
-        'nodes': 'bora[1-32]',
-        'max_cpu_per_node': '32',
-        'max_processes': '64',
-    }
-
-    
-    config_storage['storage'] = {
-        'path': '/path/to/storage',
-    }
-    
-    with open(file_name, 'w') as config_file:
-        config_file.write("#This is a default configuration file for IOPS. You can edit it to suit your needs.\n")        
-        config_file.write("#Nodes configuration\n")
-        config_nodes.write(config_file)
-
-        config_file.write("#Storage configuration\n")    
-        config_storage.write(config_file)
-
-    
-    logging.info(f"Default configuration file generated as {file_name}")
+console = Console()
 
 def start_test(config_file):
-    logging.info(f"Starting test with configuration file {config_file}...")
+    # Display startup message with a panel
+    console.print(Panel(f"[bold green]Starting test with configuration file {config_file}...", 
+                        expand=False))
+
+    # Initialize and load configuration
+    config = IOPSConfig(config_file)
+    
+    # Create a table for node information
+    table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)
+    table.add_column("Setting", style="dim", width=30)
+    table.add_column("Value")
+
+    table.add_row("Nodes", str(config.nodes))
+    table.add_row("Max Nodes", str(config.max_nodes))
+    table.add_row("Max Processes Per Node", str(config.max_processes_per_node))
+
+    # Create a table for storage information
+    table.add_row("")
+    table.add_row("Storage Path", str(config.path))
+    table.add_row("Max OST", str(config.max_ost))
+    table.add_row("Default Stripe Count", str(config.default_stripe_count))
+    table.add_row("Default Stripe Size", str(config.default_stripe_size))
+    table.add_row("File System", str(config.file_system))
+
+    # Create a table for execution information
+    table.add_row("")    
+    table.add_row("Mode", str(config.mode))
+
+    # Print the tables with section headers and horizontal rules   
+    console.print(table)
+
+    # Ask for user confirmation
+    confirmed = Prompt.ask("Is this setup correct?", choices=["yes", "no"], default="yes")
+    
+    if confirmed.lower() != "yes":
+        console.print("[bold red]Aborting test due to incorrect setup.")
+        exit(1)
+    
+    console.print("\n")
+    
+
+    total_rounds = 10
+
+    with Progress() as progress:
+
+        task1 = progress.add_task("[cyan]Running tests...\n", total=total_rounds)
+        
+        for round_num in range(1, total_rounds + 1):        
+            # Update the progress bar
+            progress.update(task1, advance=1)
+            progress.print(f"[bold green]Completed Round {round_num} of {total_rounds}...\n")
+
+            # wait for some time to simulate work            
+            time.sleep(5)
+
+
+    
+
+    
     
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter, description=app_description)
 
     parser.add_argument('conf', help="full path to the .ini file", type=str, nargs='?')
-    parser.add_argument('-v', '--verbose', help="increase output verbosity", action="store_true")
     parser.add_argument('--check_setup', help="check if all dependencies are correctly installed", action="store_true")
     parser.add_argument('--generate_ini', nargs='?', const='default_config.ini', default=None,
                     help="generate a default .ini configuration file. Optionally, specify the file name and path.")
@@ -115,7 +123,7 @@ def main():
 
     args = parser.parse_args()
 
-    configure_logging(args.verbose)
+
 
     if args.check_setup:
         Checker.check_ior_installation()            
@@ -123,7 +131,8 @@ def main():
 
     if args.generate_ini:
         file_name = args.generate_ini if args.generate_ini != True else 'default_config.ini'
-        generate_ini_file(file_name)
+        Generator.generate_ini_file(file_name)
+        
         return  # Exit after generating the init file
 
     if args.conf is None:

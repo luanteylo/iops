@@ -1,2 +1,3 @@
 tools/.env
-prompt
+iops/__pycache__/*
+iops/setup/__pycache__/*
