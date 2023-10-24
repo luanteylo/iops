@@ -50,7 +50,7 @@ app_description = f"""
 
 console = Console()
 
-def start_test(config_file):
+def start_test(config_file, skip_confirmation=False):
     # Display startup message with a panel
     console.print(Panel(f"[bold green]Starting test with configuration file {config_file}...", 
                         expand=False))
@@ -82,13 +82,14 @@ def start_test(config_file):
     # Print the tables with section headers and horizontal rules   
     console.print(table)
 
-    # Ask for user confirmation
-    confirmed = Prompt.ask("Is this setup correct?", choices=["yes", "no"], default="yes")
-    
-    if confirmed.lower() != "yes":
-        console.print("[bold red]Aborting test due to incorrect setup.")
-        exit(1)
-    
+    if not skip_confirmation:
+        # Ask for user confirmation
+        confirmed = Prompt.ask("Is this setup correct?", choices=["yes", "no"], default="yes")
+        
+        if confirmed.lower() != "yes":
+            console.print("[bold red]Aborting test due to incorrect setup.")
+            exit(1)
+        
     console.print("\n")
     
 
@@ -119,6 +120,7 @@ def main():
     parser.add_argument('--check_setup', help="check if all dependencies are correctly installed", action="store_true")
     parser.add_argument('--generate_ini', nargs='?', const='default_config.ini', default=None,
                     help="generate a default .ini configuration file. Optionally, specify the file name and path.")
+    parser.add_argument('-y', '--yes', help="automatically confirm the setup", action="store_true")
 
 
     args = parser.parse_args()
@@ -139,7 +141,7 @@ def main():
         print("Error: Configuration file is required unless --check_setup or --generate_init is used.")
         return
 
-    start_test(args.conf)
+    start_test(args.conf, skip_confirmation=args.yes)
 
 
 if __name__ == "__main__":

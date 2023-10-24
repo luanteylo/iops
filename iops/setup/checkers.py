@@ -1,6 +1,8 @@
 import logging
 import subprocess
+from rich.console import Console
 
+console = Console()
 
 class Checker:
 
@@ -11,16 +13,14 @@ class Checker:
         '''
         try:
             # Check if 'ior' binary is available
-            subprocess.run(["ior", "-h"], check=True,stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            logging.info("Ready to Go!")
+            subprocess.run(["ior", "-h"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            console.print("[bold green]Ready to Go!")
             return True
         except subprocess.CalledProcessError as e:
-            logging.error(f"Error: {e}")
-            logging.warning(f"If you are able to run 'ior -h' from the command line, it may actually be working.")
-            logging.warning(f"Versions more recent of IOR return a non-zero exit code when running \
-                            'ior -h' with messing up the IOR installation check.")
+            console.print("[bold red]Error:[/bold red]", e)
+            console.print("[bold yellow]Warning:[/bold yellow] If you are able to run 'ior -h' from the command line, it may actually be working.")
+            console.print("[bold yellow]Warning:[/bold yellow] Versions more recent of IOR return a non-zero exit code when running  'ior -h' which messes up the IOR installation check.")
         except FileNotFoundError:
-            logging.error("Error: ior binary not found. Make sure it is installed and available in $PATH.")
+            console.print("[bold red]Error:[/bold red] ior binary not found. Make sure it is installed and available in $PATH.")
         
         return False
-    
