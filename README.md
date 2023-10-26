@@ -187,7 +187,7 @@ Ready to Go!
 
 # The Tools Folder
 
-The `tools` folder contains several tools that were developed during the work reported in [Attention, PDF!](https://inria.hal.science/hal-03753813/). In essence, these are tools designed to perform some of the steps that will be carried out in `iops.py`. Others, like `hourglass.py` and `codeshot.py`, are useful for creating experiments.
+The `tools` folder contains several tools that were developed during the work reported in [Attention, PDF!](https://inria.hal.science/hal-03753813/). In essence, these are tools designed to perform some of the steps that will be carried out in `iops.py`. Others, like `hourglass.py` and `code_shooter.py`, are useful for creating experiments.
 
 These tools were previously tucked away in a very old project folder deep within the recesses of my hard drive. I have decided to make this repository their new home from now on.
 
@@ -224,8 +224,6 @@ code_shooter.py "mpirun --mca mtl psm2 ior -w  -b #[0]m -o  /beegfs/testFile" --
 
 The notion of temporal spacing originates from the I/O community, which recognizes the need to repeat tests at various times throughout the day. Otherwise, the results could be biased by background applications that might be performing I/O operations at the time of the tests.
 
-
-Certainly, here's your "Usage" section updated based on the new options for `hourglass.py`:
 
 #### Usage:
 
