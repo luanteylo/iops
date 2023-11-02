@@ -11,8 +11,10 @@ from rich.table import Table
 from rich import box
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.traceback import install
+from rich.traceback import Traceback
 import time
-
+import sys
 
 app_version = "1.0"
 app_name = "IOPS"
@@ -47,16 +49,22 @@ app_description = f"""
     """
 
 
-
+install(show_locals=True)
 console = Console()
 
-def start_test(config_file, skip_confirmation=False):
+def start_test(config_file: str, skip_confirmation: bool=False) -> None:
     # Display startup message with a panel
     console.print(Panel(f"[bold green]Starting test with configuration file {config_file}...", 
                         expand=False))
 
-    # Initialize and load configuration
-    config = IOPSConfig(config_file)
+    try:
+        # Initialize and load configuration
+        config = IOPSConfig(config_file)
+    except Exception as e:
+        console.print("[bold red]Error:[/bold red] {}".format(str(e)))
+        sys.exit(1)
+
+
     
     # Create a table for node information
     table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)
@@ -93,19 +101,28 @@ def start_test(config_file, skip_confirmation=False):
     console.print("\n")
     
 
-    total_rounds = 10
+    try:
 
-    with Progress() as progress:
+        total_rounds = 10
 
-        task1 = progress.add_task("[cyan]Running tests...\n", total=total_rounds)
-        
-        for round_num in range(1, total_rounds + 1):        
-            # Update the progress bar
-            progress.update(task1, advance=1)
-            progress.print(f"[bold green]Completed Round {round_num} of {total_rounds}...\n")
+        with Progress() as progress:
 
-            # wait for some time to simulate work            
-            time.sleep(5)
+            task1 = progress.add_task("[cyan]Running tests...\n", total=total_rounds)
+            
+            for round_num in range(1, total_rounds + 1):        
+                # Update the progress bar
+                progress.update(task1, advance=1)
+                progress.print(f"[bold green]Completed Round {round_num} of {total_rounds}...\n")
+
+                # wait for some time to simulate work            
+                time.sleep(5)
+    except KeyboardInterrupt:
+        console.print("[bold red]Aborting test due to user interruption.")
+        exit(1)
+
+    except Exception as e:
+        console.print("[bold red]Error:[/bold red] {}".format(str(e)))
+        sys.exit(1)
 
 
     
@@ -127,10 +144,6 @@ def main():
 
 
 
-    if args.check_setup:
-        Checker.check_ior_installation()            
-        return  # Exit after running setup checks
-
     if args.generate_ini:
         file_name = args.generate_ini if args.generate_ini != True else 'default_config.ini'
         Generator.generate_ini_file(file_name)
@@ -138,8 +151,14 @@ def main():
         return  # Exit after generating the init file
 
     if args.conf is None:
-        print("Error: Configuration file is required unless --check_setup or --generate_init is used.")
+        console.print("[bold red]Error: Configuration file is required unless --generate_ini is used.")        
         return
+    
+
+    if args.check_setup:
+        Checker.check_ini_file(args.conf)
+        Checker.check_ior_installation()            
+        return  # Exit after running setup checks
 
     start_test(args.conf, skip_confirmation=args.yes)
 

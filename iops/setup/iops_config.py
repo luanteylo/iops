@@ -1,20 +1,40 @@
 import configparser
 import re
+import sys 
+from rich.console import Console
+from rich.traceback import Traceback
+from rich.traceback import install
+from pathlib import Path
 
-VALID_FILE_SYSTEMS = {"lustre", "beegfs"}  # Add other allowed file systems if needed
+from iops.setup.pfs import FileSystems
+
+install(show_locals=True)
+
+console = Console()
+
+
+VALID_FILE_SYSTEMS = {"lustre", "beegfs", "local"}  # Add other allowed file systems if needed
 VALID_MODES = {"fast", "complete"}  # Add other allowed modes if needed
 
 class IOPSConfig:
-    def __init__(self, config_path):
+    def __init__(self, config_path: str):
         self.config = configparser.ConfigParser()
         self.config.read(config_path)
+
+        self.errors = []
         
         self.load_nodes()
         self.load_storage()
         self.load_execution()
 
+        if self.errors:
+            for error in self.errors:
+                console.print("[bold red]Error:[/bold red] [white]{}[/white]".format(error))
+            raise Exception("Configuration file is invalid. Please fix the errors above.")
+
+
     def __get(self, section, key):
-        value = self.config.get(section, key)
+        value = self.config.get(section, key)       
         if "#" in value:
             value = value.split("#")[0].strip()
         return value
@@ -25,24 +45,56 @@ class IOPSConfig:
         self.max_nodes = int(self.__get("nodes", "max_nodes"))
         self.max_processes_per_node = int(self.__get("nodes", "max_processes_per_node"))
 
+        if len(self.nodes) != self.max_nodes:
+            self.errors.append(f"Number of nodes in nodes parameter {self.nodes} ({len(self.nodes)}) does not match max_nodes ({self.max_nodes})")
+
+        #assert len(self.nodes) == self.max_nodes, f"Number of nodes in nodes parameter {self.nodes} ({len(self.nodes)}) does not match max_nodes ({self.max_nodes})"
+        
+
     def load_storage(self):
         self.path = self.__get("storage", "path")
-        self.max_ost = int(self.__get("storage", "max_ost"))
-        self.default_stripe_count = int(self.__get("storage", "default_stripe_count"))
-        self.default_stripe_size = int(self.__get("storage", "default_stripe_size"))        
         self.file_system = self.__get("storage", "file_system")
 
-        if self.file_system not in VALID_FILE_SYSTEMS:
-            raise ValueError(f"Invalid file_system: {self.file_system}. Allowed values are {', '.join(VALID_FILE_SYSTEMS)}")
         
-    def load_execution(self):
+        self.max_ost = int(self.__get("storage", "max_ost"))
+        self.default_stripe_count = int(self.__get("storage", "default_stripe_count"))
+        self.default_stripe_size = int(self.__get("storage", "default_stripe_size"))   
+        
+        if self.file_system not in VALID_FILE_SYSTEMS:
+            self.errors.append(f"Invalid file_system: '{self.file_system}'. Allowed values are {', '.join(VALID_FILE_SYSTEMS)}.\nDid you remove the '|' character from the .ini file?")
+            return
+     
+
+        if self.file_system.lower() == "local":
+            console.print(f"[bold yellow]Warning:[/bold yellow] File system is local. Overriding max_ost ({self.max_ost}), default_stripe_count ({self.default_stripe_count}) and default_stripe_size ({self.default_stripe_size}) to 1.")            
+            self.max_ost = 1
+            self.default_stripe_count = 1
+            self.default_stripe_size = 1      
+
+        fs = FileSystems(self.file_system, self.path)
+
+        if not fs.check_mount_point():
+            self.errors.append(f"Invalid path: '{self.path}'. Path does not exist or is not a mount point.")
+            #raise Exception(f"Invalid path: '{self.path}'. Path does not exist or is not a mount point.")
+
+        ost_count = fs.get_ost_count()
+        if ost_count < self.max_ost:
+            self.errors.append(f"Invalid max_ost: '{self.max_ost}'. File system is '{self.file_system}' and has only {ost_count} OSTs.")
+            #raise Exception(f"Invalid max_ost: '{self.max_ost}'. File system is '{self.file_system}' and has only {ost_count} OSTs.")
+        
+
+        
+
+        
+    def load_execution(self):        
         self.mode = self.__get("execution", "mode")
 
         if self.mode not in VALID_MODES:
-            raise ValueError(f"Invalid mode: {self.mode}. Allowed values are {', '.join(VALID_MODES)}")
+            self.errors.append(f"Invalid mode: '{self.mode}'. Allowed values are '{', '.join(VALID_MODES)}'.\nDid you remove the '|' character from the .ini file?")
+            #raise Exception(f"Invalid mode: '{self.mode}'. Allowed values are '{', '.join(VALID_MODES)}'.\nDid you remove the '|' character from the .ini file?")
 
         
-    def parse_nodes(self, nodes_str):
+    def parse_nodes(self, nodes_str):        
         nodes_list = []
         patterns = re.findall(r"([a-zA-Z0-9]+)\[([^\]]+)\]|([a-zA-Z0-9]+)", nodes_str)
         

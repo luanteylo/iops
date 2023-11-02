@@ -22,7 +22,7 @@ class Generator:
             'max_ost': '8',
             'default_stripe_count': '4',
             'default_stripe_size': '1048576 # In bytes', 
-            'file_system': 'lustre | beegfs # Select the parallel file system',
+            'file_system': 'lustre | beegfs | local # Select the file system',
         }
 
         config_execution['execution'] = {

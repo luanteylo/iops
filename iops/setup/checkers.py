@@ -1,10 +1,34 @@
 import logging
 import subprocess
 from rich.console import Console
+from argparse import Namespace
+from iops.setup.iops_config import IOPSConfig
+from rich.traceback import Traceback
+from rich.traceback import install
+
+import sys
+
+
 
 console = Console()
 
 class Checker:
+
+    @staticmethod
+    def check_ini_file(config_path : str) -> bool:
+        '''
+        Check if the ini file is valid.
+        '''
+        console.print(f"[bold green]Checking configuration file {config_path}...[/bold green]")
+        try:
+            IOPSConfig(config_path)
+            console.print("[bold green]Configuration file is valid!")
+            return True
+        except Exception:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            console.print("[bold red]Error:[/bold red] [white]{}[/white]".format(exc_value))
+            #console.print(Traceback.from_exception(exc_type, exc_value, exc_traceback))
+            return False
 
     @staticmethod
     def check_ior_installation() -> bool:
