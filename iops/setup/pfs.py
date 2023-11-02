@@ -31,9 +31,9 @@ class FileSystems:
     
     def get_ost_count(self) -> int:
         if self.file_system.lower() == 'lustre':
-            return get_ost_count_lustre()
+            return __get_ost_count_lustre()
         elif self.file_system.lower() == 'beegfs':
-            return get_ost_count_beegfs()
+            return __get_ost_count_beegfs()
         elif self.file_system.lower() == 'local':
             return 1
         else:
