@@ -1,6 +1,11 @@
 import configparser
 import logging
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader
 
+from iops.setup.iops_config import IOPSConfig
+
+from typing import List
 
 class Generator:
     @staticmethod
@@ -23,12 +28,14 @@ class Generator:
             'default_stripe_count': '4',
             'default_stripe_size': '1048576 # In bytes', 
             'file_system': 'lustre | beegfs | local # Select the file system',
+            'max_volume':  '34359738368 # max volume size in bytes (to limit the size of the benchmarked file size)',
         }
 
         config_execution['execution'] = {
             'mode': 'fast | complete # Select the mode of execution',
             'job_manager': 'slurm | None # Specify the job manager. If "None" is provided, it will execute the benchmark locally',
-            'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no module is loaded'
+            'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no module is loaded',
+            'workdir': '/path/to/workdir # Specify the working directory, i.e., where the benchmark will be executed',
         }
 
         
@@ -46,3 +53,26 @@ class Generator:
 
         
         logging.info(f"Default configuration file generated as {file_name}")
+    
+    @staticmethod
+    def generate_slurm_script(template_path: Path, output_path: str, file_name: str, case: dict) -> None:
+        '''
+        Generates a bash script for a given case.
+        The bash script is generated using the template file in template_path and is saved in the output_path directory.
+        '''
+        # create the Jinja2 environment and load the template
+        env = Environment(loader=FileSystemLoader(str(template_path.parent)))
+        template = env.get_template(template_path.name)
+
+        # generate the script
+        bash_script = template.render(**case)
+        # write the script to a file
+        script_filename = Path(output_path, file_name)
+        with open(script_filename, 'w') as f:
+            f.write(bash_script)
+
+   
+
+        
+
+

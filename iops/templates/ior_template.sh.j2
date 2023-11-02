@@ -1,9 +1,43 @@
 #!/bin/bash
+
 #SBATCH --job-name={{ job_name }}
+{% if partition -%}
+#SBATCH --partition={{ partition }}
+{% endif -%}
+#SBATCH --ntasks={{ ntasks }}
 #SBATCH --nodes={{ nodes }}
+#SBATCH --ntasks-per-node={{ ntasks_per_node }}
 #SBATCH --time={{ time }}
+#SBATCH --chdir={{ chdir }}
+#SBATCH -o batch%j.out
+#SBATCH -e batch%j.err
+#SBATCH --exclusive 
+{% if constraint -%}
+#SBATCH --constraint {{ constraint }}
+{% endif %}
 
-module load {{ module_name }}
+
+{% if modules|length  > 0 -%}
+module purge
+{%- for module in modules %}
+module load {{ module }}
+{%- endfor %}
+{% endif %}
+
+echo "===== My JOB Information ===="
+echo "Node List:  $SLURM_NODELIST"
+echo "my jobID:  $SLURM_JOB_ID"
+echo "Partition: $SLURM_JOB_PARTITION"
+echo "submit directory:  $SLURM_SUBMIT_DIR"
+echo "submit host:  $SLURM_SUBMIT_HOST"
+echo "In the directory: $(pwd)"
+echo "As the user: $(whoami)"
+echo "============================"
+
+## PATH where IOR will write the file
+IOR_PATH={{ ior_output_path }}
+
+mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1  ior {{ior_parameter}} -o ${IOR_PATH}/testFile1.ior
 
 
-IOR {{ ior_args }}
+

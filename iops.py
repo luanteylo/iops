@@ -3,18 +3,7 @@ import argparse
 from argparse import RawTextHelpFormatter
 from iops.setup.checkers import Checker
 from iops.setup.generator import Generator
-from iops.setup.iops_config import IOPSConfig
-
-from rich.progress import Progress
-from rich.console import Console
-from rich.table import Table
-from rich import box
-from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.traceback import install
-from rich.traceback import Traceback
-import time
-import sys
+from iops.runners.run_test import TestRunner
 
 app_version = "1.0"
 app_name = "IOPS"
@@ -49,89 +38,6 @@ app_description = f"""
     """
 
 
-install(show_locals=True)
-console = Console()
-
-def start_test(config_file: str, skip_confirmation: bool=False) -> None:
-    # Display startup message with a panel
-    console.print(Panel(f"[bold green]Starting test with configuration file {config_file}...", 
-                        expand=False))
-
-    try:
-        # Initialize and load configuration
-        config = IOPSConfig(config_file)
-    except Exception as e:
-        console.print("[bold red]Error:[/bold red] {}".format(str(e)))
-        sys.exit(1)
-
-
-    
-    # Create a table for node information
-    table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)
-    table.add_column("Setting", style="dim", width=30)
-    table.add_column("Value")
-
-    table.add_row("Nodes", str(config.nodes))
-    table.add_row("Max Nodes", str(config.max_nodes))
-    table.add_row("Max Processes Per Node", str(config.max_processes_per_node))
-
-    # Create a table for storage information
-    table.add_row("")
-    table.add_row("Storage Path", str(config.path))
-    table.add_row("Max OST", str(config.max_ost))
-    table.add_row("Default Stripe Count", str(config.default_stripe_count))
-    table.add_row("Default Stripe Size", str(config.default_stripe_size))
-    table.add_row("File System", str(config.file_system))
-
-    # Create a table for execution information
-    table.add_row("")    
-    table.add_row("Mode", str(config.mode))
-    table.add_row("Job Manager", str(config.job_manager))
-    table.add_row("Modules", ", ".join(f"{module}" for module in config.modules))
-   
-    # Print the tables with section headers and horizontal rules   
-    console.print(table)
-
-    if not skip_confirmation:
-        # Ask for user confirmation
-        confirmed = Prompt.ask("Is this setup correct?", choices=["yes", "no"], default="yes")
-        
-        if confirmed.lower() != "yes":
-            console.print("[bold red]Aborting test due to incorrect setup.")
-            exit(1)
-        
-    console.print("\n")
-    
-
-    try:
-
-        total_rounds = 10
-
-        with Progress() as progress:
-
-            task1 = progress.add_task("[cyan]Running tests...\n", total=total_rounds)
-            
-            for round_num in range(1, total_rounds + 1):        
-                # Update the progress bar
-                progress.update(task1, advance=1)
-                progress.print(f"[bold green]Completed Round {round_num} of {total_rounds}...\n")
-
-                # wait for some time to simulate work            
-                time.sleep(5)
-    except KeyboardInterrupt:
-        console.print("[bold red]Aborting test due to user interruption.")
-        exit(1)
-
-    except Exception as e:
-        console.print("[bold red]Error:[/bold red] {}".format(str(e)))
-        sys.exit(1)
-
-
-    
-
-    
-    
-
 def main():
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter, description=app_description)
 
@@ -162,7 +68,8 @@ def main():
         Checker.check_ior_installation()            
         return  # Exit after running setup checks
 
-    start_test(args.conf, skip_confirmation=args.yes)
+    runner = TestRunner(args.conf, args.yes)
+    runner.run()
 
 
 if __name__ == "__main__":
