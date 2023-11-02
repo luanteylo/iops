@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+import re
 '''
 This class contains methods to check the status of parallel file systems.
 For now, only Lustre and BeeGFS are supported.
@@ -11,7 +12,7 @@ class FileSystems:
         self.file_system = file_system
         self.mount_point = mount_point
 
-    def __get_ost_count_lustre() -> int:
+    def __get_ost_count_lustre(self) -> int:
         try:
             result = subprocess.check_output(["lfs", "df", self.mount_point])
             lines = result.decode('utf-8').split('\n')
@@ -20,35 +21,38 @@ class FileSystems:
         except Exception as e:
             raise Exception(f"An error occurred: {e}. Make sure Lustre is the right file system and the mount point is correct.")
 
-    def __get_ost_count_beegfs() -> int:
+    def __get_ost_count_beegfs(self) -> int:
         try:
             result = subprocess.check_output(["beegfs-ctl", "--getentryinfo", self.mount_point])
-            lines = result.decode('utf-8').split('\n')
-            ost_count = sum('Storage targets:' in line for line in lines)
-            return ost_count
+            output = result.decode('utf-8')
+
+            # Use a regex to find the line with the number of storage targets
+            match = re.search(r"Number of storage targets: desired: (\d+)", output)
+
+            if match:
+                # Extract the first group, which is the desired number of storage targets
+                ost_count = int(match.group(1))
+                return ost_count
+            else:
+                raise Exception("Could not find the number of storage targets in the output.")
+
         except Exception as e:
             raise Exception(f"An error occurred: {e}. Make sure BeeGFS is the right file system and the mount point is correct.")
-    
+
+
     def get_ost_count(self) -> int:
         if self.file_system.lower() == 'lustre':
-            return __get_ost_count_lustre()
+            return self.__get_ost_count_lustre()
         elif self.file_system.lower() == 'beegfs':
-            return __get_ost_count_beegfs()
+            return self.__get_ost_count_beegfs()
         elif self.file_system.lower() == 'local':
             return 1
         else:
             raise Exception(f"File system {self.file_system} is not supported.")
 
 
-    def __check_path(self) -> bool:
+    def check_path(self) -> bool:
         # check if path is valid
         return Path(self.mount_point).is_dir()
     
-    def check_mount_point(self) -> bool:
-        # first, we check if path is valid
-        if not self.__check_path():
-            return False
-        # check if path is a mount point
-        # we do not check if the path is a mount point for local file system
-        if self.file_system.lower() == 'local' or Path(self.mount_point).is_mount():
-            return True
+   

@@ -1,0 +1,9 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --nodes={{ nodes }}
+#SBATCH --time={{ time }}
+
+module load {{ module_name }}
+
+
+IOR {{ ior_args }}

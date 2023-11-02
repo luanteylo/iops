@@ -27,7 +27,10 @@ class Generator:
 
         config_execution['execution'] = {
             'mode': 'fast | complete # Select the mode of execution',
+            'job_manager': 'slurm | None # Specify the job manager. If "None" is provided, it will execute the benchmark locally',
+            'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no module is loaded'
         }
+
         
         with open(file_name, 'w') as config_file:
             config_file.write("# This is a default configuration file for IOPS.\n")        

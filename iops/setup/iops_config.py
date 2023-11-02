@@ -73,8 +73,8 @@ class IOPSConfig:
 
         fs = FileSystems(self.file_system, self.path)
 
-        if not fs.check_mount_point():
-            self.errors.append(f"Invalid path: '{self.path}'. Path does not exist or is not a mount point.")
+        if not fs.check_path():
+            self.errors.append(f"Invalid path: '{self.path}'")
             #raise Exception(f"Invalid path: '{self.path}'. Path does not exist or is not a mount point.")
 
         ost_count = fs.get_ost_count()
@@ -82,17 +82,23 @@ class IOPSConfig:
             self.errors.append(f"Invalid max_ost: '{self.max_ost}'. File system is '{self.file_system}' and has only {ost_count} OSTs.")
             #raise Exception(f"Invalid max_ost: '{self.max_ost}'. File system is '{self.file_system}' and has only {ost_count} OSTs.")
         
-
-        
-
-        
     def load_execution(self):        
         self.mode = self.__get("execution", "mode")
+        self.job_manager = self.__get("execution", "job_manager")
+        modules_str = self.__get("execution", "modules")
 
         if self.mode not in VALID_MODES:
             self.errors.append(f"Invalid mode: '{self.mode}'. Allowed values are '{', '.join(VALID_MODES)}'.\nDid you remove the '|' character from the .ini file?")
             #raise Exception(f"Invalid mode: '{self.mode}'. Allowed values are '{', '.join(VALID_MODES)}'.\nDid you remove the '|' character from the .ini file?")
-
+        
+        if self.job_manager not in {"slurm", "none"}:
+            self.errors.append(f"Invalid job_manager: '{self.job_manager}'. Allowed values are 'slurm' or 'none'.")
+        
+        # Parse and load the modules
+        if modules_str.lower() == 'none':
+            self.modules = None
+        else:
+            self.modules = [module.strip() for module in modules_str.split(',')]
         
     def parse_nodes(self, nodes_str):        
         nodes_list = []

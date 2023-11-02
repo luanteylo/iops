@@ -86,7 +86,9 @@ def start_test(config_file: str, skip_confirmation: bool=False) -> None:
     # Create a table for execution information
     table.add_row("")    
     table.add_row("Mode", str(config.mode))
-
+    table.add_row("Job Manager", str(config.job_manager))
+    table.add_row("Modules", ", ".join(f"{module}" for module in config.modules))
+   
     # Print the tables with section headers and horizontal rules   
     console.print(table)
 
