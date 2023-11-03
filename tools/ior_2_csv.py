@@ -59,12 +59,29 @@ class Loader:
 
     timestamp_start = 'start'
     timestamp_end = 'end'
+    nodes_name = 'nodes'
+    tasks_name = 'tasks'
+    clients_per_node_name = 'clients_per_node'
+    blocksize_name  = 'blocksize'
+    aggregate_filesize_name  = 'aggregate_filesize'
 
     def __init__(self, files, verbose):
         self.files = files
         self.verbose = verbose
 
         self.data = self.__build_data_dictionary()
+     
+    def __convert_to_bytes(self, size_str):
+        # Define conversion factors
+        size_units = {"B": 1, "KiB": 2**10, "MiB": 2**20, "GiB": 2**30, "TiB": 2**40}
+
+        # Split input string into numeric and unit parts
+        size, unit = [x.strip() for x in size_str.split()]
+
+        # Convert the size to bytes
+        size_in_bytes = float(size) * size_units[unit]
+        
+        return int(size_in_bytes)
 
     # Aggregate data by block_size
     def __build_data_dictionary(self):
@@ -79,16 +96,33 @@ class Loader:
             finishedTime = None
             current_block = None
 
+            
+            nodes = None
+            tasks = None
+            clients_per_node = None            
+            blocksize  = None
+            aggregate_filesize  = None
+            
+
+
             with open(file) as fp:
                 second_time = False
 
                 for line in fp:
                     # Firstly we search by the 'StartTime' Tag
                     if line.startswith('StartTime'):
-
-                        startTime = " ".join(line.split()[2:])
-
-                    # Second we find the line we want to get the information
+                        startTime = "".join(line.split()[2:])                  
+                    elif line.startswith('nodes'):
+                        nodes =  "".join(line.split(':')[-1]).strip()
+                    elif line.startswith('tasks'):
+                        tasks =  "".join(line.split(':')[-1]).strip()
+                    elif line.startswith('clients per node'):
+                        clients_per_node =  "".join(line.split(':')[-1]).strip()
+                    elif line.startswith('blocksize'):
+                        blocksize =  self.__convert_to_bytes("".join(line.split(':')[-1]).strip())
+                    elif line.startswith('aggregate filesize'):
+                        aggregate_filesize = self.__convert_to_bytes("".join(line.split(':')[-1]).strip())
+                    # Then we find the line we want to get the information
                     # Since IOR already put a <TaG> on the beggining of the write line
                     # We can use it to find the line
                     elif line.startswith('write'):
@@ -125,11 +159,34 @@ class Loader:
 
                         if self.timestamp_end not in data_by_block[current_block]:
                             data_by_block[current_block][self.timestamp_end] = []
+                        
+                        if self.nodes_name not in data_by_block[current_block]:
+                            data_by_block[current_block][self.nodes_name] = []
+                        
+                        if self.tasks_name not in data_by_block[current_block]:
+                            data_by_block[current_block][self.tasks_name] = []
+                        
+                        if self.clients_per_node_name not in data_by_block[current_block]:
+                            data_by_block[current_block][self.clients_per_node_name] = []
+
+                        if self.blocksize_name not in data_by_block[current_block]:
+                            data_by_block[current_block][self.blocksize_name] = []
+                        
+                        if self.aggregate_filesize_name not in data_by_block[current_block]:
+                            data_by_block[current_block][self.aggregate_filesize_name] = []
 
                         data_by_block[current_block][self.timestamp_start].append(startTime)
                         data_by_block[current_block][self.timestamp_end].append(finishedTime)
+                        data_by_block[current_block][self.nodes_name].append(nodes)
+                        data_by_block[current_block][self.tasks_name].append(tasks)
+                        data_by_block[current_block][self.clients_per_node_name].append(clients_per_node)
+                        data_by_block[current_block][self.blocksize_name].append(blocksize)
+                        data_by_block[current_block][self.aggregate_filesize_name].append(aggregate_filesize)
+
 
         return data_by_block
+
+    
 
     def write_csv_by_tag(self, keys, tag, output_file, write_mode='w'):
 
@@ -154,8 +211,12 @@ class Loader:
 
     def write_csv_all(self, keys, output_file, write_mode='w'):
 
-        first_line = ['access', 'bw', 'iops', 'latency', 'block', 'xfer', 'open', 'wr/rd', 'close', 'total', 'iter',
-                      'start', 'end']
+        first_line = ['access', 'bw', 'iops', 'latency', 'block', 
+                      'xfer', 'open', 'wr/rd', 'close', 'total', 
+                      'iter', 'start', 'end', 
+                      'nodes', 'tasks', 'clients_per_node', 
+                      'blocksize_bytes', 'aggregate_filesize' ]
+     
         all_rows = []
 
         # building the list of features by key
@@ -172,7 +233,12 @@ class Loader:
                        self.data[key]['total'],
                        self.data[key]['iter'],
                        self.data[key][self.timestamp_start],
-                       self.data[key][self.timestamp_end])
+                       self.data[key][self.timestamp_end],
+                       self.data[key][self.nodes_name],
+                       self.data[key][self.tasks_name],
+                       self.data[key][self.clients_per_node_name],
+                       self.data[key][self.blocksize_name],
+                       self.data[key][self.aggregate_filesize_name])
             all_rows.extend(rows)
 
         all_rows.sort(key=lambda x: x[-1], reverse=False)
