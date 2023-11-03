@@ -51,8 +51,14 @@ class FileSystems:
             raise Exception(f"File system {self.file_system} is not supported.")
 
 
-    def check_path(self) -> bool:
-        # check if path is valid
-        return Path(self.mount_point).is_dir()
+    def check_path(self, inner_folder=None) -> bool:        
+        # Check if the path is valid.
+        # If an inner folder is given as input, it will check from self.mount_point / inner_folder.
+        full_path = Path(self.mount_point)
+        if inner_folder:
+            full_path = full_path / inner_folder
+
+        return full_path.is_dir()
+
     
    

@@ -42,31 +42,22 @@ class IOPSConfig:
         return value
         
     def load_nodes(self):
-        nodes_str = self.__get("nodes", "nodes")
-        self.nodes = self.parse_nodes(nodes_str)
         self.max_nodes = int(self.__get("nodes", "max_nodes"))
-        self.max_processes_per_node = int(self.__get("nodes", "max_processes_per_node"))
-
-        if len(self.nodes) != self.max_nodes:
-            self.errors.append(f"Number of nodes in nodes parameter {self.nodes} ({len(self.nodes)}) does not match max_nodes ({self.max_nodes})")
-
-        #assert len(self.nodes) == self.max_nodes, f"Number of nodes in nodes parameter {self.nodes} ({len(self.nodes)}) does not match max_nodes ({self.max_nodes})"
+        self.processes_per_node = int(self.__get("nodes", "processes_per_node"))
         
+        if self.max_nodes < 0 or self.processes_per_node < 0:
+            self.errors.append(f"Number of nodes and processes per node need to be greater than zero.")
+
 
     def load_storage(self):
-        self.path = Path(self.__get("storage", "path"))
-        self.file_system = self.__get("storage", "file_system")
-
-        
-        self.max_ost = int(self.__get("storage", "max_ost"))
-        self.default_stripe_count = int(self.__get("storage", "default_stripe_count"))
-        self.default_stripe_size = int(self.__get("storage", "default_stripe_size"))
-        self.max_volume = int(self.__get("storage", "max_volume"))   
+        self.benchmark_output = Path(self.__get("storage", "benchmark_output"))
+        self.file_system = self.__get("storage", "file_system")        
+        self.max_volume = int(self.__get("storage", "max_volume"))
+        stripe_folders_str =  self.__get("storage", "output_stripe_folders")
         
         if self.file_system not in VALID_FILE_SYSTEMS:
             self.errors.append(f"Invalid file_system: '{self.file_system}'. Allowed values are {', '.join(VALID_FILE_SYSTEMS)}.\nDid you remove the '|' character from the .ini file?")
             return
-     
 
         if self.file_system.lower() == "local":
             console.print(f"[bold yellow]Warning:[/bold yellow] File system is local. Overriding max_ost ({self.max_ost}), default_stripe_count ({self.default_stripe_count}) and default_stripe_size ({self.default_stripe_size}) to 1.")            
@@ -74,26 +65,39 @@ class IOPSConfig:
             self.default_stripe_count = 1
             self.default_stripe_size = 1      
 
-        fs = FileSystems(self.file_system, self.path)
+        fs = FileSystems(self.file_system, self.benchmark_output)
 
         if not fs.check_path():
-            self.errors.append(f"Invalid path: '{self.path}'")
+            self.errors.append(f"Invalid path: '{self.benchmark_output}'")
             #raise Exception(f"Invalid path: '{self.path}'. Path does not exist or is not a mount point.")
-
-        ost_count = fs.get_ost_count()
-        if ost_count < self.max_ost:
-            self.errors.append(f"Invalid max_ost: '{self.max_ost}'. File system is '{self.file_system}' and has only {ost_count} OSTs.")
-            #raise Exception(f"Invalid max_ost: '{self.max_ost}'. File system is '{self.file_system}' and has only {ost_count} OSTs.")
-
+        
         # check if the max_volume is power of 2
         if self.max_volume > 0 and (self.max_volume & (self.max_volume - 1)) != 0:
             self.errors.append(f"Invalid max_volume: '{self.max_volume}'. max_volume must be a power of 2.")
         
+        # check stripe_folders
+        # Parse and load the modules
+        if stripe_folders_str.lower() == 'none':
+            self.stripe_folders = None
+        else:
+            self.stripe_folders = [stripe.strip() for stripe in stripe_folders_str.split(',')]
+            # check if the stripe_folders are valid
+            for folder in self.stripe_folders:
+                if not fs.check_path(folder):
+                    self.errors.append(f"Invalid path for stripe folder: '{self.benchmark_output / folder}'")
+            #raise Exception(f"Invalid path: '{self.path}'. Path does not exist or is not a mount point.")
+        
+
+        
     def load_execution(self):        
         self.mode = self.__get("execution", "mode").lower()
         self.job_manager = self.__get("execution", "job_manager").lower()
+        slurm_constraint_str = self.__get("execution", "slurm_constraint")
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
+        self.repetitions = int(self.__get("execution", "repetitions"))
+        template_str = self.__get("execution", "template")
+        self.ior_2_csv = Path(self.__get("execution", "ior_2_csv"))
 
         if self.mode not in VALID_MODES:
             self.errors.append(f"Invalid mode: '{self.mode}'. Allowed values are '{', '.join(VALID_MODES)}'.\nDid you remove the '|' character from the .ini file?")
@@ -110,6 +114,31 @@ class IOPSConfig:
             self.modules = None
         else:
             self.modules = [module.strip() for module in modules_str.split(',')]
+        
+        # Parse the slurm_constraint
+        if slurm_constraint_str.lower() == 'none':
+            self.slurm_constraint = None
+        else:
+            self.slurm_constraint = [constraint.strip() for constraint in slurm_constraint_str.split(',')]
+
+        if not self.workdir.is_dir():
+            self.errors.append(f"Invalid path for workdir folder: '{self.workdir}'")
+
+        # check template file
+        if template_str.lower() == 'none':
+            self.template = None
+        else:
+            self.template = Path(template_str)
+            # check if file exist
+            if not self.template.is_file():
+                self.errors.append(f"File not found: '{self.template}'")
+            
+        if self.job_manager == 'slurm' and self.template == None:
+            self.errors.append(f"When using slurm, a template file needs to be provided.")
+        
+        if not self.ior_2_csv.is_file():
+            self.errors.append(f"File not found: '{self.ior_2_csv}'")
+
         
 
         

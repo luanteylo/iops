@@ -16,26 +16,29 @@ class Generator:
         config_execution = configparser.ConfigParser()
     
         config_nodes['nodes'] = {
-            'nodes': 'node[1-32]',
-            'max_nodes': '32',
-            'max_processes_per_node': '64',
+            'max_nodes': '32 # Max number of nodes that can be allocated (to limit computing tests)',
+            'processes_per_node': '8 # The number of processes that will be used per node. For now, this is a static parameter',            
         }
+
 
         
         config_storage['storage'] = {
-            'path': '/path/to/storage',            
-            'max_ost': '8',
-            'default_stripe_count': '4',
-            'default_stripe_size': '1048576 # In bytes', 
+            'benchmark_output': '/path/to/storage # The path to the directory where the benchmark tool will write/read from',            
             'file_system': 'lustre | beegfs | local # Select the file system',
-            'max_volume':  '34359738368 # max volume size in bytes (to limit the size of the benchmarked file size)',
+            'max_volume':  '34359738368 # Max volume size in bytes (to limit the size of the benchmarked file)',
+            'output_stripe_folders': 'ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups. For now, these folders need to be created manually inside the benchmark_output folder using the file system utility to define the correct striping setup.'
         }
+
 
         config_execution['execution'] = {
             'mode': 'fast | complete # Select the mode of execution',
-            'job_manager': 'slurm | None # Specify the job manager. If "None" is provided, it will execute the benchmark locally',
-            'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no module is loaded',
-            'workdir': '/path/to/workdir # Specify the working directory, i.e., where the benchmark will be executed',
+            'job_manager': 'slurm | None # Specify the job manager. If "None" is provided, the benchmark will be executed locally',
+            'slurm_constraint': 'constraint_1, constraint_2 | None # Some clusters use the slurm constraint parameter (-c) to define the resources. If that is your case, set the list of constraints here, otherwise put None',
+            'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
+            'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
+            'repetitions': '5 # The number of repetitions for each test',
+            'template': 'iops/templates/slurm_template.sh.j2 | none # If using slurm, define the template file to generate the bash scripts. Otherwise None',
+            'ior_2_csv': 'tools/ior_2_csv.py # Path to ior_2_csv.py script'
         }
 
         
@@ -47,8 +50,8 @@ class Generator:
             config_storage.write(config_file)
 
             config_file.write("# Execution mode\n")
-            config_file.write("# - fast: Run the benchmark with a reduced number of repetitions (less accurate)\n")
-            config_file.write("# - complete: Run the benchmark with the full number of repetitions (more accurate)\n")
+            config_file.write("# - fast: Run the benchmark without any waiting time between the tests (less accurate)\n")
+            config_file.write("# - complete: Run the benchmark with random waiting times between the executions (more accurate)\n")
             config_execution.write(config_file)
 
         
