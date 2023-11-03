@@ -14,6 +14,8 @@ class Generator:
         config_nodes = configparser.ConfigParser()
         config_storage = configparser.ConfigParser()
         config_execution = configparser.ConfigParser()
+
+        config_template = configparser.ConfigParser()
     
         config_nodes['nodes'] = {
             'max_nodes': '32 # Max number of nodes that can be allocated (to limit computing tests)',
@@ -37,8 +39,13 @@ class Generator:
             'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
             'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
             'repetitions': '5 # The number of repetitions for each test',
-            'template': 'iops/templates/slurm_template.sh.j2 | none # If using slurm, define the template file to generate the bash scripts. Otherwise None',
-            'ior_2_csv': 'tools/ior_2_csv.py # Path to ior_2_csv.py script'
+            
+        }
+
+        config_template['template'] = {
+            'slurm_template': 'iops/templates/slurm_template.sh.j2 | None # If using Slurm, define the template file to generate the bash scripts. Otherwise, None.',
+            'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
+            'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.'
         }
 
         
@@ -53,6 +60,9 @@ class Generator:
             config_file.write("# - fast: Run the benchmark without any waiting time between the tests (less accurate)\n")
             config_file.write("# - complete: Run the benchmark with random waiting times between the executions (more accurate)\n")
             config_execution.write(config_file)
+            
+            config_file.write("# Template and scripts \n")
+            config_template.write(config_file)
 
         
         logging.info(f"Default configuration file generated as {file_name}")

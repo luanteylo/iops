@@ -45,7 +45,7 @@ def main():
     parser.add_argument('--check_setup', help="check if all dependencies are correctly installed", action="store_true")
     parser.add_argument('--generate_ini', nargs='?', const='default_config.ini', default=None,
                     help="generate a default .ini configuration file. Optionally, specify the file name and path.")
-    parser.add_argument('-y', '--yes', help="automatically confirm the setup", action="store_true")
+    parser.add_argument('-y', '--yes', help="automatically confirm the setup (Attention: the workdir directory will be cleaned without asking for confirmation)", action="store_true")
 
 
     args = parser.parse_args()

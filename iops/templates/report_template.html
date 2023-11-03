@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Report</title>
+</head>
+<body>
+    <h2>Test Report</h2>
+    <p>{{ config_info }}</p>
+
+    <h3>Graphs</h3>
+    {% for graph in graphs %}
+        <img src="{{ graph }}" alt="{{ graph }}" width="600"/><br>
+    {% endfor %}
+</body>
+</html>

@@ -28,6 +28,7 @@ class IOPSConfig:
         self.load_nodes()
         self.load_storage()
         self.load_execution()
+        self.load_templates()
 
         if self.errors:
             for error in self.errors:
@@ -47,7 +48,6 @@ class IOPSConfig:
         
         if self.max_nodes < 0 or self.processes_per_node < 0:
             self.errors.append(f"Number of nodes and processes per node need to be greater than zero.")
-
 
     def load_storage(self):
         self.benchmark_output = Path(self.__get("storage", "benchmark_output"))
@@ -87,8 +87,6 @@ class IOPSConfig:
                     self.errors.append(f"Invalid path for stripe folder: '{self.benchmark_output / folder}'")
             #raise Exception(f"Invalid path: '{self.path}'. Path does not exist or is not a mount point.")
         
-
-        
     def load_execution(self):        
         self.mode = self.__get("execution", "mode").lower()
         self.job_manager = self.__get("execution", "job_manager").lower()
@@ -96,8 +94,7 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
-        template_str = self.__get("execution", "template")
-        self.ior_2_csv = Path(self.__get("execution", "ior_2_csv"))
+        
 
         if self.mode not in VALID_MODES:
             self.errors.append(f"Invalid mode: '{self.mode}'. Allowed values are '{', '.join(VALID_MODES)}'.\nDid you remove the '|' character from the .ini file?")
@@ -124,23 +121,31 @@ class IOPSConfig:
         if not self.workdir.is_dir():
             self.errors.append(f"Invalid path for workdir folder: '{self.workdir}'")
 
+        if self.repetitions <= 0:
+            self.errors.append(f"The number of repetitions must be greater than zero.")        
+
+    def load_templates(self):
+        slurm_template_str = self.__get("template", "slurm_template")
+        self.ior_2_csv = Path(self.__get("template", "ior_2_csv"))
+        self.report_template = Path(self.__get("template", "report_template"))
+
         # check template file
-        if template_str.lower() == 'none':
-            self.template = None
+        if slurm_template_str.lower() == 'none':
+            self.slurm_template = None
         else:
-            self.template = Path(template_str)
+            self.slurm_template = Path(slurm_template_str)
             # check if file exist
-            if not self.template.is_file():
-                self.errors.append(f"File not found: '{self.template}'")
+            if not self.slurm_template.is_file():
+                self.errors.append(f"File not found: '{self.slurm_template}'")
             
-        if self.job_manager == 'slurm' and self.template == None:
+        if self.job_manager == 'slurm' and self.slurm_template == None:
             self.errors.append(f"When using slurm, a template file needs to be provided.")
         
         if not self.ior_2_csv.is_file():
             self.errors.append(f"File not found: '{self.ior_2_csv}'")
-
         
-
+        if not self.report_template.is_file():
+            self.errors.append(f"File not found: '{self.report_template}'")
         
     def parse_nodes(self, nodes_str):        
         nodes_list = []
@@ -164,25 +169,3 @@ class IOPSConfig:
                 nodes_list.append(single_node)
         return nodes_list
     
-    def __str__(self):
-        lines = []
-        lines.append("IOPS Configuration:")
-        
-        # Nodes section
-        lines.append(f"  \t\tNodes: {self.nodes}")
-        lines.append(f"  \t\tMax Nodes: {self.max_nodes}")
-        lines.append(f"  \t\tMax Processes Per Node: {self.max_processes_per_node}")
-        
-        # Storage section
-        lines.append(f"  \t\tStorage Path: {self.path}")
-        lines.append(f"  \t\tMax OST: {self.max_ost}")
-        lines.append(f"  \t\tDefault Stripe Count: {self.default_stripe_count}")
-        lines.append(f"  \t\tDefault Stripe Size: {self.default_stripe_size} bytes")
-        lines.append(f"  \t\tFile System: {self.file_system}")
-
-        # Execution section
-        lines.append(f"  \t\tExecution Mode: {self.mode}")
-
-        return "\n".join(lines)
-
-

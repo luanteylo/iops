@@ -12,6 +12,7 @@ from pathlib import Path
 import math
 import random
 import subprocess
+import shutil
 
 from iops.setup.iops_config import IOPSConfig
 from iops.setup.generator import Generator
@@ -24,7 +25,8 @@ console = Console()
 class TestRunner:
     def __init__(self, config_file: str, skip_confirmation: bool=False):
         self.config_file = config_file
-        self.skip_confirmation = skip_confirmation
+        self.skip_confirmation = skip_confirmation        
+        self.clean_workdir = 'yes'
 
         try:
             # Initialize and load configuration
@@ -43,7 +45,6 @@ class TestRunner:
         table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)
         table.add_column("Setting", style="dim", width=30)
         table.add_column("Value")
-
         table.add_row("Max Nodes", str(self.config.max_nodes))
         table.add_row("Processes Per Node", str(self.config.processes_per_node))
 
@@ -73,11 +74,18 @@ class TestRunner:
         table.add_row("Slurm Constraint", str(slurm_constraint))
         table.add_row("Workdir", str(self.config.workdir))
         table.add_row("Repetitions", str(self.config.repetitions))
+
+        table.add_row("")  
+        table.add_row("Slurm Template", str(self.config.slurm_template))
+        table.add_row("Report Template", str(self.config.report_template))
         table.add_row("ior_2_csv script", str(self.config.ior_2_csv))
 
-    
+        table.add_row("")
         # Print the tables with section headers and horizontal rules   
         console.print(table)
+
+        console.print("[bold yellow]Warning:[/bold yellow] You may need to adapt the template file for your system. Check the options in 'iops/templates/'\n")
+
 
         if not self.skip_confirmation:
             # Ask for user confirmation
@@ -86,6 +94,15 @@ class TestRunner:
             if confirmed.lower() != "yes":
                 console.print("[bold red]Aborting test due to incorrect setup.")
                 exit(1)
+            
+            # Ask for user confirmation to clean workdir
+            self.clean_workdir = Prompt.ask("[bold cyan]Do you want to clean the working directory?[/bold cyan]", choices=["yes", "no"], default="yes")
+        
+        if self.clean_workdir.lower() == "yes":            
+            console.print("[bold green]Cleaning the working directory...[/bold green]")
+            self.__clean_workdir()
+        else:
+            console.print("[bold yellow]Preserving the working directory.[/bold yellow]")
             
         console.print("\n")
         
@@ -114,7 +131,7 @@ class TestRunner:
         [bold green]Total nodes: {num_nodes}[/bold green]
         """
 
-        console.print(Panel(panel_text, title="File Size Test"))
+        console.print(Panel(panel_text, title="File Size Test", expand=True))
 
         for i in range(num_steps):
             current_size = start_size * (2 ** i)
@@ -138,7 +155,7 @@ class TestRunner:
                 "ior_parameter": f"-w -t 1m -b {bytes_per_process}b"                
             }
             # generate the slurm script            
-            Generator.generate_slurm_script(self.config.template, file_path, file_name, case)
+            Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
             console.print(f"[bold green]Created file:[/bold green] [bold cyan]{file_path/file_name}[/bold cyan]...")
 
             cases.append(file_path/file_name)        
@@ -159,7 +176,7 @@ class TestRunner:
         [bold green]Striping folder: {self.config.stripe_folders}[/bold green]  
         """
 
-        console.print(Panel(panel_text, title="Striping Tests"))
+        console.print(Panel(panel_text, title="Striping Tests", expand=True))
         
         i = 0
         for stripe_folder in self.config.stripe_folders:            
@@ -184,7 +201,7 @@ class TestRunner:
                 "ior_parameter": f"-w -t 1m -b {bytes_per_process}b"                
             }
             # generate the slurm script            
-            Generator.generate_slurm_script(self.config.template, file_path, file_name, case)
+            Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
             console.print(f"[bold green]Created file:[/bold green] [bold cyan]{file_path/file_name}[/bold cyan]...")
             cases.append(file_path/file_name)        
 
@@ -231,7 +248,7 @@ class TestRunner:
                 "ior_parameter": f"-w -t 1m -b {bytes_per_process}b"                
             }
             # generate the slurm script            
-            Generator.generate_slurm_script(self.config.template, file_path, file_name, case)
+            Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
             console.print(f"[bold green]Created file:[/bold green] [bold cyan]{file_path/file_name}[/bold cyan]...")
             cases.append(file_path/file_name)        
 
@@ -266,13 +283,49 @@ class TestRunner:
 
         # Once a job is submitted and finished, advance the progress bar by 1 step        
 
-    def __generate_filesize_graph(self, tests : List[Path]):
-        # first generate CSV files using ior_2+_csv.tool
-        pass
+    def __generate_csv(self, input_path : Path, output_path : Path):       
+        # First generate CSV files using ior_2_csv tool                
+        args = [self.config.ior_2_csv, input_path, output_path]         
+        # Call the script and wait for it to finish
+        try:
+            result = subprocess.run(args, check=True)
+            
+            # Check the return code
+            if result.returncode == 0:
+                console.print(f"[bold green] Generated {output_path}")
+            else:
+                console.print(f"[bold red] Error:[bold red] Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")                
+                sys.exit(1)
+
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red] Error:[bold red] Script execution failed: {e}")
+            sys.exit(1)
+    
+    def __clean_workdir(self):
+        try:
+            # Clean everything inside the working directory
+            for item in self.config.workdir.iterdir():
+                if item.is_file() or item.is_symlink():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+        except Exception as e:
+            console.print("[bold red]Error:[/bold red] {}".format(str(e)))
+            sys.exit(1)
+
+
+
+    def __format_time(self, seconds: float) -> str:
+        hours, remainder = divmod(int(seconds), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours} hours, {minutes} minutes, and {seconds} seconds"
 
     def run(self) -> None:
 
-        try:            
+        start_time = time.time()
+        error = False
+
+        try:                        
             # First, generate the folder structure
             # Create 'filesize' folder and subfolders for each file size step
             filesize_folder = self.config.workdir / 'filesize'
@@ -307,9 +360,17 @@ class TestRunner:
             console.print("[bold green]All jobs completed successfully.")
 
             
-            console.print(Panel("Generating Graphs"))
+            console.print(Panel("Generating Report", expand=True))
 
-            self.__generate_filesize_graph(file_size_tests)
+            filesize_csv = Path(self.config.workdir, "filesize.csv")
+            computing_csv = Path(self.config.workdir, "computing.csv")
+            striping_csv = Path(self.config.workdir, "striping.csv")
+
+            self.__generate_csv(filesize_folder, filesize_csv )
+            self.__generate_csv(computing_folder, computing_csv)
+            self.__generate_csv(striping_folder, striping_csv)
+
+            #self.__generate_graphs(filesize_csv, computing_csv, striping_csv)
             #self.__generate_computing_graph(computing_tests)
             #self.__generate_striping_graph(striping_tests)
 
@@ -317,8 +378,16 @@ class TestRunner:
             # Check if job is still in queue
             console.print("[bold red]Aborting test due to user interruption.")
             console.print("[bold yellow]Warning:[/bold yellow] You may have an ongoing job in the job manager.")
-            exit(1)
+            error = True
 
         except Exception as e:
             console.print("[bold red]Error:[/bold red] {}".format(str(e)))
+            error = True
+        
+        end_time = time.time()  # Record the end time
+        execution_time = end_time - start_time  # Compute the execution time
+        formatted_time = self.__format_time(execution_time)
+        console.print(f"[bold green]Execution Time:[/bold green] {formatted_time}")
+
+        if error:
             sys.exit(1)
