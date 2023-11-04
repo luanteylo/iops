@@ -3,6 +3,7 @@ iops/__pycache__/*
 iops/setup/__pycache__/*
 
 iops/runners/__pycache__/
+iops/reports/__pycache__/
 iops_env.egg-info/
 build/
 dist/
