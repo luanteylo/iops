@@ -266,10 +266,3 @@ class BasicReport:
         
         console.print(f"[bold green]Report '{self.report_html}' generated successfully.\n")
 
-config = IOPSConfig("../../default_config.ini")
-report = BasicReport(0, config, config.workdir/"filesize_0", config.workdir/"computing_0", config.workdir/"striping_0")
-report.full_report()
-
-
-
-report.striping_df
