@@ -57,13 +57,7 @@ class IOPSConfig:
         
         if self.file_system not in VALID_FILE_SYSTEMS:
             self.errors.append(f"Invalid file_system: '{self.file_system}'. Allowed values are {', '.join(VALID_FILE_SYSTEMS)}.\nDid you remove the '|' character from the .ini file?")
-            return
-
-        if self.file_system.lower() == "local":
-            console.print(f"[bold yellow]Warning:[/bold yellow] File system is local. Overriding max_ost ({self.max_ost}), default_stripe_count ({self.default_stripe_count}) and default_stripe_size ({self.default_stripe_size}) to 1.")            
-            self.max_ost = 1
-            self.default_stripe_count = 1
-            self.default_stripe_size = 1      
+            return       
 
         fs = FileSystems(self.file_system, self.benchmark_output)
 
@@ -127,7 +121,7 @@ class IOPSConfig:
     def load_templates(self):
         slurm_template_str = self.__get("template", "slurm_template")
         self.ior_2_csv = Path(self.__get("template", "ior_2_csv"))
-        self.report_template = Path(self.__get("template", "report_template"))
+        self.report_template = Path(self.__get("template", "report_template"))        
 
         # check template file
         if slurm_template_str.lower() == 'none':
@@ -146,6 +140,7 @@ class IOPSConfig:
         
         if not self.report_template.is_file():
             self.errors.append(f"File not found: '{self.report_template}'")
+       
         
     def parse_nodes(self, nodes_str):        
         nodes_list = []

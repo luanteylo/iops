@@ -326,7 +326,9 @@ class TestRunner:
             # then, let's create the slurm scripts to generate the computing tests
             computing_tests = self.__generate_computing_cases(computing_folder)
             # finally, let's create the slurm scripts to generate the striping tests
-            striping_tests = self.__generate_striping_cases(striping_folder)
+            striping_tests = []
+            if self.config.stripe_folders is not None:
+                striping_tests = self.__generate_striping_cases(striping_folder)
             # s(self, striping_folder : Path, file_size : int, num_computing_nodes : int)
 
             all_tests = file_size_tests + computing_tests + striping_tests

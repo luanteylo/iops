@@ -10,3 +10,4 @@ rich
 jinja2
 plotly
 nbformat
+pexpect

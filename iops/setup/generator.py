@@ -29,6 +29,7 @@ class Generator:
             'file_system': 'lustre | beegfs | local # Select the file system',
             'max_volume':  '34359738368 # Max volume size in bytes (to limit the size of the benchmarked file)',
             'output_stripe_folders': "ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups.\n" \
+            "# If 'None' is provided, the striping test will not be executed.\n" \
             "# For now, these folders need to be created manually inside the benchmark_output folder using the file system\n"\
             "# utility to define the correct striping setup. These folders need to be defined using a sequential number\n"\
             "# (the larger the number, the more OSTs); a good approach is to use the number of OSTs as this number.\n"\
@@ -49,7 +50,7 @@ class Generator:
         config_template['template'] = {
             'slurm_template': 'iops/templates/slurm_template.sh.j2 | None # If using Slurm, define the template file to generate the bash scripts. Otherwise, None.',
             'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
-            'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.'
+            'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',            
         }
 
         

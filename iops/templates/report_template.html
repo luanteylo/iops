@@ -2,14 +2,35 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <img src="https://gitlab.inria.fr/uploads/-/system/project/avatar/48317/_30004c6c-582a-49eb-8201-3c9d8c3027cc.jpeg?width=64" alt="IOPS icon" style="vertical-align: middle; width: 50px; height: auto;">
     <title>IOPS Report</title>
+    
+
     <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            padding: 20px;
+            background-color: white;
+        }
         .graph-section {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+        .graph-container {
+            flex: 1;
+            max-width: 30%;
             border: 1px solid #ddd;
             border-radius: 5px;
             padding: 15px;
-            margin: 20px 0;
+            margin: 10px;
             background-color: #f9f9f9;
         }
         .graph-title {
@@ -18,7 +39,6 @@
         }
         img {
             width: 100%;
-            max-width: 600px;
             margin: 10px 0;
         }
         table {
@@ -28,13 +48,12 @@
         table, th, td {
             border: 1px solid black;
             text-align: left;
-            padding: 8px;
+            padding: 4px; /* Reduced padding */
         }
         th, td {
             background-color: #f2f2f2;
         }
         .report-info {
-            font-family: Arial, sans-serif;
             color: #333;
             background-color: #f9f9f9;
             border: 1px solid #ddd;
@@ -49,37 +68,167 @@
         .report-info a:hover {
             text-decoration: underline;
         }
+        .lightbox {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9); /* Darker background */
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .lightbox {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.9); /* Changed to white with slight opacity */
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .lightbox img {
+            max-width: 80%;
+            max-height: 80%;
+            margin: 10px 0;
+        }
+
+
+        /* Optional: if you want to darken the image slightly on zoom, you can add a filter */
+        .lightbox img:hover {
+            transform: scale(1.1);
+            filter: brightness(80%);
+        }
+        .graph-container img.graph {
+            transition: transform 0.2s, filter 0.2s;
+        }
+
+        .graph-container img.graph:hover {
+            transform: scale(1.05);
+            filter: brightness(80%);
+            cursor: pointer;
+        }
+        p span {
+            display: inline-block;
+            margin-left: 20px; /* Adjust as needed for alignment */
+        }
+        p strong {
+            font-weight: bold;
+        }
+        .info-panel {
+            color: #333;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+            /* Remove text-align: center; to align text to the left */
+        }
+
+        .panel-spacing {
+            margin-bottom: 20px; /* Adjust the value as needed */
+        }
+        .report-footer {
+            text-align: center;
+            padding: 20px;
+            background-color: #f4f4f4;
+            border-top: 1px solid #ddd;
+            color: #333;
+        }
+
+        .report-footer p {
+            margin: 0; /* Removes the default margin for p tags if needed */
+            font-size: 16px; /* Example size, adjust as needed */
+            color: #333; /* Sets the color of the text */
+        }
+
+        .report-footer a {
+            color: #e24329; /* GitLab's brand color, or choose your own */
+            text-decoration: none; /* Removes underline from links */
+        }
+
+        .report-footer a:hover {
+            text-decoration: underline; /* Adds underline on hover for links */
+        }
+
+        .report-footer i.fab {
+            margin-right: 5px; /* Spacing between the icon and the text */
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+            /* Ensure the min-height is the full viewport */
+            min-height: 100vh; /* This stretches the body to the full height of the viewport */
+            /* Removed position relative */
+        }
+
     </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.1/css/all.min.css">
 </head>
 <body>
-    <h1>Performance Report</h1>
+    <div class="container">
+        <div class="header">           
+            <h1 style="display: inline-block; margin-left: 10px;">IOPS Report</h1>
+        </div>
 
-    <div class="report-info">
-        <p>This report was generated using IOPS. For more information, see <a href="https://gitlab.inria.fr/lgouveia/iops" target="_blank">here</a>.</p>
+        <div class="info-panel panel-spacing">
+            <p><strong>IOPS:</strong> <span>{{iops_version}}</span></p>
+            <p><strong>IOR:</strong> <span>{{ior_version}}</span></p>
+            <p><strong>Total number of tests:</strong> <span>{{total_tests}}</span></p>
+        </div>
+
+        
+        <div class="info-panel panel-spacing">
+         <h2>Round: {{round_number}}</h2>
+         <div class="graph-section">
+            {% for graph in graphs %}
+            <div class="graph-container">
+                <h2 class="graph-title">{{ graph.title }}</h2>
+                <img src="{{ graph.filename }}" alt="{{ graph.title }}" class="graph" onclick="openLightbox('{{ graph.filename }}', '{{ graph.title }}')">
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <div class="lightbox" id="lightbox" onclick="closeLightbox()">
+        <img id="lightbox-img" src="" alt="">
     </div>
 
-    <table>        
-        <tr>
-            <td>IOPS</td>
-            <td>{{iops_version}}</td>
-        </tr>
-        <tr>
-            <td>IOR</td>
-            <td>{{ior_version}}</td>
-        </tr>
-        <tr>
-            <td>Total number of tests</td>
-            <td>{{total_tests}}</td>
-        </tr>
-    </table>
-    
-     <h2>Round: {{round_number}}</h2>
-     {% for graph in graphs %}
-         <div class="graph-section">
-             <h2 class="graph-title">{{ graph.title }}</h2>
-             <img src="{{ graph.filename }}" alt="{{ graph.title }}">
-         </div>
-     {% endfor %}
+    <div class="info-panel panel-spacing">
+        <h2> Test information </h2>
+        <p><strong>Max Bandwidth:  <span>{{max_bw}}</span> </strong></p>
+        <p><strong>Test case: </strong> <span>{{max_test_case}}</span></p>
+    </div>
+</div>
+
+<script>
+    function openLightbox(filename, title) {
+        var lightbox = document.getElementById('lightbox');
+        var lightboxImg = document.getElementById('lightbox-img');
+        lightbox.style.display = 'flex';
+        lightboxImg.src = filename;
+        lightboxImg.alt = title;
+    }
+
+    function closeLightbox() {
+        var lightbox = document.getElementById('lightbox');
+        lightbox.style.display = 'none';
+    }
+</script>
+
+<footer class="report-footer">
+    <img src="https://gitlab.inria.fr/uploads/-/system/project/avatar/48317/_30004c6c-582a-49eb-8201-3c9d8c3027cc.jpeg?width=64" alt="IOPS Icon" style="height:20px; vertical-align:middle; margin-right:5px;" />
+    <p>This report was generated using IOPS. For more information visit <a href="https://gitlab.inria.fr/lgouveia/iops" target="_blank"><i class="fab fa-gitlab"></i> here</a>.</p>
+</footer>
 
 </body>
 </html>
