@@ -64,6 +64,7 @@ class Loader:
     clients_per_node_name = 'clients_per_node'
     blocksize_name  = 'blocksize'
     aggregate_filesize_name  = 'aggregate_filesize'
+    path_name = 'Path'
 
     def __init__(self, files, verbose):
         self.files = files
@@ -96,7 +97,7 @@ class Loader:
             finishedTime = None
             current_block = None
 
-            
+            path_ = None
             nodes = None
             tasks = None
             clients_per_node = None            
@@ -111,7 +112,9 @@ class Loader:
                 for line in fp:
                     # Firstly we search by the 'StartTime' Tag
                     if line.startswith('StartTime'):
-                        startTime = "".join(line.split()[2:])                  
+                        startTime = "".join(line.split()[2:])      
+                    elif line.startswith('Path'):
+                        path_ = "".join(line.split(':')[-1]).strip()            
                     elif line.startswith('nodes'):
                         nodes =  "".join(line.split(':')[-1]).strip()
                     elif line.startswith('tasks'):
@@ -160,6 +163,9 @@ class Loader:
                         if self.timestamp_end not in data_by_block[current_block]:
                             data_by_block[current_block][self.timestamp_end] = []
                         
+                        if self.path_name not in data_by_block[current_block]:
+                            data_by_block[current_block][self.path_name] = []
+
                         if self.nodes_name not in data_by_block[current_block]:
                             data_by_block[current_block][self.nodes_name] = []
                         
@@ -174,9 +180,12 @@ class Loader:
                         
                         if self.aggregate_filesize_name not in data_by_block[current_block]:
                             data_by_block[current_block][self.aggregate_filesize_name] = []
+                        
+                        
 
                         data_by_block[current_block][self.timestamp_start].append(startTime)
                         data_by_block[current_block][self.timestamp_end].append(finishedTime)
+                        data_by_block[current_block][self.path_name].append(path_)
                         data_by_block[current_block][self.nodes_name].append(nodes)
                         data_by_block[current_block][self.tasks_name].append(tasks)
                         data_by_block[current_block][self.clients_per_node_name].append(clients_per_node)
@@ -213,7 +222,7 @@ class Loader:
 
         first_line = ['access', 'bw', 'iops', 'latency', 'block', 
                       'xfer', 'open', 'wr/rd', 'close', 'total', 
-                      'iter', 'start', 'end', 
+                      'iter', 'start', 'end', 'path',
                       'nodes', 'tasks', 'clients_per_node', 
                       'blocksize_bytes', 'aggregate_filesize' ]
      
@@ -234,6 +243,7 @@ class Loader:
                        self.data[key]['iter'],
                        self.data[key][self.timestamp_start],
                        self.data[key][self.timestamp_end],
+                       self.data[key][self.path_name],
                        self.data[key][self.nodes_name],
                        self.data[key][self.tasks_name],
                        self.data[key][self.clients_per_node_name],

@@ -28,7 +28,11 @@ class Generator:
             'benchmark_output': '/path/to/storage # The path to the directory where the benchmark tool will write/read from',            
             'file_system': 'lustre | beegfs | local # Select the file system',
             'max_volume':  '34359738368 # Max volume size in bytes (to limit the size of the benchmarked file)',
-            'output_stripe_folders': 'ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups. For now, these folders need to be created manually inside the benchmark_output folder using the file system utility to define the correct striping setup.'
+            'output_stripe_folders': "ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups.\n" \
+            "# For now, these folders need to be created manually inside the benchmark_output folder using the file system\n"\
+            "# utility to define the correct striping setup. These folders need to be defined using a sequential number\n"\
+            "# (the larger the number, the more OSTs); a good approach is to use the number of OSTs as this number.\n"\
+            "# Otherwise, you may encounter problems in the striping graph.\n"
         }
 
 

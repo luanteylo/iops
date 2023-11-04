@@ -1,15 +1,85 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Report</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IOPS Report</title>
+    <style>
+        .graph-section {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+            background-color: #f9f9f9;
+        }
+        .graph-title {
+            font-size: 18px;
+            color: #007bff;
+        }
+        img {
+            width: 100%;
+            max-width: 600px;
+            margin: 10px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        table, th, td {
+            border: 1px solid black;
+            text-align: left;
+            padding: 8px;
+        }
+        th, td {
+            background-color: #f2f2f2;
+        }
+        .report-info {
+            font-family: Arial, sans-serif;
+            color: #333;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .report-info a {
+            color: #007bff;
+            text-decoration: none;
+        }
+        .report-info a:hover {
+            text-decoration: underline;
+        }
+    </style>
 </head>
 <body>
-    <h2>Test Report</h2>
-    <p>{{ config_info }}</p>
+    <h1>Performance Report</h1>
 
-    <h3>Graphs</h3>
-    {% for graph in graphs %}
-        <img src="{{ graph }}" alt="{{ graph }}" width="600"/><br>
-    {% endfor %}
+    <div class="report-info">
+        <p>This report was generated using IOPS. For more information, see <a href="https://gitlab.inria.fr/lgouveia/iops" target="_blank">here</a>.</p>
+    </div>
+
+    <table>        
+        <tr>
+            <td>IOPS</td>
+            <td>{{iops_version}}</td>
+        </tr>
+        <tr>
+            <td>IOR</td>
+            <td>{{ior_version}}</td>
+        </tr>
+        <tr>
+            <td>Total number of tests</td>
+            <td>{{total_tests}}</td>
+        </tr>
+    </table>
+    
+     <h2>Round: {{round_number}}</h2>
+     {% for graph in graphs %}
+         <div class="graph-section">
+             <h2 class="graph-title">{{ graph.title }}</h2>
+             <img src="{{ graph.filename }}" alt="{{ graph.title }}">
+         </div>
+     {% endfor %}
+
 </body>
 </html>

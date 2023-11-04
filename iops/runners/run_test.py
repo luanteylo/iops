@@ -1,4 +1,4 @@
-from rich.progress import Progress
+from rich.progress import Progress, BarColumn, TextColumn
 from rich.console import Console
 from rich.table import Table
 from rich import box
@@ -16,6 +16,7 @@ import shutil
 
 from iops.setup.iops_config import IOPSConfig
 from iops.setup.generator import Generator
+from iops.reports.basic_report import BasicReport
 from typing import List
 
 #install(show_locals=True)
@@ -23,6 +24,7 @@ console = Console()
 
 
 class TestRunner:
+    
     def __init__(self, config_file: str, skip_confirmation: bool=False):
         self.config_file = config_file
         self.skip_confirmation = skip_confirmation        
@@ -142,7 +144,7 @@ class TestRunner:
             file_path.mkdir(exist_ok=True)
 
             case = template_tags = {
-                "job_name": f"filesize_{current_size}_{i+1}",
+                "job_name": f"iops_filesize_{current_size}_{i+1}",
                 #"partition": "The partition to submit the job to",
                 "ntasks":total_processes,
                 "nodes": num_nodes,                
@@ -188,7 +190,7 @@ class TestRunner:
             file_path.mkdir(exist_ok=True)
 
             case = template_tags = {
-                "job_name": f"striping_{i+1}",
+                "job_name": f"iops_striping_{i+1}",
                 #"partition": "The partition to submit the job to",
                 "ntasks":total_processes,
                 "nodes": num_computing_nodes,                
@@ -235,7 +237,7 @@ class TestRunner:
             file_path.mkdir(exist_ok=True)
 
             case = template_tags = {
-                "job_name": f"computing_{current_nodes}_{i+1}",
+                "job_name": f"iops_computing_{current_nodes}_{i+1}",
                 #"partition": "The partition to submit the job to",
                 "ntasks":total_processes,
                 "nodes": current_nodes,                
@@ -283,24 +285,6 @@ class TestRunner:
 
         # Once a job is submitted and finished, advance the progress bar by 1 step        
 
-    def __generate_csv(self, input_path : Path, output_path : Path):       
-        # First generate CSV files using ior_2_csv tool                
-        args = [self.config.ior_2_csv, input_path, output_path]         
-        # Call the script and wait for it to finish
-        try:
-            result = subprocess.run(args, check=True)
-            
-            # Check the return code
-            if result.returncode == 0:
-                console.print(f"[bold green] Generated {output_path}")
-            else:
-                console.print(f"[bold red] Error:[bold red] Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")                
-                sys.exit(1)
-
-        except subprocess.CalledProcessError as e:
-            console.print(f"[bold red] Error:[bold red] Script execution failed: {e}")
-            sys.exit(1)
-    
     def __clean_workdir(self):
         try:
             # Clean everything inside the working directory
@@ -313,8 +297,6 @@ class TestRunner:
             console.print("[bold red]Error:[/bold red] {}".format(str(e)))
             sys.exit(1)
 
-
-
     def __format_time(self, seconds: float) -> str:
         hours, remainder = divmod(int(seconds), 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -324,17 +306,19 @@ class TestRunner:
 
         start_time = time.time()
         error = False
+        report_id = 0
+        round = 0
 
         try:                        
             # First, generate the folder structure
             # Create 'filesize' folder and subfolders for each file size step
-            filesize_folder = self.config.workdir / 'filesize'
+            filesize_folder = self.config.workdir / f'filesize_{round}'
             filesize_folder.mkdir(exist_ok=True)            
             # Create 'computing' folder and subfolders for each compute node
-            computing_folder = self.config.workdir / 'computing'
+            computing_folder = self.config.workdir / f'computing_{round}'
             computing_folder.mkdir(exist_ok=True)
             # Create 'striping' folder
-            striping_folder = self.config.workdir / 'striping'
+            striping_folder = self.config.workdir / f'striping_{round}'
             striping_folder.mkdir(exist_ok=True)
             
             # first, let's create the slurm scripts to generate the file size tests
@@ -347,12 +331,21 @@ class TestRunner:
 
             all_tests = file_size_tests + computing_tests + striping_tests
 
-            with Progress(console=console, transient=True) as progress:
-                # Create task with total count as len(all_tests) * repetitions
-                task_id = progress.add_task("[cyan]Submitting...", total=len(all_tests) * self.config.repetitions)
+            # Custom Progress Bar
+            custom_columns = [
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                TextColumn("{task.completed}/{task.total} ({task.percentage:.2f}%)"),
+            ]
+
+            with Progress(*custom_columns, console=console, transient=True) as progress:
+                total_tests = len(all_tests) * self.config.repetitions
+                task_id = progress.add_task("[cyan]Submitting...", total=total_tests)
+                
                 for i in range(self.config.repetitions):
                     console.print(f"Repetition [bold green]{i+1}[/bold green] of [bold green]{self.config.repetitions}[/bold green]")
                     random.shuffle(all_tests)
+                    
                     for test in all_tests:
                         self.submit_test_to_slurm(test)
                         progress.advance(task_id)
@@ -361,18 +354,11 @@ class TestRunner:
 
             
             console.print(Panel("Generating Report", expand=True))
+            
+            report = BasicReport(report_id, self.config, filesize_folder, computing_folder, striping_folder)
+            report.full_report()
 
-            filesize_csv = Path(self.config.workdir, "filesize.csv")
-            computing_csv = Path(self.config.workdir, "computing.csv")
-            striping_csv = Path(self.config.workdir, "striping.csv")
-
-            self.__generate_csv(filesize_folder, filesize_csv )
-            self.__generate_csv(computing_folder, computing_csv)
-            self.__generate_csv(striping_folder, striping_csv)
-
-            #self.__generate_graphs(filesize_csv, computing_csv, striping_csv)
-            #self.__generate_computing_graph(computing_tests)
-            #self.__generate_striping_graph(striping_tests)
+           
 
         except KeyboardInterrupt:
             # Check if job is still in queue

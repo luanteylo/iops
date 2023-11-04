@@ -1,0 +1,12 @@
+matplotlib
+numpy
+pandas
+scipy
+seaborn
+readline
+python-dotenv
+paramiko
+rich
+jinja2
+plotly
+nbformat
