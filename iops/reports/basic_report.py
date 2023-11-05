@@ -9,7 +9,9 @@ import re
 from rich.console import Console
 import sys 
 from iops.setup.iops_config import IOPSConfig
-import shutil
+
+from typing import List
+
 
 console = Console()
 
@@ -33,8 +35,6 @@ class BasicReport:
         self.filesize_fig = self.report_dir / f"filesize_{self.report_id}.svg"
         self.computing_fig = self.report_dir / f"computing_{self.report_id}.svg"
         self.striping_fig = self.report_dir /  f"striping_{self.report_id}.svg"
-
-        self.report_html = self.report_dir / f"report_{self.report_id}.html"
 
         self.filesize_df = None 
         self.computing_df = None 
@@ -153,8 +153,7 @@ class BasicReport:
         # Save the figure
         plt.savefig(self.computing_fig, format='svg')
         plt.close()
-   
-    
+       
     def plot_striping_graph(self):
         
         expected_unique_values = 1
@@ -238,31 +237,60 @@ class BasicReport:
             console.print(f"[bold red] Error:[bold red] Script execution failed: {e}")
             sys.exit(1)
 
-    def full_report(self):        
+class Report:
+    @staticmethod
+    def full_report(reports: List[BasicReport], config : IOPSConfig):        
         # Generate graphs
-        self.plot_filesize_graph()
-        self.plot_computing_graph()
-        self.plot_striping_graph()
+        reports_info = []
 
-        #self.plot_graph(self.computing_df, "Computing Test")
-        #self.plot_graph(self.striping_df, "Striping Test")
+        for report in reports:
+            report_id = report.report_id
+            # generate the graphs
+            report.plot_filesize_graph()
+            report.plot_computing_graph()
+            report.plot_striping_graph()
+
+            # Find the dataframe and column with the maximum bandwidth
+            max_df, bw_col = max( [ (report.filesize_df, 'bw'),
+                                   (report.computing_df, 'bw'),
+                                   (report.striping_df, 'bw')], key=lambda x: x[0][x[1]].max())
+
+            # Get the row with max bandwidth
+            row = max_df[max_df[bw_col] == max_df[bw_col].max()]
+
+            reports_info.append(
+                { 
+                "info": { "report_id": report_id,
+                         "max_bw": f"{row['bw'].values[0]} MiB/s",
+                         "operation": row['access'].values[0],
+                         "num_nodes": row['nodes'].values[0],
+                         "num_tasks": row['tasks'].values[0],
+                         "clients_per_node": row['clients_per_node'].values[0],
+                         "file_size": f"{row['aggregate_filesize'].values[0] / 2**30} GB"
+                        },
+                "graphs": [
+                    {"title": "File Size Test", "filename": report.filesize_fig.name},
+                    {"title": "Computing Test", "filename": report.computing_fig.name},
+                    {"title": "Striping Test", "filename": report.striping_fig.name}
+                ]                                    
+            })
+
+        
+        report_html = config.workdir / "report" / "repor.html"
 
         # create the Jinja2 environment and load the template
-        env = Environment(loader=FileSystemLoader(str(self.config.report_template.parent)))
-        template = env.get_template(self.config.report_template.name)
+        env = Environment(loader=FileSystemLoader(str(config.report_template.parent)))
+        template = env.get_template(config.report_template.name)
 
-        # Include any config information you'd like in the report
-        # Include any config information you'd like in the report
-        report_data = {            
-            'graphs': [
-                {"title": "File Size Test", "filename": self.filesize_fig.name},
-                {"title": "Computing Test", "filename": self.computing_fig.name},
-                {"title": "Striping Test", "filename": self.striping_fig.name}
-            ]
-        }
-
-        with open(self.report_html.as_posix(), "w") as f:
-            f.write(template.render(report_data))
+        with open(report_html.as_posix(), "w") as f:
+            f.write(template.render(reports_info=reports_info))
         
-        console.print(f"[bold green]Report '{self.report_html}' generated successfully.\n")
+        console.print(f"[bold green]Report '{report_html}' generated successfully.\n")
 
+#config = IOPSConfig("../../default_config.ini")
+#report1 = BasicReport(0, config, config.workdir/"filesize_0", config.workdir/"computing_0", config.workdir/"striping_0")
+#report2 = BasicReport(1, config, config.workdir/"filesize_0", config.workdir/"computing_0", config.workdir/"striping_0")
+#print("generating report")
+#Report.full_report([report1, report2], config)
+
+#report.filesize_df

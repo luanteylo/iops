@@ -180,34 +180,58 @@
             <h1 style="display: inline-block; margin-left: 10px;">IOPS Report</h1>
         </div>
 
-        <div class="info-panel panel-spacing">
-            <p><strong>IOPS:</strong> <span>{{iops_version}}</span></p>
-            <p><strong>IOR:</strong> <span>{{ior_version}}</span></p>
-            <p><strong>Total number of tests:</strong> <span>{{total_tests}}</span></p>
-        </div>
-
         
-        <div class="info-panel panel-spacing">
-         <h2>Round: {{round_number}}</h2>
-         <div class="graph-section">
-            {% for graph in graphs %}
-            <div class="graph-container">
-                <h2 class="graph-title">{{ graph.title }}</h2>
-                <img src="{{ graph.filename }}" alt="{{ graph.title }}" class="graph" onclick="openLightbox('{{ graph.filename }}', '{{ graph.title }}')">
+
+        {% for report in reports_info %}
+            <div class="info-panel panel-spacing">
+             <h2>Round: {{report.info.report_id}}</h2>
+             <div class="info-panel panel-spacing">
+                <h2>Max Bandwidth Test Case</h2>
+                    <table>
+                        <tr>
+                            <th>Max Bandwidth</th>
+                            <td>{{report.info.max_bw}}</td>
+                        </tr>
+                        <tr>
+                            <th>Operation</th>
+                            <td>{{report.info.operation}}</td>
+                        </tr>
+                        <tr>
+                            <th>Computer Nodes</th>
+                            <td>{{report.info.num_nodes}}</td>
+                        </tr>
+                        <tr>
+                            <th>Processes</th>
+                            <td>{{report.info.num_tasks}}</td>
+                        </tr>
+                        <tr>
+                            <th>Processes per Node</th>
+                            <td>{{report.info.clients_per_node}}</td>
+                        </tr>
+                        <tr>
+                            <th>File Size</th>
+                            <td>{{report.info.file_size}}</td>
+                        </tr>
+                    </table>
+                </div>
+
+                 <div class="graph-section">
+                    {% for graph in report.graphs %}
+                    <div class="graph-container">
+                        <h2 class="graph-title">{{ graph.title }}</h2>
+                        <img src="{{ graph.filename }}" alt="{{ graph.title }}" class="graph" onclick="openLightbox('{{ graph.filename }}', '{{ graph.title }}')">
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
-            {% endfor %}
-        </div>
-    </div>
+        {% endfor %}
     
     <div class="lightbox" id="lightbox" onclick="closeLightbox()">
         <img id="lightbox-img" src="" alt="">
     </div>
 
-    <div class="info-panel panel-spacing">
-        <h2> Test information </h2>
-        <p><strong>Max Bandwidth:  <span>{{max_bw}}</span> </strong></p>
-        <p><strong>Test case: </strong> <span>{{max_test_case}}</span></p>
-    </div>
+    
+
 </div>
 
 <script>

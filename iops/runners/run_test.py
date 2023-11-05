@@ -16,7 +16,7 @@ import shutil
 
 from iops.setup.iops_config import IOPSConfig
 from iops.setup.generator import Generator
-from iops.reports.basic_report import BasicReport
+from iops.reports.basic_report import BasicReport, Report
 from typing import List
 
 #install(show_locals=True)
@@ -110,7 +110,7 @@ class TestRunner:
         
         console.print(Panel(f"[bold green]Starting test...", expand=True))
 
-    def __generate_file_cases(self, test_folder: Path, dict_info = None):        
+    def __generate_file_cases(self, test_folder: Path, dict_info):        
         cases = []
         start_size = 256 * 2**20  # 256 MiB
         max_size = self.config.max_volume
@@ -143,7 +143,15 @@ class TestRunner:
             file_path = test_folder / f"{i}"
             file_path.mkdir(exist_ok=True)
 
-            case = template_tags = {
+            operation = dict_info['operation']
+            if operation == "write":
+                operation = "-w"
+            elif operation == "read":
+                operation = "-r"
+            else:
+                raise Exception("Operation not supported by IOR")
+
+            case = {
                 "job_name": f"iops_filesize_{current_size}_{i+1}",
                 #"partition": "The partition to submit the job to",
                 "ntasks":total_processes,
@@ -154,7 +162,7 @@ class TestRunner:
                 "constraint": self.config.slurm_constraint,
                 "modules": self.config.modules,
                 "ior_output_path": self.config.benchmark_output,
-                "ior_parameter": f"-w -t 1m -b {bytes_per_process}b"                
+                "ior_parameter": f"{operation} -t 1m -b {bytes_per_process}b"                
             }
             # generate the slurm script            
             Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
@@ -166,7 +174,7 @@ class TestRunner:
         
         return cases
     
-    def __generate_striping_cases(self, test_folder : Path, dict_info = None):        
+    def __generate_striping_cases(self, test_folder : Path, dict_info):        
         cases = []
         file_size = 32 * 2**30
         num_computing_nodes = 4
@@ -189,7 +197,23 @@ class TestRunner:
             file_path = test_folder / f"{i}"
             file_path.mkdir(exist_ok=True)
 
-            case = template_tags = {
+            operation = dict_info['operation']
+            if operation == "write":
+                operation = "-w"
+            elif operation == "read":
+                operation = "-r"
+            else:
+                raise Exception("Operation not supported by IOR")
+
+            operation = dict_info['operation']
+            if operation == "write":
+                operation = "-w"
+            elif operation == "read":
+                operation = "-r"
+            else:
+                raise Exception("Operation not supported by IOR")
+
+            case = {
                 "job_name": f"iops_striping_{i+1}",
                 #"partition": "The partition to submit the job to",
                 "ntasks":total_processes,
@@ -200,7 +224,7 @@ class TestRunner:
                 "constraint": self.config.slurm_constraint,
                 "modules": self.config.modules,
                 "ior_output_path": self.config.benchmark_output / stripe_folder,
-                "ior_parameter": f"-w -t 1m -b {bytes_per_process}b"                
+                "ior_parameter": f"{operation} -t 1m -b {bytes_per_process}b"                
             }
             # generate the slurm script            
             Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
@@ -213,7 +237,7 @@ class TestRunner:
         
         return cases
 
-    def __generate_computing_cases(self, test_folder: Path, dict_info = None):        
+    def __generate_computing_cases(self, test_folder: Path, dict_info):        
         cases = []
         current_nodes = 1
         max_nodes = self.config.max_nodes
@@ -236,7 +260,15 @@ class TestRunner:
             file_path = test_folder / f"{i}"
             file_path.mkdir(exist_ok=True)
 
-            case = template_tags = {
+            operation = dict_info['operation']
+            if operation == "write":
+                operation = "-w"
+            elif operation == "read":
+                operation = "-r"
+            else:
+                raise Exception("Operation not supported by IOR")
+
+            case = {
                 "job_name": f"iops_computing_{current_nodes}_{i+1}",
                 #"partition": "The partition to submit the job to",
                 "ntasks":total_processes,
@@ -247,7 +279,7 @@ class TestRunner:
                 "constraint": self.config.slurm_constraint,
                 "modules": self.config.modules,
                 "ior_output_path": self.config.benchmark_output,
-                "ior_parameter": f"-w -t 1m -b {bytes_per_process}b"                
+                "ior_parameter": f"{operation} -t 1m -b {bytes_per_process}b"                
             }
             # generate the slurm script            
             Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
@@ -285,6 +317,69 @@ class TestRunner:
 
         # Once a job is submitted and finished, advance the progress bar by 1 step        
 
+    def __run_write_test(self, filesize_folder: Path, computing_folder: Path, striping_folder: Path):
+        # first, let's create the slurm scripts to generate the file size tests
+        file_size_tests = self.__generate_file_cases(filesize_folder, {"operation": "write"})
+        # then, let's create the slurm scripts to generate the computing tests
+        computing_tests = self.__generate_computing_cases(computing_folder, {"operation": "write"})
+        # finally, let's create the slurm scripts to generate the striping tests
+        striping_tests = []
+        if self.config.stripe_folders is not None:
+            striping_tests = self.__generate_striping_cases(striping_folder, {"operation": "write"})
+        
+        all_tests = file_size_tests + computing_tests + striping_tests
+
+        # Custom Progress Bar
+        custom_columns = [
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total} ({task.percentage:.2f}%)"),
+        ]
+
+        with Progress(*custom_columns, console=console, transient=True) as progress:
+            total_tests = len(all_tests) * self.config.repetitions
+            task_id = progress.add_task("[cyan]Submitting...", total=total_tests)
+            
+            for i in range(self.config.repetitions):
+                console.print(f"Repetition [bold green]{i+1}[/bold green] of [bold green]{self.config.repetitions}[/bold green]")
+                random.shuffle(all_tests)
+                
+                for test in all_tests:
+                    self.submit_test_to_slurm(test)
+                    progress.advance(task_id)
+
+    def __run_read_test(self, filesize_folder: Path, computing_folder: Path, striping_folder: Path):
+        # first, let's create the slurm scripts to generate the file size tests
+        file_size_tests = self.__generate_file_cases(filesize_folder, {"operation": "read"})
+        # then, let's create the slurm scripts to generate the computing tests
+        computing_tests = self.__generate_computing_cases(computing_folder, {"operation": "read"})
+        # finally, let's create the slurm scripts to generate the striping tests
+        striping_tests = []
+        if self.config.stripe_folders is not None:
+            striping_tests = self.__generate_striping_cases(striping_folder, {"operation": "read"})
+        
+        all_tests = file_size_tests + computing_tests + striping_tests
+
+        # Custom Progress Bar
+        custom_columns = [
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total} ({task.percentage:.2f}%)"),
+        ]
+
+        with Progress(*custom_columns, console=console, transient=True) as progress:
+            total_tests = len(all_tests) * self.config.repetitions
+            task_id = progress.add_task("[cyan]Submitting...", total=total_tests)
+            
+            for i in range(self.config.repetitions):
+                console.print(f"Repetition [bold green]{i+1}[/bold green] of [bold green]{self.config.repetitions}[/bold green]")
+                random.shuffle(all_tests)
+                
+                for test in all_tests:
+                    self.submit_test_to_slurm(test)
+                    progress.advance(task_id)
+
+            
     def __clean_workdir(self):
         try:
             # Clean everything inside the working directory
@@ -306,60 +401,49 @@ class TestRunner:
 
         start_time = time.time()
         error = False
-        report_id = 0
-        round = 0
 
-        try:                        
+        reports = []
+
+        try:
             # First, generate the folder structure
             # Create 'filesize' folder and subfolders for each file size step
-            filesize_folder = self.config.workdir / f'filesize_{round}'
+            round_write = 0
+            filesize_folder = self.config.workdir / f'filesize_{round_write}'
             filesize_folder.mkdir(exist_ok=True)            
             # Create 'computing' folder and subfolders for each compute node
-            computing_folder = self.config.workdir / f'computing_{round}'
+            computing_folder = self.config.workdir / f'computing_{round_write}'
             computing_folder.mkdir(exist_ok=True)
             # Create 'striping' folder
-            striping_folder = self.config.workdir / f'striping_{round}'
+            striping_folder = self.config.workdir / f'striping_{round_write}'
             striping_folder.mkdir(exist_ok=True)
+
+            self.__run_write_test(filesize_folder, computing_folder, striping_folder)            
+            reports.append(BasicReport(round_write, self.config, filesize_folder, computing_folder, striping_folder))
+
+            round_read = 1
+
+            # First, generate the folder structure
+            # Create 'filesize' folder and subfolders for each file size step
+            round_write = 0
+            filesize_folder = self.config.workdir / f'filesize_{round_read}'
+            filesize_folder.mkdir(exist_ok=True)            
+            # Create 'computing' folder and subfolders for each compute node
+            computing_folder = self.config.workdir / f'computing_{round_read}'
+            computing_folder.mkdir(exist_ok=True)
+            # Create 'striping' folder
+            striping_folder = self.config.workdir / f'striping_{round_read}'
+            striping_folder.mkdir(exist_ok=True)
+
+            self.__run_read_test(filesize_folder, computing_folder, striping_folder)            
+            reports.append(BasicReport(round_read, self.config, filesize_folder, computing_folder, striping_folder))
+
             
-            # first, let's create the slurm scripts to generate the file size tests
-            file_size_tests = self.__generate_file_cases(filesize_folder)
-            # then, let's create the slurm scripts to generate the computing tests
-            computing_tests = self.__generate_computing_cases(computing_folder)
-            # finally, let's create the slurm scripts to generate the striping tests
-            striping_tests = []
-            if self.config.stripe_folders is not None:
-                striping_tests = self.__generate_striping_cases(striping_folder)
-            # s(self, striping_folder : Path, file_size : int, num_computing_nodes : int)
-
-            all_tests = file_size_tests + computing_tests + striping_tests
-
-            # Custom Progress Bar
-            custom_columns = [
-                TextColumn("[bold blue]{task.description}"),
-                BarColumn(),
-                TextColumn("{task.completed}/{task.total} ({task.percentage:.2f}%)"),
-            ]
-
-            with Progress(*custom_columns, console=console, transient=True) as progress:
-                total_tests = len(all_tests) * self.config.repetitions
-                task_id = progress.add_task("[cyan]Submitting...", total=total_tests)
-                
-                for i in range(self.config.repetitions):
-                    console.print(f"Repetition [bold green]{i+1}[/bold green] of [bold green]{self.config.repetitions}[/bold green]")
-                    random.shuffle(all_tests)
+            console.print("[bold green]All jobs completed successfully.")            
+            console.print(Panel("Generating Report", expand=True))            
                     
-                    for test in all_tests:
-                        self.submit_test_to_slurm(test)
-                        progress.advance(task_id)
-
-            console.print("[bold green]All jobs completed successfully.")
-
+            Report.full_report(reports=reports, config=self.config)
             
-            console.print(Panel("Generating Report", expand=True))
-            
-            report = BasicReport(report_id, self.config, filesize_folder, computing_folder, striping_folder)
-            report.full_report()
-
+                
            
 
         except KeyboardInterrupt:
