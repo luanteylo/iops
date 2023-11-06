@@ -92,7 +92,7 @@ class Generator:
             f.write(bash_script)
 
     @staticmethod
-    def report(reports: List[Report], report_path : Path, config : IOPSConfig):        
+    def report(reports: List[Report], report_html : Path, config : IOPSConfig):        
         # Generate graphs
         reports_info = []
 
@@ -104,7 +104,7 @@ class Generator:
         env = Environment(loader=FileSystemLoader(str(config.report_template.parent)))
         template = env.get_template(config.report_template.name)
 
-        with open(report_path.as_posix(), "w") as f:
+        with open(report_html.as_posix(), "w") as f:
             f.write(template.render(reports_info=reports_info, 
                                     current_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
       

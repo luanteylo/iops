@@ -323,7 +323,8 @@ class TestRunner:
             
             for round in (0, 1):
 
-                report = Report(self.config, report_id=round, description=f"Test report {round}")                
+                report = Report(self.config, report_id=round, description=f"Test report {round}")          
+                    
 
                 benchmark_output = self.config.benchmark_output
 
@@ -351,6 +352,8 @@ class TestRunner:
                 report.add_test(computing_folder, test_id= uuid.uuid4(), type=TestType.COMPUTING)               
                 # Finally, let's create the slurm scripts to generate the computing tests
                 all_tests.extend(self.__generate_computing_cases(benchmark_output, computing_folder))
+
+                reports.append(report)  
             
             with Progress(*custom_columns, console=console, transient=True) as progress:
                 total_tests = len(all_tests) * self.config.repetitions

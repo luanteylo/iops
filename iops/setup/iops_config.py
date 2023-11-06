@@ -88,8 +88,6 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
-
-        self.reportdir = self.workdir / "report"
         
 
         if self.mode not in VALID_MODES:
@@ -116,6 +114,9 @@ class IOPSConfig:
 
         if not self.workdir.is_dir():
             self.errors.append(f"Invalid path for workdir folder: '{self.workdir}'")
+        
+        self.reportdir = self.workdir / "report"
+        self.reportdir.mkdir(parents=True, exist_ok=True)
 
         if self.repetitions <= 0:
             self.errors.append(f"The number of repetitions must be greater than zero.")        

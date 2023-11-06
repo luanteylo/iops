@@ -20,6 +20,7 @@ class Report():
         self.description = description
 
         self.reportdir = self.config.reportdir / f"report_{self.report_id}"
+        self.reportdir.mkdir(parents=True, exist_ok=True)
 
         self.tests : dict = {}
 
