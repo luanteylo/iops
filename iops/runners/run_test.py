@@ -333,19 +333,22 @@ class TestRunner:
                 else:
                      # Create 'striping' folder
                     striping_folder = self.config.workdir / f'striping_{round}'
-                    report.add_test(striping_folder, test_id= uuid.uuid4(), test_type=TestType.STRIPING)
+                    report.add_test(striping_folder, test_id= uuid.uuid4(), type=TestType.STRIPING)
+                    striping_folder.mkdir(exist_ok=True)
                     # let's create the slurm scripts to generate the striping tests
                     all_tests.extend(self.__generate_striping_cases(striping_folder))
 
                 filesize_folder = self.config.workdir / f'filesize_{round}'
-                report.add_test(filesize_folder,test_id= uuid.uuid4(), test_type=TestType.FILE_SIZE)                
+                filesize_folder.mkdir(exist_ok=True)
+                report.add_test(filesize_folder,test_id= uuid.uuid4(), type=TestType.FILESIZE)                
                 # Then, let's create the slurm scripts to generate the file size tests
                 all_tests.extend(self.__generate_file_cases(benchmark_output, filesize_folder))
 
                   
                 # Create 'computing' folder and subfolders for each compute node
                 computing_folder = self.config.workdir / f'computing_{round}'
-                report.add_test(computing_folder, test_id= uuid.uuid4(), test_type=TestType.COMPUTING_NODES)               
+                computing_folder.mkdir(exist_ok=True)
+                report.add_test(computing_folder, test_id= uuid.uuid4(), type=TestType.COMPUTING)               
                 # Finally, let's create the slurm scripts to generate the computing tests
                 all_tests.extend(self.__generate_computing_cases(benchmark_output, computing_folder))
             
