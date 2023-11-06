@@ -54,7 +54,7 @@ def main():
 
     if args.generate_ini:
         file_name = args.generate_ini if args.generate_ini != True else 'default_config.ini'
-        Generator.generate_ini_file(file_name)
+        Generator.ini_file(file_name)
         
         return  # Exit after generating the init file
 

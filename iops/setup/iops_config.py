@@ -88,6 +88,8 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
+
+        self.reportdir = self.workdir / "report"
         
 
         if self.mode not in VALID_MODES:

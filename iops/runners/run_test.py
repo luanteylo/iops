@@ -4,20 +4,20 @@ from rich.table import Table
 from rich import box
 from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.traceback import install
-from rich.traceback import Traceback
 import time
 import sys
 from pathlib import Path
 import math
-import random
 import subprocess
 import shutil
+import uuid
+import random
 
 from iops.setup.iops_config import IOPSConfig
 from iops.setup.generator import Generator
-from iops.reports.basic_report import BasicReport, Report
-from typing import List
+from iops.reports.report import Report
+from iops.setup.tags import TestType
+
 
 #install(show_locals=True)
 console = Console()
@@ -164,7 +164,7 @@ class TestRunner:
                 "ior_parameter": f"-w -t 1m -b {bytes_per_process}b -k"                
             }
             # generate the slurm script            
-            Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
+            Generator.slurm_script(self.config.slurm_template, file_path, file_name, case)
             console.print(f"[bold green]Created file:[/bold green] [bold cyan]{file_path/file_name}[/bold cyan]...")
 
             cases.append(file_path/file_name)        
@@ -210,7 +210,7 @@ class TestRunner:
                 "ior_parameter": f"-w -t 1m -b {bytes_per_process}b -k"                
             }
             # generate the slurm script            
-            Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
+            Generator.slurm_script(self.config.slurm_template, file_path, file_name, case)
             console.print(f"[bold green]Created file:[/bold green] [bold cyan]{file_path/file_name}[/bold cyan]...")
             cases.append(file_path/file_name)        
 
@@ -257,7 +257,7 @@ class TestRunner:
                 "ior_parameter": f"-w -t 1m -b {bytes_per_process}b -k"                
             }
             # generate the slurm script            
-            Generator.generate_slurm_script(self.config.slurm_template, file_path, file_name, case)
+            Generator.slurm_script(self.config.slurm_template, file_path, file_name, case)
             console.print(f"[bold green]Created file:[/bold green] [bold cyan]{file_path/file_name}[/bold cyan]...")
             cases.append(file_path/file_name)        
 
@@ -323,14 +323,7 @@ class TestRunner:
             
             for round in (0, 1):
 
-                filesize_folder = self.config.workdir / f'filesize_{round}'
-                filesize_folder.mkdir(exist_ok=True)            
-                # Create 'computing' folder and subfolders for each compute node
-                computing_folder = self.config.workdir / f'computing_{round}'
-                computing_folder.mkdir(exist_ok=True)
-                # Create 'striping' folder
-                striping_folder = self.config.workdir / f'striping_{round}'
-                striping_folder.mkdir(exist_ok=True)
+                report = Report(self.config, report_id=round, description=f"Test report {round}")                
 
                 benchmark_output = self.config.benchmark_output
 
@@ -338,19 +331,23 @@ class TestRunner:
                     benchmark_output = benchmark_output / "ior_8"
                     striping_folder = None
                 else:
+                     # Create 'striping' folder
+                    striping_folder = self.config.workdir / f'striping_{round}'
+                    report.add_test(striping_folder, test_id= uuid.uuid4(), test_type=TestType.STRIPING)
                     # let's create the slurm scripts to generate the striping tests
                     all_tests.extend(self.__generate_striping_cases(striping_folder))
 
+                filesize_folder = self.config.workdir / f'filesize_{round}'
+                report.add_test(filesize_folder,test_id= uuid.uuid4(), test_type=TestType.FILE_SIZE)                
                 # Then, let's create the slurm scripts to generate the file size tests
                 all_tests.extend(self.__generate_file_cases(benchmark_output, filesize_folder))
+
+                  
+                # Create 'computing' folder and subfolders for each compute node
+                computing_folder = self.config.workdir / f'computing_{round}'
+                report.add_test(computing_folder, test_id= uuid.uuid4(), test_type=TestType.COMPUTING_NODES)               
                 # Finally, let's create the slurm scripts to generate the computing tests
                 all_tests.extend(self.__generate_computing_cases(benchmark_output, computing_folder))
-
-                reports.append(BasicReport(report_id=round, config=self.config, 
-                                           filesize_path=filesize_folder, 
-                                           computing_path=computing_folder, 
-                                           striping_path=striping_folder))
-            
             
             with Progress(*custom_columns, console=console, transient=True) as progress:
                 total_tests = len(all_tests) * self.config.repetitions
@@ -362,14 +359,13 @@ class TestRunner:
                     
                     for test in all_tests:
                         self.submit_test_to_slurm(test)
-                        progress.advance(task_id)
-            
+                        progress.advance(task_id)            
 
             
             console.print("[bold green]All jobs completed successfully.")            
             console.print(Panel("Generating Report", expand=True))            
                     
-            Report.full_report(reports=reports, config=self.config)
+            Generator.report(reports, self.config.reportdir / "report.html", self.config)
             
                 
            
