@@ -9,7 +9,7 @@ import re
 from rich.console import Console
 import sys 
 from iops.setup.iops_config import IOPSConfig
-
+from datetime import datetime
 from typing import List
 
 
@@ -40,20 +40,22 @@ class BasicReport:
         self.computing_df = None 
         self.striping_df = None 
 
-        self.__load_data()
+        #self.__load_data()
     
-    def __load_data(self):
+    def load_data(self):
         # First generate the CSV files
-        self.__generate_csv(self.filesize_path, self.filesize_csv)
-        self.__generate_csv(self.computing_path, self.computing_csv)
-        self.__generate_csv(self.striping_path, self.striping_csv)
+        if self.__generate_csv(self.filesize_path, self.filesize_csv):
+            self.filesize_df = pd.read_csv(self.filesize_csv)
 
-        # Load pandas
-        self.filesize_df = pd.read_csv(self.filesize_csv)
-        self.computing_df = pd.read_csv(self.computing_csv)
-        self.striping_df = pd.read_csv(self.striping_csv)
+        if self.__generate_csv(self.computing_path, self.computing_csv):
+            self.computing_df = pd.read_csv(self.computing_csv)
+
+        if self.__generate_csv(self.striping_path, self.striping_csv):
+            self.striping_df = pd.read_csv(self.striping_csv)
 
     def plot_filesize_graph(self):
+        if self.filesize_df is None:
+            return False
         # Consistency check
         expected_unique_values = 1
         for column in ['nodes', 'tasks', 'access', 'clients_per_node']:
@@ -104,8 +106,11 @@ class BasicReport:
         # Save the figure
         plt.savefig(self.filesize_fig, format='svg')
         plt.close()
+        return True
 
     def plot_computing_graph(self):
+        if self.computing_df is None:
+            return False
         # Consistency check
         expected_unique_values = 1
         for column in ['access', 'clients_per_node', 'aggregate_filesize']:
@@ -153,9 +158,11 @@ class BasicReport:
         # Save the figure
         plt.savefig(self.computing_fig, format='svg')
         plt.close()
+        return True
        
     def plot_striping_graph(self):
-        
+        if self.striping_df is None:
+            return False
         expected_unique_values = 1
         for column in ['access', 'nodes', 'tasks', 'clients_per_node', 'aggregate_filesize']:
             if self.striping_df[column].nunique() != expected_unique_values:
@@ -218,8 +225,12 @@ class BasicReport:
         #plt.show()
         plt.savefig(self.striping_fig, format='svg')
         plt.close()
+        return True
     
-    def __generate_csv(self, input_path : Path, output_path : Path):       
+    def __generate_csv(self, input_path : Path, output_path : Path):     
+
+        if input_path == None:
+            return False  
         # First generate CSV files using ior_2_csv tool                
         args = [self.config.ior_2_csv, input_path, output_path]         
         # Call the script and wait for it to finish
@@ -232,6 +243,8 @@ class BasicReport:
             else:
                 console.print(f"[bold red] Error:[bold red] Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")                
                 sys.exit(1)
+            
+            return True
 
         except subprocess.CalledProcessError as e:
             console.print(f"[bold red] Error:[bold red] Script execution failed: {e}")
@@ -244,36 +257,44 @@ class Report:
         reports_info = []
 
         for report in reports:
+
+            report.load_data()
             report_id = report.report_id
             # generate the graphs
-            report.plot_filesize_graph()
-            report.plot_computing_graph()
-            report.plot_striping_graph()
+            graphs = []
+            df_list = []
+            if report.plot_filesize_graph():
+                graphs.append(
+                     {"title": "File Size Test", "filename": report.filesize_fig.name},
+                )
+                df_list.append((report.filesize_df, 'bw'))
+            if report.plot_computing_graph():
+                graphs.append(
+                    {"title": "Computing Test", "filename": report.computing_fig.name},
+                )
+                df_list.append((report.computing_df, 'bw'))
+            if report.plot_striping_graph():
+                graphs.append(
+                    {"title": "Striping Test", "filename": report.striping_fig.name}
+                )
+                df_list.append((report.striping_df, 'bw'))
 
             # Find the dataframe and column with the maximum bandwidth
-            max_df, bw_col = max( [ (report.filesize_df, 'bw'),
-                                   (report.computing_df, 'bw'),
-                                   (report.striping_df, 'bw')], key=lambda x: x[0][x[1]].max())
+            max_df, bw_col = max(df_list, key=lambda x: x[0][x[1]].max())
 
             # Get the row with max bandwidth
             row = max_df[max_df[bw_col] == max_df[bw_col].max()]
 
-            reports_info.append(
-                { 
-                "info": { "report_id": report_id,
-                         "max_bw": f"{row['bw'].values[0]} MiB/s",
-                         "operation": row['access'].values[0],
-                         "num_nodes": row['nodes'].values[0],
-                         "num_tasks": row['tasks'].values[0],
-                         "clients_per_node": row['clients_per_node'].values[0],
-                         "file_size": f"{row['aggregate_filesize'].values[0] / 2**30} GB"
-                        },
-                "graphs": [
-                    {"title": "File Size Test", "filename": report.filesize_fig.name},
-                    {"title": "Computing Test", "filename": report.computing_fig.name},
-                    {"title": "Striping Test", "filename": report.striping_fig.name}
-                ]                                    
-            })
+            reports_info.append({"info": { "report_id": report_id,
+                                           "max_bw": f"{row['bw'].values[0]} MiB/s",
+                                           "operation": row['access'].values[0],
+                                           "num_nodes": row['nodes'].values[0],
+                                           "num_tasks": row['tasks'].values[0],
+                                           "clients_per_node": row['clients_per_node'].values[0],
+                                           "file_size": f"{row['aggregate_filesize'].values[0] / 2**30} GB",
+                                           "striping": row['path'].values[0]
+                                        },
+                                "graphs":graphs})
 
         
         report_html = config.workdir / "report" / "repor.html"
@@ -283,14 +304,21 @@ class Report:
         template = env.get_template(config.report_template.name)
 
         with open(report_html.as_posix(), "w") as f:
-            f.write(template.render(reports_info=reports_info))
+            f.write(template.render(reports_info=reports_info, 
+                                    current_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         
         console.print(f"[bold green]Report '{report_html}' generated successfully.\n")
 
-#config = IOPSConfig("../../default_config.ini")
+#config = IOPSConfig("../../config.ini")
 #report1 = BasicReport(0, config, config.workdir/"filesize_0", config.workdir/"computing_0", config.workdir/"striping_0")
-#report2 = BasicReport(1, config, config.workdir/"filesize_0", config.workdir/"computing_0", config.workdir/"striping_0")
-#print("generating report")
-#Report.full_report([report1, report2], config)
+#report2 = BasicReport(1, config, config.workdir/"filesize_1", config.workdir/"computing_1", None)
 
-#report.filesize_df
+#reports = [report1, 
+#           report2
+#           ]
+#Report.full_report(reports, config)
+
+
+
+
+

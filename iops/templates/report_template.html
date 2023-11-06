@@ -177,7 +177,8 @@
 <body>
     <div class="container">
         <div class="header">           
-            <h1 style="display: inline-block; margin-left: 10px;">IOPS Report</h1>
+            <h1 style="display: inline-block; margin-left: 10px;">IOPS Report</h1><br>
+            <p> Generated on {{ current_date }} </p>
         </div>
 
         {% for report in reports_info %}
@@ -209,6 +210,10 @@
                         <tr>
                             <th>File Size</th>
                             <td>{{report.info.file_size}}</td>
+                        </tr>
+                        <tr>
+                            <th>Striping</th>
+                            <td>{{ report.info.striping}}</td>
                         </tr>
                     </table>
                 </div>
