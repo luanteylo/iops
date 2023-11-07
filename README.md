@@ -306,10 +306,7 @@ A simple command-line client that uses Gmail to send emails. This tool is partic
 
 `ior_2_csv` is a Python tool designed to process and aggregate IOR benchmark results. The tool reads all IOR batch files from a specified folder and exports the extracted data to a CSV file. It provides a command-line interface with various options to customize the operation. 
 
-#### Features
 
-- **Flexible File Search**: The script accepts different file extensions and can even search by a specific filename.
-- **Remote File Fetching**: An optional `--get_files` argument allows the tool to download files from a remote host via SSH.
 ---
 
 
