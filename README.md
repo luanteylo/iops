@@ -27,11 +27,14 @@ In this paper, we conducted numerous IOR executions and discovered many interest
 
 But back then, we spent a lot of time writing scripts, and the automation of this process was almost non-existent. It was very error-prone, and the scripts were not portable to other machines: it was a nightmare when we tried to perform the same tests on another machine.
 
-Moreover, it was extremely time-consuming to start the tests, wait for completion, process the data, generate the graphs, and so on. Honestly, we had a postdoc who was doing all that for us, so it wasn't really a big problem because we didn't care much about him, but now he has a permanent position, so we are forced to improve his working conditions (Damn left-wing!).
+Moreover, it was extremely time-consuming to start the tests, wait for completion, process the data, generate the graphs, and so on. Honestly, we had a postdoc who was doing all that for us, so it wasn't really a big problem because we didn't care much about him, but now he has a permanent position, so we are forced to improve his working conditions.
 
 ## Ok! I'm Convinced. How Does It Work?
 
-Well, we can't show you due to a minor detail that we forgot to tell you: it doesn't exist yet.
+Well, we can't show you due to a minor detail that we forgot to tell you: ~~it doesn't exist yet.~~
+
+**NOTE FROM THE FUTURE: IT DOES EXIST NOW! If you want to install and use it, go to the [Getting Started Section](#getting-started-section). We decided to keep this text because it explains important things; in the near future, it will be reformulated.**
+
 
 Of course, we have the scripts from the paper, and some steps like data parsing and graph generation are already in place, but it lacks the glue that IOPS aims to be. Anyway, let me explain how it will work and the architecture behind it.
 
@@ -88,10 +91,9 @@ Tests need to be repeated temporally and spatially to minimize the effects of co
 After running everything, IOPS will perform **Data Aggregation and Analysis**: It will generate graphs and evaluate the results, producing a report on the impact of each parameter on the system under evaluation.
 
 
-
-
-
 ---
+
+# Getting Started Section
 
 ## Dependencies
 
@@ -111,8 +113,8 @@ The following packages are required to run the code:
         ```
     - **CentOS/RHEL**: 
         ```
-        sudo yum install openmpi-devel
-        ```
+        sudo yum install openmpi-devel        ```
+    
 
 ### Optional Dependencies
 
@@ -152,9 +154,15 @@ Activate your new Conda environment with:
 conda activate your_environment_name
 ```
 
-Replace `your_environment_name` with the name you've given to your Conda environment in the `environment.yml` file.
+Replace `your_environment_name` with the name you've given to your Conda environment in the `environment.yml` file (by default `iops_env`).
 
-#### 3. Install IOR 
+#### 4. Install IOPS
+```bash
+# at iops directory
+pip install .
+```
+
+#### 5. Install IOR 
 
 If you haven't installed IOR yet, you can use the provided `install_ior.sh` script to do so. Before running the script, make sure to give it the necessary permissions:
 
@@ -170,28 +178,49 @@ Then, run the script:
 ./install_ior.sh
 ```
 
+
 ### Verifying the Installation
 
-To verify that everything is set up correctly, you can run the following command:
+To ensure that everything is set up correctly, you can run IOPS with the `--check_setup` option. However, you must first generate a .ini file. IOPS provides an option to assist you with this. Begin by generating the .ini file:
 
 ```bash
-iops --check_setup
+iops.py --generate_ini
 ```
 
-If everything is installed correctly, you should see the expected output:
+This command will create the `default_config.ini` file. You then need to update this file according to your system's specifications. After updating, you can check your configuration with the `--check_setup` option:
+
+```bash
+iops default_config.ini --check_setup
+```
+
+If everything is installed correctly, you should see the following output:
 
 ```bash
 Ready to Go!
 ```
 
+Remember, if you are using a cluster that utilizes modules, you need to load the MPI module, which is required by IOR.
+
+
+## Running iops
+
+If everything is okay, you can run `iops.py` with the following command:
+
+```bash
+./iops.py default_config.ini
+```
+
+Here, `default_config.ini` is the configuration file.
+
+At the end of the execution, iops will generate an HTML report containing the details of the benchmark rounds. The HTML report is written to the work directory (defined in the .ini file) within the `report` folder. The HTML report will look like this:
+
+![IOPS Report](.images/iops_report.png)
 
 # The Tools Folder
 
 The `tools` folder contains several tools that were developed during the work reported in [Attention, PDF!](https://inria.hal.science/hal-03753813/). In essence, these are tools designed to perform some of the steps that will be carried out in `iops.py`. Others, like `hourglass.py` and `code_shooter.py`, are useful for creating experiments.
 
-These tools were previously tucked away in a very old project folder deep within the recesses of my hard drive. I have decided to make this repository their new home from now on.
-
-Why? Because some of them will be incorporated (or at least called) by `iops.py`. Moreover, we can now justify the use of the word "suite."
+I have decided to make this repository their new home from now on.Why? Because some of them will be incorporated (or at least called) by `iops.py`. Moreover, we can now justify the use of the word "suite."
 
 ---
 

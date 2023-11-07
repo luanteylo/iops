@@ -4,6 +4,6 @@ channels:
 dependencies:
   - python=3.8
   - pip
-  - pip:g
+  - pip:
     - -r requirements.txt
   
