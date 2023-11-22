@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 from argparse import RawTextHelpFormatter
-from iops.setup.checkers import Checker
-from iops.setup.generator import Generator
-from iops.runners.run_test import TestRunner
+from iops.util.checkers import Checker
+from iops.util.generator import Generator
+from iops.core.engine import Engine
+
+from rich.console import Console
+
+console = Console()
 
 app_version = "1.0"
 app_name = "IOPS"
@@ -55,6 +59,8 @@ def main():
     if args.generate_ini:
         file_name = args.generate_ini if args.generate_ini != True else 'default_config.ini'
         Generator.ini_file(file_name)
+
+        console.print(f"[bold green]Configuration file {file_name} generated successfully.")
         
         return  # Exit after generating the init file
 
@@ -68,7 +74,7 @@ def main():
         Checker.check_ior_installation()            
         return  # Exit after running setup checks
 
-    runner = TestRunner(args.conf, args.yes)
+    runner = Engine(args.conf, args.yes)
     runner.run()
 
 

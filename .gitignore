@@ -9,3 +9,5 @@ build/
 dist/
 default_config.ini
 test/
+
+__pycache__/

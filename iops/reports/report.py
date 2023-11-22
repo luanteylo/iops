@@ -5,9 +5,9 @@ import sys
 
 from rich.console import Console
 
-from iops.setup.iops_config import IOPSConfig
+from iops.core.config import IOPSConfig
 from iops.reports.graphs import Graph
-from iops.setup.tags import TestType
+from iops.util.tags import TestType
 
 
 

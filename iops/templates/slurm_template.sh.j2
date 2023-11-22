@@ -17,7 +17,7 @@
 {% endif %}
 
 
-{% if modules|length  > 0 -%}
+{% if modules and modules|length  > 0 -%}
 module purge
 {%- for module in modules %}
 module load {{ module }}
@@ -34,10 +34,7 @@ echo "In the directory: $(pwd)"
 echo "As the user: $(whoami)"
 echo "============================"
 
-## PATH where IOR will write the file
-IOR_PATH={{ ior_output_path }}
-
-mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1  ior {{ior_parameter}} -o ${IOR_PATH}/testFile1.ior
+mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1  {{benchmark_cmd}}
 
 
 

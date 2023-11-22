@@ -1,13 +1,9 @@
-import logging
 import subprocess
 from rich.console import Console
-from argparse import Namespace
-from iops.setup.iops_config import IOPSConfig
+from iops.core.config import IOPSConfig
 from rich.traceback import Traceback
-from rich.traceback import install
 
 import sys
-
 
 
 console = Console()

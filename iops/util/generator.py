@@ -5,7 +5,7 @@ from jinja2 import Environment, FileSystemLoader
 from typing import List
 from datetime import datetime
 
-from iops.setup.iops_config import IOPSConfig
+from iops.core.config import IOPSConfig
 from iops.reports.report import Report
 
 
@@ -16,6 +16,7 @@ class Generator:
         config_nodes = configparser.ConfigParser()
         config_storage = configparser.ConfigParser()
         config_execution = configparser.ConfigParser()
+        config_slurm = configparser.ConfigParser()
 
         config_template = configparser.ConfigParser()
     
@@ -27,10 +28,9 @@ class Generator:
 
         
         config_storage['storage'] = {
-            'benchmark_output': '/path/to/storage # The path to the directory where the benchmark tool will write/read from',            
-            'file_system': 'lustre | beegfs | local # Select the file system',
-            'max_volume':  '34359738368 # Max volume size in bytes (to limit the size of the benchmarked file)',
-            'output_stripe_folders': "ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups.\n" \
+            'filesystem_dir': '/path/to/storage # The path to the directory where the benchmark tool will write/read from',                      
+            'max_volume':  '34359738368 # Max volume size in bytes (to limit the size of the benchmarked file). Warning: the volume needs to be power of 2.',
+            'stripe_folders': "ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups.\n" \
             "# If 'None' is provided, the striping test will not be executed.\n" \
             "# For now, these folders need to be created manually inside the benchmark_output folder using the file system\n"\
             "# utility to define the correct striping setup. These folders need to be defined using a sequential number\n"\
@@ -41,8 +41,9 @@ class Generator:
 
         config_execution['execution'] = {
             'mode': 'fast | complete # Select the mode of execution',
-            'job_manager': 'slurm | None # Specify the job manager. If "None" is provided, the benchmark will be executed locally',
-            'slurm_constraint': 'constraint_1, constraint_2 | None # Some clusters use the slurm constraint parameter (-c) to define the resources. If that is your case, set the list of constraints here, otherwise put None',
+            'search_method' :'greedy # The search method to be used. For now, only greedy is supported',
+            'job_manager': 'slurm | local # Specify the job manager. If "local" is provided, the benchmark will be executed locally',
+            'benchmark_tool': 'ior  # Specify the benchmark tool to use. For now, only IOR is supported.',            
             'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
             'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
             'repetitions': '5 # The number of repetitions for each test',
@@ -53,6 +54,12 @@ class Generator:
             'slurm_template': 'iops/templates/slurm_template.sh.j2 | None # If using Slurm, define the template file to generate the bash scripts. Otherwise, None.',
             'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',            
+        }
+
+        config_slurm['slurm'] = {
+            'slurm_constraint': 'constraint_1, constraint_2 | None # Some clusters use the slurm constraint parameter (-c) to define the resources. If that is your case, set the list of constraints here, otherwise put None',
+            'slurm_partition' : 'None # The partition to be used. If None, no partition is defined',
+            'slurm_time' : 'None # The maximum time for the job. If None, no time is defined'
         }
 
         
@@ -71,24 +78,25 @@ class Generator:
             config_file.write("# Template and scripts \n")
             config_template.write(config_file)
 
+            config_file.write("# Slurm parameters (only used if slurm is selected as the job manager)\n")
+            config_slurm.write(config_file)
+
         
         logging.info(f"Default configuration file generated as {file_name}")
     
     @staticmethod
-    def slurm_script(template_path: Path, output_path: str, file_name: str, case: dict) -> None:
+    def slurm_script(template_path: Path, script_path: Path, case: dict) -> None:
         '''
         Generates a bash script for a given case.
-        The bash script is generated using the template file in template_path and is saved in the output_path directory.
+        The bash script is generated using the template file in template_path and is saved in the script_path file.
         '''
         # create the Jinja2 environment and load the template
         env = Environment(loader=FileSystemLoader(str(template_path.parent)))
         template = env.get_template(template_path.name)
-
         # generate the script
         bash_script = template.render(**case)
-        # write the script to a file
-        script_filename = Path(output_path, file_name)
-        with open(script_filename, 'w') as f:
+        # write the script to a file        
+        with open(script_path, 'w') as f:
             f.write(bash_script)
 
     @staticmethod
