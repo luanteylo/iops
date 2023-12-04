@@ -4,7 +4,8 @@ from rich.console import Console
 from rich.traceback import install
 from pathlib import Path
 
-from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchMethod
+from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType
+
 
 install(show_locals=True)
 
@@ -111,7 +112,7 @@ class IOPSConfig:
         if stripe_folders_str.lower() == 'none':
             self.stripe_folders = None
         else:
-            self.stripe_folders = [stripe.strip() for stripe in stripe_folders_str.split(',')]
+            self.stripe_folders = [Path(stripe.strip()) for stripe in stripe_folders_str.split(',')]
             # check if the stripe_folders are valid
             for folder in self.stripe_folders:
                 full_path = self.filesystem_dir / folder
@@ -137,11 +138,13 @@ class IOPSConfig:
                                                    value=self.mode,
                                                    valid_values=ExecutionMode.__members__.keys()))            
         
-        if self.search_method.upper() not in SearchMethod.__members__:
+        if self.search_method.upper() not in SearchType.__members__:
             self.errors.append(self.__format_error(section="execution",
                                                    key="search_method",
                                                    value=self.search_method,
-                                                   valid_values=SearchMethod.__members__.keys()))
+                                                   valid_values=SearchType.__members__.keys()))
+        else:
+            self.search_method = SearchType[self.search_method.upper()]
 
 
         if job_manager_str.upper() not in jobManager.__members__:

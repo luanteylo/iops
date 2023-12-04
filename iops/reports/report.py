@@ -9,6 +9,9 @@ from iops.core.config import IOPSConfig
 from iops.reports.graphs import Graph
 from iops.util.tags import TestType
 
+from iops.core.search_methods import Test
+
+
 
 
 console = Console()
@@ -41,14 +44,15 @@ class Report():
             console.print(f"[bold red]Error: Script execution failed: {e}")
             sys.exit(1)
     
-    def add_test(self, testpath : Path, test_id : str, type : TestType, testdescription : str = ""):
-        if test_id in self.tests:            
-            raise ValueError(f"Test ID {test_id} already exists!")
+    def add_test(self, test: Test):
+        # testpath : Path, test_id : str, type : TestType, testdescription : str = ""
+        if test.test_id in self.tests:            
+            raise ValueError(f"Test ID {test.test_id} already exists!")
                 
-        self.tests[test_id] = {
-            "testpath" : testpath,
-            "testtype" : type,
-            "testdescription": testdescription,
+        self.tests[test.test_id] = {
+            "testpath" : test.workdir,
+            "testtype" : test.test_type,
+            "testdescription": test.description,
             "csvfile" : None,          
             "df" : None,            
             "graphfile": None,

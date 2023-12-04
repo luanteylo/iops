@@ -11,8 +11,9 @@ import shutil
 from typing import List, Optional
 
 from iops.core.config import IOPSConfig
-from iops.core.search_methods import Test
+from iops.core.search_methods import SearchMethod, Test
 from iops.reports.report import Report
+from iops.util.tags import TestType
 
 
 # This class is the main engine of the application. It is responsible for:
@@ -41,10 +42,13 @@ class Engine:
         self.config_file = config_file
         self.skip_confirmation = skip_confirmation        
         self.clean_workdir = 'yes'
+        self.reports = []
 
         try:
             # Initialize and load configuration
             self.config = IOPSConfig(config_file)
+            # Initialize search method
+            self.search_method = SearchMethod.create(self.config.search_method, self.config)
 
         except Exception as e:
             console.print("[bold red]Error:[/bold red] {}".format(str(e)))
@@ -147,30 +151,65 @@ class Engine:
         return f"{hours} hours, {minutes} minutes, and {seconds} seconds"
 
     def __execute_rounds(self, rounds: List[List[Test]]) -> None:
-        pass
+        for test in rounds:
+            print(test)
     
-    def __build_report(self, round: List[Test]) -> Report:
-        pass
+    def __build_report(self,  report_id: int, round: List[Test]) -> Report:
+        report = Report(self.config, report_id=report_id, description="a report")
+        
+        for test in round:
+            report.add_test(test)          
+        
+        return report
+            
+
+         
+    
+    def __process_report(self, report: Report) -> Optional[int]:
+        # TODO: process the report and return the value for the next round
+        if report.testtype == TestType.FILESIZE:
+            # return 32GB (in bytes)
+            return 32 * 2**30
+        elif report.testtype == TestType.COMPUTING:
+            # return 32
+            return 32
+        elif report.testtype == TestType.STRIPING:
+            return None
+    
 
     def run(self) -> None:
 
         start_time = time.time()
         error = False
         run = True
-        search_method = self.config.search_method
+        # config = IOPSConfig("/home/luan/Devel/io-ps/default_config.ini")     
+        value_nround = None
 
-        
+        round_counter = 0
+
         try:
 
             while run:
                 # Build the next round
-                round = search_method.build_round()
+                round = self.search_method.build_round(value=value_nround)
                 if round not in (None, []):
-                    self.__execute_rounds(round)
-                    self.reports.append(self.__build_report(round))
+                    status = self.__execute_rounds(round)
+                    
+                    if status == False:
+                        raise Exception(f"Error executing round {round_counter}")
+                    
+                    report = self.__build_report(round)
+                    value_nround = self.__process_report(report)
+
+                    # add report to the list
+                    self.reports.append(report)
+
+                    round_counter += 1
+
                 else:
                     self.build_html_report()
                     run = False
+                
  
         except KeyboardInterrupt:
             # Check if job is still in queue
@@ -189,3 +228,12 @@ class Engine:
 
         if error:
             sys.exit(1)
+
+
+
+# let's test the engine
+
+engine = Engine(config_file="/home/luan/Devel/io-ps/default_config.ini", skip_confirmation=True)
+
+
+engine.run()

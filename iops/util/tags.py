@@ -36,7 +36,7 @@ class BenchmarkTool(Enum):
     """
     IOR = "ior"
 
-class SearchMethod(Enum):
+class SearchType(Enum):
     """
     Tags for search methods
     """
