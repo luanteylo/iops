@@ -41,4 +41,3 @@ class SearchType(Enum):
     Tags for search methods
     """
     GREEDY = "greedy"
-    

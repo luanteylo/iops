@@ -9,7 +9,7 @@ from iops.core.config import IOPSConfig
 from iops.reports.graphs import Graph
 from iops.util.tags import TestType
 
-from iops.core.search_methods import Test
+from iops.core.runner import Round
 
 
 
@@ -44,7 +44,7 @@ class Report():
             console.print(f"[bold red]Error: Script execution failed: {e}")
             sys.exit(1)
     
-    def add_test(self, test: Test):
+    def add_test(self, test: Round):
         # testpath : Path, test_id : str, type : TestType, testdescription : str = ""
         if test.test_id in self.tests:            
             raise ValueError(f"Test ID {test.test_id} already exists!")

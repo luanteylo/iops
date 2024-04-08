@@ -16,6 +16,7 @@ console = Console()
 class IOPSConfig:
     def __init__(self, config_path: str):
         self.config = configparser.ConfigParser()
+        self.config_path = config_path
         self.config.read(config_path)
 
 
@@ -274,7 +275,3 @@ class IOPSConfig:
         f"slurm_partition = {self.slurm_partition}\n" \
         f"slurm_time = {self.slurm_time}\n"
         
-
-
-#config = IOPSConfig("/home/luan/Devel/io-ps/test.ini")
-#print(config)
