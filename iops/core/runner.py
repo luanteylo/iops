@@ -4,6 +4,7 @@ from iops.util.tags import TestType
 
 from typing import List, Optional, Any
 from rich.console import Console
+from typing import Union
 import time
 
 console = Console()       
@@ -23,7 +24,7 @@ class Round:
         self.test_type = test_type
         self.current_test = self.parameters
 
-    def next(self) -> dict | None:
+    def next(self) -> Union[dict, None]: # unsupported operand type(s) for |: 'type' and 'NoneType'
         """
         Returns the next test; otherwise, returns None.
         """

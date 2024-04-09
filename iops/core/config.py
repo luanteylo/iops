@@ -1,8 +1,17 @@
 import configparser
 import re
+import sys
+import shutil
 from rich.console import Console
 from rich.traceback import install
 from pathlib import Path
+
+from rich.progress import BarColumn, TextColumn
+from rich.table import Table
+from rich import box
+from rich.panel import Panel
+from rich.prompt import Prompt
+
 
 from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType
 
@@ -10,7 +19,12 @@ from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType
 install(show_locals=True)
 
 console = Console()
-
+                            
+custom_columns = [
+    TextColumn("[bold blue]{task.description}"),
+    BarColumn(),
+    TextColumn("{task.completed}/{task.total} ({task.percentage:.2f}%)"),
+]
 
 
 class IOPSConfig:
@@ -274,4 +288,94 @@ class IOPSConfig:
         f"slurm_constraint = {self.slurm_constraint}\n" \
         f"slurm_partition = {self.slurm_partition}\n" \
         f"slurm_time = {self.slurm_time}\n"
+    
+    def clean_workdir(self) -> None:
+        try:
+            # Clean everything inside the working directory
+            for item in self.workdir.iterdir():
+                if item.is_file() or item.is_symlink():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+        except Exception as e:
+            console.print("[bold red]Error:[/bold red] {}".format(str(e)))
+            sys.exit(1)
+
+    def print_config( self, skip_confirmation: bool):
+        # Display startup message with a panel
+        console.print(Panel(f"[bold green]Starting test with configuration file {self.config_path}...", expand=False))
         
+        # Create a table for node information
+        table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)
+        table.add_column("Setting", style="dim", width=30)
+        table.add_column("Value")
+        table.add_row("Max Nodes", str(self.max_nodes))
+        table.add_row("Processes Per Node", str(self.processes_per_node))
+
+        # Create a table for storage information
+        table.add_row("")
+        table.add_row("File System Dir:", str(self.filesystem_dir))                
+        # print max volume in GB
+        table.add_row("Max Volume", f"{self.max_volume/ 2**30}GB")
+        stripe_folders = self.stripe_folders
+        if stripe_folders is not None:        
+            stripe_folders = ", ".join(f"{stripe}" for stripe in self.stripe_folders)
+        table.add_row("Stripe Folders", str(stripe_folders))
+
+
+        # Create a table for execution information
+        table.add_row("")    
+        table.add_row("Mode", str(self.mode))    
+        table.add_row("Job Manager", str(self.job_manager))
+        
+        
+        modules = self.modules
+        if modules is not None:        
+            modules = ", ".join(f"{module}" for module in self.modules)
+        table.add_row("Modules", str(modules))        
+        table.add_row("Workdir", str(self.workdir))
+        table.add_row("Repetitions", str(self.repetitions))
+
+        table.add_row("")  
+        table.add_row("Slurm Template", str(self.slurm_template))
+        table.add_row("Report Template", str(self.report_template))
+        table.add_row("ior_2_csv script", str(self.ior_2_csv))
+
+        table.add_row("")
+        slurm_constraint = self.slurm_constraint
+        if slurm_constraint is not None:
+            slurm_constraint = ", ".join(f"{constraint}" for constraint in self.slurm_constraint)
+        table.add_row("Slurm Constraint", str(slurm_constraint))
+        table.add_row("Slurm Partition", str(self.slurm_partition))
+        table.add_row("Slurm Time", str(self.slurm_time))
+        table.add_row("")
+
+        table.add_row("")
+        # Print the tables with section headers and horizontal rules   
+        console.print(table)
+
+        console.print("[bold yellow]Warning:[/bold yellow] You may need to adapt the template file for your system. Check the options in 'iops/templates/'\n")
+
+
+        if not skip_confirmation:
+            # Ask for user confirmation
+            confirmed = Prompt.ask("Is this setup correct?", choices=["yes", "no"], default="yes")
+            
+            if confirmed.lower() != "yes":
+                console.print("[bold red]Aborting test due to incorrect setup.")
+                exit(1)
+            
+        # Ask for user confirmation to clean workdir
+        confirmed = Prompt.ask("[bold cyan]Do you want to clean the working directory?[/bold cyan]", choices=["yes", "no"], default="yes")
+
+        if confirmed.lower() == "yes":            
+            console.print("[bold green]Cleaning the working directory...[/bold green]")
+            self.clean_workdir()
+        else:
+            console.print("[bold yellow]Preserving the working directory.[/bold yellow]")
+            
+        console.print("\n")
+        
+        console.print(Panel(f"[bold green]Starting test...", expand=True))
+
+
