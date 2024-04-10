@@ -19,21 +19,40 @@ class Round:
     This class exposes the function `next`, which returns the next test or `None`, in case the round has ended.
     """
 
-    def __init__(self, parameters: dict, test_type: TestType):
-        self.parameters = parameters
+    def __init__(self, start_volume: int, start_folder: list, start_computing: int, config: IOPSConfig, test_type: TestType):
         self.test_type = test_type
-        self.current_test = self.parameters
+        self.current_volume = start_volume
+        self.current_folder = start_folder
+        self.current_computing = start_computing
+        self.config = config
+        self.current_folder_index = 0
 
-    def next(self) -> Union[dict, None]: # unsupported operand type(s) for |: 'type' and 'NoneType'
+    def next(self) -> Union[dict, None]: 
         """
         Returns the next test; otherwise, returns None.
         """
-        if self.current_test['computing_nodes'] < 10:
-            self.current_test['computing_nodes'] += 1
-            return self.current_test
-        else:
-            return None
-            
+
+        if self.test_type == TestType.COMPUTING:
+            if self.current_computing < self.config.max_nodes:
+                self.current_computing += 1
+                return self.current_computing 
+            else:
+                return None
+
+        if self.test_type == TestType.FILESIZE:
+            if self.current_volume < self.config.max_volume:
+                self.current_volume += 1024
+                return self.current_volume
+            else:
+                return None
+        
+        if self.test_type == self.test_type.STRIPING:
+            if self.current_folder_index < len(self.current_folder) - 1:
+                self.current_folder_index += 1
+                return self.current_folder[self.current_folder_index]
+            else:
+                return None            
+
         
 
 

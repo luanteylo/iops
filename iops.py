@@ -84,13 +84,16 @@ def main():
     config = IOPSConfig(args.conf)
     config.print_config(args.yes)
 
-    parameters = {
-        'volume_mb': 1,
-        'storage_folder': config.stripe_folders[0],
-        'computing_nodes': 1       
-        }
 
-    round = Round(parameters=parameters, test_type=TestType.COMPUTING)
+    # Define static params 
+    start_volume = 1
+    stripe_folders = config.stripe_folders
+    start_computing = 1
+    test_type = TestType.COMPUTING
+
+
+    # Create a round object with static parameters
+    round = Round(start_volume, stripe_folders, start_computing, config, test_type)
     Runner.run(round)
 
 
