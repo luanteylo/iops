@@ -379,3 +379,8 @@ class IOPSConfig:
         console.print(Panel(f"[bold green]Starting test...", expand=True))
 
 
+
+    def get_stripe_folder(self, index: int) -> Path:
+        # Return the stripe folder based on the index.
+        # The function most return the full path to the folder considering the filesystem_dir
+        pass
