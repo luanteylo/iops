@@ -72,6 +72,9 @@ class Round:
         '''
         pass
 
+    def get_current_test(self) -> TestIOR:
+        return self.current_test
+
     def next(self) -> None: 
         """
         Generates the next Test instance based on the test type and current state
@@ -98,7 +101,7 @@ class Round:
                 next_test = None
         
         self.current_test = next_test
-        return next_test
+        
 
     def __repr__(self) -> str:
         return f"Round test_type={self.test_type}, current_test={self.current_test}"
@@ -138,12 +141,14 @@ class Runner:
         try:
             while True:
 
-                test = round.next()                
+                test = round.get_current_test()                
 
                 if test:
                     Runner._run(test)  # Execute the test using the static method.
                 else:
                     break  # Exit the loop if there are no more tests.
+
+                round.next()  # Move to the next test in the round.
 
                 
 
