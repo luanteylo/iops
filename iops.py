@@ -84,17 +84,14 @@ def main():
     config = IOPSConfig(args.conf)
     config.print_config(args.yes)
 
-
-    # Define static params 
-    start_volume = 1
-    stripe_folders = config.stripe_folders
-    start_computing = 1
-    test_type = TestType.COMPUTING
-
-
     # Create a round object with static parameters
-    round = Round(start_volume, stripe_folders, start_computing, config, test_type)
-    Runner.run(round)
+    round_volume = Round(volume= 1073741824, folder_index = 0, computing= 1, config=config, test_type=TestType.FILESIZE)
+    round_computing = Round(volume= 1073741824, folder_index = 0, computing= 1, config=config, test_type=TestType.COMPUTING)
+    round_striping = Round(volume= 1073741824, folder_index = 0, computing= 1, config=config, test_type=TestType.STRIPING)
+    
+    for round in [round_volume, round_computing, round_striping]:
+        console.print(f"[bold green]Running Round:[/bold green] {round}")
+        Runner.run(round)
 
 
 if __name__ == "__main__":
