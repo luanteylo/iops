@@ -81,16 +81,32 @@ def main():
     
     
     # Initialize and load configuration
-    config = IOPSConfig(args.conf)
-    config.print_config(args.yes)
+    config = IOPSConfig(config_path=args.conf)
+    config.print_config(skip_confirmation=args.yes)
 
     # Create a round object with static parameters
-    round_volume = Round(volume= 1073741824, folder_index = 0, computing= 1, config=config, test_type=TestType.FILESIZE)
-    round_computing = Round(volume= 1073741824, folder_index = 0, computing= 1, config=config, test_type=TestType.COMPUTING)
-    round_striping = Round(volume= 1073741824, folder_index = 0, computing= 1, config=config, test_type=TestType.STRIPING)
+    round_volume = Round(volume=1073741824, 
+                         folder_index=0, 
+                         computing=1, 
+                         config=config, 
+                         test_type=TestType.FILESIZE)
     
-    for round in [round_volume, round_computing, round_striping]:
+    round_computing = Round(volume=1073741824, 
+                            folder_index=0, 
+                            computing=1, 
+                            config=config, 
+                            test_type=TestType.COMPUTING)
+    
+    round_striping = Round(volume=1073741824, 
+                           folder_index=0, 
+                           computing=1, 
+                           config=config, 
+                           test_type=TestType.STRIPING)
+    
+    for round in (round_volume, round_computing, round_striping):
+
         console.print(f"[bold green]Running Round:[/bold green] {round}")
+        
         Runner.run(round)
 
 
