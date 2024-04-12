@@ -101,7 +101,7 @@ def main():
                            folder_index=0, 
                            computing=1, 
                            config=config, 
-                           test_type=TestType.STRIPING)
+                           test_type=TestType.STRIPING)                         
     
     for round in (round_volume, round_computing, round_striping):
 

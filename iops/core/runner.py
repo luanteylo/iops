@@ -8,6 +8,7 @@ from typing import Union
 import time
 from pathlib import Path
 
+
 console = Console()       
 
 
@@ -15,63 +16,72 @@ class TestIOR:
     """
     Represents a single IOR test, containing the parameters required to execute the test.
     """
+    _id_counter = 0
 
-    def __init__(self, volume: int, folder_index: int, computing : int, config: IOPSConfig):
+    def __init__(self, volume: int, folder_index: int, computing: int, config: 'IOPSConfig', test_path: Path):
         """
         Initializes a new instance of a test.
         
         :param volume: The volume parameter for the test.
-        :param folder: The folder parameter for the test.
+        :param folder_index: The folder parameter for the test.
         :param computing: The computing parameter for the test.
+        :param config: The configuration object for I/O operations.
         """
+        type(self)._id_counter += 1
+        self.test_id = self._id_counter
         self.volume = volume
         self.folder_index = folder_index
         self.computing = computing
-
         self.config = config
+
+        self.test_path = test_path
+        self.batch_file = self.test_path / f"batch_{self.test_id}.sh"
     
     def __get_ior_command(self) -> str:
         pass
 
-    def generate_batch_file(self, file_path: Path) -> Path:
+    def generate_batch_file(self) -> None:
         pass    
 
     def __repr__(self):
-        return f"<Test volume={self.volume}, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}>"
+        return f"<Test {self.test_id} Batch: {self.batch_file} volume={self.volume}, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}>"
+
+    @classmethod
+    def from_existing(cls, existing_test: 'TestIOR'):
+        """
+        Creates a new TestIOR object based on an existing one.
+        
+        :param existing_test: An instance of TestIOR from which to create a new instance.
+        """
+        # Create a new instance using the attributes of the existing test
+        return cls(existing_test.volume, existing_test.folder_index, existing_test.computing, existing_test.config, existing_test.test_path)
 
 class Round:
     """
     Represents a round of tests, generating and managing Test instances
     based on the configured test type.
     """
+    _id_counter = 0
 
     def __init__(self,  volume: int, folder_index: int,  computing: int, config: IOPSConfig, test_type: TestType):
-        self.round_id = None # <--- Add a unique identifier for the round
+        type(self)._id_counter += 1
+        self.round_id = self._id_counter
+        
 
         self.test_type = test_type
         self.config = config
+        
+        self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
+
+        # create the directory
+        self.round_path.mkdir(parents=True, exist_ok=True)
+
 
         self.current_test = TestIOR(volume=volume,
                                  folder_index=folder_index, 
                                  computing=computing,
-                                 config=config)
-        
-        self.__generate_directory_structure()
-
-
-    def __generate_directory_structure(self) -> None:
-        '''
-        this method generates a directory structure that represents a round. The folder is created in the workdir directory and has the following structure:
-
-        workdir/<round_id>_<test_type>/
-            - exec_01/
-            - exec_02/
-            - exec_03/
-            ...
-            - exec_<max_exec>/
-        '''
-        pass
-
+                                 config=config, test_path=self.round_path)
+    
     def get_current_test(self) -> TestIOR:
         return self.current_test
 
@@ -80,7 +90,7 @@ class Round:
         Generates the next Test instance based on the test type and current state
         """
         # copy the current test and update it
-        next_test : TestIOR = self.current_test
+        next_test = TestIOR.from_existing(self.current_test)
         
         if self.test_type == TestType.COMPUTING:              
             if  next_test.computing < self.config.max_nodes:
@@ -101,10 +111,9 @@ class Round:
                 next_test = None
         
         self.current_test = next_test
-        
 
     def __repr__(self) -> str:
-        return f"Round test_type={self.test_type}, current_test={self.current_test}"
+        return f"Round {self.round_id} test_type={self.test_type}, current_test={self.current_test}"
 
 
 
@@ -116,13 +125,14 @@ class Runner:
     """
 
     @staticmethod
-    def _run(test: dict) -> None:
+    def _run(test: TestIOR) -> None:
         """
         Executes a given test by building the appropriate batch file and submitting it for execution.
         
         Parameters:
         - test (Any): A set of pre-defined parameters that describe the test to be executed.
         """
+        test.generate_batch_file()
         console.print(f"[bold green]Run Test:[/bold green] {test}")
 
     @staticmethod
