@@ -1,5 +1,6 @@
 import configparser
 import logging
+from rich.console import Console
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from typing import List
@@ -7,6 +8,7 @@ from datetime import datetime
 
 from iops.core.config import IOPSConfig
 
+console = Console()     
 
 class Generator:
     @staticmethod
@@ -97,6 +99,13 @@ class Generator:
         # write the script to a file        
         with open(script_path, 'w') as f:
             f.write(bash_script)
+    
+    @staticmethod
+    def local_script(template_path: Path, script_path: Path, case: dict) -> None:
+        # console.print(f"Generating local script: [bold cyan]{script_path}[/bold cyan]...")
+        pass
+
+        
 
     # @staticmethod
     # def report(reports: List[Report], report_html : Path, config : IOPSConfig):        

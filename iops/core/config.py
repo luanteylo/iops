@@ -63,6 +63,9 @@ class IOPSConfig:
         self.slurm_partition = None
         self.slurm_time = None
 
+        # local the configuration (for now)
+        self.local_template = None
+
         self.errors = []
         
         self.load_nodes()
