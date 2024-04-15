@@ -63,15 +63,16 @@ static params
 
  
 ## Questions      
-```"What are the params that affects the PFS performance ?"
+```What are the params that affects the PFS performance ?
 ```
 
 ```How can we compare bandwidth ?
 ```
 
 ```What should be the stop condition ?
-for now, we define the number of rounds. How many ?
 ```
+for now, we define the number of rounds. How many ?
+
 
 
 
@@ -93,6 +94,7 @@ Start with a same architecture and make it work and run some basics:
 --> DATE: ven. 05 avril 2024 11:06:54 <--g
 
 ## Reading paper
+
 **Goal**:
 * Characterise the writing performance of BeeGFS, especially the impact of the stripe count.
 * How networks can change the observations when evaluating I/O performance.
@@ -187,13 +189,13 @@ The question arises: should the idea for the next round come from the updated st
 For now, we are just updating the parameters from the starting values. For example, if the starting volume is 1, in the next round the volume will be increased by 1024. Similarly, the number of computing nodes will increase from 1 to 2. The round will test the number of computing nodes = 2, 3, ..., up to max_nodes (which is currently set to 32).
 
 
-## heuristic
+## Heuristic
 An idea of heuristic is one call hill climbing algorithm. 
 ```The hill climbing algorithm is a basic optimization technique that starts with an initial solution and iteratively makes small improvements to it.
 ```
 **DATE**: jeu. 11 avril 2024 09:28:49
 
-Today, I will discuss with Luan to the task 2 that I pushed yesterday. For now I correct orthographe in this file and push it because I dont I loss it.
+Today, I will discuss with Luan to the task 2 that I pushed yesterday. For now, I corrected the spelling in this file and pushed it on the development branch **dev-1.0** because I don't want to lose it.
 
 **DATE**: jeu. 11 avril 2024 16:00:24 
 
