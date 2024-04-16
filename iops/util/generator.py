@@ -6,7 +6,6 @@ from typing import List
 from datetime import datetime
 
 from iops.core.config import IOPSConfig
-from iops.reports.report import Report
 
 
 class Generator:
@@ -99,43 +98,22 @@ class Generator:
         with open(script_path, 'w') as f:
             f.write(bash_script)
 
-    @staticmethod
-    def report(reports: List[Report], report_html : Path, config : IOPSConfig):        
-        # Generate graphs
-        reports_info = []
+    # @staticmethod
+    # def report(reports: List[Report], report_html : Path, config : IOPSConfig):        
+    #     # Generate graphs
+    #     reports_info = []
 
-        for report in reports:
-            report.build()      
-            reports_info.append(report.summary())
+    #     for report in reports:
+    #         report.build()      
+    #         reports_info.append(report.summary())
 
-        # create the Jinja2 environment and load the template
-        env = Environment(loader=FileSystemLoader(str(config.report_template.parent)))
-        template = env.get_template(config.report_template.name)
+    #     # create the Jinja2 environment and load the template
+    #     env = Environment(loader=FileSystemLoader(str(config.report_template.parent)))
+    #     template = env.get_template(config.report_template.name)
 
-        with open(report_html.as_posix(), "w") as f:
-            f.write(template.render(reports_info=reports_info, 
-                                    current_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    #     with open(report_html.as_posix(), "w") as f:
+    #         f.write(template.render(reports_info=reports_info, 
+    #                                 current_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
       
-#config = IOPSConfig(config_path="../../config.ini")
-#report = Report(config, 1, "Test report")
-
-#import uuid
-#from iops.setup.tags import TestType
-
-#config = IOPSConfig(config_path="../../config.ini")
-
-#report1 = Report(config, 1, "Test report 1")
-#report2 = Report(config, 2, "Test report 2")
-
-
-#report1.add_test(config.workdir / "computing_0", uuid.uuid4(), TestType.COMPUTING)
-#report1.add_test(config.workdir / "filesize_0", uuid.uuid4(), TestType.FILESIZE)
-#report1.add_test(config.workdir / "striping_0", uuid.uuid4(), TestType.STRIPING)
-
-#report2.add_test(config.workdir / "computing_1", uuid.uuid4(), TestType.COMPUTING)
-#report2.add_test(config.workdir / "filesize_1", uuid.uuid4(), TestType.FILESIZE)
-
-#Generator.report([report1, report2],  config.reportdir / "report.html", config)
-
 
 
