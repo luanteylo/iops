@@ -70,20 +70,30 @@ class TestIOR:
         # First create the folder for the test
         self.batch_path.mkdir(parents=True, exist_ok=True)
 
-        parameters = {
-            "job_name": f"iops_{self.test_id}",
-            "partition": f"{self.config.slurm_partition}",
-            "ntasks": self.config.max_nodes,
-            "nodes": self.computing,                
-            "ntasks_per_node": self.config.processes_per_node,
-            "time": f"{self.config.slurm_time}",
-            "chdir": self.batch_file.parent,
-            "constraint": self.config.slurm_constraint,
-            "modules": self.config.modules,
-            "benchmark_cmd": self.__get_ior_command(True)
-        }
-        # return self.__generate_batch_file(self.batch_file, parameters)
+        parameters = {}
+        if self.config.modules is not None:
+            parameters["modules"] = self.config.modules
+    
+        if self.config.slurm_constraint is not None:
+            parameters["constraint"] = self.config.slurm_constraint
+        
+        if self.config.slurm_partition is not None:
+            parameters["partition"] = self.config.slurm_partition
+        
+        if self.config.slurm_time is not None:
+            parameters["time"] = self.config.slurm_time
+        else:
+            parameters["time"] = "04:00:00"
+        
+        parameters["job_name"] = f"iops_{self.test_id}"
+        parameters["chdir"] = self.batch_file.parent
+        parameters["ntasks"] = self.computing * self.config.processes_per_node
+        parameters["nodes"] = self.computing
+        parameters["ntasks_per_node"] = self.config.processes_per_node
+        parameters["benchmark_cmd"] = self.__get_ior_command(True)
+        
         return parameters
+        # return self.__generate_batch_file(self.batch_file, parameters)
             
 
     def __repr__(self):

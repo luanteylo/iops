@@ -25,7 +25,6 @@ class Slurm:
             while True:
                 # Check if job is still in queue
                 check_job_command = f"squeue -j {job_id}"
-                console.print(f"job id :  {job_id}")
                 job_status = subprocess.run(check_job_command, shell=True, capture_output=True)
                 if job_status.returncode == 0 and job_id.encode() not in job_status.stdout:
                     break
