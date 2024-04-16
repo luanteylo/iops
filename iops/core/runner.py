@@ -3,7 +3,7 @@ from iops.util.generator import Generator
 from iops.util.submitter import Slurm
 from iops.util.submitter import Local
 from iops.util.tags import TestType
-
+from iops.util.tags import jobManager
 
 from typing import List, Optional, Any
 from rich.console import Console
@@ -181,11 +181,11 @@ class Runner:
         - test (Any): A set of pre-defined parameters that describe the test to be executed.
         """
         parameters = test.generate_batch_file()
-        if (test.config.job_manager == "slurm"):
+        if test.config.job_manager == jobManager.SLURM:
             Generator.slurm_script(test.config.slurm_template, test.batch_file, parameters)
             console.print(f"[bold green]Run Test:[/bold green] {test}")
             Slurm.submit_slurm(test.batch_file)
-        else:
+        elif test.config.job_manager == jobManager.LOCAL:
             Generator.local_script(test.config.local_template, test.batch_file, parameters)
             Local.submit_local(test.batch_file)
             console.print(f"[bold green]Run Test:[/bold green] {test}")
