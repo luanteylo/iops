@@ -25,6 +25,7 @@ class Slurm:
             while True:
                 # Check if job is still in queue
                 check_job_command = f"squeue -j {job_id}"
+                console.print(f"job id :  {job_id}")
                 job_status = subprocess.run(check_job_command, shell=True, capture_output=True)
                 if job_status.returncode == 0 and job_id.encode() not in job_status.stdout:
                     break
@@ -44,6 +45,16 @@ class Local:
         result = subprocess.run(submit_command, shell=True, capture_output=True)
         
         if result.returncode == 0:
+            while True:
+                # Check if job is still running
+                output = result.stdout.decode("utf-8")
+                
+                check_job_command = f"ps -ef | grep {test}" # Check if the job is still running
+                job_status = subprocess.run(check_job_command, shell=True, capture_output=True) 
+                if job_status.returncode == 0:
+                    break
+
+                time.sleep(5)
             console.print(f"Job [bold cyan]{test}[/bold cyan] completed.")
         else:
             console.print(f"Failed to run job: {result.stderr.decode('utf-8')}", style="bold red")

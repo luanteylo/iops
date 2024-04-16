@@ -53,6 +53,7 @@ class Generator:
 
         config_template['template'] = {
             'slurm_template': 'iops/templates/slurm_template.sh.j2 | None # If using Slurm, define the template file to generate the bash scripts. Otherwise, None.',
+            'local_template': 'iops/templates/local_template.sh.j2 | None # Template for the bash script to be executed locally.',
             'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',            
         }
@@ -102,10 +103,18 @@ class Generator:
     
     @staticmethod
     def local_script(template_path: Path, script_path: Path, case: dict) -> None:
-        # console.print(f"Generating local script: [bold cyan]{script_path}[/bold cyan]...")
-        pass
+        '''
+        Generates a bash script for a given case for local execution.
+        '''
+        # create the Jinja2 environment and load the template
+        env = Environment(loader=FileSystemLoader(str(template_path.parent)))
+        template = env.get_template(template_path.name)
+        # generate the script
+        bash_script = template.render(**case)
+        # write the script to a file
+        with open(script_path, 'w') as f:
+            f.write(bash_script)
 
-        
 
     # @staticmethod
     # def report(reports: List[Report], report_html : Path, config : IOPSConfig):        

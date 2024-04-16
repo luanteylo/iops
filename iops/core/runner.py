@@ -45,7 +45,7 @@ class TestIOR:
         Generate the IOR command based on the parameters defined in TestIOR.
         """
         
-        ior_command : str = "ior "
+        ior_command : str = "ior"
 
         block_size : int = self.volume / (self.config.processes_per_node * self.config.max_nodes)
        
@@ -76,7 +76,7 @@ class TestIOR:
             "ntasks": self.config.max_nodes,
             "nodes": self.computing,                
             "ntasks_per_node": self.config.processes_per_node,
-            "time": "04:00:00",
+            "time": f"{self.config.slurm_time}",
             "chdir": self.batch_file.parent,
             "constraint": self.config.slurm_constraint,
             "modules": self.config.modules,
@@ -84,10 +84,6 @@ class TestIOR:
         }
         # return self.__generate_batch_file(self.batch_file, parameters)
         return parameters
-        # to test 
-        # Generator.slurm_script(self.config.slurm_template, self.batch_file, parameters)
-        # Generator.local_script(self.config.local_template, self.batch_file, parameters)
-        # return 
             
 
     def __repr__(self):
