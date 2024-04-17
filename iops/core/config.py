@@ -63,6 +63,9 @@ class IOPSConfig:
         self.slurm_partition = None
         self.slurm_time = None
 
+        # local the configuration (for now)
+        self.local_template = None
+
         self.errors = []
         
         self.load_nodes()
@@ -151,7 +154,9 @@ class IOPSConfig:
             self.errors.append(self.__format_error(section="execution",
                                                    key="mode",
                                                    value=self.mode,
-                                                   valid_values=ExecutionMode.__members__.keys()))            
+                                                   valid_values=ExecutionMode.__members__.keys()))
+        else:
+            self.mode = ExecutionMode[self.mode.upper()]            
         
         if self.search_method.upper() not in SearchType.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -202,6 +207,8 @@ class IOPSConfig:
 
     def load_templates(self):
         slurm_template_str = self.__get("template", "slurm_template")
+        local_template_str = self.__get("template", "local_template")
+
         self.report_template = Path(self.__get("template", "report_template"))        
         self.ior_2_csv = Path(self.__get("template", "ior_2_csv"))        
 
@@ -234,6 +241,32 @@ class IOPSConfig:
                                                    key="report_template",
                                                    value=self.report_template,
                                                    custom_message="File not found."))
+        
+        # check local template file
+        if local_template_str.lower() == 'none':
+            self.local_template = None
+        else:
+            self.local_template = Path(local_template_str)
+            # check if file exist
+            if not self.local_template.is_file():
+                self.errors.append(self.__format_error(section="template",
+                                                       key="local_template",
+                                                       value=self.local_template,
+                                                       custom_message="File not found."))
+
+        if self.job_manager == jobManager.LOCAL and self.local_template == None:
+            self.errors.append(self.__format_error(section="template",
+                                                   key="local_template",
+                                                   value=self.local_template,
+                                                   custom_message="When using local, a template file needs to be provided."))
+
+        # if self.job_manager == jobManager.LOCAL and self.slurm_template != None:
+        #     self.errors.append(self.__format_error(section="template",
+        #                                            key="slurm_template",
+        #                                            value=self.slurm_template,
+        #                                            custom_message="When using local, the slurm template file should be None."))
+
+        
 
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")
@@ -282,6 +315,7 @@ class IOPSConfig:
         f"repetitions = {self.repetitions}\n\n" \
         f"[bold]Templates[/bold] \n" \
         f"slurm_template = {self.slurm_template}\n" \
+        f"local_template = {self.local_template}\n" \
         f"report_template = {self.report_template}\n" \
         f"ior_2_csv = {self.ior_2_csv}\n\n" \
         f"[bold]Slurm[/bold] \n" \
@@ -338,6 +372,7 @@ class IOPSConfig:
 
         table.add_row("")  
         table.add_row("Slurm Template", str(self.slurm_template))
+        table.add_row("Local Template", str(self.local_template))
         table.add_row("Report Template", str(self.report_template))
         table.add_row("ior_2_csv script", str(self.ior_2_csv))
 
@@ -383,4 +418,7 @@ class IOPSConfig:
     def get_stripe_folder(self, index: int) -> Path:
         # Return the stripe folder based on the index.
         # The function most return the full path to the folder considering the filesystem_dir
-        pass
+        if self.stripe_folders is None or index >= len(self.stripe_folders):
+            return None
+        return self.filesystem_dir / self.stripe_folders[index]
+        
