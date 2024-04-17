@@ -2,8 +2,8 @@ from iops.core.config import IOPSConfig
 from iops.util.generator import Generator
 from iops.util.submitter import Slurm
 from iops.util.submitter import Local
-from iops.util.tags import TestType
-from iops.util.tags import jobManager
+from iops.util.tags import TestType, jobManager, ExecutionMode
+
 
 from typing import List, Optional, Any
 from rich.console import Console
@@ -96,8 +96,17 @@ class TestIOR:
         # return self.__generate_batch_file(self.batch_file, parameters)
             
 
+    def __bytes_to_mb(self, bytes: int) -> float:
+        """
+        Converts bytes to megabytes.
+        
+        :param bytes: The number of bytes to convert.
+        """
+        return bytes / 1024**2
+    
     def __repr__(self):
-        return f"<Test {self.test_id} Batch: {self.batch_file} volume={self.volume}, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}>"
+        return f"<Test {self.test_id} Batch: {self.batch_file} volume={self.__bytes_to_mb(self.volume)}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}>"
+
 
     @classmethod
     def from_existing(cls, existing_test: 'TestIOR'):
@@ -154,7 +163,7 @@ class Round:
                 
         if self.test_type == TestType.FILESIZE:            
             if next_test.volume < self.config.max_volume:
-                next_test.volume += 1073741824                                
+                next_test.volume += 536870912                                
             else:
                 next_test = None # no more tests to run        
 
@@ -186,14 +195,21 @@ class Runner:
         Parameters:
         - test (Any): A set of pre-defined parameters that describe the test to be executed.
         """
+
+        to_run = True
+        if test.config.mode == ExecutionMode.DEBUG:
+            to_run = False
+
         parameters = test.generate_batch_file()
         if test.config.job_manager == jobManager.SLURM:
             Generator.slurm_script(test.config.slurm_template, test.batch_file, parameters)
             console.print(f"[bold green]Run Test:[/bold green] {test}")
-            Slurm.submit_slurm(test.batch_file)
+            if to_run:
+                Slurm.submit_slurm(test.batch_file)
         elif test.config.job_manager == jobManager.LOCAL:
             Generator.local_script(test.config.local_template, test.batch_file, parameters)
-            Local.submit_local(test.batch_file)
+            if to_run:
+                Local.submit_local(test.batch_file)
             console.print(f"[bold green]Run Test:[/bold green] {test}")
             
 

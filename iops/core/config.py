@@ -154,7 +154,9 @@ class IOPSConfig:
             self.errors.append(self.__format_error(section="execution",
                                                    key="mode",
                                                    value=self.mode,
-                                                   valid_values=ExecutionMode.__members__.keys()))            
+                                                   valid_values=ExecutionMode.__members__.keys()))
+        else:
+            self.mode = ExecutionMode[self.mode.upper()]            
         
         if self.search_method.upper() not in SearchType.__members__:
             self.errors.append(self.__format_error(section="execution",
