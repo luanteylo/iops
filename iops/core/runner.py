@@ -59,7 +59,7 @@ class TestIOR:
         if not delete_generate_file:
             ior_command += f" -k"    
         # Path where the output will be written 
-        ior_command += f" -o {self.config.get_stripe_folder(self.folder_index)}/{self.test_id}.ior"
+        ior_command += f" -o {self.config.get_stripe_folder(self.folder_index)}/test{self.test_id}.ior"
         
         return ior_command
 
