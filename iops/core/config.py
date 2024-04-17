@@ -418,4 +418,7 @@ class IOPSConfig:
     def get_stripe_folder(self, index: int) -> Path:
         # Return the stripe folder based on the index.
         # The function most return the full path to the folder considering the filesystem_dir
-        pass
+        if self.stripe_folders is None or index >= len(self.stripe_folders):
+            return None
+        return self.filesystem_dir / self.stripe_folders[index]
+        

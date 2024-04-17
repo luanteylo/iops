@@ -58,8 +58,8 @@ class TestIOR:
         # delete the generate file at the end
         if not delete_generate_file:
             ior_command += f" -k"    
-        # Path where the output will be written, change name_file.ior
-        ior_command += f" -o {self.config.filesystem_dir}/test_file.ior"  
+        # Path where the output will be written 
+        ior_command += f" -o {self.config.get_stripe_folder(self.folder_index)}/{self.test_id}.ior"
         
         return ior_command
 
