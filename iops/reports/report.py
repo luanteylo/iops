@@ -1,6 +1,9 @@
 from iops.core.config import IOPSConfig
 from iops.core.runner import Round
 
+from iops.util.generator import Generator
+
+from datetime import datetime
 
 
 
@@ -15,6 +18,8 @@ class Report():
         self.reportdir = self.config.reportdir / f"report_{self.report_id}"
         self.reportdir.mkdir(parents=True, exist_ok=True)
 
+        self.report_file = self.reportdir / "report.html"   
+
         self.rounds : dict[int, Round] = {}
         
 
@@ -28,40 +33,20 @@ class Report():
 
     
     def generate_report(self):
+
+        report_dict = {
+            'current_date': datetime.now()
+        }
+
         for round in self.rounds.values():
-            print(f"Generating report for round {round.round_id}")
-
-        # def summary(self) -> dict:        
-        #     df_list = []
-        #     graphs = []
-
-        #     for test in self.tests.values():
-        #         df_list.append(test["df"])            
-        #         graphs.append({
-        #             "filename" : test["graphfile"].relative_to(self.config.reportdir),
-        #             "title" : test["testdescription"]
-        #         })
-
-        #     # Find the dataframe and column with the maximum bandwidth
-        #     bw_col = "bw"
-        #     max_df = max(df_list, key=lambda df: df[bw_col].max()) 
-        #     # get the row with the max value in column bw
-        #     row = max_df.loc[max_df[bw_col].idxmax()]        
+            # update the report_dict with the round's information
+            pass
             
-        #     summary = {
-        #         "info" : {
-        #             "report_id": self.report_id,
-        #             "max_bw": f"{row['bw']} MiB/s",
-        #             "operation": row['access'],
-        #             "num_nodes": row['nodes'],
-        #             "num_tasks": row['tasks'],
-        #             "clients_per_node": row['clients_per_node'],
-        #             "file_size": f"{row['aggregate_filesize'] / 2**30} GB",
-        #             "striping": row['path']
-        #         },
-        #         "graphs": graphs
-        #     }
-        #     return summary
+        Generator.from_template(template_path=self.config.report_template, 
+                                output_path=self.report_file,
+                                info=report_dict)
+
+        
 
 
                 

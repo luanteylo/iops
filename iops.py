@@ -108,8 +108,6 @@ def main():
     report = Report(config, 1, "IOPS Report")                     
     
     for round in (round_volume, round_computing, round_striping):
-        console.print(f"[bold green]Running Round:[/bold green] {round}")
-        
         Runner.run(round)
         report.add_round(round)
 

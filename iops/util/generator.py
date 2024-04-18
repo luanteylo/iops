@@ -89,52 +89,19 @@ class Generator:
         logging.info(f"Default configuration file generated as {file_name}")
     
     @staticmethod
-    def slurm_script(template_path: Path, script_path: Path, case: dict) -> None:
+    def from_template(template_path: Path, output_path: Path, info: dict | list[dict]) -> None:
         '''
-        Generates a bash script for a given case.
-        The bash script is generated using the template file in template_path and is saved in the script_path file.
-        '''
-        # create the Jinja2 environment and load the template
-        env = Environment(loader=FileSystemLoader(str(template_path.parent)))
-        template = env.get_template(template_path.name)
-        # generate the script
-        bash_script = template.render(**case)
-        # write the script to a file        
-        with open(script_path, 'w') as f:
-            f.write(bash_script)
-    
-    @staticmethod
-    def local_script(template_path: Path, script_path: Path, case: dict) -> None:
-        '''
-        Generates a bash script for a given case for local execution.
+        Generates a file from a give template
         '''
         # create the Jinja2 environment and load the template
         env = Environment(loader=FileSystemLoader(str(template_path.parent)))
         template = env.get_template(template_path.name)
         # generate the script
-        bash_script = template.render(**case)
+        rendered_file = template.render(**info)
         # write the script to a file
-        with open(script_path, 'w') as f:
-            f.write(bash_script)
-
-
-    # @staticmethod
-    # def report(reports: List[Report], report_html : Path, config : IOPSConfig):        
-    #     # Generate graphs
-    #     reports_info = []
-
-    #     for report in reports:
-    #         report.build()      
-    #         reports_info.append(report.summary())
-
-    #     # create the Jinja2 environment and load the template
-    #     env = Environment(loader=FileSystemLoader(str(config.report_template.parent)))
-    #     template = env.get_template(config.report_template.name)
-
-    #     with open(report_html.as_posix(), "w") as f:
-    #         f.write(template.render(reports_info=reports_info, 
-    #                                 current_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-      
+        with open(output_path, 'w') as f:
+            f.write(rendered_file)
+    
 
 class Graphs:
 

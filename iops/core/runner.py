@@ -99,7 +99,15 @@ class TestIOR:
         
         return parameters
         # return self.__generate_batch_file(self.batch_file, parameters)
-            
+
+    @property
+    def template(self):
+        if self.config.job_manager == jobManager.SLURM:
+            return self.config.slurm_template   
+        elif self.config.job_manager == jobManager.LOCAL:
+            return self.config.local_template
+        else:
+            return None     
 
     def __bytes_to_mb(self, bytes: int) -> float:
         """
@@ -154,7 +162,7 @@ class Round:
         self.csv_file = self.round_path / f"{self.test_type.name}_{self.round_id}.csv"
         self.graph_file = self.round_path / f"{self.test_type.name}_{self.round_id}.svg"
        
-    def load_results(self):
+    def __load_results(self):
         '''
         load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
         it can also generate a graph based on the results
@@ -206,6 +214,9 @@ class Round:
         
         self.current_test = next_test
 
+        if self.current_test is None:
+            self.__load_results()
+            
     def __repr__(self) -> str:
         return f"Round {self.round_id} test_type={self.test_type}, current_test={self.current_test}"
 
@@ -227,21 +238,25 @@ class Runner:
         - test (Any): A set of pre-defined parameters that describe the test to be executed.
         """
 
-        to_run = True
-        if test.config.mode == ExecutionMode.DEBUG:
-            to_run = False
-
+        
         parameters = test.generate_batch_file()
-        if test.config.job_manager == jobManager.SLURM:
-            Generator.slurm_script(test.config.slurm_template, test.batch_file, parameters)
-            console.print(f"[bold green]Run Test:[/bold green] {test}")
-            if to_run:
+
+        # Generate the execution script
+        Generator.from_template(template_path=test.template, 
+                                output_path=test.batch_file, 
+                                info=parameters)
+        
+        console.print(f"{test}")
+        
+        # running the test
+        if test.config.mode != ExecutionMode.DEBUG:
+
+            if test.config.job_manager == jobManager.SLURM:
                 Slurm.submit_slurm(test.batch_file)
-        elif test.config.job_manager == jobManager.LOCAL:
-            Generator.local_script(test.config.local_template, test.batch_file, parameters)
-            if to_run:
+
+            elif test.config.job_manager == jobManager.LOCAL:
                 Local.submit_local(test.batch_file)
-            console.print(f"[bold green]Run Test:[/bold green] {test}")
+    
             
 
     @staticmethod
@@ -257,7 +272,8 @@ class Runner:
         """
         start_time = time.time()
 
-        try:
+        try:            
+            console.print(f"[bold green]{round}[/bold green]")
             while True:
 
                 test = round.get_current_test()                
@@ -267,11 +283,6 @@ class Runner:
                     break  # Exit the loop if there are no more tests.
 
                 round.next()  # Move to the next test in the round.
-
-            # Load the results of the tests
-            round.load_results()
-
-                
 
         except KeyboardInterrupt:
             # Handle user interruption.
