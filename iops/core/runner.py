@@ -1,8 +1,13 @@
 from iops.core.config import IOPSConfig
-from iops.util.generator import Generator
-from iops.util.submitter import Slurm
-from iops.util.submitter import Local
+from iops.util.generator import Generator, Graphs
+from iops.util.submitter import Slurm, Local
 from iops.util.tags import TestType, jobManager, ExecutionMode
+
+
+
+import pandas as pd
+from pathlib import Path
+import subprocess
 
 
 from typing import List, Optional, Any
@@ -49,7 +54,7 @@ class TestIOR:
         
         ior_command : str = "ior"
 
-        block_size : int = self.volume / (self.config.processes_per_node * self.config.max_nodes)
+        block_size : int = self.volume / (self.config.processes_per_node * self.computing)
        
         # Add parameters to the command
 
@@ -98,7 +103,15 @@ class TestIOR:
         
         return parameters
         # return self.__generate_batch_file(self.batch_file, parameters)
-            
+
+    @property
+    def template(self):
+        if self.config.job_manager == jobManager.SLURM:
+            return self.config.slurm_template   
+        elif self.config.job_manager == jobManager.LOCAL:
+            return self.config.local_template
+        else:
+            return None     
 
     def __bytes_to_mb(self, bytes: int) -> float:
         """
@@ -152,7 +165,33 @@ class Round:
                                  computing=computing,
                                  config=config, 
                                  round_path=self.round_path)
-    
+        
+        self.df = None
+        self.csv_file = self.round_path / f"{self.test_type.name}_{self.round_id}.csv"
+        self.graph_file = self.round_path / f"{self.test_type.name}_{self.round_id}.svg"
+       
+    def __load_results(self):
+        '''
+        load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
+        it can also generate a graph based on the results
+        '''
+        args = [self.config.ior_2_csv, self.round_path, self.csv_file]
+
+        try:
+            result = subprocess.run(args, check=True)
+            if result.returncode != 0:
+                raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")
+            # load the csv file into a pandas dataframe
+            self.df = pd.read_csv(self.csv_file)
+            # generate the graph
+            Graphs.generate(self.df, self.graph_file, self.test_type)
+
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Error: Script execution failed: {e}")
+        
+        except Exception as e:
+            raise Exception(f"Error: {e}")
+
     def get_current_test(self) -> TestIOR:
         return self.current_test
 
@@ -183,6 +222,9 @@ class Round:
         
         self.current_test = next_test
 
+        if self.current_test is None:
+            self.__load_results()
+            
     def __repr__(self) -> str:
         return f"Round {self.round_id} test_type={self.test_type}, current_test={self.current_test}"
 
@@ -204,21 +246,25 @@ class Runner:
         - test (Any): A set of pre-defined parameters that describe the test to be executed.
         """
 
-        to_run = True
-        if test.config.mode == ExecutionMode.DEBUG:
-            to_run = False
-
+        
         parameters = test.generate_batch_file()
-        if test.config.job_manager == jobManager.SLURM:
-            Generator.slurm_script(test.config.slurm_template, test.batch_file, parameters)
-            console.print(f"[bold green]Run Test:[/bold green] {test}")
-            if to_run:
+
+        # Generate the execution script
+        Generator.from_template(template_path=test.template, 
+                                output_path=test.batch_file, 
+                                info=parameters)
+        
+        console.print(f"{test}")
+        
+        # running the test
+        if test.config.mode != ExecutionMode.DEBUG:
+
+            if test.config.job_manager == jobManager.SLURM:
                 Slurm.submit_slurm(test.batch_file)
-        elif test.config.job_manager == jobManager.LOCAL:
-            Generator.local_script(test.config.local_template, test.batch_file, parameters)
-            if to_run:
+
+            elif test.config.job_manager == jobManager.LOCAL:
                 Local.submit_local(test.batch_file)
-            console.print(f"[bold green]Run Test:[/bold green] {test}")
+    
             
 
     @staticmethod
@@ -234,7 +280,8 @@ class Runner:
         """
         start_time = time.time()
 
-        try:
+        try:            
+            console.print(f"[bold green]{round}[/bold green]")
             while True:
 
                 test = round.get_current_test()                
@@ -245,19 +292,15 @@ class Runner:
 
                 round.next()  # Move to the next test in the round.
 
-                
-
         except KeyboardInterrupt:
             # Handle user interruption.
             # Assuming console is a logging or output object you've defined elsewhere
             console.print("[bold red]Aborting test due to user interruption.")
             console.print("[bold yellow]Warning:[/bold yellow] You may have an ongoing job in the job manager.")
-            error = True
 
         except Exception as e:
             # Handle general exceptions.
             console.print(f"[bold red]Error:[/bold red] {str(e)}")
-            error = True
 
         end_time = time.time()
         execution_time = end_time - start_time  
