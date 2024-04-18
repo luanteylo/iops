@@ -38,6 +38,8 @@ class TestIOR:
 
         self.round_path = round_path
         self.batch_path = round_path / f"test_{self.test_id}"      
+        # self.summary_path = round_path / f"summary_{self.test_id}"
+        self.summary_file = self.batch_path / f"summary_test_{self.test_id}.csv"
         self.batch_file = self.batch_path / f"batch_{self.test_id}.sh"
     
     def __get_ior_command(self, delete_generate_file: bool) -> str:
@@ -57,7 +59,9 @@ class TestIOR:
 
         # delete the generate file at the end
         if not delete_generate_file:
-            ior_command += f" -k"    
+            ior_command += f" -k" 
+        ior_command += f" -O summaryFile={self.summary_file}" # Path where the output will be written 
+        ior_command += f" -O summaryFormat=csv"
         # Path where the output will be written 
         ior_command += f" -o {self.config.get_stripe_folder(self.folder_index)}/test{self.test_id}.ior"
         
@@ -137,6 +141,10 @@ class Round:
 
         # create the directory
         self.round_path.mkdir(parents=True, exist_ok=True)
+
+        # create the directory for the summary files
+        # self.summary_path = self.round_path / "summary"
+        # self.summary_path.mkdir(parents=True, exist_ok=True)
 
 
         self.current_test = TestIOR(volume=volume,
