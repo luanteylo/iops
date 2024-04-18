@@ -10,6 +10,8 @@ from iops.util.tags import TestType
 from iops.core.runner import Runner, Round
 from iops.core.config import IOPSConfig
 
+from iops.reports.report import Report
+
 
 console = Console()   
 
@@ -101,13 +103,20 @@ def main():
                            folder_index=0, 
                            computing=1, 
                            config=config, 
-                           test_type=TestType.STRIPING)                         
+                           test_type=TestType.STRIPING)    
+
+    report = Report(config, 1, "IOPS Report")                     
     
     for round in (round_volume, round_computing, round_striping):
-
         console.print(f"[bold green]Running Round:[/bold green] {round}")
         
         Runner.run(round)
+        report.add_round(round)
+
+    
+    # generating the reports
+    report.generate_report()
+    console.print("[bold green]Exiting...")
 
 
 if __name__ == "__main__":

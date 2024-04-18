@@ -1,8 +1,13 @@
 from iops.core.config import IOPSConfig
-from iops.util.generator import Generator
-from iops.util.submitter import Slurm
-from iops.util.submitter import Local
+from iops.util.generator import Generator, Graphs
+from iops.util.submitter import Slurm, Local
 from iops.util.tags import TestType, jobManager, ExecutionMode
+
+
+
+import pandas as pd
+from pathlib import Path
+import subprocess
 
 
 from typing import List, Optional, Any
@@ -47,7 +52,7 @@ class TestIOR:
         
         ior_command : str = "ior"
 
-        block_size : int = self.volume / (self.config.processes_per_node * self.config.max_nodes)
+        block_size : int = self.volume / (self.config.processes_per_node * self.computing)
        
         # Add parameters to the command
 
@@ -144,7 +149,33 @@ class Round:
                                  computing=computing,
                                  config=config, 
                                  round_path=self.round_path)
-    
+        
+        self.df = None
+        self.csv_file = self.round_path / f"{self.test_type.name}_{self.round_id}.csv"
+        self.graph_file = self.round_path / f"{self.test_type.name}_{self.round_id}.svg"
+       
+    def load_results(self):
+        '''
+        load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
+        it can also generate a graph based on the results
+        '''
+        args = [self.config.ior_2_csv, self.round_path, self.csv_file]
+
+        try:
+            result = subprocess.run(args, check=True)
+            if result.returncode != 0:
+                raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")
+            # load the csv file into a pandas dataframe
+            self.df = pd.read_csv(self.csv_file)
+            # generate the graph
+            Graphs.generate(self.df, self.graph_file, self.test_type)
+
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Error: Script execution failed: {e}")
+        
+        except Exception as e:
+            raise Exception(f"Error: {e}")
+
     def get_current_test(self) -> TestIOR:
         return self.current_test
 
@@ -237,6 +268,9 @@ class Runner:
 
                 round.next()  # Move to the next test in the round.
 
+            # Load the results of the tests
+            round.load_results()
+
                 
 
         except KeyboardInterrupt:
@@ -244,12 +278,10 @@ class Runner:
             # Assuming console is a logging or output object you've defined elsewhere
             console.print("[bold red]Aborting test due to user interruption.")
             console.print("[bold yellow]Warning:[/bold yellow] You may have an ongoing job in the job manager.")
-            error = True
 
         except Exception as e:
             # Handle general exceptions.
             console.print(f"[bold red]Error:[/bold red] {str(e)}")
-            error = True
 
         end_time = time.time()
         execution_time = end_time - start_time  
