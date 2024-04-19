@@ -29,6 +29,7 @@ class ExecutionMode(Enum):
     """
     FAST = "fast"
     COMPLETE = "complete"
+    DEBUG = "debug"
 
 class BenchmarkTool(Enum):
     """

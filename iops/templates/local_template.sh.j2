@@ -1,0 +1,18 @@
+#!/bin/bash
+
+#job_name={{ job_name }}
+#chdir={{ chdir }}
+
+
+echo "===== My JOB Information ===="
+echo "Job name: $job_name"
+echo "In the directory: $(pwd)"
+echo "As the user: $(whoami)"
+echo "============================"
+
+
+# run the benchmark command
+{{ benchmark_cmd }}
+
+
+

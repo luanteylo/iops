@@ -5,10 +5,12 @@ from argparse import RawTextHelpFormatter
 from rich.console import Console
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
-from iops.util.tags import TestType
+from iops.util.tags import TestType, jobManager
 
 from iops.core.runner import Runner, Round
 from iops.core.config import IOPSConfig
+
+from iops.reports.report import Report
 
 
 console = Console()   
@@ -101,13 +103,24 @@ def main():
                            folder_index=0, 
                            computing=1, 
                            config=config, 
-                           test_type=TestType.STRIPING)
+                           test_type=TestType.STRIPING)    
+
+    report = Report(config, 1, "IOPS Report")                     
     
     for round in (round_volume, round_computing, round_striping):
+        if round.config.job_manager == jobManager.LOCAL:
+            if round.test_type == TestType.FILESIZE:
+                Runner.run(round)
+                report.add_round(round)
+        elif round.config.job_manager == jobManager.SLURM:
+            Runner.run(round)
+            report.add_round(round)
 
-        console.print(f"[bold green]Running Round:[/bold green] {round}")
-        
-        Runner.run(round)
+
+    
+    # generating the reports
+    report.generate_report()
+    console.print("[bold green]Exiting...")
 
 
 if __name__ == "__main__":
