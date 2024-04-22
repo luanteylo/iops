@@ -112,6 +112,7 @@ def main():
             if round.test_type == TestType.FILESIZE:
                 Runner.run(round)
                 report.add_round(round)
+                
         elif round.config.job_manager == jobManager.SLURM:
             Runner.run(round)
             report.add_round(round)

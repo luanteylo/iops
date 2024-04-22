@@ -89,7 +89,7 @@ class Generator:
         logging.info(f"Default configuration file generated as {file_name}")
     
     @staticmethod
-    def from_template(template_path: Path, output_path: Path, info: dict | list[dict]) -> None:
+    def from_template(template_path: Path, output_path: Path, info: dict ) -> None: # | list[dict]
         '''
         Generates a file from a give template
         '''

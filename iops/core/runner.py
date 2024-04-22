@@ -146,7 +146,6 @@ class Round:
         type(self)._id_counter += 1
         self.round_id = self._id_counter
         
-
         self.test_type = test_type
         self.config = config
         
@@ -159,12 +158,16 @@ class Round:
         # self.summary_path = self.round_path / "summary"
         # self.summary_path.mkdir(parents=True, exist_ok=True)
 
-
+        # create a list of tests to store all the tests
+        self.list_test : List[TestIOR] = []
+        
         self.current_test = TestIOR(volume=volume,
                                  folder_index=folder_index, 
                                  computing=computing,
                                  config=config, 
-                                 round_path=self.round_path)
+                                 round_path=self.round_path)        
+        
+        self.list_test.append(self.current_test)
         
         self.df = None
         self.csv_file = self.round_path / f"{self.test_type.name}_{self.round_id}.csv"
@@ -220,6 +223,10 @@ class Round:
             else:
                 next_test = None
         
+        if next_test is not None and next_test not in self.list_test:
+            # console.print(f"Adding test {next_test} to the list of tests")
+            self.list_test.append(next_test)
+
         self.current_test = next_test
 
         if self.current_test is None:
@@ -301,6 +308,8 @@ class Runner:
         except Exception as e:
             # Handle general exceptions.
             console.print(f"[bold red]Error:[/bold red] {str(e)}")
+
+        # console.print(f"List of tests: {round.list_test}")
 
         end_time = time.time()
         execution_time = end_time - start_time  
