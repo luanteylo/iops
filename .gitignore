@@ -8,3 +8,5 @@ default_config.ini
 test/
 __pycache__/
 .vscode/
+
+traces.md
