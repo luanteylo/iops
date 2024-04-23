@@ -12,7 +12,7 @@ The true is, IOPS is not a benchmark tool (or a suite, whatever that means we on
 And the most important part is that it conducts this search, processes the results, generates nice graphs, and does it all automatically! No more bash scripts to perform multiple IOR experiments. No sir! Not on my watch!
 
 
-## Where Do We Stand in the Sum?
+## Where Do We Stand in the Sun?
 
 You may be asking, why would I need to know this? Who cares about the parameters required to achieve maximum bandwidth for my PFS? Well, my friend, you need to know for at least three reasons:
 
