@@ -130,7 +130,7 @@ class TestIOR:
         
         :param bytes: The number of bytes to convert.
         """
-        return bytes / 1024**2
+        return bytes / 1024.0 / 1024.0
     
     def __repr__(self):
         return f"\t{self.test_id:04}: \[volume={self.__bytes_to_mb(self.volume)}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}]"
@@ -248,8 +248,7 @@ class Round:
         """
         Updates the next Test instance to be executed in the round.
         """
-        
-        
+                
         if self.__current_pos == 0 and self.__repetition < self.config.repetitions:
             console.print(f"Repetition {self.__repetition + 1}/{self.config.repetitions}", style="bold white on red")
 
