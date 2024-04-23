@@ -12,7 +12,7 @@ echo "============================"
 
 
 # run the benchmark command
-{{ benchmark_cmd }}
+mpirun -np {{ ntasks }} --oversubscribe {{ benchmark_cmd }}
 
 
 

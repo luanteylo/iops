@@ -4,58 +4,34 @@ import subprocess
 from pathlib import Path
 import time
 
+from iops.util.tags import jobManager
+
 console = Console()
 
 
 
-class Slurm:
+class Submitter:
+
 
     @staticmethod
-    def submit_slurm(test: Path) -> None:
-        # Submit the job to SLURM        
-        console.print(f"Submitting job: [bold cyan]{test}[/bold cyan]...")                     
-        submit_command = f"sbatch {test}"
-        result = subprocess.run(submit_command, shell=True, capture_output=True)
-        # Extract job ID from sbatch output
-        if result.returncode == 0:
-            output = result.stdout.decode("utf-8")
-            job_id = output.split()[-1]  # Assumes sbatch returns "Submitted batch job <job_id>"
-            console.print(f"Job [bold cyan]{job_id}[/bold cyan] submitted successfully.")
-            # Wait for job to finish
-            while True:
-                # Check if job is still in queue
-                check_job_command = f"squeue -j {job_id}"
-                job_status = subprocess.run(check_job_command, shell=True, capture_output=True)
-                if job_status.returncode == 0 and job_id.encode() not in job_status.stdout:
-                    break
-                time.sleep(5)  
-            console.print(f"Job [bold cyan]{job_id}[/bold cyan] completed.")
-        else:
-            console.print(f"Failed to submit job: {result.stderr.decode('utf-8')}", style="bold red")
-
-        
-class Local:
+    def __slurm(test: Path):
+        return f"sbatch --wait {test}"
     
     @staticmethod
-    def submit_local(test: Path) -> None:
-        # Submit the job locally
-        console.print(f"Running job: [bold cyan]{test}[/bold cyan]...")                     
-        submit_command = f"bash {test}"
-        result = subprocess.run(submit_command, shell=True, capture_output=True)
-        
-        if result.returncode == 0:
-            while True:
-                # Check if job is still running
-                output = result.stdout.decode("utf-8")
-                
-                check_job_command = f"ps -ef | grep {test}" # Check if the job is still running
-                job_status = subprocess.run(check_job_command, shell=True, capture_output=True) 
-                if job_status.returncode == 0:
-                    break
+    def __local(test: Path) -> str:
+        return f"bash {test}"
 
-                time.sleep(5)
-            console.print(f"Job [bold cyan]{test}[/bold cyan] completed.")
-        else:
-            console.print(f"Failed to run job: {result.stderr.decode('utf-8')}", style="bold red")
+    @staticmethod
+    def submit(test: Path, job_manager: jobManager) -> subprocess.CompletedProcess:
+
+        if job_manager == jobManager.SLURM:
+            submit_command = Submitter.__slurm(test)
+        elif job_manager == jobManager.LOCAL:
+            submit_command = Submitter.__local(test)
+        
+        result = subprocess.run(submit_command, shell=True, capture_output=True)     
+
+        return result
+            
 
         

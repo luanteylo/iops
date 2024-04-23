@@ -1,6 +1,6 @@
 from iops.core.config import IOPSConfig
 from iops.util.generator import Generator, Graphs
-from iops.util.submitter import Slurm, Local
+from iops.util.submitter import Submitter
 from iops.util.tags import TestType, jobManager, ExecutionMode
 
 
@@ -11,14 +11,24 @@ import subprocess
 import random
 
 
-from typing import List, Optional, Any
+from typing import List
 from rich.console import Console
+from rich.progress import Progress, BarColumn, TextColumn, TaskProgressColumn
+from rich.panel import Panel
 import time
 from pathlib import Path
 
 
 console = Console()       
 
+# Define the style of the progress bar
+progress_columns = [
+    TextColumn("[bold green]{task.fields[round_id]}[/]", justify="left"),
+    BarColumn(bar_width=20, complete_style="green3", finished_style="bold green"),
+    TextColumn("[progress.percentage]"),
+    TaskProgressColumn(),
+    TextColumn("({task.completed}/{task.total} tests)")
+]
 
 class TestIOR:
     """
@@ -120,10 +130,10 @@ class TestIOR:
         
         :param bytes: The number of bytes to convert.
         """
-        return bytes / 1024**2
+        return bytes / 1024.0 / 1024.0
     
     def __repr__(self):
-        return f"<Test {self.test_id} Batch: {self.batch_file} volume={self.__bytes_to_mb(self.volume)}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}>"
+        return f"\t{self.test_id:04}: \[volume={self.__bytes_to_mb(self.volume)}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}]"
 
 
     @classmethod
@@ -169,8 +179,12 @@ class Round:
         self.all_tests : List[TestIOR] = []
         self.__current_pos = 0
         self.__repetition = 0
+        
         # generate all tests
         self.__generate_all_tests(volume=volume, folder_index=folder_index, computing=computing)
+
+        # computing the number of tests
+        self.number_of_tests = len(self.all_tests) * self.config.repetitions
         
        
     def __load_results(self):
@@ -234,10 +248,9 @@ class Round:
         """
         Updates the next Test instance to be executed in the round.
         """
-        
-        
+                
         if self.__current_pos == 0 and self.__repetition < self.config.repetitions:
-            console.print(f"Starting Repetition {self.__repetition}")
+            console.print(f"Repetition {self.__repetition + 1}/{self.config.repetitions}", style="bold white on red")
 
         next_test = None
         if self.__repetition < self.config.repetitions:
@@ -253,7 +266,7 @@ class Round:
         return next_test
             
     def __repr__(self) -> str:
-        return f"Round {self.round_id} test_type={self.test_type}"
+        return f"Round {self.round_id} \[{self.test_type.name}]"
 
 
 
@@ -271,16 +284,14 @@ class Runner:
         
         Parameters:
         - test (Any): A set of pre-defined parameters that describe the test to be executed.
-        """
+        """        
         console.print(f"{test}")
         # running the test
         if test.config.mode != ExecutionMode.DEBUG:
-            if test.config.job_manager == jobManager.SLURM:
-                Slurm.submit_slurm(test.batch_file)
+            result = Submitter.submit(test.batch_file, test.config.job_manager)                
+            if result.returncode != 0:                
+                console.print(f"\tTest: {test.test_id} Failed: {result.stderr.decode('utf-8')}", style="bold red")
 
-            elif test.config.job_manager == jobManager.LOCAL:
-                Local.submit_local(test.batch_file)
-    
             
 
     @staticmethod
@@ -297,15 +308,27 @@ class Runner:
         start_time = time.time()
 
         try:            
-            console.print(f"[bold green]{round}[/bold green]")
-            while True:
+            console.print(Panel(f"{round}", style="bold green", expand=True))
 
-                test = round.next()  # Move to the next test in the round.            
-                if test:
-                    Runner._run(test)  # Execute the test using the static method.
-                else:
-                    break  # Exit the loop if there are no more tests.
+            # Create the Progress instance with the defined columns
+            with Progress(*progress_columns, console=console) as progress:
+                # Start a task with specific metadata for the round and total number of tests
+                round_task = progress.add_task("[green]Round", round_id=f"Round {round.round_id}",
+                                            total=round.number_of_tests)
 
+                while True:
+
+                    test = round.next()  # Move to the next test in the round.            
+                    if test:
+                        Runner._run(test)  # Execute the test using the static method.
+                    else:
+                        break  # Exit the loop if there are no more tests.
+                        
+                    progress.update(round_task, advance=1)  # Update the progress bar.
+                    
+                
+
+                
                 
 
         except KeyboardInterrupt:
