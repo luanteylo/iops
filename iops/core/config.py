@@ -411,7 +411,7 @@ class IOPSConfig:
             
         console.print("\n")
         
-        console.print(Panel(f"[bold green]Starting test...", expand=True))
+        #console.print(Panel(f"[bold green]Starting test...", expand=True))
 
 
 
