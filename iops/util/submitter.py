@@ -14,8 +14,8 @@ class Submitter:
 
 
     @staticmethod
-    def __slurm(test: Path) -> str:
-        return f"sbatch {test}"
+    def __slurm(test: Path):
+        return f"sbatch --wait {test}"
     
     @staticmethod
     def __local(test: Path) -> str:
