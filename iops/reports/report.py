@@ -33,7 +33,7 @@ class Report():
         self.rounds[round.round_id] = round
 
     
-    def generate_report(self):
+    def generate_report(self):    
 
         report_dict = {
             'current_date': datetime.now(),
@@ -41,12 +41,16 @@ class Report():
         }
 
         for round in self.rounds.values():
+            # Firstly, we copy the files to the report folder
+            round.graph_file.rename(self.reportdir / round.graph_file.name)
+            round.csv_file.rename(self.reportdir / round.csv_file.name)
+
             # update the report_dict
             report_dict['reports_info'].append({
                 'report_id': round.round_id,
                 'round_description': self.description,
                 'max_bw': f"{round.df.bw.max()}MiB/s",
-                'graph_path': round.graph_file,
+                'graph_path': round.graph_file.name,
                 'graph_title': f"Round {round.test_type.name.lower()}",
                 'operation': 'write',
                 'num_tasks':round.df.loc[round.df['bw'].idxmax(), 'tasks'],
