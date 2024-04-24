@@ -225,7 +225,7 @@ class Round:
             
             if self.test_type == TestType.COMPUTING:              
                 if  next_test.computing < self.config.max_nodes:
-                    next_test.computing += 1
+                    next_test.computing *= 2
                 else:
                     next_test =  None # no more tests to run
 
