@@ -4,7 +4,7 @@ from iops.util.submitter import Submitter
 from iops.util.tags import TestType, jobManager, ExecutionMode
 
 
-
+import sys
 import pandas as pd
 from pathlib import Path
 import subprocess
@@ -336,6 +336,13 @@ class Runner:
             # Assuming console is a logging or output object you've defined elsewhere
             console.print("[bold red]Aborting test due to user interruption.")
             console.print("[bold yellow]Warning:[/bold yellow] You may have an ongoing job in the job manager.")
+            # when a ctrl+c is pressed, stop the execution of tests
+            sys.exit(1)
+
+            # response = input("Press 'n' to move to the next test, or 'q' to quit: ")
+            # if response.lower() == 'n':
+            #     # Skip to the next test
+            #     pass
 
         except Exception as e:
             # Handle general exceptions.
