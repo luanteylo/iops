@@ -1,6 +1,8 @@
 from iops.core.config import IOPSConfig
 from iops.core.runner import Round
 
+from pathlib import Path
+
 from iops.util.generator import Generator
 
 from datetime import datetime
@@ -30,21 +32,33 @@ class Report():
                 
         self.rounds[round.round_id] = round
 
-
     
     def generate_report(self):
 
         report_dict = {
-            'current_date': datetime.now()
+            'current_date': datetime.now(),
+            'reports_info': []
         }
 
         for round in self.rounds.values():
-            # update the report_dict with the round's information
-            pass
-            
+            # update the report_dict
+            report_dict['reports_info'].append({
+                'report_id': round.round_id,
+                'round_description': self.description,
+                'max_bw': f"{round.df.bw.max()}MiB/s",
+                'graph_path': round.graph_file,
+                'graph_title': f"Round {round.test_type.name.lower()}",
+                'operation': 'write',
+                'num_tasks':round.df.loc[round.df['bw'].idxmax(), 'tasks'],
+                'clients_per_node': round.df.loc[round.df['bw'].idxmax(), 'clients_per_node'],
+                'num_nodes': round.df.loc[round.df['bw'].idxmax(), 'nodes'],
+                'file_size': f"{(round.df.loc[round.df['bw'].idxmax(), 'aggregate_filesize'])/1024/1024}MiB",
+                'striping': Path(round.df.loc[round.df['bw'].idxmax(), 'path']).parent,
+            })
+
         Generator.from_template(template_path=self.config.report_template, 
-                                output_path=self.report_file,
-                                info=report_dict)
+                    output_path=self.report_file,
+                    info=report_dict)
 
         
 

@@ -183,48 +183,44 @@
 
         {% for report in reports_info %}
             <div class="info-panel panel-spacing">
-             <h2>Round: {{report.info.report_id}}</h2>
+             <h2>Round: {{report.report_id}}</h2>
              <div class="info-panel panel-spacing">
                 <h2>Max Bandwidth Test Case</h2>
                     <table>
                         <tr>
                             <th>Max Bandwidth</th>
-                            <td>{{report.info.max_bw}}</td>
+                            <td>{{report.max_bw}}</td>
                         </tr>
-                        <tr>
-                            <th>Operation</th>
-                            <td>{{report.info.operation}}</td>
-                        </tr>
+                       
                         <tr>
                             <th>Computer Nodes</th>
-                            <td>{{report.info.num_nodes}}</td>
+                            <td>{{report.num_nodes}}</td>
                         </tr>
                         <tr>
                             <th>Processes</th>
-                            <td>{{report.info.num_tasks}}</td>
+                            <td>{{report.num_tasks}}</td>
                         </tr>
                         <tr>
                             <th>Processes per Node</th>
-                            <td>{{report.info.clients_per_node}}</td>
+                            <td>{{report.clients_per_node}}</td>
                         </tr>
                         <tr>
                             <th>File Size</th>
-                            <td>{{report.info.file_size}}</td>
+                            <td>{{report.file_size}}</td>
                         </tr>
                         <tr>
                             <th>Striping</th>
-                            <td>{{ report.info.striping}}</td>
+                            <td>{{ report.striping}}</td>
                         </tr>
                     </table>
                 </div>
 
                  <div class="graph-section">
-                    {% for graph in report.graphs %}
                     <div class="graph-container">
-                        <h2 class="graph-title">{{ graph.title }}</h2>
-                        <img src="{{ graph.filename }}" alt="{{ graph.title }}" class="graph" onclick="openLightbox('{{ graph.filename }}', '{{ graph.title }}')">
+                        <h2 class="graph-title">{{ report.graph_title }}</h2>
+                        <img src="{{ report.graph_path }}" alt="{{ report.graph_title }}" class="graph" onclick="openLightbox('{{ report.graph_path }}', '{{ report.graph_title }}')">
                     </div>
-                    {% endfor %}
+                    
                 </div>
             </div>
         {% endfor %}
