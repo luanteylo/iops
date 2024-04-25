@@ -288,10 +288,29 @@ class Runner:
         console.print(f"{test}")
         # running the test
         if test.config.mode != ExecutionMode.DEBUG:
-            result = Submitter.submit(test.batch_file, test.config.job_manager)                
+            result = Submitter.submit(test.batch_file, test.config.job_manager)               
             if result.returncode != 0:                
-                console.print(f"\tTest: {test.test_id} Failed: {result.stderr.decode('utf-8')}", style="bold red")
+                # Decode the output only once
+                decoded_stderr = result.stderr.decode('utf-8')
+                decoded_stdout = result.stdout.decode('utf-8')
 
+                # Print a clear, styled message about the test failure
+                console.print(f"\tError: Test: {test.test_id} Failed", style="bold red")
+
+                # Adjusting the panel size by setting a width and changing the border style
+                panel_width = 80  # Adjust the width as needed
+                stderr_panel = Panel(decoded_stderr, title="stderr", subtitle=f"Test ID: {test.test_id}", style="bold red", width=panel_width, border_style="red")
+                stdout_panel = Panel(decoded_stdout, title="stdout", subtitle=f"Test ID: {test.test_id}", style="bold green", width=panel_width, border_style="green")
+
+                console.print(stderr_panel, justify="center")
+                console.print(stdout_panel, justify="center")
+
+
+                # Stopping execution message
+                console.print("Stopping the execution of the tests", style="bold red")
+
+                # Exit the script
+                sys.exit(1)
             
 
     @staticmethod
@@ -325,17 +344,19 @@ class Runner:
                         break  # Exit the loop if there are no more tests.
                         
                     progress.update(round_task, advance=1)  # Update the progress bar.
-                    
-                
-
-                
-                
 
         except KeyboardInterrupt:
             # Handle user interruption.
             # Assuming console is a logging or output object you've defined elsewhere
             console.print("[bold red]Aborting test due to user interruption.")
             console.print("[bold yellow]Warning:[/bold yellow] You may have an ongoing job in the job manager.")
+
+            # check if there is a test running and stop it
+            if round.config.job_manager == jobManager.SLURM:
+                # stop the test
+                Submitter.stop_slurm()
+
+
             # when a ctrl+c is pressed, stop the execution of tests
             sys.exit(1)
 

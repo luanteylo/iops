@@ -79,7 +79,6 @@ class IOPSConfig:
                 console.print("[bold red]Error:[/bold red] [white]{}[/white]".format(error))
             raise Exception("Configuration file is invalid. Please fix the errors above.")
 
-
     def __get(self, section, key):
         value = self.config.get(section, key)       
         if "#" in value:
@@ -89,7 +88,7 @@ class IOPSConfig:
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
         if custom_message:
             return f"Invalid value: '{value}' for '{key}' in section '{section}'. {custom_message}"
-        return f"Invalid value: '{value}' for '{key}' in section '{section}'. Allowed values are '{', '.join(valid_values)}'.\nDid you remove the '|' character from the .ini file?"
+        return f"Invalid value: '{value}' for '{key}' in section '{section}'. Allowed values are '{', '.join(valid_values)}'"
 
     def load_nodes(self):
         self.max_nodes = int(self.__get("nodes", "max_nodes"))
@@ -106,7 +105,6 @@ class IOPSConfig:
                                                    key="processes_per_node", 
                                                    value=self.processes_per_node,
                                                    custom_message="Number of processes per node need to be greater than zero."))
-
 
     def load_storage(self):
         self.filesystem_dir = Path(self.__get("storage", "filesystem_dir"))        
@@ -139,7 +137,6 @@ class IOPSConfig:
                                                           key="stripe_folders",
                                                           value=full_path,
                                                           custom_message="Invalid path."))
-            
         
     def load_execution(self):                
         self.mode = self.__get("execution", "mode").lower()
@@ -265,8 +262,6 @@ class IOPSConfig:
         #                                            key="slurm_template",
         #                                            value=self.slurm_template,
         #                                            custom_message="When using local, the slurm template file should be None."))
-
-        
 
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")
@@ -394,7 +389,7 @@ class IOPSConfig:
 
         if not skip_confirmation:
             # Ask for user confirmation
-            confirmed = Prompt.ask("Is this setup correct?", choices=["yes", "no"], default="yes")
+            confirmed = Prompt.ask("[bold cyan]Is this setup correct?[/bold cyan]", choices=["yes", "no"], default="yes")
             
             if confirmed.lower() != "yes":
                 console.print("[bold red]Aborting test due to incorrect setup.")
@@ -412,8 +407,6 @@ class IOPSConfig:
         console.print("\n")
         
         #console.print(Panel(f"[bold green]Starting test...", expand=True))
-
-
 
     def get_stripe_folder(self, index: int) -> Path:
         # Return the stripe folder based on the index.
