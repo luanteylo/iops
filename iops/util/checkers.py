@@ -48,3 +48,22 @@ class Checker:
             # Handle any other exception that could occur
             console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
             return False
+
+    @staticmethod
+    def check_mpi() -> bool:
+        '''
+        Check if MPI is installed and available in $PATH.
+        '''
+        console = Console()
+        try:
+            # Run 'mpirun -h' and ignore the return code
+            result = subprocess.run(["mpirun", "-h"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # Print a success message if the command executes (regardless of return code)
+            console.print("[bold green]MPI is installed.[/bold green]")
+            return True
+        except Exception as e:
+            # Handle any other exception that could occur
+            console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+            return False
+        # console.print("[bold red] Error: MPI is not installed.[/bold red]")

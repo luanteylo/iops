@@ -77,8 +77,9 @@ def main():
 
     if args.check_setup:        
         r1 = Checker.check_ini_file(args.conf)            
-        r2 = Checker.check_ior_installation()            
-        sys.exit(0 if r1 and r2 else 1)  # Exit after running setup checks
+        r2 = Checker.check_ior_installation()   
+        r3 = Checker.check_mpi()         
+        sys.exit(0 if r1 and r2 and r3 else 1)  # Exit after running setup checks
     
     try:
         # Initialize and load configuration
@@ -90,19 +91,19 @@ def main():
     config.print_config(skip_confirmation=args.yes)
 
     # Create a round object with static parameters
-    round_volume = Round(volume=1073741824, 
+    round_volume = Round(volume=1024, 
                          folder_index=0, 
                          computing=1, 
                          config=config, 
                          test_type=TestType.FILESIZE)
     
-    round_computing = Round(volume=1073741824, 
+    round_computing = Round(volume=1024, 
                             folder_index=0, 
                             computing=1, 
                             config=config, 
                             test_type=TestType.COMPUTING)
     
-    round_striping = Round(volume=1073741824, 
+    round_striping = Round(volume=1024, 
                            folder_index=0, 
                            computing=1, 
                            config=config, 

@@ -71,7 +71,7 @@ class TestIOR:
 
         ior_command += f" -w" # only write operation for now
         ior_command += f" -t 1m"  
-        ior_command += f" -b {block_size}b"  
+        ior_command += f" -b {int(block_size)}m"  
 
         # delete the generate file at the end
         if not delete_generate_file:
@@ -124,16 +124,16 @@ class TestIOR:
         else:
             return None     
 
-    def __bytes_to_mb(self, bytes: int) -> float:
-        """
-        Converts bytes to megabytes.
+    # def __bytes_to_mb(self, bytes: int) -> float:
+    #     """
+    #     Converts bytes to megabytes.
         
-        :param bytes: The number of bytes to convert.
-        """
-        return bytes / 1024.0 / 1024.0
+    #     :param bytes: The number of bytes to convert.
+    #     """
+    #     return bytes / 1024.0 / 1024.0
     
     def __repr__(self):
-        return f"\t{self.test_id:04}: \[volume={self.__bytes_to_mb(self.volume)}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}]"
+        return f"\t{self.test_id:04}: \[volume={self.volume}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}]"
 
 
     @classmethod
@@ -231,7 +231,7 @@ class Round:
 
             if self.test_type == TestType.FILESIZE:            
                 if next_test.volume < self.config.max_volume:
-                    next_test.volume += 536870912                                
+                    next_test.volume += 512                                
                 else:
                     next_test = None # no more tests to run        
 
@@ -355,7 +355,6 @@ class Runner:
             if round.config.job_manager == jobManager.SLURM:
                 # stop the test
                 Submitter.stop_slurm()
-
 
             # when a ctrl+c is pressed, stop the execution of tests
             sys.exit(1)
