@@ -1,4 +1,5 @@
 import configparser
+import os
 import re
 import sys
 import shutil
@@ -85,6 +86,17 @@ class IOPSConfig:
         if "#" in value:
             value = value.split("#")[0].strip()
         return value
+    
+    def __get_next_index(self):
+        # Get the next index for the execution folder
+        existing_folders = [folder for folder in os.listdir(str(self.workdir)) if folder.startswith('execution_')]
+        
+        if existing_folders:
+            indexes = [int(folder.split('_')[1]) for folder in existing_folders]
+            next_index = max(indexes) + 1
+        else:
+            next_index = 0
+        return next_index
 
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
         if custom_message:
@@ -188,9 +200,8 @@ class IOPSConfig:
         else:
             self.modules = [module.strip() for module in modules_str.split(',')]        
         
-        # execution folder
-        id_folder = Generator.get_next_folder_index()
-        self.execution = self.workdir / f"execution_{id_folder}"
+        # Create the execution folder in workdir
+        self.execution = self.workdir / f"execution_{self.__get_next_index()}"
         self.execution.mkdir(parents=True, exist_ok=True)
 
         if not self.workdir.is_dir():
