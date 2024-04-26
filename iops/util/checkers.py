@@ -32,16 +32,38 @@ class Checker:
         '''
         Check if IOR is installed and available in $PATH.
         '''
+        console = Console()
         try:
-            # Check if 'ior' binary is available
-            subprocess.run(["ior", "--help"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            console.print("[bold green]Ready to Go!")
+            # Run 'ior -h' and ignore the return code
+            result = subprocess.run(["ior", "-h"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # Print a success message if the command executes (regardless of return code)
+            console.print("[bold green]IOR is installed.[/bold green]")
             return True
-        except subprocess.CalledProcessError as e:
-            console.print("[bold red]Error:[/bold red]", e)
-            console.print("[bold yellow]Warning:[/bold yellow] If you are able to run 'ior -h' from the command line, it may actually be working.")
-            console.print("[bold yellow]Warning:[/bold yellow] Versions more recent of IOR return a non-zero exit code when running  'ior -h' which messes up the IOR installation check.")
         except FileNotFoundError:
-            console.print("[bold red]Error:[/bold red] ior binary not found. Make sure it is installed and available in $PATH.")
-        
-        return False
+            # Handle the case where 'ior' is not found in the path
+            console.print("[bold red]Error: 'ior' binary not found. Make sure it is installed and available in $PATH.[/bold red]")
+            return False
+        except Exception as e:
+            # Handle any other exception that could occur
+            console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+            return False
+
+    @staticmethod
+    def check_mpi() -> bool:
+        '''
+        Check if MPI is installed and available in $PATH.
+        '''
+        console = Console()
+        try:
+            # Run 'mpirun -h' and ignore the return code
+            result = subprocess.run(["mpirun", "-h"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # Print a success message if the command executes (regardless of return code)
+            console.print("[bold green]MPI is installed.[/bold green]")
+            return True
+        except Exception as e:
+            # Handle any other exception that could occur
+            console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+            return False
+        # console.print("[bold red] Error: MPI is not installed.[/bold red]")
