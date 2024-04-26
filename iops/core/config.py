@@ -50,6 +50,7 @@ class IOPSConfig:
         self.benchmark_tool = None
         self.modules = None
         self.workdir = None
+        self.execution = None
         self.reportdir = None # not in the .ini file
         self.repetitions = None
 
@@ -186,14 +187,19 @@ class IOPSConfig:
             self.modules = None
         else:
             self.modules = [module.strip() for module in modules_str.split(',')]        
-       
+        
+        # execution folder
+        id_folder = Generator.get_next_folder_index()
+        self.execution = self.workdir / f"execution_{id_folder}"
+        self.execution.mkdir(parents=True, exist_ok=True)
+
         if not self.workdir.is_dir():
             self.errors.append(self.__format_error(section="execution",
                                                    key="workdir",
                                                    value=self.workdir,
                                                    custom_message="Invalid path."))
         
-        self.reportdir = self.workdir / "report"
+        self.reportdir = self.execution / "report"
         self.reportdir.mkdir(parents=True, exist_ok=True)
 
         if self.repetitions <= 0:
@@ -344,8 +350,8 @@ class IOPSConfig:
         # Create a table for storage information
         table.add_row("")
         table.add_row("File System Dir:", str(self.filesystem_dir))                
-        # print max volume in GB
-        table.add_row("Max Volume", f"{self.max_volume/ 2**30}GB")
+        # print max volume in MB
+        table.add_row("Max Volume", f"{self.max_volume}MB")
         stripe_folders = self.stripe_folders
         if stripe_folders is not None:        
             stripe_folders = ", ".join(f"{stripe}" for stripe in self.stripe_folders)
@@ -395,14 +401,14 @@ class IOPSConfig:
                 console.print("[bold red]Aborting test due to incorrect setup.")
                 exit(1)
             
-        # Ask for user confirmation to clean workdir
-        confirmed = Prompt.ask("[bold cyan]Do you want to clean the working directory?[/bold cyan]", choices=["yes", "no"], default="yes")
+        # # Ask for user confirmation to clean workdir
+        # confirmed = Prompt.ask("[bold cyan]Do you want to clean the working directory?[/bold cyan]", choices=["yes", "no"], default="yes")
 
-        if confirmed.lower() == "yes":            
-            console.print("[bold green]Cleaning the working directory...[/bold green]")
-            self.clean_workdir()
-        else:
-            console.print("[bold yellow]Preserving the working directory.[/bold yellow]")
+        # if confirmed.lower() == "yes":            
+        #     console.print("[bold green]Cleaning the working directory...[/bold green]")
+        #     self.clean_workdir()
+        # else:
+        #     console.print("[bold yellow]Preserving the working directory.[/bold yellow]")
             
         console.print("\n")
         

@@ -102,7 +102,26 @@ class Generator:
         with open(output_path, 'w') as f:
             f.write(rendered_file)
     
+    @staticmethod
+    def get_next_folder_index() -> int:
+        '''
+        Returns the next id for execution folder
+        '''
+        id_file = Path('execution_id.txt')
 
+        if id_file.exists():
+            with open(id_file, 'r') as f:
+                id = int(f.read())
+        else:
+            id_file.touch()
+            id = 0
+
+        next_id = id + 1
+        with open(id_file, 'w') as f:
+            f.write(str(next_id))
+
+        return id
+    
 class Graphs:
 
     @staticmethod
