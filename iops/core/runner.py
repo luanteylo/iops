@@ -160,7 +160,7 @@ class Round:
         self.test_type = test_type
         self.config = config
         
-        self.round_path = self.config.execution / self.test_type.name.lower() / f"round_{self.round_id}"
+        self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
 
         # create the directory
         self.round_path.mkdir(parents=True, exist_ok=True)

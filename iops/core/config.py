@@ -1,5 +1,4 @@
 import configparser
-import os
 import re
 import sys
 import shutil
@@ -51,7 +50,6 @@ class IOPSConfig:
         self.benchmark_tool = None
         self.modules = None
         self.workdir = None
-        self.execution = None
         self.reportdir = None # not in the .ini file
         self.repetitions = None
 
@@ -89,10 +87,9 @@ class IOPSConfig:
     
     def __get_next_index(self):
         # Get the next index for the execution folder
-        existing_folders = [folder for folder in os.listdir(str(self.workdir)) if folder.startswith('execution_')]
-        
+        existing_folders = [folder for folder in self.workdir.iterdir() if folder.name.startswith('execution_')]
         if existing_folders:
-            indexes = [int(folder.split('_')[1]) for folder in existing_folders]
+            indexes = [int(folder.name.split('_')[1]) for folder in existing_folders]
             next_index = max(indexes) + 1
         else:
             next_index = 0
@@ -201,16 +198,17 @@ class IOPSConfig:
             self.modules = [module.strip() for module in modules_str.split(',')]        
         
         # Create the execution folder in workdir
-        self.execution = self.workdir / f"execution_{self.__get_next_index()}"
-        self.execution.mkdir(parents=True, exist_ok=True)
+        # self.execution = self.workdir / f"execution_{self.__get_next_index()}"
+        # self.execution.mkdir(parents=True, exist_ok=True)
+        
 
         if not self.workdir.is_dir():
-            self.errors.append(self.__format_error(section="execution",
-                                                   key="workdir",
-                                                   value=self.workdir,
-                                                   custom_message="Invalid path."))
+            self.workdir.mkdir(parents=True, exist_ok=True)
+
+        self.workdir = self.workdir / f"execution_{self.__get_next_index()}"
+        self.workdir.mkdir(parents=True, exist_ok=True)
         
-        self.reportdir = self.execution / "report"
+        self.reportdir = self.workdir / "report"
         self.reportdir.mkdir(parents=True, exist_ok=True)
 
         if self.repetitions <= 0:
@@ -335,17 +333,17 @@ class IOPSConfig:
         f"slurm_partition = {self.slurm_partition}\n" \
         f"slurm_time = {self.slurm_time}\n"
     
-    def clean_workdir(self) -> None:
-        try:
-            # Clean everything inside the working directory
-            for item in self.workdir.iterdir():
-                if item.is_file() or item.is_symlink():
-                    item.unlink()
-                elif item.is_dir():
-                    shutil.rmtree(item)
-        except Exception as e:
-            console.print("[bold red]Error:[/bold red] {}".format(str(e)))
-            sys.exit(1)
+    # def clean_workdir(self) -> None:
+    #     try:
+    #         # Clean everything inside the working directory
+    #         for item in self.workdir.iterdir():
+    #             if item.is_file() or item.is_symlink():
+    #                 item.unlink()
+    #             elif item.is_dir():
+    #                 shutil.rmtree(item)
+    #     except Exception as e:
+    #         console.print("[bold red]Error:[/bold red] {}".format(str(e)))
+    #         sys.exit(1)
 
     def print_config( self, skip_confirmation: bool):
         # Display startup message with a panel
@@ -412,17 +410,6 @@ class IOPSConfig:
                 console.print("[bold red]Aborting test due to incorrect setup.")
                 exit(1)
             
-        # # Ask for user confirmation to clean workdir
-        # confirmed = Prompt.ask("[bold cyan]Do you want to clean the working directory?[/bold cyan]", choices=["yes", "no"], default="yes")
-
-        # if confirmed.lower() == "yes":            
-        #     console.print("[bold green]Cleaning the working directory...[/bold green]")
-        #     self.clean_workdir()
-        # else:
-        #     console.print("[bold yellow]Preserving the working directory.[/bold yellow]")
-            
-        console.print("\n")
-        
         #console.print(Panel(f"[bold green]Starting test...", expand=True))
 
     def get_stripe_folder(self, index: int) -> Path:
