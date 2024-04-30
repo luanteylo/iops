@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 import argparse
 from argparse import RawTextHelpFormatter
-
 from rich.console import Console
+import sys
+
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
 from iops.util.tags import TestType, jobManager
-
 from iops.core.runner import Runner, Round
 from iops.core.config import IOPSConfig
-
 from iops.reports.report import Report
+
+
 
 
 console = Console()   
@@ -66,40 +67,43 @@ def main():
     if args.generate_ini:
         file_name = args.generate_ini if args.generate_ini != True else 'default_config.ini'
         Generator.ini_file(file_name)
-
-        console.print(f"[bold green]Configuration file {file_name} generated successfully.")
-        
-        return  # Exit after generating the init file
+        console.print(f"[bold green]Configuration file {file_name} generated successfully.")        
+        sys.exit(0)  # Exit after generating the init file
 
     if args.conf is None:
         console.print("[bold red]Error: Configuration file is required unless --generate_ini is used.")        
-        return
+        sys.exit(1)
     
 
-    if args.check_setup:
-        Checker.check_ini_file(args.conf)
-        Checker.check_ior_installation()            
-        return  # Exit after running setup checks
+    if args.check_setup:        
+        r1 = Checker.check_ini_file(args.conf)            
+        r2 = Checker.check_ior_installation()   
+        r3 = Checker.check_mpi()         
+        sys.exit(0 if r1 and r2 and r3 else 1)  # Exit after running setup checks
     
+    try:
+        # Initialize and load configuration
+        config = IOPSConfig(config_path=args.conf)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] [white]{e}[/white]")
+        sys.exit(1)
     
-    # Initialize and load configuration
-    config = IOPSConfig(config_path=args.conf)
     config.print_config(skip_confirmation=args.yes)
 
     # Create a round object with static parameters
-    round_volume = Round(volume=1073741824, 
+    round_volume = Round(volume=1024, 
                          folder_index=0, 
                          computing=1, 
                          config=config, 
                          test_type=TestType.FILESIZE)
     
-    round_computing = Round(volume=1073741824, 
+    round_computing = Round(volume=1024, 
                             folder_index=0, 
                             computing=1, 
                             config=config, 
                             test_type=TestType.COMPUTING)
     
-    round_striping = Round(volume=1073741824, 
+    round_striping = Round(volume=1024, 
                            folder_index=0, 
                            computing=1, 
                            config=config, 

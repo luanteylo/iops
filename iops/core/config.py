@@ -79,17 +79,26 @@ class IOPSConfig:
                 console.print("[bold red]Error:[/bold red] [white]{}[/white]".format(error))
             raise Exception("Configuration file is invalid. Please fix the errors above.")
 
-
     def __get(self, section, key):
         value = self.config.get(section, key)       
         if "#" in value:
             value = value.split("#")[0].strip()
         return value
+    
+    def __get_next_index(self):
+        # Get the next index for the execution folder
+        existing_folders = [folder for folder in self.workdir.iterdir() if folder.name.startswith('execution_')]
+        if existing_folders:
+            indexes = [int(folder.name.split('_')[1]) for folder in existing_folders]
+            next_index = max(indexes) + 1
+        else:
+            next_index = 0
+        return next_index
 
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
         if custom_message:
             return f"Invalid value: '{value}' for '{key}' in section '{section}'. {custom_message}"
-        return f"Invalid value: '{value}' for '{key}' in section '{section}'. Allowed values are '{', '.join(valid_values)}'.\nDid you remove the '|' character from the .ini file?"
+        return f"Invalid value: '{value}' for '{key}' in section '{section}'. Allowed values are '{', '.join(valid_values)}'"
 
     def load_nodes(self):
         self.max_nodes = int(self.__get("nodes", "max_nodes"))
@@ -106,7 +115,6 @@ class IOPSConfig:
                                                    key="processes_per_node", 
                                                    value=self.processes_per_node,
                                                    custom_message="Number of processes per node need to be greater than zero."))
-
 
     def load_storage(self):
         self.filesystem_dir = Path(self.__get("storage", "filesystem_dir"))        
@@ -139,7 +147,6 @@ class IOPSConfig:
                                                           key="stripe_folders",
                                                           value=full_path,
                                                           custom_message="Invalid path."))
-            
         
     def load_execution(self):                
         self.mode = self.__get("execution", "mode").lower()
@@ -189,12 +196,17 @@ class IOPSConfig:
             self.modules = None
         else:
             self.modules = [module.strip() for module in modules_str.split(',')]        
-       
+        
+        # Create the execution folder in workdir
+        # self.execution = self.workdir / f"execution_{self.__get_next_index()}"
+        # self.execution.mkdir(parents=True, exist_ok=True)
+        
+
         if not self.workdir.is_dir():
-            self.errors.append(self.__format_error(section="execution",
-                                                   key="workdir",
-                                                   value=self.workdir,
-                                                   custom_message="Invalid path."))
+            self.workdir.mkdir(parents=True, exist_ok=True)
+
+        self.workdir = self.workdir / f"execution_{self.__get_next_index()}"
+        self.workdir.mkdir(parents=True, exist_ok=True)
         
         self.reportdir = self.workdir / "report"
         self.reportdir.mkdir(parents=True, exist_ok=True)
@@ -266,8 +278,6 @@ class IOPSConfig:
         #                                            value=self.slurm_template,
         #                                            custom_message="When using local, the slurm template file should be None."))
 
-        
-
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")
         slurm_partition_str = self.__get("slurm", "slurm_partition")
@@ -323,17 +333,17 @@ class IOPSConfig:
         f"slurm_partition = {self.slurm_partition}\n" \
         f"slurm_time = {self.slurm_time}\n"
     
-    def clean_workdir(self) -> None:
-        try:
-            # Clean everything inside the working directory
-            for item in self.workdir.iterdir():
-                if item.is_file() or item.is_symlink():
-                    item.unlink()
-                elif item.is_dir():
-                    shutil.rmtree(item)
-        except Exception as e:
-            console.print("[bold red]Error:[/bold red] {}".format(str(e)))
-            sys.exit(1)
+    # def clean_workdir(self) -> None:
+    #     try:
+    #         # Clean everything inside the working directory
+    #         for item in self.workdir.iterdir():
+    #             if item.is_file() or item.is_symlink():
+    #                 item.unlink()
+    #             elif item.is_dir():
+    #                 shutil.rmtree(item)
+    #     except Exception as e:
+    #         console.print("[bold red]Error:[/bold red] {}".format(str(e)))
+    #         sys.exit(1)
 
     def print_config( self, skip_confirmation: bool):
         # Display startup message with a panel
@@ -349,8 +359,8 @@ class IOPSConfig:
         # Create a table for storage information
         table.add_row("")
         table.add_row("File System Dir:", str(self.filesystem_dir))                
-        # print max volume in GB
-        table.add_row("Max Volume", f"{self.max_volume/ 2**30}GB")
+        # print max volume in MB
+        table.add_row("Max Volume", f"{self.max_volume}MB")
         stripe_folders = self.stripe_folders
         if stripe_folders is not None:        
             stripe_folders = ", ".join(f"{stripe}" for stripe in self.stripe_folders)
@@ -394,26 +404,13 @@ class IOPSConfig:
 
         if not skip_confirmation:
             # Ask for user confirmation
-            confirmed = Prompt.ask("Is this setup correct?", choices=["yes", "no"], default="yes")
+            confirmed = Prompt.ask("[bold cyan]Is this setup correct?[/bold cyan]", choices=["yes", "no"], default="yes")
             
             if confirmed.lower() != "yes":
                 console.print("[bold red]Aborting test due to incorrect setup.")
                 exit(1)
             
-        # Ask for user confirmation to clean workdir
-        confirmed = Prompt.ask("[bold cyan]Do you want to clean the working directory?[/bold cyan]", choices=["yes", "no"], default="yes")
-
-        if confirmed.lower() == "yes":            
-            console.print("[bold green]Cleaning the working directory...[/bold green]")
-            self.clean_workdir()
-        else:
-            console.print("[bold yellow]Preserving the working directory.[/bold yellow]")
-            
-        console.print("\n")
-        
         #console.print(Panel(f"[bold green]Starting test...", expand=True))
-
-
 
     def get_stripe_folder(self, index: int) -> Path:
         # Return the stripe folder based on the index.

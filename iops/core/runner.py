@@ -4,7 +4,7 @@ from iops.util.submitter import Submitter
 from iops.util.tags import TestType, jobManager, ExecutionMode
 
 
-
+import sys
 import pandas as pd
 from pathlib import Path
 import subprocess
@@ -71,7 +71,7 @@ class TestIOR:
 
         ior_command += f" -w" # only write operation for now
         ior_command += f" -t 1m"  
-        ior_command += f" -b {block_size}b"  
+        ior_command += f" -b {int(block_size)}m"  
 
         # delete the generate file at the end
         if not delete_generate_file:
@@ -124,16 +124,16 @@ class TestIOR:
         else:
             return None     
 
-    def __bytes_to_mb(self, bytes: int) -> float:
-        """
-        Converts bytes to megabytes.
+    # def __bytes_to_mb(self, bytes: int) -> float:
+    #     """
+    #     Converts bytes to megabytes.
         
-        :param bytes: The number of bytes to convert.
-        """
-        return bytes / 1024.0 / 1024.0
+    #     :param bytes: The number of bytes to convert.
+    #     """
+    #     return bytes / 1024.0 / 1024.0
     
     def __repr__(self):
-        return f"\t{self.test_id:04}: \[volume={self.__bytes_to_mb(self.volume)}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}]"
+        return f"\t{self.test_id:04}: \[volume={self.volume}MB, folder_index={self.config.stripe_folders[self.folder_index]}, computing={self.computing}]"
 
 
     @classmethod
@@ -231,7 +231,7 @@ class Round:
 
             if self.test_type == TestType.FILESIZE:            
                 if next_test.volume < self.config.max_volume:
-                    next_test.volume += 536870912                                
+                    next_test.volume += 512                                
                 else:
                     next_test = None # no more tests to run        
 
@@ -288,10 +288,29 @@ class Runner:
         console.print(f"{test}")
         # running the test
         if test.config.mode != ExecutionMode.DEBUG:
-            result = Submitter.submit(test.batch_file, test.config.job_manager)                
+            result = Submitter.submit(test.batch_file, test.config.job_manager)               
             if result.returncode != 0:                
-                console.print(f"\tTest: {test.test_id} Failed: {result.stderr.decode('utf-8')}", style="bold red")
+                # Decode the output only once
+                decoded_stderr = result.stderr.decode('utf-8')
+                decoded_stdout = result.stdout.decode('utf-8')
 
+                # Print a clear, styled message about the test failure
+                console.print(f"\tError: Test: {test.test_id} Failed", style="bold red")
+
+                # Adjusting the panel size by setting a width and changing the border style
+                panel_width = 80  # Adjust the width as needed
+                stderr_panel = Panel(decoded_stderr, title="stderr", subtitle=f"Test ID: {test.test_id}", style="bold red", width=panel_width, border_style="red")
+                stdout_panel = Panel(decoded_stdout, title="stdout", subtitle=f"Test ID: {test.test_id}", style="bold green", width=panel_width, border_style="green")
+
+                console.print(stderr_panel, justify="center")
+                console.print(stdout_panel, justify="center")
+
+
+                # Stopping execution message
+                console.print("Stopping the execution of the tests", style="bold red")
+
+                # Exit the script
+                sys.exit(1)
             
 
     @staticmethod
@@ -325,17 +344,25 @@ class Runner:
                         break  # Exit the loop if there are no more tests.
                         
                     progress.update(round_task, advance=1)  # Update the progress bar.
-                    
-                
-
-                
-                
 
         except KeyboardInterrupt:
             # Handle user interruption.
             # Assuming console is a logging or output object you've defined elsewhere
             console.print("[bold red]Aborting test due to user interruption.")
             console.print("[bold yellow]Warning:[/bold yellow] You may have an ongoing job in the job manager.")
+
+            # check if there is a test running and stop it
+            if round.config.job_manager == jobManager.SLURM:
+                # stop the test
+                Submitter.stop_slurm()
+
+            # when a ctrl+c is pressed, stop the execution of tests
+            sys.exit(1)
+
+            # response = input("Press 'n' to move to the next test, or 'q' to quit: ")
+            # if response.lower() == 'n':
+            #     # Skip to the next test
+            #     pass
 
         except Exception as e:
             # Handle general exceptions.

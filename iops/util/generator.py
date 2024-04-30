@@ -32,7 +32,7 @@ class Generator:
         
         config_storage['storage'] = {
             'filesystem_dir': '/path/to/storage # The path to the directory where the benchmark tool will write/read from',                      
-            'max_volume':  '34359738368 # Max volume size in bytes (to limit the size of the benchmarked file). Warning: the volume needs to be power of 2.',
+            'max_volume':  '8192 # Max volume size in bytes (to limit the size of the benchmarked file). Warning: the volume needs to be power of 2.',
             'stripe_folders': "ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups.\n" \
             "# If 'None' is provided, the striping test will not be executed.\n" \
             "# For now, these folders need to be created manually inside the benchmark_output folder using the file system\n"\
@@ -43,25 +43,25 @@ class Generator:
 
 
         config_execution['execution'] = {
-            'mode': 'fast | complete # Select the mode of execution',
+            'mode': 'fast  # Select the mode of execution',
             'search_method' :'greedy # The search method to be used. For now, only greedy is supported',
-            'job_manager': 'slurm | local # Specify the job manager. If "local" is provided, the benchmark will be executed locally',
+            'job_manager': ' local # Specify the job manager. If "local" is provided, the benchmark will be executed locally',
             'benchmark_tool': 'ior  # Specify the benchmark tool to use. For now, only IOR is supported.',            
-            'modules': 'mpi, some_other_module | None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
+            'modules': ' None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
             'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
             'repetitions': '5 # The number of repetitions for each test',
             
         }
 
         config_template['template'] = {
-            'slurm_template': 'iops/templates/slurm_template.sh.j2 | None # If using Slurm, define the template file to generate the bash scripts. Otherwise, None.',
-            'local_template': 'iops/templates/local_template.sh.j2 | None # Template for the bash script to be executed locally.',
+            'slurm_template': 'iops/templates/slurm_template.sh.j2 # If using Slurm, define the template file to generate the bash scripts. Otherwise, None.',
+            'local_template': 'iops/templates/local_template.sh.j2 # Template for the bash script to be executed locally.',
             'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',            
         }
 
         config_slurm['slurm'] = {
-            'slurm_constraint': 'constraint_1, constraint_2 | None # Some clusters use the slurm constraint parameter (-c) to define the resources. If that is your case, set the list of constraints here, otherwise put None',
+            'slurm_constraint': 'None # Some clusters use the slurm constraint parameter (-c) to define the resources. If that is your case, set the list of constraints here, otherwise put None',
             'slurm_partition' : 'None # The partition to be used. If None, no partition is defined',
             'slurm_time' : 'None # The maximum time for the job. If None, no time is defined'
         }
@@ -102,7 +102,8 @@ class Generator:
         with open(output_path, 'w') as f:
             f.write(rendered_file)
     
-
+   
+        
 class Graphs:
 
     @staticmethod

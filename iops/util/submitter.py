@@ -1,17 +1,9 @@
-from rich.console import Console
 import subprocess
-
 from pathlib import Path
-import time
 
 from iops.util.tags import jobManager
 
-console = Console()
-
-
-
 class Submitter:
-
 
     @staticmethod
     def __slurm(test: Path):
