@@ -50,6 +50,7 @@ class Generator:
             'modules': ' None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
             'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
             'repetitions': '5 # The number of repetitions for each test',
+            'rounds': 'filesize, computing, striping # The rounds to be executed',
             
         }
 

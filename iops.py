@@ -112,14 +112,16 @@ def main():
     report = Report(config, 1, "IOPS Report")                     
     
     for round in (round_volume, round_computing, round_striping):
-        if round.config.job_manager == jobManager.LOCAL:
-            if round.test_type == TestType.FILESIZE:
+        if round.test_type.name.lower() in config.rounds:
+
+            if round.config.job_manager == jobManager.LOCAL:
+                if round.test_type == TestType.FILESIZE:
+                    Runner.run(round)
+                    report.add_round(round)
+                
+            elif round.config.job_manager == jobManager.SLURM:
                 Runner.run(round)
                 report.add_round(round)
-                
-        elif round.config.job_manager == jobManager.SLURM:
-            Runner.run(round)
-            report.add_round(round)
 
 
     

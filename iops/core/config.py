@@ -52,6 +52,7 @@ class IOPSConfig:
         self.workdir = None
         self.reportdir = None # not in the .ini file
         self.repetitions = None
+        self.rounds = None
 
         # Templates & scripts
         self.slurm_template = None
@@ -156,6 +157,7 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
+        self.rounds = self.__get("execution", "rounds")
                 
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -190,7 +192,11 @@ class IOPSConfig:
         else:
             self.benchmark_tool = BenchmarkTool[benchmark_tool_str.upper()]
 
-
+        if self.rounds.lower() == 'none':
+            self.rounds = None
+        else:
+            self.rounds = [str(round.strip()) for round in self.rounds.split(',')]
+        
         # Parse and load the modules
         if modules_str.lower() == 'none':
             self.modules = None
@@ -322,7 +328,8 @@ class IOPSConfig:
         f"modules = {self.modules}\n" \
         f"workdir = {self.workdir}\n" \
         f"reportdir = {self.reportdir}\n" \
-        f"repetitions = {self.repetitions}\n\n" \
+        f"repetitions = {self.repetitions}\n" \
+        f"rounds = {self.rounds}\n\n" \
         f"[bold]Templates[/bold] \n" \
         f"slurm_template = {self.slurm_template}\n" \
         f"local_template = {self.local_template}\n" \
@@ -332,7 +339,6 @@ class IOPSConfig:
         f"slurm_constraint = {self.slurm_constraint}\n" \
         f"slurm_partition = {self.slurm_partition}\n" \
         f"slurm_time = {self.slurm_time}\n"
-    
     # def clean_workdir(self) -> None:
     #     try:
     #         # Clean everything inside the working directory
@@ -378,6 +384,7 @@ class IOPSConfig:
             modules = ", ".join(f"{module}" for module in self.modules)
         table.add_row("Modules", str(modules))        
         table.add_row("Workdir", str(self.workdir))
+        table.add_row("Rounds", str(self.rounds))
         table.add_row("Repetitions", str(self.repetitions))
 
         table.add_row("")  
