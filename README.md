@@ -1,4 +1,4 @@
-# I/O Performance Evaluation benchmark Suite (IOPS)
+# I/O Performance Evaluation Suite (IOPS)
 
 The I/O Performance Evaluation Suite, or IOPS, is a tool that aims to answer one and only one question: **What parameters do you need to reach the peak I/O performance of your Parallel File System (PFS)?**
 

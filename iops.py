@@ -90,24 +90,20 @@ def main():
     
     config.print_config(skip_confirmation=args.yes)
 
+    parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
+
     # Create a round object with static parameters
-    round_volume = Round(volume=1024, 
-                         folder_index=0, 
-                         computing=1, 
-                         config=config, 
-                         test_type=TestType.FILESIZE)
+    round_volume = Round(config=config, 
+                         test_type=TestType.FILESIZE,
+                         round_parameters=parameters)
     
-    round_computing = Round(volume=1024, 
-                            folder_index=0, 
-                            computing=1, 
-                            config=config, 
-                            test_type=TestType.COMPUTING)
+    round_computing = Round(config=config, 
+                            test_type=TestType.COMPUTING,
+                            round_parameters=parameters)
     
-    round_striping = Round(volume=1024, 
-                           folder_index=0, 
-                           computing=1, 
-                           config=config, 
-                           test_type=TestType.STRIPING)    
+    round_striping = Round(config=config, 
+                           test_type=TestType.STRIPING,
+                           round_parameters=parameters)    
 
     report = Report(config, 1, "IOPS Report")                     
     
