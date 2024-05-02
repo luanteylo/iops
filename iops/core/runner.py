@@ -35,15 +35,15 @@ class Round:
     """
     _id_counter = 0
 
-    def __init__(self, config: IOPSConfig, test_type: TestType, parameters: dict):
+    def __init__(self, config: IOPSConfig, test_type: TestType, round_parameters: dict):
         type(self)._id_counter += 1
         self.round_id = self._id_counter
         
-        self.test_type = test_type
         self.config = config
+        self.test_type = test_type        
+        self.round_parameters = round_parameters
         
         self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
-
         # create the directory
         self.round_path.mkdir(parents=True, exist_ok=True)
 
@@ -59,7 +59,7 @@ class Round:
         self.__repetition = 0
         
         # generate all tests
-        self.__generate_all_tests(parameters)
+        self.__generate_all_tests()
 
         # computing the number of tests
         self.number_of_tests = len(self.all_tests) * self.config.repetitions
@@ -87,13 +87,13 @@ class Round:
         except Exception as e:
             raise Exception(f"Error: {e}")
 
-    def __generate_all_tests(self, parameters: dict):
+    def __generate_all_tests(self):
 
         next_test =  Test.create_test(pattern=Pattern.SEQUENTIAL,
                                       operation=Operation.WRITE,
                                       config=self.config,
                                       round_path=self.round_path,
-                                      test_parameters=parameters)
+                                      test_parameters=self.round_parameters)
         
         while next_test is not None:
 

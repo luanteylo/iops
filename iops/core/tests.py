@@ -5,6 +5,7 @@ from iops.util.tags import jobManager, TestType, Pattern, Operation
 
 from pathlib import Path
 from abc import ABC, abstractmethod
+import copy
 
 
 from abc import ABC, abstractmethod
@@ -30,7 +31,7 @@ class Test(ABC):
         
         self.config = config
         self.round_path = round_path
-        self.test_parameters = test_parameters
+        self.test_parameters = copy.deepcopy(test_parameters)
 
         self.batch_path = round_path / f"test_{self.test_id}"
         self.summary_file = self.batch_path / f"summary_test_{self.test_id}_$(date +%Y%m%d%H%M%S)_$RANDOM.out"

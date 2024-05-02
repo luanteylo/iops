@@ -95,15 +95,15 @@ def main():
     # Create a round object with static parameters
     round_volume = Round(config=config, 
                          test_type=TestType.FILESIZE,
-                         parameters=parameters)
+                         round_parameters=parameters)
     
     round_computing = Round(config=config, 
                             test_type=TestType.COMPUTING,
-                            parameters=parameters)
+                            round_parameters=parameters)
     
     round_striping = Round(config=config, 
                            test_type=TestType.STRIPING,
-                           parameters=parameters)    
+                           round_parameters=parameters)    
 
     report = Report(config, 1, "IOPS Report")                     
     
