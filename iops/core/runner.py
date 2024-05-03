@@ -85,7 +85,7 @@ class Round:
             raise Exception(f"Error: Script execution failed: {e}")
         
         except Exception as e:
-            raise Exception(f"Error: {e}")
+            raise e
 
     def __generate_all_tests(self):
 
@@ -246,7 +246,7 @@ class Runner:
 
         except Exception as e:
             # Handle general exceptions.
-            console.print(f"[bold red]Error:[/bold red] {str(e)}")
+            raise e
 
         # console.print(f"List of tests: {round.list_test}")
 

@@ -1,5 +1,6 @@
 from iops.core.config import IOPSConfig
 from iops.core.runner import Round
+from iops.util.tags import TestType
 
 from pathlib import Path
 
@@ -32,7 +33,14 @@ class Report():
                 
         self.rounds[round.round_id] = round
 
-    
+    def __human_readable_title(self, test_type: TestType):
+        if test_type == TestType.FILESIZE:
+            return "Varying the File Size"
+        elif test_type == TestType.COMPUTING:
+            return "Varying the Number of Computing Nodes"
+        elif test_type == TestType.STRIPING:
+            return "Varying the Striping Configuration"
+
     def generate_report(self):    
 
         report_dict = {
@@ -40,18 +48,20 @@ class Report():
             'reports_info': []
         }
 
+        
+
         for round in self.rounds.values():
             # Firstly, we copy the files to the report folder
             round.graph_file.rename(self.reportdir / round.graph_file.name)
             round.csv_file.rename(self.reportdir / round.csv_file.name)
 
             # update the report_dict
-            report_dict['reports_info'].append({
-                'report_id': round.round_id,
-                'round_description': self.description,
-                'max_bw': f"{round.df.bw.max()}MiB/s",
+            report_dict['reports_info'].append({                
+                'test_title': self.__human_readable_title(round.test_type),
+                'round_id': round.round_id,                                
+                'max_bw': f"{round.df.bw.max()} MiB/s",
                 'graph_path': round.graph_file.name,
-                'graph_title': f"Round {round.test_type.name.lower()}",
+                'graph_title': self.__human_readable_title(round.test_type),
                 'operation': 'write',
                 'num_tasks':round.df.loc[round.df['bw'].idxmax(), 'tasks'],
                 'clients_per_node': round.df.loc[round.df['bw'].idxmax(), 'clients_per_node'],
