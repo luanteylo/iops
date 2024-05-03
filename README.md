@@ -105,20 +105,8 @@ The following packages are required to run the code:
     - Source code can be found [here](https://github.com/hpc/ior)
     - Follow the installation instructions in their README or build from source.
     - Optionally, IOPS offers an `install_ior.sh` script to simplify the installation process.
-    
-    to install ior we need to load module mpi, gcc and cmake
-    ```
-    module load mpi or gcc or cmake version
-    ```  
-2. **libopenmpi-dev**: Open MPI development libraries.
-    - **Ubuntu**: 
-        ```
-        sudo apt-get install libopenmpi-dev
-        ```
-    - **CentOS/RHEL**: 
-        ```
-        sudo yum install openmpi-devel        ```
-    
+    - Dependencies: mpi, gcc and cmake
+
 
 ### Optional Dependencies
 
