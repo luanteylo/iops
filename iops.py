@@ -11,15 +11,15 @@ from iops.core.runner import Runner, Round
 from iops.core.config import IOPSConfig
 from iops.reports.report import Report
 
-
+from version import __version__
 
 
 console = Console()   
 
-app_version = "1.0"
+
 app_name = "IOPS"
 app_description = f"""
-    {app_name} version {app_version}  
+    {app_name} version {__version__}  
 
     
     IOPS (I/O Performance Evaluation benchmark Suite) is an automated utility designed to 
