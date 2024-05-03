@@ -8,6 +8,12 @@ class TestType(Enum):
     COMPUTING = "computing"
     STRIPING = "striping"
 
+class Pattern(Enum):
+    """
+    Tags for I/O patterns
+    """
+    SEQUENTIAL = "sequential"
+    RANDOM = "random"
 
 class Operation(Enum):
     """
