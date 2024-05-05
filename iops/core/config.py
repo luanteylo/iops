@@ -13,7 +13,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 
-from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType
+from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, TestType
 
 
 install(show_locals=True)
@@ -52,7 +52,7 @@ class IOPSConfig:
         self.workdir = None
         self.reportdir = None # not in the .ini file
         self.repetitions = None
-        self.rounds = None
+        self.test_type = None
 
         # Templates & scripts
         self.slurm_template = None
@@ -95,6 +95,25 @@ class IOPSConfig:
         else:
             next_index = 0
         return next_index
+
+
+    def get_test_type(self, test_type_str: str) -> TestType:
+        # test_type_str = test_type_str.lower()
+        try:
+            if test_type_str == "computing:sequential:one":
+                return TestType.IOR_COM_SEQ_ONE
+            elif test_type_str == "computing:sequential:shared":
+                return TestType.IOR_COM_SEQ_SHARED
+            elif test_type_str == "computing:random:one":
+                return TestType.IOR_COM_RANDOM_ONE
+            elif test_type_str == "computing:random:shared":
+                return TestType.IOR_COM_RANDOM_SHARED
+            elif test_type_str == "filesize:sequential:one":
+                return TestType.IOR_FILESIZE_SEQ_ONE
+            elif test_type_str == "filesize:sequential:shared":
+                return TestType.IOR_FILESIZE_SEQ_SHARED
+        except ValueError:
+            return f"Invalid test type: {test_type_str}"    
 
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
         if custom_message:
@@ -157,7 +176,7 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
-        self.rounds = self.__get("execution", "rounds")
+        self.test_type = self.__get("execution", "test_type")
                 
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -192,20 +211,18 @@ class IOPSConfig:
         else:
             self.benchmark_tool = BenchmarkTool[benchmark_tool_str.upper()]
 
-        if self.rounds.lower() == 'none':
-            self.rounds = None
-        else:
-            self.rounds = [str(round.strip()) for round in self.rounds.split(',')]
+        
+        test_type_str = [self.test_type.strip() for self.test_type in self.test_type.split(',')]
+        
+        self.test_type = [self.get_test_type(test_type) for test_type in test_type_str]
+
+        # self.get_test_type(self.test_type)
         
         # Parse and load the modules
         if modules_str.lower() == 'none':
             self.modules = None
         else:
             self.modules = [module.strip() for module in modules_str.split(',')]        
-        
-        # Create the execution folder in workdir
-        # self.execution = self.workdir / f"execution_{self.__get_next_index()}"
-        # self.execution.mkdir(parents=True, exist_ok=True)
         
 
         if not self.workdir.is_dir():
@@ -329,7 +346,7 @@ class IOPSConfig:
         f"workdir = {self.workdir}\n" \
         f"reportdir = {self.reportdir}\n" \
         f"repetitions = {self.repetitions}\n" \
-        f"rounds = {self.rounds}\n\n" \
+        f"test_type =  = {self.test_type}\n\n" \
         f"[bold]Templates[/bold] \n" \
         f"slurm_template = {self.slurm_template}\n" \
         f"local_template = {self.local_template}\n" \
@@ -339,17 +356,6 @@ class IOPSConfig:
         f"slurm_constraint = {self.slurm_constraint}\n" \
         f"slurm_partition = {self.slurm_partition}\n" \
         f"slurm_time = {self.slurm_time}\n"
-    # def clean_workdir(self) -> None:
-    #     try:
-    #         # Clean everything inside the working directory
-    #         for item in self.workdir.iterdir():
-    #             if item.is_file() or item.is_symlink():
-    #                 item.unlink()
-    #             elif item.is_dir():
-    #                 shutil.rmtree(item)
-    #     except Exception as e:
-    #         console.print("[bold red]Error:[/bold red] {}".format(str(e)))
-    #         sys.exit(1)
 
     def print_config( self, skip_confirmation: bool):
         # Display startup message with a panel
@@ -384,7 +390,7 @@ class IOPSConfig:
             modules = ", ".join(f"{module}" for module in self.modules)
         table.add_row("Modules", str(modules))        
         table.add_row("Workdir", str(self.workdir))
-        table.add_row("Rounds", str(self.rounds))
+        table.add_row("Test_type", str(self.test_type))
         table.add_row("Repetitions", str(self.repetitions))
 
         table.add_row("")  

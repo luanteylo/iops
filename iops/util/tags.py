@@ -4,6 +4,16 @@ class TestType(Enum):
     """
     Tags for tests
     """
+    IOR_COM_SEQ_ONE = 1
+    IOR_COM_SEQ_SHARED = 2
+    IOR_COM_RANDOM_ONE = 3
+    IOR_COM_RANDOM_SHARED = 4
+    IOR_FILESIZE_SEQ_ONE = 5
+    IOR_FILESIZE_SEQ_SHARED = 6
+
+    IOR_STRIPING_SEQ_ONE = 7
+    IOR_STRIPING_SEQ_SHARED = 8
+    
     FILESIZE = "filesize"
     COMPUTING = "computing"
     STRIPING = "striping"

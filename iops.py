@@ -49,6 +49,30 @@ app_description = f"""
     """
 
 
+def round_builder(previous_round: Round, config: IOPSConfig, round_parameters: dict):
+    """
+    build the next round based on the previous round results
+    :param config:
+    :param round_parameters:
+    :return:
+    """
+    if previous_round is not None:
+        if previous_round.test_type == TestType.COMPUTING:
+            # get computing nodes from previous round
+            computing_nodes = previous_round.get_computing_nodes()
+            return Round(config, TestType.FILESIZE, round_parameters, computing_nodes)
+    
+        if previous_round.test_type == TestType.FILESIZE:
+            # get filesize from previous round
+            filesize = previous_round.get_filesize()
+            return Round(config, TestType.ACCESS_PATTERN, round_parameters, filesize)
+    
+        if previous_round.test_type == TestType.STRIPING:
+            # get stripes from previous round
+            stripes = previous_round.get_stripes()
+            return Round(config, TestType.COMPUTING, round_parameters, stripes)
+    
+
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter, description=app_description)
@@ -108,7 +132,7 @@ def main():
     report = Report(config, 1, "IOPS Report")                     
     
     for round in (round_volume, round_computing, round_striping):
-        if round.test_type.name.lower() in config.rounds:
+        # if round.test_type.name.lower() in config.rounds:
 
             if round.config.job_manager == jobManager.LOCAL:
                 if round.test_type == TestType.FILESIZE:
@@ -118,7 +142,6 @@ def main():
             elif round.config.job_manager == jobManager.SLURM:
                 Runner.run(round)
                 report.add_round(round)
-
 
     
     # generating the reports

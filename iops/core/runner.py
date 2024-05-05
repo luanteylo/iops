@@ -86,6 +86,21 @@ class Round:
         
         except Exception as e:
             raise Exception(f"Error: {e}")
+    @property
+    def get_computing_nodes(self):
+        '''
+        get the computing nodes from the previous round
+        '''
+        return self.df.loc[self.df['bw'].idxmax(), 'nodes']
+
+    @property
+    def get_volume(self):
+        '''
+        get the volume from the previous round
+        '''
+        return self.df.loc[self.df['bw'].idxmax(), 'volume']
+    
+    
 
     def __generate_all_tests(self):
 
