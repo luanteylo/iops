@@ -223,14 +223,25 @@ class IOPSConfig:
             self.modules = None
         else:
             self.modules = [module.strip() for module in modules_str.split(',')]        
+  
         
 
         if not self.workdir.is_dir():
             self.workdir.mkdir(parents=True, exist_ok=True)
 
-        self.workdir = self.workdir / f"execution_{self.__get_next_index()}"
-        self.workdir.mkdir(parents=True, exist_ok=True)
+        # if it is running in debug mode we may want to pointing to the folder given by the user
+        # in this case we ask the user to confirm the folder
+
+        create_folder = False
+        if self.mode == ExecutionMode.DEBUG:            
+            console.print(f"[bold yellow]Debug Mode Warning:[/bold yellow] the folder {self.workdir} will be used")
+            if Prompt.ask("[bold cyan]Do you want to use this folder?[/bold cyan]", choices=["yes", "no"], default="yes") == "no":
+                create_folder = True        
         
+        if create_folder:
+            self.workdir = self.workdir / f"execution_{self.__get_next_index()}"
+            self.workdir.mkdir(parents=True, exist_ok=True)
+                
         self.reportdir = self.workdir / "report"
         self.reportdir.mkdir(parents=True, exist_ok=True)
 

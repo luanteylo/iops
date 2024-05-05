@@ -261,7 +261,7 @@ class Runner:
 
         except Exception as e:
             # Handle general exceptions.
-            console.print(f"[bold red]Error:[/bold red] {str(e)}")
+            raise e
 
         # console.print(f"List of tests: {round.list_test}")
 

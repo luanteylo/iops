@@ -113,7 +113,10 @@ class Graphs:
             expected_unique_values = 1
             for column in ['nodes', 'tasks', 'access', 'clients_per_node']:
                 if df[column].nunique() != expected_unique_values:
-                    raise ValueError(f"Column {column} does not have consistent values")
+                    if df[column].nunique() == 0:
+                        raise ValueError(f"Column '{column}' has no values.")
+                    else:
+                        raise ValueError(f"Column '{column}' does not have consistent values.")
 
             # Retrieving consistent values
             nodes = df['nodes'].iloc[0]
@@ -161,7 +164,7 @@ class Graphs:
             plt.close()
             return True
         except Exception as e:
-            raise Exception(f"Error: {e}")
+            raise e
     
     @staticmethod
     def __computing(df: pd.DataFrame, output_path: Path) -> bool:
@@ -291,14 +294,13 @@ class Graphs:
         '''
         Generates a graph based on the test type.
         '''
-        try:
-            if test_type == TestType.FILESIZE:
-                return Graphs.__filesize(df, graphfile)
-            elif test_type == TestType.COMPUTING:
-                return Graphs.__computing(df, graphfile)
-            elif test_type == TestType.STRIPING:
-                return Graphs.__striping(df, graphfile)
-            else:
-                raise ValueError(f"Invalid test type: {test_type}")
-        except Exception as e:
-            raise Exception(f"Error: {e}")
+        
+        if test_type == TestType.FILESIZE:
+            return Graphs.__filesize(df, graphfile)
+        elif test_type == TestType.COMPUTING:
+            return Graphs.__computing(df, graphfile)
+        elif test_type == TestType.STRIPING:
+            return Graphs.__striping(df, graphfile)
+        else:
+            raise ValueError(f"Invalid test type: {test_type}")
+    

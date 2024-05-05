@@ -25,14 +25,16 @@
             justify-content: space-between;
         }
         .graph-container {
-            flex: 1;
-            max-width: 30%;
+            flex: 0 0 30%; /* Do not grow, do not shrink, start at 30% width */
+            max-width: 30%; /* Ensure it does not exceed 30% width */
             border: 1px solid #ddd;
             border-radius: 5px;
             padding: 15px;
             margin: 10px;
             background-color: #f9f9f9;
+            box-sizing: border-box; /* Includes padding and border in the element's total width and height */
         }
+
         .graph-title {
             font-size: 18px;
             color: #007bff;
@@ -181,17 +183,21 @@
             <p> Generated on {{ current_date }} </p>
         </div>
 
-        {% for report in reports_info %}
-            <div class="info-panel panel-spacing">
-             <h2>Round: {{report.report_id}}</h2>
-             <div class="info-panel panel-spacing">
-                <h2>Max Bandwidth Test Case</h2>
+        <div class="info-panel panel-spacing">
+        {% for report in reports_info %}                       
+            <h4 style="font-size: 16px; color: #333;">
+                <span style="font-weight: bold; color: #007bff;">{{report.test_title}}</span>.                
+            </h4>
+            <h4 style="font-size: 16px; color: #333;">
+                <span style="font-weight: normal; color: #555;">Max Bandwidth Found:</span>
+                <span style="font-weight: bold; color: #e74c3c;">{{report.max_bw}}</span> 
+            </h4>
+             <div class="info-panel panel-spacing">                
+                <caption style="caption-side: top; font-size: 18px; font-weight: bold; color: #333; margin: 10px 0;">
+                    Configuration Details for Maximum Bandwidth in round {{report.round_id}}
+                </caption>
+                
                     <table>
-                        <tr>
-                            <th>Max Bandwidth</th>
-                            <td>{{report.max_bw}}</td>
-                        </tr>
-                       
                         <tr>
                             <th>Computer Nodes</th>
                             <td>{{report.num_nodes}}</td>
@@ -213,17 +219,22 @@
                             <td>{{ report.striping}}</td>
                         </tr>
                     </table>
-                </div>
-
-                 <div class="graph-section">
-                    <div class="graph-container">
-                        <h2 class="graph-title">{{ report.graph_title }}</h2>
-                        <img src="{{ report.graph_path }}" alt="{{ report.graph_title }}" class="graph" onclick="openLightbox('{{ report.graph_path }}', '{{ report.graph_title }}')">
-                    </div>
-                    
-                </div>
+                </div>     
+        {% endfor %}
+    </div>
+        
+   
+    <div class="graph-section">
+        {% for report in reports_info %}
+            <div class="graph-container">
+                <h2 class="graph-title">{{ report.graph_title }}</h2>                
+                <img src="{{ report.graph_path }}" alt="{{ report.graph_title }}" class="graph" onclick="openLightbox('{{ report.graph_path }}', '{{ report.graph_title }}')">
             </div>
         {% endfor %}
+        </div>                
+        
+   
+    
     
     <div class="lightbox" id="lightbox" onclick="closeLightbox()">
         <img id="lightbox-img" src="" alt="">

@@ -6,20 +6,20 @@ import sys
 
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
-from iops.util.tags import TestType, jobManager
+from iops.util.tags import TestType, jobManager, ExecutionMode
 from iops.core.runner import Runner, Round
 from iops.core.config import IOPSConfig
 from iops.reports.report import Report
 
-
+from version import __version__
 
 
 console = Console()   
 
-app_version = "1.0"
+
 app_name = "IOPS"
 app_description = f"""
-    {app_name} version {app_version}  
+    {app_name} version {__version__}  
 
     
     IOPS (I/O Performance Evaluation benchmark Suite) is an automated utility designed to 
@@ -48,6 +48,30 @@ app_description = f"""
     
     """
 
+
+def round_builder(previous_round: Round, config: IOPSConfig, round_parameters: dict):
+    """
+    build the next round based on the previous round results
+    :param config:
+    :param round_parameters:
+    :return:
+    """
+    if previous_round is not None:
+        if previous_round.test_type == TestType.COMPUTING:
+            # get computing nodes from previous round
+            computing_nodes = previous_round.get_computing_nodes()
+            return Round(config, TestType.FILESIZE, round_parameters, computing_nodes)
+    
+        if previous_round.test_type == TestType.FILESIZE:
+            # get filesize from previous round
+            filesize = previous_round.get_filesize()
+            return Round(config, TestType.ACCESS_PATTERN, round_parameters, filesize)
+    
+        if previous_round.test_type == TestType.STRIPING:
+            # get stripes from previous round
+            stripes = previous_round.get_stripes()
+            return Round(config, TestType.COMPUTING, round_parameters, stripes)
+    
 
 def round_builder(previous_round: Round, config: IOPSConfig, round_parameters: dict):
     """
@@ -108,11 +132,41 @@ def main():
     try:
         # Initialize and load configuration
         config = IOPSConfig(config_path=args.conf)
+   
+        config.print_config(skip_confirmation=args.yes)
+
+        parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
+
+        # Create a round object with static parameters
+        round_volume = Round(config=config, 
+                            test_type=TestType.FILESIZE,
+                            round_parameters=parameters)
+        
+        round_computing = Round(config=config, 
+                                test_type=TestType.COMPUTING,
+                                round_parameters=parameters)
+        
+        round_striping = Round(config=config, 
+                            test_type=TestType.STRIPING,
+                            round_parameters=parameters)    
+
+        report = Report(config, 1, "IOPS Report")                     
+        
+        for round in (round_volume, round_computing, round_striping):
+            if round.config.job_manager == jobManager.LOCAL:
+                if round.test_type == TestType.FILESIZE:
+                    Runner.run(round)
+                    report.add_round(round)
+                    
+            elif round.config.job_manager == jobManager.SLURM:
+                Runner.run(round)
+                report.add_round(round)
+        
+        report.generate_report()
+        
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] [white]{e}[/white]")
         sys.exit(1)
-    
-    config.print_config(skip_confirmation=args.yes)
 
     parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
 
