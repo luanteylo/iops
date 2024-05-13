@@ -13,7 +13,7 @@ from iops.reports.report import Report
 
 from version import __version__
 
-
+from typing import List
 console = Console()   
 
 
@@ -49,53 +49,39 @@ app_description = f"""
     """
 
 
-def round_builder(previous_round: Round, config: IOPSConfig, round_parameters: dict):
+def round_builder(previous_round: Round, config: IOPSConfig, test_type: TestType, round_parameters: dict):
     """
     build the next round based on the previous round results
     :param config:
     :param round_parameters:
     :return:
     """
-    if previous_round is not None:
-        if previous_round.test_type == TestType.COMPUTING:
+    
+    # if previous_round is None, return the first round
+    if previous_round is None:
+        previous_round = Round(config=config, test_type=test_type, round_parameters=round_parameters)
+        return previous_round
+    else:
+        # if previous_round is not None, build the next round based on the previous round results
+        if previous_round.test_type == test_type:
+            pass
+        elif previous_round.test_type == TestType.FILESIZE:
+            # get filesize from previous round
+            round_parameters["volume"] = previous_round.get_volume()
+            return Round(config, test_type, round_parameters)
+        elif previous_round.test_type == TestType.COMPUTING:
             # get computing nodes from previous round
             computing_nodes = previous_round.get_computing_nodes()
-            return Round(config, TestType.FILESIZE, round_parameters, computing_nodes)
-    
-        if previous_round.test_type == TestType.FILESIZE:
-            # get filesize from previous round
-            filesize = previous_round.get_filesize()
-            return Round(config, TestType.ACCESS_PATTERN, round_parameters, filesize)
-    
-        if previous_round.test_type == TestType.STRIPING:
-            # get stripes from previous round
-            stripes = previous_round.get_stripes()
-            return Round(config, TestType.COMPUTING, round_parameters, stripes)
-    
-
-def round_builder(previous_round: Round, config: IOPSConfig, round_parameters: dict):
-    """
-    build the next round based on the previous round results
-    :param config:
-    :param round_parameters:
-    :return:
-    """
-    if previous_round is not None:
-        if previous_round.test_type == TestType.COMPUTING:
-            # get computing nodes from previous round
-            computing_nodes = previous_round.get_computing_nodes()
-            return Round(config, TestType.FILESIZE, round_parameters, computing_nodes)
-    
-        if previous_round.test_type == TestType.FILESIZE:
-            # get filesize from previous round
-            filesize = previous_round.get_filesize()
-            return Round(config, TestType.ACCESS_PATTERN, round_parameters, filesize)
-    
-        if previous_round.test_type == TestType.STRIPING:
-            # get stripes from previous round
-            stripes = previous_round.get_stripes()
-            return Round(config, TestType.COMPUTING, round_parameters, stripes)
-    
+            round_parameters["computing"] = computing_nodes
+            return Round(config, test_type, round_parameters)
+        elif previous_round.test_type == TestType.STRIPING:
+            # get ost folder from previous round
+            folder = previous_round.get_folder_index()
+            round_parameters["folder_index"] = folder
+            return Round(config, test_type, round_parameters)
+        else:
+            raise Exception("Unknown test type")
+        
 
 
 def main():
@@ -138,69 +124,45 @@ def main():
         parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
 
         # Create a round object with static parameters
-        round_volume = Round(config=config, 
-                            test_type=TestType.FILESIZE,
-                            round_parameters=parameters)
+        # round_volume = Round(config=config, 
+        #                     test_type=TestType.FILESIZE,
+        #                     round_parameters=parameters)
         
-        round_computing = Round(config=config, 
-                                test_type=TestType.COMPUTING,
-                                round_parameters=parameters)
+        # round_computing = Round(config=config, 
+        #                         test_type=TestType.COMPUTING,
+        #                         round_parameters=parameters)
         
-        round_striping = Round(config=config, 
-                            test_type=TestType.STRIPING,
-                            round_parameters=parameters)    
+        # round_striping = Round(config=config, 
+        #                     test_type=TestType.STRIPING,
+        #                     round_parameters=parameters)    
 
         report = Report(config, 1, "IOPS Report")                     
         
-        for round in (round_volume, round_computing, round_striping):
+        # round builder
+        previous_round = None
+        
+        list_test_type = list(set(test_type[0] for test_type in config.test_type))
+        # console.print(f"[bold red] test_type {config.test_type}[/bold red]")
+        for test_type in list_test_type:
+            
+            round = round_builder(previous_round, config, test_type, parameters)
+            previous_round = round
+            
+
             if round.config.job_manager == jobManager.LOCAL:
                 if round.test_type == TestType.FILESIZE:
                     Runner.run(round)
                     report.add_round(round)
-                    
+                        
             elif round.config.job_manager == jobManager.SLURM:
                 Runner.run(round)
                 report.add_round(round)
-        
-        report.generate_report()
+
+            report.generate_report()
         
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] [white]{e}[/white]")
         sys.exit(1)
-
-    parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
-
-    # Create a round object with static parameters
-    round_volume = Round(config=config, 
-                         test_type=TestType.FILESIZE,
-                         round_parameters=parameters)
-    
-    round_computing = Round(config=config, 
-                            test_type=TestType.COMPUTING,
-                            round_parameters=parameters)
-    
-    round_striping = Round(config=config, 
-                           test_type=TestType.STRIPING,
-                           round_parameters=parameters)    
-
-    report = Report(config, 1, "IOPS Report")                     
-    
-    for round in (round_volume, round_computing, round_striping):
-        # if round.test_type.name.lower() in config.rounds:
-
-            if round.config.job_manager == jobManager.LOCAL:
-                if round.test_type == TestType.FILESIZE:
-                    Runner.run(round)
-                    report.add_round(round)
-                
-            elif round.config.job_manager == jobManager.SLURM:
-                Runner.run(round)
-                report.add_round(round)
-
-    
-    # generating the reports
-    report.generate_report()
-    console.print("[bold green]Exiting...")
 
 
 if __name__ == "__main__":

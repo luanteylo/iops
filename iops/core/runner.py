@@ -93,20 +93,23 @@ class Round:
         '''
         return self.df.loc[self.df['bw'].idxmax(), 'nodes']
 
-    @property
+    
     def get_volume(self):
         '''
         get the volume from the previous round
         '''
-        return self.df.loc[self.df['bw'].idxmax(), 'volume']
+        return self.df.loc[self.df['bw'].idxmax(), 'aggregate_filesize']
     
+    @property
+    def get_folder_index(self):
+        '''
+        get the folder index from the previous round
+        '''
+        pass
     
-
     def __generate_all_tests(self):
 
-        next_test =  Test.create_test(pattern=Pattern.SEQUENTIAL,
-                                      operation=Operation.WRITE,
-                                      config=self.config,
+        next_test =  Test.create_test(config=self.config,
                                       round_path=self.round_path,
                                       test_parameters=self.round_parameters)
         
