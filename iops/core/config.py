@@ -1,7 +1,5 @@
 import configparser
 import re
-import sys
-import shutil
 from rich.console import Console
 from rich.traceback import install
 from pathlib import Path
@@ -13,7 +11,8 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 
-from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, TestType
+from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, TestType, Pattern, FileMode
+from typing import List, Tuple
 
 
 install(show_locals=True)
@@ -97,23 +96,16 @@ class IOPSConfig:
         return next_index
 
 
-    def get_test_type(self, test_type_str: str) -> TestType:
-        # test_type_str = test_type_str.lower()
-        try:
-            if test_type_str == "computing:sequential:one":
-                return TestType.IOR_COM_SEQ_ONE
-            elif test_type_str == "computing:sequential:shared":
-                return TestType.IOR_COM_SEQ_SHARED
-            elif test_type_str == "computing:random:one":
-                return TestType.IOR_COM_RANDOM_ONE
-            elif test_type_str == "computing:random:shared":
-                return TestType.IOR_COM_RANDOM_SHARED
-            elif test_type_str == "filesize:sequential:one":
-                return TestType.IOR_FILESIZE_SEQ_ONE
-            elif test_type_str == "filesize:sequential:shared":
-                return TestType.IOR_FILESIZE_SEQ_SHARED
-        except ValueError:
-            return f"Invalid test type: {test_type_str}"    
+    def get_test_type(self, test_type_str: str) -> List[Tuple[TestType, Pattern, FileMode]]:
+        # Return the TestType based on the string
+        test_params = []
+        for test_type in test_type_str:
+            test_type_split = test_type.split(':')
+            if len(test_type_split) != 3: # Check if the test type is valid
+                raise ValueError(f"Invalid test type: {test_type}")
+            test_type_tuple = (TestType[test_type_split[0].upper()], Pattern[test_type_split[1].upper()], FileMode[test_type_split[2].upper()])
+            test_params.append(test_type_tuple)
+        return test_params
 
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
         if custom_message:
@@ -214,9 +206,8 @@ class IOPSConfig:
         
         test_type_str = [self.test_type.strip() for self.test_type in self.test_type.split(',')]
         
-        self.test_type = [self.get_test_type(test_type) for test_type in test_type_str]
-
-        # self.get_test_type(self.test_type)
+        self.test_type = self.get_test_type(test_type_str)
+        
         
         # Parse and load the modules
         if modules_str.lower() == 'none':
