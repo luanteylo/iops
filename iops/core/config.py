@@ -223,8 +223,9 @@ class IOPSConfig:
         # if it is running in debug mode we may want to pointing to the folder given by the user
         # in this case we ask the user to confirm the folder
 
-        create_folder = False
-        if self.mode == ExecutionMode.DEBUG:            
+        create_folder = True
+        if self.mode == ExecutionMode.DEBUG:
+            create_folder = False            
             console.print(f"[bold yellow]Debug Mode Warning:[/bold yellow] the folder {self.workdir} will be used")
             if Prompt.ask("[bold cyan]Do you want to use this folder?[/bold cyan]", choices=["yes", "no"], default="yes") == "no":
                 create_folder = True        

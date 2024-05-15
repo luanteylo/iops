@@ -63,21 +63,17 @@ def round_builder(previous_round: Round, config: IOPSConfig, test_type: TestType
         return previous_round
     else:
         # if previous_round is not None, build the next round based on the previous round results
-        if previous_round.test_type == test_type:
-            pass
-        elif previous_round.test_type == TestType.FILESIZE:
+        if previous_round.test_type == TestType.FILESIZE:
             # get filesize from previous round
             round_parameters["volume"] = previous_round.get_volume()
             return Round(config, test_type, round_parameters)
         elif previous_round.test_type == TestType.COMPUTING:
             # get computing nodes from previous round
-            computing_nodes = previous_round.get_computing_nodes()
-            round_parameters["computing"] = computing_nodes
+            round_parameters["computing"] = previous_round.get_computing_nodes()
             return Round(config, test_type, round_parameters)
         elif previous_round.test_type == TestType.STRIPING:
             # get ost folder from previous round
-            folder = previous_round.get_folder_index()
-            round_parameters["folder_index"] = folder
+            round_parameters["folder_index"] = previous_round.get_folder_index()
             return Round(config, test_type, round_parameters)
         else:
             raise Exception("Unknown test type")

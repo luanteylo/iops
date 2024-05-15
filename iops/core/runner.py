@@ -86,25 +86,39 @@ class Round:
         
         except Exception as e:
             raise Exception(f"Error: {e}")
-    @property
+    
     def get_computing_nodes(self):
         '''
         get the computing nodes from the previous round
         '''
-        return self.df.loc[self.df['bw'].idxmax(), 'nodes']
-
+        gb = self.df.groupby('nodes')
+        max_bw = 0.0
+        computing = 0
+        for nodes, df_gb in gb:
+            if df_gb['bw'].mean() > max_bw:
+                max_bw = df_gb['bw'].mean()
+                computing = nodes
+        return computing
     
     def get_volume(self):
         '''
         get the volume from the previous round
         '''
-        return self.df.loc[self.df['bw'].idxmax(), 'aggregate_filesize']
+        gb = self.df.groupby('aggregate_filesize')
+        max_bw = 0.0
+        volume = 0
+        for filesize, df_gb in gb:            
+            if df_gb['bw'].mean() > max_bw:
+                max_bw = df_gb['bw'].mean()
+                volume = filesize       
+        return volume/1024/1024
     
-    @property
+    
     def get_folder_index(self):
         '''
         get the folder index from the previous round
         '''
+        console.print(f"folder index not yet implemented")
         pass
     
     def __generate_all_tests(self):
@@ -256,11 +270,6 @@ class Runner:
 
             # when a ctrl+c is pressed, stop the execution of tests
             sys.exit(1)
-
-            # response = input("Press 'n' to move to the next test, or 'q' to quit: ")
-            # if response.lower() == 'n':
-            #     # Skip to the next test
-            #     pass
 
         except Exception as e:
             # Handle general exceptions.
