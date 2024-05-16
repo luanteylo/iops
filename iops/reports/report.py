@@ -47,9 +47,7 @@ class Report():
             'current_date': datetime.now(),
             'reports_info': []
         }
-
         
-
         for round in self.rounds.values():
             # Firstly, we copy the files to the report folder
             round.graph_file.rename(self.reportdir / round.graph_file.name)

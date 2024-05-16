@@ -150,11 +150,11 @@ def main():
                     Runner.run(round)
                     report.add_round(round)
                         
-            elif round.config.job_manager == jobManager.SLURM:
-                Runner.run(round)
-                report.add_round(round)
+                elif round.config.job_manager == jobManager.SLURM:
+                    Runner.run(round)
+                    report.add_round(round)
 
-            report.generate_report()
+        report.generate_report()
         
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] [white]{e}[/white]")
