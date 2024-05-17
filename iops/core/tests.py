@@ -49,15 +49,19 @@ class Test(ABC):
         :param test_parameters: Dictionary of specific test parameters.
         :return: An instance of a subclass of Test.
         """
-        
+        # Get the test pattern and file mode from the configuration
+        _, pattern, file_mode, *_ = config.test_configuration[0]
+        print(f"Creating test {pattern} {file_mode}...")
 
-        if config.test_type[0][1] == Pattern.SEQUENTIAL and config.test_type[0][2] == FileMode.SINGLE:
+        if pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SINGLE:
             return TestIORSeq(config, round_path, test_parameters)
-        elif config.test_type[0][1] == Pattern.RANDOM and config.test_type[0][2] == FileMode.SINGLE:
+        elif pattern == Pattern.RANDOM and file_mode == FileMode.SINGLE:
             return TestIORRandom(config, round_path, test_parameters)
+        elif pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SHARED:
+            print("Sequential multiple")
         # Add more elif statements for other test types as needed
         else:
-            raise ValueError(f"Unsupported test: {config.test_type}")
+            raise ValueError(f"Unsupported test: {config.test_configuration}")
 
     @abstractmethod
     def build_files(self) -> None:

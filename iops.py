@@ -49,32 +49,31 @@ app_description = f"""
     """
 
 
-def round_builder(previous_round: Round, config: IOPSConfig, test_type: TestType, round_parameters: dict):
+def round_builder(previous_round: Round, config: IOPSConfig, test_config: tuple, round_parameters: dict):
     """
     build the next round based on the previous round results
     :param config:
     :param round_parameters:
     :return:
     """
-    
+    console.print(f"Building round {test_config[0]}...")
     # if previous_round is None, return the first round
     if previous_round is None:
-        previous_round = Round(config=config, test_type=test_type, round_parameters=round_parameters)
-        return previous_round
+        return Round(config=config, test_type=test_config[0], round_parameters=round_parameters)
     else:
         # if previous_round is not None, build the next round based on the previous round results
         if previous_round.test_type == TestType.FILESIZE:
             # get filesize from previous round
-            round_parameters["volume"] = previous_round.get_volume()
-            return Round(config, test_type, round_parameters)
+            round_parameters["volume"] = previous_round.get_volume()            
+            return Round(config, test_config[0], round_parameters)
         elif previous_round.test_type == TestType.COMPUTING:
             # get computing nodes from previous round
             round_parameters["computing"] = previous_round.get_computing_nodes()
-            return Round(config, test_type, round_parameters)
+            return Round(config, test_config[0], round_parameters)
         elif previous_round.test_type == TestType.STRIPING:
             # get ost folder from previous round
             round_parameters["folder_index"] = previous_round.get_folder_index()
-            return Round(config, test_type, round_parameters)
+            return Round(config, test_config[0], round_parameters)
         else:
             raise Exception("Unknown test type")
         
@@ -137,14 +136,13 @@ def main():
         # round builder
         previous_round = None
         
-        list_test_type = list(set(test_type[0] for test_type in config.test_type))
-        # console.print(f"[bold red] test_type {config.test_type}[/bold red]")
-        for test_type in list_test_type:
+        list_test_type = list(set(test_config[0] for test_config in config.test_configuration))
+     
+        for test_config in config.test_configuration:
             
-            round = round_builder(previous_round, config, test_type, parameters)
+            round = round_builder(previous_round, config, test_config, parameters)
             previous_round = round
             
-
             if round.config.job_manager == jobManager.LOCAL:
                 if round.test_type == TestType.FILESIZE:
                     Runner.run(round)

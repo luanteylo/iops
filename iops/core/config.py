@@ -51,7 +51,7 @@ class IOPSConfig:
         self.workdir = None
         self.reportdir = None # not in the .ini file
         self.repetitions = None
-        self.test_type = None
+        self.test_configuration = None
 
         # Templates & scripts
         self.slurm_template = None
@@ -96,15 +96,14 @@ class IOPSConfig:
         return next_index
 
 
-    def get_test_type(self, test_type_str: str) -> List[Tuple[TestType, Pattern, FileMode]]:
+    def get_test_config(self, test_combination_str: str) -> List[Tuple[TestType, Pattern, FileMode]]:
         # Return the TestType based on the string
         test_params = []
-        for test_type in test_type_str:
-            test_type_split = test_type.split(':')
-            if len(test_type_split) != 3: # Check if the test type is valid
-                raise ValueError(f"Invalid test type: {test_type}")
-            test_type_tuple = (TestType[test_type_split[0].upper()], Pattern[test_type_split[1].upper()], FileMode[test_type_split[2].upper()])
-            test_params.append(test_type_tuple)
+        for test_config in test_combination_str:
+            test_config_split = test_config.split(':')
+            if len(test_config_split) != 3: # Check if the test type is valid
+                raise ValueError(f"Invalid test type: {test_config}")
+            test_params.append((TestType[test_config_split[0].upper()], Pattern[test_config_split[1].upper()], FileMode[test_config_split[2].upper()]))
         return test_params
 
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
@@ -168,7 +167,7 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
-        self.test_type = self.__get("execution", "test_type")
+        self.test_configuration = self.__get("execution", "test_configuration")
                 
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -204,9 +203,9 @@ class IOPSConfig:
             self.benchmark_tool = BenchmarkTool[benchmark_tool_str.upper()]
 
         
-        test_type_str = [self.test_type.strip() for self.test_type in self.test_type.split(',')]
+        test_config_str = [self.test_configuration.strip() for self.test_configuration in self.test_configuration.split(',')]
         
-        self.test_type = self.get_test_type(test_type_str)
+        self.test_configuration = self.get_test_config(test_config_str)
         
         
         # Parse and load the modules
@@ -349,7 +348,7 @@ class IOPSConfig:
         f"workdir = {self.workdir}\n" \
         f"reportdir = {self.reportdir}\n" \
         f"repetitions = {self.repetitions}\n" \
-        f"test_type =  = {self.test_type}\n\n" \
+        f"test_configuration =  = {self.test_configuration}\n\n" \
         f"[bold]Templates[/bold] \n" \
         f"slurm_template = {self.slurm_template}\n" \
         f"local_template = {self.local_template}\n" \
@@ -393,7 +392,7 @@ class IOPSConfig:
             modules = ", ".join(f"{module}" for module in self.modules)
         table.add_row("Modules", str(modules))        
         table.add_row("Workdir", str(self.workdir))
-        table.add_row("Test_type", str(self.test_type))
+        table.add_row("Test_config", str(self.test_configuration))
         table.add_row("Repetitions", str(self.repetitions))
 
         table.add_row("")  

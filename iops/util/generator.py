@@ -50,7 +50,7 @@ class Generator:
             'modules': ' None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
             'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
             'repetitions': '5 # The number of repetitions for each test',
-            'test_type': 'computing:sequential:single, computing:sequential:shared, filesize:sequential:single, filesize:sequential:shared # The list of tests to be executed. Each test is defined by the following parameters: computing:access:clients_per_node',            
+            'test_combinations': 'computing:sequential:single, computing:sequential:shared, filesize:sequential:single, filesize:sequential:shared # The list of tests to be executed. Each test is defined by the following parameters: computing:access:clients_per_node',            
         }
 
         config_template['template'] = {
