@@ -32,7 +32,7 @@ class Generator:
         
         config_storage['storage'] = {
             'filesystem_dir': '/path/to/storage # The path to the directory where the benchmark tool will write/read from',                      
-            'max_volume':  '8192 # Max volume size in bytes (to limit the size of the benchmarked file). Warning: the volume needs to be power of 2.',
+            'max_volume':  '8192 # Max volume size in mega bytes (to limit the size of the benchmarked file). Warning: the volume needs to be power of 2.',
             'stripe_folders': "ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups.\n" \
             "# If 'None' is provided, the striping test will not be executed.\n" \
             "# For now, these folders need to be created manually inside the benchmark_output folder using the file system\n"\
@@ -45,12 +45,15 @@ class Generator:
         config_execution['execution'] = {
             'mode': 'fast  # Select the mode of execution',
             'search_method' :'greedy # The search method to be used. For now, only greedy is supported',
-            'job_manager': ' local # Specify the job manager. If "local" is provided, the benchmark will be executed locally',
+            'job_manager': ' slurm # Specify the job manager. If "local" is provided, the benchmark will be executed locally',
             'benchmark_tool': 'ior  # Specify the benchmark tool to use. For now, only IOR is supported.',            
             'modules': ' None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
             'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
-            'repetitions': '5 # The number of repetitions for each test',
-            'test_combinations': 'computing:sequential:single, computing:sequential:shared, filesize:sequential:single, filesize:sequential:shared # The list of tests to be executed. Each test is defined by the following parameters: computing:access:clients_per_node',            
+            'repetitions': '5 # The number of repetitions for each test',            
+            'tests': 'filesize, computing, striping # The list of tests to be executed. The following tests are supported: filesize, computing, striping',            
+            'io_patterns': 'sequential:shared, sequential:shared # The list of IO patterns to be executed. Each pattern is defined by the following parameters: access_pattern:file_access.\n \
+             # The access pattern can be sequencial or random, and the file access can be single  (one file per process) or shared (all processes access the same file).\n \
+             # Each test will be executed considering the io_patterns defined above. If more than one pattern is defined, the test will be repeated for each pattern.\n' \
         }
 
         config_template['template'] = {

@@ -2,7 +2,7 @@ from iops.core.config import IOPSConfig
 from iops.core.tests import Test
 from iops.util.generator import Graphs
 from iops.util.submitter import Submitter
-from iops.util.tags import TestType, jobManager, ExecutionMode, Pattern, Operation
+from iops.util.tags import TestType, jobManager, ExecutionMode, Pattern, FileMode
 
 import sys
 import pandas as pd
@@ -35,10 +35,12 @@ class Round:
     """
     _id_counter = 0
 
-    def __init__(self, config: IOPSConfig, test_type: TestType, round_parameters: dict):
+    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, round_parameters: dict):
         type(self)._id_counter += 1
         self.round_id = self._id_counter
         
+        self.pattern = pattern
+        self.file_mode = file_mode
         self.config = config
         self.test_type = test_type        
         self.round_parameters = round_parameters
@@ -123,7 +125,9 @@ class Round:
     
     def __generate_all_tests(self):
 
-        next_test =  Test.create_test(config=self.config,
+        next_test =  Test.create_test(pattern=self.pattern,
+                                      file_mode=self.file_mode,
+                                      config=self.config,
                                       round_path=self.round_path,
                                       test_parameters=self.round_parameters)
         
@@ -165,6 +169,7 @@ class Round:
             console.print(f"Repetition {self.__repetition + 1}/{self.config.repetitions}", style="bold white on red")
 
         next_test = None
+        
         if self.__repetition < self.config.repetitions:
             next_test = self.all_tests[self.__current_pos]
             self.__current_pos += 1 
@@ -266,7 +271,8 @@ class Runner:
             # check if there is a test running and stop it
             if round.config.job_manager == jobManager.SLURM:
                 # stop the test
-                Submitter.stop_slurm()
+                pass
+                #TODO: Submitter.stop_slurm()
 
             # when a ctrl+c is pressed, stop the execution of tests
             sys.exit(1)

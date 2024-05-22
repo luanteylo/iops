@@ -27,7 +27,7 @@ class Test(ABC):
         :param test_parameters: Dictionary of parameters that define test specifics. These parameters need to be handled appropriately by any class that inherits from this class.
         """
         type(self)._id_counter += 1
-        self.test_id = self._id_counter
+        self.test_id = self._id_counter        
         
         self.config = config
         self.round_path = round_path
@@ -38,7 +38,7 @@ class Test(ABC):
         self.batch_file = self.batch_path / f"batch_{self.test_id}.sh"
 
     @classmethod
-    def create_test(cls, config: 'IOPSConfig', round_path: Path, test_parameters: dict) -> 'Test':
+    def create_test(cls, pattern: Pattern, file_mode: FileMode, config: 'IOPSConfig', round_path: Path, test_parameters: dict) -> 'Test':
         """
         Factory method to create test instances based on the test pattern and operation.
         
@@ -49,19 +49,16 @@ class Test(ABC):
         :param test_parameters: Dictionary of specific test parameters.
         :return: An instance of a subclass of Test.
         """
-        # Get the test pattern and file mode from the configuration
-        _, pattern, file_mode, *_ = config.test_configuration[0]
+        # Get the test pattern and file mode from the configuration        
         print(f"Creating test {pattern} {file_mode}...")
 
-        if pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SINGLE:
+        if pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SHARED:
             return TestIORSeq(config, round_path, test_parameters)
-        elif pattern == Pattern.RANDOM and file_mode == FileMode.SINGLE:
-            return TestIORRandom(config, round_path, test_parameters)
-        elif pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SHARED:
-            print("Sequential multiple")
+        elif pattern == Pattern.RANDOM and file_mode == FileMode.SHARED:
+            return TestIORRandom(config, round_path, test_parameters) 
         # Add more elif statements for other test types as needed
         else:
-            raise ValueError(f"Unsupported test: {config.test_configuration}")
+            raise ValueError(f"Unsupported test pattern and file mode combination: {pattern}:{file_mode}")
 
     @abstractmethod
     def build_files(self) -> None:

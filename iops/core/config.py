@@ -51,7 +51,7 @@ class IOPSConfig:
         self.workdir = None
         self.reportdir = None # not in the .ini file
         self.repetitions = None
-        self.test_configuration = None
+        self.tests = None
 
         # Templates & scripts
         self.slurm_template = None
@@ -95,16 +95,31 @@ class IOPSConfig:
             next_index = 0
         return next_index
 
+    def __build_io_patterns(self, patterns_str: List[str]) -> List[Tuple[Pattern, FileMode]]:
+        io_patterns = []
+        for pattern in patterns_str:                
+            pattern = pattern.split(':')                        
+            if len(pattern) != 2:
+                raise ValueError(f"Invalid pattern: {pattern}. Expected format: 'pattern:file_mode'")
+            pattern_type = pattern[0]
+            file_mode = pattern[1]
+            if pattern_type.upper() not in Pattern.__members__:
+                raise ValueError(f"Invalid Pattern: {pattern_type}")
+            if file_mode.upper() not in FileMode.__members__:
+                raise ValueError(f"Invalid FileMode: {file_mode}")
+            io_patterns.append((Pattern[pattern_type.upper()], FileMode[file_mode.upper()]))
+        
+        return io_patterns
 
-    def get_test_config(self, test_combination_str: str) -> List[Tuple[TestType, Pattern, FileMode]]:
+    def __build_tests(self, tests_str: List[str]) -> List[TestType]:
         # Return the TestType based on the string
-        test_params = []
-        for test_config in test_combination_str:
-            test_config_split = test_config.split(':')
-            if len(test_config_split) != 3: # Check if the test type is valid
-                raise ValueError(f"Invalid test type: {test_config}")
-            test_params.append((TestType[test_config_split[0].upper()], Pattern[test_config_split[1].upper()], FileMode[test_config_split[2].upper()]))
-        return test_params
+        tests = []        
+        for test in tests_str:          
+            if test.upper() not in TestType.__members__:                
+                raise ValueError(f"Invalid TestType: {test}")
+            else:
+                tests.append(TestType[test.upper()])            
+        return tests
 
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
         if custom_message:
@@ -167,7 +182,8 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
-        self.test_configuration = self.__get("execution", "test_configuration")
+        self.tests = self.__get("execution", "tests")
+        self.io_patterns = self.__get("execution", "io_patterns")        
                 
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -202,26 +218,59 @@ class IOPSConfig:
         else:
             self.benchmark_tool = BenchmarkTool[benchmark_tool_str.upper()]
 
+        # if the self.tests is a empty string, we append a error message
+        if self.tests == "":
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="tests",
+                                                   value=self.tests,
+                                                   custom_message="Test configuration is required."))
+        else:
+            # split the tests string and remove the white spaces
+            tests_str = [test.strip() for test in self.tests.split(',')]            
+            # create a list of tuples with the test configuration
+            try:
+                
+                self.tests = self.__build_tests(tests_str)                
+            except ValueError as e:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="tests",
+                                                       value=self.tests,
+                                                       custom_message=str(e)))
         
-        test_config_str = [self.test_configuration.strip() for self.test_configuration in self.test_configuration.split(',')]
+        if self.io_patterns == "":
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="io_patterns",
+                                                   value=self.io_patterns,
+                                                   custom_message="IO Patterns is required."))
+        else:
+            # split the io_patterns string and remove the white spaces
+            io_patterns_str = [io_pattern.strip() for io_pattern in self.io_patterns.split(',')]           
+            # create a list of tuples with the io patterns            
+            try:
+                self.io_patterns = self.__build_io_patterns(io_patterns_str)                
+            except ValueError as e:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="io_patterns",
+                                                       value=self.io_patterns,
+                                                       custom_message=str(e)))
         
-        self.test_configuration = self.get_test_config(test_config_str)
-        
-        
+        # check if  the tests pattern is valid considering the execution mode
+        if self.job_manager == jobManager.LOCAL:
+            for test in self.tests:
+                if test in [TestType.COMPUTING, TestType.STRIPING]:
+                    self.errors.append(self.__format_error(section="execution",
+                                                       key="tests",
+                                                       value=f"{test.name}",
+                                                       custom_message=f"Test Type {test.name} is not allowed when using {self.job_manager.name} job manager."))
         # Parse and load the modules
         if modules_str.lower() == 'none':
             self.modules = None
         else:
             self.modules = [module.strip() for module in modules_str.split(',')]        
   
-        
-
-        if not self.workdir.is_dir():
-            self.workdir.mkdir(parents=True, exist_ok=True)
-
+      
         # if it is running in debug mode we may want to pointing to the folder given by the user
         # in this case we ask the user to confirm the folder
-
         create_folder = True
         if self.mode == ExecutionMode.DEBUG:
             create_folder = False            
@@ -230,11 +279,22 @@ class IOPSConfig:
                 create_folder = True        
         
         if create_folder:
-            self.workdir = self.workdir / f"execution_{self.__get_next_index()}"
-            self.workdir.mkdir(parents=True, exist_ok=True)
-                
-        self.reportdir = self.workdir / "report"
-        self.reportdir.mkdir(parents=True, exist_ok=True)
+            try:
+                self.workdir = self.workdir / f"execution_{self.__get_next_index()}"            
+                self.workdir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="workdir",
+                                                       value=self.workdir,
+                                                       custom_message=str(e)))
+        try:       
+            self.reportdir = self.workdir / "report"
+            self.reportdir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="workdir",
+                                                   value=self.reportdir,
+                                                   custom_message=str(e)))
 
         if self.repetitions <= 0:
             self.errors.append(self.__format_error(section="execution",
@@ -348,7 +408,7 @@ class IOPSConfig:
         f"workdir = {self.workdir}\n" \
         f"reportdir = {self.reportdir}\n" \
         f"repetitions = {self.repetitions}\n" \
-        f"test_configuration =  = {self.test_configuration}\n\n" \
+        f"tests =  = {self.tests}\n\n" \
         f"[bold]Templates[/bold] \n" \
         f"slurm_template = {self.slurm_template}\n" \
         f"local_template = {self.local_template}\n" \
@@ -383,8 +443,8 @@ class IOPSConfig:
 
         # Create a table for execution information
         table.add_row("")    
-        table.add_row("Mode", str(self.mode))    
-        table.add_row("Job Manager", str(self.job_manager))
+        table.add_row("Mode", self.mode.name)    
+        table.add_row("Job Manager", self.job_manager.name)
         
         
         modules = self.modules
@@ -392,7 +452,8 @@ class IOPSConfig:
             modules = ", ".join(f"{module}" for module in self.modules)
         table.add_row("Modules", str(modules))        
         table.add_row("Workdir", str(self.workdir))
-        table.add_row("Test_config", str(self.test_configuration))
+        table.add_row("Tests", ", ".join([f"{test.name}" for test in self.tests]  ))
+        table.add_row("IO Patterns", ", ".join([f"{pattern[0].name}:{pattern[1].name}" for pattern in self.io_patterns]))
         table.add_row("Repetitions", str(self.repetitions))
 
         table.add_row("")  

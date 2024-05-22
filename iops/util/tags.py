@@ -15,17 +15,12 @@ class Pattern(Enum):
     SEQUENTIAL = "sequential"
     RANDOM = "random"
 
-class Operation(Enum):
-    """
-    Tags for operations
-    """
-    WRITE = "write"
-    READ = "read"
+
+
 class FileMode(Enum):
     """
     Tags for file modes
     """
-    SINGLE = "single"
     SHARED = "shared"
 
 class jobManager(Enum):
