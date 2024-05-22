@@ -120,8 +120,7 @@ class Round:
         '''
         get the folder index from the previous round
         '''
-        console.print(f"folder index not yet implemented")
-        pass
+        return 0 # TODO: implement it
     
     def __generate_all_tests(self):
 

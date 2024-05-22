@@ -59,27 +59,28 @@ def run(config: IOPSConfig) ->  Report:
     report = Report(config, 1, "IOPS Report") 
     parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
     
-    current_round = None    
+  
 
     for io_pattern, file_mode in config.io_patterns:
         console.print(f"[bold]Running tests for {io_pattern.name}:{file_mode.name}[/bold]")        
         for test_type in config.tests:
-            # build the round
-            if current_round is not None:
-                # update the parameters based on the previous round results        
-                if test_type == TestType.FILESIZE:
-                    # get filesize from previous round
-                    parameters["volume"] = current_round.get_volume()                
-                elif test_type == TestType.COMPUTING:
-                    # get computing nodes from previous round
-                    parameters["computing"] = current_round.get_computing_nodes()
-                elif test_type == TestType.STRIPING:
-                    # get ost folder from previous round
-                    parameters["folder_index"] = current_round.get_folder_index()
-                
             current_round = Round(pattern=io_pattern, file_mode=file_mode, config=config, test_type=test_type, round_parameters=parameters)
             Runner.run(current_round)
             report.add_round(current_round)
+            # build the round
+            
+            # update the parameters based on the previous round results        
+            if test_type == TestType.FILESIZE:
+                # get filesize from previous round
+                parameters["volume"] = current_round.get_volume()                
+            elif test_type == TestType.COMPUTING:
+                # get computing nodes from previous round
+                parameters["computing"] = current_round.get_computing_nodes()
+            elif test_type == TestType.STRIPING:
+                # get ost folder from previous round
+                parameters["folder_index"] = current_round.get_folder_index()
+            
+            
         
     return report
 

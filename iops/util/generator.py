@@ -51,7 +51,7 @@ class Generator:
             'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
             'repetitions': '5 # The number of repetitions for each test',            
             'tests': 'filesize, computing, striping # The list of tests to be executed. The following tests are supported: filesize, computing, striping',            
-            'io_patterns': 'sequential:shared, sequential:shared # The list of IO patterns to be executed. Each pattern is defined by the following parameters: access_pattern:file_access.\n \
+            'io_patterns': 'sequential:shared, random:shared # The list of IO patterns to be executed. Each pattern is defined by the following parameters: access_pattern:file_access.\n \
              # The access pattern can be sequencial or random, and the file access can be single  (one file per process) or shared (all processes access the same file).\n \
              # Each test will be executed considering the io_patterns defined above. If more than one pattern is defined, the test will be repeated for each pattern.\n' \
         }
