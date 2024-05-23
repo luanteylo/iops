@@ -49,9 +49,6 @@ class Test(ABC):
         :param test_parameters: Dictionary of specific test parameters.
         :return: An instance of a subclass of Test.
         """
-        # Get the test pattern and file mode from the configuration        
-        print(f"Creating test {pattern} {file_mode}...")
-
         if pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SHARED:
             return TestIORSeq(config, round_path, test_parameters)
         elif pattern == Pattern.RANDOM and file_mode == FileMode.SHARED:
@@ -99,7 +96,7 @@ class Test(ABC):
     def __repr__(self):
         msg_str = f"\t{self.test_id:04}: "
         for key, value in self.test_parameters.items():            
-            msg_str += f"\[{key}={value}] "
+            msg_str += f"\[{key.name}={value}] "
         
         return msg_str
 
@@ -181,21 +178,21 @@ class TestIORSeq(Test):
         """
         The volume of data involved in the test, in MB.
         """
-        return self.test_parameters["volume"]
+        return self.test_parameters[TestType.FILESIZE]
     
     @property
     def folder_index(self) -> int:
         """
         The index of the directory within the storage hierarchy where the test files will be placed.
         """
-        return self.test_parameters["folder_index"]
+        return self.test_parameters[TestType.STRIPING]
     
     @property
     def computing(self) -> int:
         """
         The number of computing nodes or processes dedicated to this test.
         """
-        return self.test_parameters["computing"]
+        return self.test_parameters[TestType.COMPUTING]
 
 
 
@@ -278,18 +275,18 @@ class TestIORRandom(Test):
         """
         The volume of data involved in the test, in MB.
         """
-        return self.test_parameters["volume"]
+        return self.test_parameters[TestType.FILESIZE]
     
     @property
     def folder_index(self) -> int:
         """
         The index of the directory within the storage hierarchy where the test files will be placed.
         """
-        return self.test_parameters["folder_index"]
+        return self.test_parameters[TestType.STRIPING]
     
     @property
     def computing(self) -> int:
         """
         The number of computing nodes or processes dedicated to this test.
         """
-        return self.test_parameters["computing"]
+        return self.test_parameters[TestType.COMPUTING]

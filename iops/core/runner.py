@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, TaskProgressColumn
 from rich.panel import Panel
 import time
+from pathlib import Path
 
 
 
@@ -44,6 +45,10 @@ class Round:
         self.config = config
         self.test_type = test_type        
         self.round_parameters = round_parameters
+
+        self.best_bw = None
+        self.best_df = None
+        self.best_parameter = None
         
         self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
         # create the directory
@@ -82,45 +87,28 @@ class Round:
             self.df = pd.read_csv(self.csv_file)
             # generate the graph
             Graphs.generate(self.df, self.graph_file, self.test_type)
+            # load the best test
+            
+            if self.test_type == TestType.COMPUTING:
+                gb = self.df.groupby('nodes')
+            elif self.test_type == TestType.FILESIZE:
+                gb = self.df.groupby('aggregate_filesize')
+            elif self.test_type == TestType.STRIPING:
+                gb = self.df.groupby('path')
+            
+            # get the best test
+            self.best_bw = 0.0
+            for parameter, df_gb in gb:
+                if df_gb['bw'].mean() > self.best_bw:
+                    self.best_bw = df_gb['bw'].mean()
+                    self.best_df = df_gb.copy()
+                    self.best_parameter = parameter
 
         except subprocess.CalledProcessError as e:
             raise Exception(f"Error: Script execution failed: {e}")
         
         except Exception as e:
             raise Exception(f"Error: {e}")
-    
-    def get_computing_nodes(self):
-        '''
-        get the computing nodes from the previous round
-        '''
-        gb = self.df.groupby('nodes')
-        max_bw = 0.0
-        computing = 0
-        for nodes, df_gb in gb:
-            if df_gb['bw'].mean() > max_bw:
-                max_bw = df_gb['bw'].mean()
-                computing = nodes
-        return computing
-    
-    def get_volume(self):
-        '''
-        get the volume from the previous round
-        '''
-        gb = self.df.groupby('aggregate_filesize')
-        max_bw = 0.0
-        volume = 0
-        for filesize, df_gb in gb:            
-            if df_gb['bw'].mean() > max_bw:
-                max_bw = df_gb['bw'].mean()
-                volume = filesize       
-        return volume/1024/1024
-    
-    
-    def get_folder_index(self):
-        '''
-        get the folder index from the previous round
-        '''
-        return 0 # TODO: implement it
     
     def __generate_all_tests(self):
 
@@ -140,25 +128,39 @@ class Round:
             
             if self.test_type == TestType.COMPUTING:              
                 if  next_test.computing < self.config.max_nodes:
-                    next_test.test_parameters['computing'] *= 2
+                    next_test.test_parameters[TestType.COMPUTING] *= 2
                 else:
                     next_test =  None # no more tests to run
 
             if self.test_type == TestType.FILESIZE:            
                 if next_test.volume < self.config.max_volume:
-                    next_test.test_parameters['volume'] += 512                                
+                    next_test.test_parameters[TestType.FILESIZE] += 512                                
                 else:
                     next_test = None # no more tests to run        
 
             if self.test_type == TestType.STRIPING:            
                 if next_test.folder_index < len(self.config.stripe_folders) - 1:
-                    next_test.test_parameters['folder_index'] += 1
+                    next_test.test_parameters[TestType.STRIPING] += 1
                 else:
                     next_test = None
         # randomize the list of tests
         random.shuffle(self.all_tests)
             
-
+    def get_best_parameter(self) -> int | float | None:
+        '''
+        get the best parameter for the current round
+        '''
+        if self.test_type == TestType.COMPUTING:
+            return self.best_parameter
+        elif self.test_type == TestType.FILESIZE:
+            return self.best_parameter / 1024 / 1024
+        elif self.test_type == TestType.STRIPING:
+            folder_path = Path(Path(self.best_parameter).parent.name)
+            return self.config.stripe_folders.index(folder_path)
+        else:
+            raise Exception("Error: Test type not supported")
+    
+      
     def next(self) -> Test | None:
         """
         Updates the next Test instance to be executed in the round.
@@ -182,7 +184,7 @@ class Round:
         return next_test
             
     def __repr__(self) -> str:
-        return f"Round {self.round_id} \[{self.test_type.name}]"
+        return f"Round {self.round_id} \[{self.test_type.name}]\[{self.pattern.name}:{self.file_mode.name}]"
 
 
 

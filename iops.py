@@ -57,31 +57,18 @@ def run(config: IOPSConfig) ->  Report:
     :return:
     """
     report = Report(config, 1, "IOPS Report") 
-    parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
     
-  
 
     for io_pattern, file_mode in config.io_patterns:
-        console.print(f"[bold]Running tests for {io_pattern.name}:{file_mode.name}[/bold]")        
+        parameters = {TestType.FILESIZE: 1024, TestType.STRIPING: 0, TestType.COMPUTING: 1}        
         for test_type in config.tests:
             current_round = Round(pattern=io_pattern, file_mode=file_mode, config=config, test_type=test_type, round_parameters=parameters)
             Runner.run(current_round)
             report.add_round(current_round)
             # build the round
-            
-            # update the parameters based on the previous round results        
-            if test_type == TestType.FILESIZE:
-                # get filesize from previous round
-                parameters["volume"] = current_round.get_volume()                
-            elif test_type == TestType.COMPUTING:
-                # get computing nodes from previous round
-                parameters["computing"] = current_round.get_computing_nodes()
-            elif test_type == TestType.STRIPING:
-                # get ost folder from previous round
-                parameters["folder_index"] = current_round.get_folder_index()
-            
-            
-        
+            parameters[test_type] = current_round.get_best_parameter()
+            console.print(f"[bold green]Round {current_round.round_id} completed successfully.")
+            console.print(f"[bold green]Best parameter for {test_type.name}: {parameters[test_type]}")
     return report
 
 def main():
@@ -119,7 +106,7 @@ def main():
         report.generate_report()        
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] [white]{e}[/white]")
-        #raise e
+        raise e
 
 
 if __name__ == "__main__":

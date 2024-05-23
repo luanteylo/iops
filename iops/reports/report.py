@@ -56,16 +56,12 @@ class Report():
             # update the report_dict
             report_dict['reports_info'].append({                
                 'test_title': self.__human_readable_title(round.test_type),
-                'round_id': round.round_id,                                
-                'max_bw': f"{round.df.bw.max()} MiB/s",
+                'round_id': round.round_id,
                 'graph_path': round.graph_file.name,
                 'graph_title': self.__human_readable_title(round.test_type),
-                'operation': 'write',
-                'num_tasks':round.df.loc[round.df['bw'].idxmax(), 'tasks'],
-                'clients_per_node': round.df.loc[round.df['bw'].idxmax(), 'clients_per_node'],
-                'num_nodes': round.df.loc[round.df['bw'].idxmax(), 'nodes'],
-                'file_size': f"{(round.df.loc[round.df['bw'].idxmax(), 'aggregate_filesize'])/1024/1024}MiB",
-                'striping': Path(round.df.loc[round.df['bw'].idxmax(), 'path']).parent,
+                'io_pattern': round.pattern.name,
+                'file_mode': round.file_mode.name,
+                'df':   round.best_df                
             })
 
         Generator.from_template(template_path=self.config.report_template, 
