@@ -7,8 +7,10 @@ from pathlib import Path
 from abc import ABC, abstractmethod
 import copy
 
-
+from datetime import datetime
 from abc import ABC, abstractmethod
+import subprocess
+import pandas as pd
 
 class Test(ABC):
     """
@@ -34,8 +36,14 @@ class Test(ABC):
         self.test_parameters = copy.deepcopy(test_parameters)
 
         self.batch_path = round_path / f"test_{self.test_id}"
-        self.summary_file = self.batch_path / f"summary_test_{self.test_id}_$(date +%Y%m%d%H%M%S)_$RANDOM.out"
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        
+        self.summary_file = self.batch_path / f"summary_test_{self.test_id}_{timestamp}.out"
+        self.csv_file = self.batch_path / f"test_{self.test_id}_{timestamp}.csv"
         self.batch_file = self.batch_path / f"batch_{self.test_id}.sh"
+
+        self.df = None
+
 
     @classmethod
     def create_test(cls, pattern: Pattern, file_mode: FileMode, config: 'IOPSConfig', round_path: Path, test_parameters: dict) -> 'Test':
@@ -73,6 +81,17 @@ class Test(ABC):
         else:
             return None     
     
+    def load_results(self):
+        """
+        Load the results of the tests
+        """
+        args = [self.config.ior_2_csv, self.summary_file, self.csv_file]
+        result = subprocess.run(args, capture_output=True)
+        if result.returncode != 0:
+            raise ValueError(f"Error converting IOR output to CSV: {result.stderr}")
+        self.df = pd.read_csv(self.csv_file)
+
+        
 
 
     @classmethod

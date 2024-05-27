@@ -28,7 +28,6 @@ progress_columns = [
     TextColumn("({task.completed}/{task.total} tests)")
 ]
 
-
 class Round:
     """
     Represents a round of tests, generating and managing Test instances
@@ -103,6 +102,10 @@ class Round:
                     self.best_bw = df_gb['bw'].mean()
                     self.best_df = df_gb.copy()
                     self.best_parameter = parameter
+            
+            # if test_type == FileSize, we need to convert the parameter to MB
+            if self.test_type == TestType.FILESIZE:
+                self.best_parameter = self.best_parameter / 1024 / 1024
 
         except subprocess.CalledProcessError as e:
             raise Exception(f"Error: Script execution failed: {e}")
@@ -153,7 +156,7 @@ class Round:
         if self.test_type == TestType.COMPUTING:
             return self.best_parameter
         elif self.test_type == TestType.FILESIZE:
-            return self.best_parameter / 1024 / 1024
+            return self.best_parameter 
         elif self.test_type == TestType.STRIPING:
             folder_path = Path(Path(self.best_parameter).parent.name)
             return self.config.stripe_folders.index(folder_path)
@@ -179,7 +182,7 @@ class Round:
                 self.__repetition += 1
                 random.shuffle(self.all_tests)
         else:            
-            self.__load_results()
+            self.__load_results() # load the results of the entire round
         
         return next_test
             
@@ -229,6 +232,10 @@ class Runner:
 
                 # Exit the script
                 sys.exit(1)
+            else:
+                # load the results of the test
+                test.load_results() # load the results of the test
+                
             
 
     @staticmethod
