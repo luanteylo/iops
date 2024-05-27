@@ -36,7 +36,7 @@ class Round:
     """
     _id_counter = 0
 
-    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, round_parameters: dict):
+    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
         type(self)._id_counter += 1
         self.round_id = self._id_counter
         
@@ -44,7 +44,7 @@ class Round:
         self.file_mode = file_mode
         self.config = config
         self.test_type = test_type        
-        self.round_parameters = round_parameters
+        self.initial_parameters = initial_parameters
 
         self.best_bw = None
         self.best_df = None
@@ -116,7 +116,7 @@ class Round:
                                       file_mode=self.file_mode,
                                       config=self.config,
                                       round_path=self.round_path,
-                                      test_parameters=self.round_parameters)
+                                      test_parameters=self.initial_parameters)
         
         while next_test is not None:
 

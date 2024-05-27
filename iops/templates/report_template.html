@@ -198,19 +198,16 @@
             <caption style="caption-side: top; font-size: 18px; font-weight: bold; color: #333; margin: 10px 0;">
                 Best result in round {{report.round_id}}
             </caption>
-             <div class="info-panel panel-spacing">                
-
-                
-                <br>
-                
+             <div class="info-panel panel-spacing">                    
+                <br>                
                     <table>
                         <tr>
                             <th>Computer Nodes</th>
-                            <td>{{report.df.nodes.mean()}}</td>
+                            <td>{{ report.df.nodes.mean() }}</td>
                         </tr>
                         <tr>
                             <th>Processes</th>
-                            <td>{{ report.df.tasks.mean()}}</td>
+                            <td>{{ report.df.tasks.mean() }}</td>
                         </tr>
                         <tr>
                             <th>Processes per Node</th>
@@ -218,7 +215,7 @@
                         </tr>
                         <tr>
                             <th>File Size</th>
-                            <td>{{report.df.aggregate_filesize.mean() / 1024.0 / 1024.0}} MB</td>
+                            <td>{{ report.df.aggregate_filesize.mean() / 1024.0 / 1024.0 }} MB</td>
                         </tr>
                         <tr>
                             <th>Striping</th>
@@ -237,16 +234,11 @@
                 <img src="{{ report.graph_path }}" alt="{{ report.graph_title }}" class="graph" onclick="openLightbox('{{ report.graph_path }}', '{{ report.graph_title }}')">
             </div>
         {% endfor %}
-        </div>                
-        
-   
-    
+        </div>    
     
     <div class="lightbox" id="lightbox" onclick="closeLightbox()">
         <img id="lightbox-img" src="" alt="">
     </div>
-
-    
 
 </div>
 
