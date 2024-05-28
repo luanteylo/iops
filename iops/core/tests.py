@@ -43,6 +43,13 @@ class Test(ABC):
         self.batch_file = self.batch_path / f"batch_{self.test_id}.sh"
 
         self.df = None
+    
+    @property
+    def bw(self):
+        if self.df is not None:
+            return self.df["bw"].iloc[0]
+        else:
+            return None
 
 
     @classmethod

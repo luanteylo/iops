@@ -1,19 +1,14 @@
-from iops.core.config import IOPSConfig
+
 from iops.core.tests import Test
-from iops.util.generator import Graphs
+from iops.core.round import Round
 from iops.util.submitter import Submitter
-from iops.util.tags import TestType, jobManager, ExecutionMode, Pattern, FileMode
+from iops.util.tags import  jobManager, ExecutionMode
 
 import sys
-import pandas as pd
-import subprocess
-import random
-from typing import List
+import time
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, TaskProgressColumn
 from rich.panel import Panel
-import time
-from pathlib import Path
 
 
 
@@ -27,169 +22,6 @@ progress_columns = [
     TaskProgressColumn(),
     TextColumn("({task.completed}/{task.total} tests)")
 ]
-
-class Round:
-    """
-    Represents a round of tests, generating and managing Test instances
-    based on the configured test type.
-    """
-    _id_counter = 0
-
-    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
-        type(self)._id_counter += 1
-        self.round_id = self._id_counter
-        
-        self.pattern = pattern
-        self.file_mode = file_mode
-        self.config = config
-        self.test_type = test_type        
-        self.initial_parameters = initial_parameters
-
-        self.best_bw = None
-        self.best_df = None
-        self.best_parameter = None
-        
-        self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
-        # create the directory
-        self.round_path.mkdir(parents=True, exist_ok=True)
-
-        # create a list of tests to store all the tests
-        self.list_test : List[Test] = []
-                
-        self.df = None
-        self.csv_file = self.round_path / f"{self.test_type.name}_{self.round_id}.csv"
-        self.graph_file = self.round_path / f"{self.test_type.name}_{self.round_id}.svg"
-
-        self.all_tests : List[Test] = []
-        self.__current_pos = 0
-        self.__repetition = 0
-        
-        # generate all tests
-        self.__generate_all_tests()
-
-        # computing the number of tests
-        self.number_of_tests = len(self.all_tests) * self.config.repetitions
-        
-       
-    def __load_results(self):
-        '''
-        load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
-        it can also generate a graph based on the results
-        '''
-        args = [self.config.ior_2_csv, self.round_path, self.csv_file]
-
-        try:
-            result = subprocess.run(args, check=True)
-            if result.returncode != 0:
-                raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")
-            # load the csv file into a pandas dataframe
-            self.df = pd.read_csv(self.csv_file)
-            # generate the graph
-            Graphs.generate(self.df, self.graph_file, self.test_type)
-            # load the best test
-            
-            if self.test_type == TestType.COMPUTING:
-                gb = self.df.groupby('nodes')
-            elif self.test_type == TestType.FILESIZE:
-                gb = self.df.groupby('aggregate_filesize')
-            elif self.test_type == TestType.STRIPING:
-                gb = self.df.groupby('path')
-            
-            # get the best test
-            self.best_bw = 0.0
-            for parameter, df_gb in gb:
-                if df_gb['bw'].mean() > self.best_bw:
-                    self.best_bw = df_gb['bw'].mean()
-                    self.best_df = df_gb.copy()
-                    self.best_parameter = parameter
-            
-            # if test_type == FileSize, we need to convert the parameter to MB
-            if self.test_type == TestType.FILESIZE:
-                self.best_parameter = self.best_parameter / 1024 / 1024
-
-        except subprocess.CalledProcessError as e:
-            raise Exception(f"Error: Script execution failed: {e}")
-        
-        except Exception as e:
-            raise Exception(f"Error: {e}")
-    
-    def __generate_all_tests(self):
-
-        next_test =  Test.create_test(pattern=self.pattern,
-                                      file_mode=self.file_mode,
-                                      config=self.config,
-                                      round_path=self.round_path,
-                                      test_parameters=self.initial_parameters)
-        
-        while next_test is not None:
-
-            # Before the append, we need to create the script for the test
-            next_test.build_files()
-            # save the test in the list of all tests and create a new test based on the current one
-            self.all_tests.append(next_test)
-            next_test = Test.from_existing(next_test)
-            
-            if self.test_type == TestType.COMPUTING:              
-                if  next_test.computing < self.config.max_nodes:
-                    next_test.test_parameters[TestType.COMPUTING] *= 2
-                else:
-                    next_test =  None # no more tests to run
-
-            if self.test_type == TestType.FILESIZE:            
-                if next_test.volume < self.config.max_volume:
-                    next_test.test_parameters[TestType.FILESIZE] += 512                                
-                else:
-                    next_test = None # no more tests to run        
-
-            if self.test_type == TestType.STRIPING:            
-                if next_test.folder_index < len(self.config.stripe_folders) - 1:
-                    next_test.test_parameters[TestType.STRIPING] += 1
-                else:
-                    next_test = None
-        # randomize the list of tests
-        random.shuffle(self.all_tests)
-            
-    def get_best_parameter(self) -> int | float | None:
-        '''
-        get the best parameter for the current round
-        '''
-        if self.test_type == TestType.COMPUTING:
-            return self.best_parameter
-        elif self.test_type == TestType.FILESIZE:
-            return self.best_parameter 
-        elif self.test_type == TestType.STRIPING:
-            folder_path = Path(Path(self.best_parameter).parent.name)
-            return self.config.stripe_folders.index(folder_path)
-        else:
-            raise Exception("Error: Test type not supported")
-    
-      
-    def next(self) -> Test | None:
-        """
-        Updates the next Test instance to be executed in the round.
-        """
-                
-        if self.__current_pos == 0 and self.__repetition < self.config.repetitions:
-            console.print(f"Repetition {self.__repetition + 1}/{self.config.repetitions}", style="bold white on red")
-
-        next_test = None
-        
-        if self.__repetition < self.config.repetitions:
-            next_test = self.all_tests[self.__current_pos]
-            self.__current_pos += 1 
-            if self.__current_pos >= len(self.all_tests):                                                
-                self.__current_pos = 0
-                self.__repetition += 1
-                random.shuffle(self.all_tests)
-        else:            
-            self.__load_results() # load the results of the entire round
-        
-        return next_test
-            
-    def __repr__(self) -> str:
-        return f"Round {self.round_id} \[{self.test_type.name}]\[{self.pattern.name}:{self.file_mode.name}]"
-
-
 
 class Runner:
     """
@@ -259,10 +91,8 @@ class Runner:
                 # Start a task with specific metadata for the round and total number of tests
                 round_task = progress.add_task("[green]Round", round_id=f"Round {round.round_id}",
                                             total=round.number_of_tests)
-
                 while True:
-
-                    test = round.next()  # Move to the next test in the round.            
+                    test = round.next(console)  # Move to the next test in the round.            
                     if test:
                         Runner._run(test)  # Execute the test using the static method.
                     else:
@@ -288,8 +118,6 @@ class Runner:
         except Exception as e:
             # Handle general exceptions.
             raise e
-
-        # console.print(f"List of tests: {round.list_test}")
 
         end_time = time.time()
         execution_time = end_time - start_time  

@@ -6,8 +6,9 @@ import sys
 
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
-from iops.util.tags import TestType, jobManager, ExecutionMode
-from iops.core.runner import Runner, Round
+from iops.util.tags import TestType
+from iops.core.runner import Runner
+from iops.core.round import Round
 from iops.core.config import IOPSConfig
 from iops.reports.report import Report
 
@@ -62,11 +63,11 @@ def run(config: IOPSConfig) ->  Report:
     for io_pattern, file_mode in config.io_patterns:
         parameters = {TestType.FILESIZE: 1024, TestType.STRIPING: 0, TestType.COMPUTING: 1}        
         for test_type in config.tests:
-            current_round = Round(pattern=io_pattern, 
-                                  file_mode=file_mode, 
-                                  config=config, 
-                                  test_type=test_type, 
-                                  initial_parameters=parameters)
+            current_round = Round.factory(pattern=io_pattern,
+                                          file_mode=file_mode, 
+                                          config=config, 
+                                          test_type=test_type, 
+                                          initial_parameters=parameters)
             Runner.run(current_round)
             report.add_round(current_round)
             # build the round

@@ -402,6 +402,7 @@ class IOPSConfig:
         f"stripe_folders = {self.stripe_folders}\n\n" \
         f"[bold]Execution[/bold] \n" \
         f"mode = {self.mode}\n" \
+        f"search_method = {self.search_method.name}\n" \
         f"job_manager = {self.job_manager}\n" \
         f"benchmark_tool = {self.benchmark_tool}\n" \
         f"modules = {self.modules}\n" \
@@ -444,6 +445,7 @@ class IOPSConfig:
         # Create a table for execution information
         table.add_row("")    
         table.add_row("Mode", self.mode.name)    
+        table.add_row("Search Method", self.search_method.name)
         table.add_row("Job Manager", self.job_manager.name)
         
         
