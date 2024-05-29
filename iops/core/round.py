@@ -204,22 +204,17 @@ class RoundSmart(Round):
         self.tests_already_run = []
         self.tests_to_run = []
 
-        self.file_size_threshold =  2
+        self.file_size_threshold = 2
         self.tolerance = 0.5
         self.alpha = 10
         
     
-    def heuristic(self) -> List | None:
+    def heuristic(self) -> List | Test | None:
         """
         Search smartly the best test to be executed in the round.
         """
 
-        # left = self.start_idx
-        # right = self.end_idx
         mid = int((self.end_idx + self.start_idx)) // 2
-
-        print(f"Start: {self.start_idx}, Mid: {mid}, End: {self.end_idx}")
-        print(f"File size threshold: {self.file_size_threshold}, Tolerance: {self.tolerance}, Alpha: {self.alpha}")
 
         if self.tests_already_run == []:
             return [self.all_tests[self.start_idx],self.all_tests[mid], self.all_tests[self.end_idx]]
@@ -231,36 +226,27 @@ class RoundSmart(Round):
             test_left = self.all_tests[self.start_idx]
             test_right = self.all_tests[self.end_idx]
             
-            print(f"Left bw: {test_left.bw}, Right bw: {test_right.bw}")
-
             max_bw = max(test_left.bw, test_right.bw)
-            print(f"Max bw: {max_bw}")     
-
 
             if self.end_idx - self.start_idx > self.file_size_threshold and abs(test_left.bw - test_right.bw ) > self.tolerance:
-                # test_mid = self.all_tests[mid]
-                test_mid = self.all_tests[mid]
-                print(f"Mid bw: {test_mid.bw}")
-                if abs(test_mid.bw - max_bw) > self.tolerance: # if the mid point has a bigger bandwidth than the left or right
-                    print("abs(test_mid.bw - max_bw) > self.tolerance")
-                    if test_mid.bw > max_bw:
-                        print("test_mid.bw > max_bw")
+                test_mid = self.all_tests[mid]                
+                if abs(test_mid.bw - max_bw) > self.tolerance: # if the mid point has a bigger bandwidth than the left or right                    
+                    if test_mid.bw > max_bw:                        
                         max_bw = test_mid.bw
                         self.start_idx = mid
                     else:
-                        print("test_mid.bw < max_bw")
                         test_right = test_mid
                         self.end_idx = mid
                 else:
-                    print("abs(test_mid.bw - max_bw) < self.tolerance")
                     if abs(test_mid.bw - test_left.bw) < self.alpha: # if the bandwidth did not change much
-                        print("abs(test_mid.bw - test_left.bw) < self.alpha")
                         self.start_idx = mid
                     else:
-                        print("abs(test_mid.bw - test_left.bw) > self.alpha")
                         self.end_idx = mid
-            mid = int((self.start_idx + self.end_idx) / 2)
-            return [self.all_tests[self.start_idx],self.all_tests[mid], self.all_tests[self.end_idx]]
+                mid = int((self.start_idx + self.end_idx) / 2)
+                # return [self.all_tests[self.start_idx],self.all_tests[mid], self.all_tests[self.end_idx]]
+                return [self.all_tests[mid]]
+            else:
+                return None
         else:
             return None
 
