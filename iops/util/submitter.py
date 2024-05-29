@@ -24,6 +24,11 @@ class Submitter:
         result = subprocess.run(submit_command, shell=True, capture_output=True)     
 
         return result
+
+    @staticmethod
+    def stop_slurm():
+        subprocess.run("scancel -u $USER", shell=True, capture_output=True)
+        return
             
 
         
