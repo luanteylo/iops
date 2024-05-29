@@ -108,9 +108,8 @@ class Runner:
 
             # check if there is a test running and stop it
             if round.config.job_manager == jobManager.SLURM:
-                # stop the test
-                pass
-                #TODO: Submitter.stop_slurm()
+                # stop the excuting jobs 
+                Submitter.stop_slurm()
 
             # when a ctrl+c is pressed, stop the execution of tests
             sys.exit(1)
