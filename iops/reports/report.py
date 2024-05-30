@@ -55,13 +55,8 @@ class Report():
 
             # update the report_dict
             report_dict['reports_info'].append({                
-                'test_title': self.__human_readable_title(round.test_type),
-                'round_id': round.round_id,
-                'graph_path': round.graph_file.name,
-                'graph_title': self.__human_readable_title(round.test_type),
-                'io_pattern': round.pattern.name,
-                'file_mode': round.file_mode.name,
-                'df':   round.best_df                
+                'description': self.__human_readable_title(round.test_type),                
+                'round': round                     
             })
 
         Generator.from_template(template_path=self.config.report_template, 
@@ -86,13 +81,13 @@ class Report():
             f.write(f"\tModules: {self.config.modules}\n")
             f.write(f"\tWorkdir: {self.config.workdir}\n")
             f.write(f"\tRepetitions: {self.config.repetitions}\n")
-            f.write(f"\tTests: {self.config.tests}\n")
-            f.write(f"\tIO Patterns: {self.config.io_patterns}\n")
-            
+            f.write(f"\tTests: {self.config.tests}\n")       
 
             for round in self.rounds.values():
                 f.write(f"\tRound {round.round_id} -  {round.test_type.name}:{round.pattern.name}:{round.file_mode.name} - Best parameter: {round.best_parameter} Best Bandwidth: {round.best_bw}\n")
                 f.write("\n")
+                for test in round.all_tests:
+                    f.write(f"\t\tTest {test} - Bandwidth: {test.bw}\n")
                 
 
 

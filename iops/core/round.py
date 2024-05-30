@@ -122,7 +122,7 @@ class Round:
 
             if self.test_type == TestType.FILESIZE:            
                 if next_test.volume < self.config.max_volume:
-                    next_test.test_parameters[TestType.FILESIZE] += 512                                
+                    next_test.test_parameters[TestType.FILESIZE] += self.config.volume_step                                
                 else:
                     next_test = None # no more tests to run        
 
@@ -163,7 +163,7 @@ class Round:
         pass
             
     def __repr__(self) -> str:
-        return f"Round {self.round_id} \[{self.test_type.name}]\[{self.pattern.name}:{self.file_mode.name}]"
+        return f"Round {self.round_id} \[{self.test_type.name}]\[{self.pattern.name}:{self.file_mode.name}] - up to {self.number_of_tests} tests"
 
 
 
@@ -171,8 +171,7 @@ class RoundGreedy(Round):
     def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
         super().__init__(pattern, file_mode, config, test_type, initial_parameters)
         # randomize the list of tests
-        random.shuffle(self.all_tests)
-
+        
     
     def next(self, console: Console) -> Test:
         """
@@ -191,6 +190,8 @@ class RoundGreedy(Round):
                 self.repetition += 1
                 random.shuffle(self.all_tests)
         else:            
+            # sort the list of tests by test_id
+            self.all_tests.sort(key=lambda x: x.test_id)
             self.load_results() # load the results of the entire round
         
         return next_test
@@ -210,7 +211,7 @@ class RoundSmart(Round):
         self.alpha = 10
         
         self.current_test = None
-        self.current_repetition = 0
+        self.current_repetition = 1
     
     def heuristic(self) -> List | None:
         """
@@ -275,7 +276,7 @@ class RoundSmart(Round):
             self.tests_already_run.append(next_test)
 
         self.current_test = next_test
-        self.current_repetition = 0
+        self.current_repetition = 1
         return next_test
 
         

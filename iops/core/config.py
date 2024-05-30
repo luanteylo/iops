@@ -12,6 +12,7 @@ from rich.prompt import Prompt
 
 
 from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, TestType, Pattern, FileMode
+from iops.util.tags import VolumeValidation
 from typing import List, Tuple
 
 
@@ -146,7 +147,9 @@ class IOPSConfig:
 
     def load_storage(self):
         self.filesystem_dir = Path(self.__get("storage", "filesystem_dir"))        
+        self.min_volume = int(self.__get("storage", "min_volume"))
         self.max_volume = int(self.__get("storage", "max_volume"))
+        self.volume_step = int(self.__get("storage", "volume_step"))
         stripe_folders_str =  self.__get("storage", "stripe_folders")
         
         if not self.filesystem_dir.is_dir():
@@ -160,7 +163,27 @@ class IOPSConfig:
             self.errors.append(self.__format_error(section="storage",
                                                    key="max_volume",
                                                    value=self.max_volume,
-                                                   custom_message="Must be greater than zero and a power of 2!"))            
+                                                   custom_message="Must be greater than zero and a power of 2!"))   
+        # check if the min_volume is power of 2
+        if self.min_volume > 0 and (self.min_volume & (self.min_volume - 1)) != 0:
+            self.errors.append(self.__format_error(section="storage",
+                                                   key="min_volume",
+                                                   value=self.min_volume,
+                                                   custom_message="Must be greater than zero and a power of 2!"))
+            
+        if self.min_volume >= self.max_volume:
+            self.errors.append(self.__format_error(section="storage",
+                                                   key="min_volume",
+                                                   value=self.min_volume,
+                                                   custom_message="Must be less than max_volume."))
+
+        # check if the volume_step is power of 2
+        if self.volume_step not in VolumeValidation.VALID_VOLUME_STEPS:
+            self.errors.append(self.__format_error(section="storage",
+                                                   key="volume_step",
+                                                   value=self.volume_step,
+                                                   custom_message=f"Must be one of the following values: {VolumeValidation.VALID_VOLUME_STEPS}."))
+
         # check stripe_folders
         # Parse and load the modules
         if stripe_folders_str.lower() == 'none':
@@ -379,40 +402,12 @@ class IOPSConfig:
             else:
                 self.slurm_time = slurm_time_str
 
-    def __str__(self) -> str:
-        # print the configuration parameters
-        return f"[bold]Nodes[/bold] \n" \
-        f"max_nodes = {self.max_nodes}\n" \
-        f"processes_per_node = {self.processes_per_node}\n\n" \
-        f"[bold]Storage[/bold] \n" \
-        f"filesystem_dir = {self.filesystem_dir}\n" \
-        f"max_volume = {self.max_volume}\n" \
-        f"stripe_folders = {self.stripe_folders}\n\n" \
-        f"[bold]Execution[/bold] \n" \
-        f"mode = {self.mode}\n" \
-        f"search_method = {self.search_method.name}\n" \
-        f"job_manager = {self.job_manager}\n" \
-        f"benchmark_tool = {self.benchmark_tool}\n" \
-        f"modules = {self.modules}\n" \
-        f"workdir = {self.workdir}\n" \
-        f"repetitions = {self.repetitions}\n" \
-        f"tests =  = {self.tests}\n\n" \
-        f"[bold]Templates[/bold] \n" \
-        f"slurm_template = {self.slurm_template}\n" \
-        f"local_template = {self.local_template}\n" \
-        f"report_template = {self.report_template}\n" \
-        f"ior_2_csv = {self.ior_2_csv}\n\n" \
-        f"[bold]Slurm[/bold] \n" \
-        f"slurm_constraint = {self.slurm_constraint}\n" \
-        f"slurm_partition = {self.slurm_partition}\n" \
-        f"slurm_time = {self.slurm_time}\n"
-
     def print_config( self, skip_confirmation: bool):
         # Display startup message with a panel
         console.print(Panel(f"[bold green]Starting test with configuration file {self.config_path}...", expand=False))
         
-        # Create a table for node information
-        table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)
+        # Create a table for node information   
+        table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)        
         table.add_column("Setting", style="dim", width=30)
         table.add_column("Value")
         table.add_row("Max Nodes", str(self.max_nodes))
@@ -420,9 +415,11 @@ class IOPSConfig:
 
         # Create a table for storage information
         table.add_row("")
-        table.add_row("File System Dir:", str(self.filesystem_dir))                
+        table.add_row("File System Dir:", str(self.filesystem_dir))      
+        table.add_row("Min Volume", f"{self.min_volume}MB")          
         # print max volume in MB
         table.add_row("Max Volume", f"{self.max_volume}MB")
+        table.add_row("Volume Step", f"{self.volume_step}MB")
         stripe_folders = self.stripe_folders
         if stripe_folders is not None:        
             stripe_folders = ", ".join(f"{stripe}" for stripe in self.stripe_folders)

@@ -6,9 +6,8 @@ from iops.util.tags import  jobManager, ExecutionMode
 
 import sys
 from rich.console import Console
-from rich.progress import BarColumn, TextColumn, TaskProgressColumn
+from rich.progress import Progress, BarColumn, TextColumn, TaskProgressColumn
 from rich.panel import Panel
-
 
 
 console = Console()       
@@ -83,12 +82,20 @@ class Runner:
 
         try:            
             console.print(Panel(f"{round}", style="bold green", expand=True))
-            while True:
-                test = round.next(console)  # Move to the next test in the round.            
-                if test:
-                    Runner._run(test)  # Execute the test using the static method.
-                else:
-                    break  # Exit the loop if there are no more tests.
+
+            # Create a progress bar for the round using the rich library
+            with Progress(*progress_columns, console=console) as progress:
+                # Start a task with specific metadata for the round and total number of tests
+                round_task = progress.add_task("[green]Round", round_id=f"Round {round.round_id}",
+                                            total=round.number_of_tests)
+           
+                while True:
+                    test = round.next(console)  # Move to the next test in the round.            
+                    if test:
+                        Runner._run(test)  # Execute the test using the static method.
+                        progress.update(round_task, advance=1)  # Update the progress bar.
+                    else:
+                        break  # Exit the loop if there are no more tests.
 
         except KeyboardInterrupt:
             # Handle user interruption.

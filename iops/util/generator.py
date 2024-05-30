@@ -1,98 +1,96 @@
 import configparser
-import logging
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
 import pandas as pd
 
-import matplotlib
-matplotlib.use('Agg')
+
 from matplotlib import pyplot as plt
+import matplotlib as mpl
 import seaborn as sns
 from matplotlib.ticker import MaxNLocator
 import re
 
-from iops.util.tags import TestType
+from iops.util.tags import TestType, VolumeValidation
+
+
+# set the backend to Agg to avoid the need for a display
+# when running on a headless server
+mpl.use('Agg')
+
 
 class Generator:
     @staticmethod
     def ini_file(file_name):
-        logging.info("Generating default configuration file...")
         config_nodes = configparser.ConfigParser()
         config_storage = configparser.ConfigParser()
         config_execution = configparser.ConfigParser()
         config_slurm = configparser.ConfigParser()
-
         config_template = configparser.ConfigParser()
     
         config_nodes['nodes'] = {
-            'max_nodes': '32 # Max number of nodes that can be allocated (to limit computing tests)',
-            'processes_per_node': '8 # The number of processes that will be used per node. For now, this is a static parameter',            
+            'max_nodes': '32 # Maximum number of nodes that can be allocated (limits computing tests)',
+            'processes_per_node': '8 # Number of processes per node. Currently, this is a static parameter',            
         }
 
-
-        
         config_storage['storage'] = {
-            'filesystem_dir': '/path/to/storage # The path to the directory where the benchmark tool will write/read from',                      
-            'max_volume':  '8192 # Max volume size in mega bytes (to limit the size of the benchmarked file). Warning: the volume needs to be power of 2.',
-            'stripe_folders': "ost_1, ost_2, ost_4, ost_8 # A list of folders with distinct striping setups.\n" \
+            'filesystem_dir': '/path/to/storage # Directory where the benchmark tool will read/write data', 
+            'min_volume': '1024  # Minimum volume size in megabytes. Must be a power of 2 and less than max_volume',
+            'max_volume':  '8192 # Maximum volume size in megabytes (limits the size of the benchmarked file). Must be a power of 2.',
+            'volume_step': f'1024 # Step size for increasing volume in megabytes. Accepted values are: {VolumeValidation.VALID_VOLUME_STEPS}\n',
+            'stripe_folders': "ost_1, ost_2, ost_4, ost_8 # List of folders with different striping setups.\n" \
             "# If 'None' is provided, the striping test will not be executed.\n" \
-            "# For now, these folders need to be created manually inside the benchmark_output folder using the file system\n"\
-            "# utility to define the correct striping setup. These folders need to be defined using a sequential number\n"\
-            "# (the larger the number, the more OSTs); a good approach is to use the number of OSTs as this number.\n"\
-            "# Otherwise, you may encounter problems in the striping graph.\n"
+            "# These folders should be created manually inside the benchmark_output directory using the file system utility\n"\
+            "# to set the correct striping setup. The folders should be sequentially numbered (higher numbers imply more OSTs).\n"\
+            "# Using the number of OSTs as the folder name is a good practice. Improper setup may cause striping graph issues.\n"
         }
-
 
         config_execution['execution'] = {
-            'mode': 'fast  # Select the mode of execution',
-            'search_method' :'greedy # The search method to be used. For now, only greedy is supported',
-            'job_manager': ' slurm # Specify the job manager. If "local" is provided, the benchmark will be executed locally',
-            'benchmark_tool': 'ior  # Specify the benchmark tool to use. For now, only IOR is supported.',            
-            'modules': ' None # Specify the list of modules to load using "module add <module>". If "None" is provided, no modules are loaded',
-            'workdir': '/path/to/workdir # # Specify the working directory, i.e., where the script files will be written',
-            'repetitions': '5 # The number of repetitions for each test',            
-            'tests': 'filesize, computing, striping # The list of tests to be executed. The following tests are supported: filesize, computing, striping',            
-            'io_patterns': 'sequential:shared, random:shared # The list of IO patterns to be executed. Each pattern is defined by the following parameters: access_pattern:file_access.\n \
-             # The access pattern can be sequencial or random, and the file access can be single  (one file per process) or shared (all processes access the same file).\n \
-             # Each test will be executed considering the io_patterns defined above. If more than one pattern is defined, the test will be repeated for each pattern.\n' \
+            'mode': 'normal # Execution mode. Use "normal" to generate and execute the benchmark scripts, or "debug" to generate the scripts without executing them',
+            'search_method' :'greedy # Search method to use. Currently, only greedy is supported',
+            'job_manager': ' slurm # Specify the job manager. Use "local" for local execution',
+            'benchmark_tool': 'ior  # Benchmark tool to use. Currently, only IOR is supported.',            
+            'modules': ' None # List of modules to load using "module add <module>". Use "None" to load no modules',
+            'workdir': '/path/to/workdir # Directory where the script files will be written',
+            'repetitions': '5 # Number of repetitions for each test',            
+            'tests': 'filesize, computing, striping # List of tests to execute. Supported tests: filesize, computing, striping',            
+            'io_patterns': 'sequential:shared, random:shared # List of IO patterns to execute. Each pattern is defined by access_pattern:file_access.\n' \
+            '             # Access pattern can be sequential or random. File access can be single (one file per process) or shared (all processes access the same file).\n' \
+            '             # Each test will be executed with the defined IO patterns. If multiple patterns are defined, tests will be repeated for each pattern.\n'
         }
 
         config_template['template'] = {
-            'slurm_template': 'iops/templates/slurm_template.sh.j2 # If using Slurm, define the template file to generate the bash scripts. Otherwise, None.',
-            'local_template': 'iops/templates/local_template.sh.j2 # Template for the bash script to be executed locally.',
+            'slurm_template': 'iops/templates/slurm_template.sh.j2 # Template file for Slurm to generate bash scripts. Use None if not using Slurm.',
+            'local_template': 'iops/templates/local_template.sh.j2 # Template for the bash script for local execution.',
             'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',            
         }
 
         config_slurm['slurm'] = {
-            'slurm_constraint': 'None # Some clusters use the slurm constraint parameter (-c) to define the resources. If that is your case, set the list of constraints here, otherwise put None',
-            'slurm_partition' : 'None # The partition to be used. If None, no partition is defined',
-            'slurm_time' : 'None # The maximum time for the job. If None, no time is defined'
+            'slurm_constraint': 'None # Slurm constraint parameter (-c) for resource definition. Set list of constraints if applicable, otherwise use None',
+            'slurm_partition' : 'None # Partition to use. Use None if no partition is specified',
+            'slurm_time' : 'None # Maximum job time. Use None if no time limit is specified'
         }
 
-        
         with open(file_name, 'w') as config_file:
-            config_file.write("# This is a default configuration file for IOPS.\n")        
-            config_file.write("# Edit it to suit your needs.\n\n")
+            config_file.write("# This is the default configuration file for IOPS.\n")        
+            config_file.write("# Edit this file to suit your needs.\n\n")
             config_nodes.write(config_file)
-
             config_storage.write(config_file)
 
             config_file.write("# Execution mode\n")
-            config_file.write("# - fast: Run the benchmark without any waiting time between the tests (less accurate)\n")
-            config_file.write("# - complete: Run the benchmark with random waiting times between the executions (more accurate)\n")
+            config_file.write("# - normal: Generates and executes the benchmark scripts\n")
+            config_file.write("# - debug: Generates but does not execute the benchmark scripts. Use to test the script generation.\n")
+            config_file.write("# The debug mode can also be use to generate reports from existing data.\n")
             config_execution.write(config_file)
             
-            config_file.write("# Template and scripts \n")
+            config_file.write("# Templates and scripts \n")
             config_template.write(config_file)
 
-            config_file.write("# Slurm parameters (only used if slurm is selected as the job manager)\n")
+            config_file.write("# Slurm parameters (only used if Slurm is selected as the job manager)\n")
             config_slurm.write(config_file)
 
-        
-        logging.info(f"Default configuration file generated as {file_name}")
-    
+
     @staticmethod
     def from_template(template_path: Path, output_path: Path, info: dict ) -> None | list[dict]: #
         '''

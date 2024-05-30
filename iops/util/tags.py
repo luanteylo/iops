@@ -34,8 +34,7 @@ class ExecutionMode(Enum):
     """
     Tags for execution modes
     """
-    FAST = "fast"
-    COMPLETE = "complete"
+    NORMAL = "normal"
     DEBUG = "debug"
 
 class BenchmarkTool(Enum):
@@ -50,3 +49,7 @@ class SearchType(Enum):
     """
     GREEDY = "greedy"
     SMART = "smart"
+
+class VolumeValidation:
+    # 256MB to 1GB
+    VALID_VOLUME_STEPS = [2**i for i in range(8, 11)] 
