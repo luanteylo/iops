@@ -2,6 +2,8 @@
 import argparse
 from argparse import RawTextHelpFormatter
 from rich.console import Console
+
+
 import sys
 from datetime import datetime
 
@@ -58,9 +60,9 @@ def run(config: IOPSConfig) ->  Report:
     :param round_parameters:
     :return:
     """
-    start_time = datetime.now()
-
     report = Report(config, 1, "IOPS Report") 
+
+    
     
     for io_pattern, file_mode in config.io_patterns:
         parameters = {TestType.FILESIZE: 1024, TestType.STRIPING: 0, TestType.COMPUTING: 1}        
@@ -78,7 +80,6 @@ def run(config: IOPSConfig) ->  Report:
             console.print(f"[bold green]Best parameter for {test_type.name}: {parameters[test_type]}")
 
     console.print(f"[bold green]All rounds completed successfully.")
-    console.print(f"[bold green]Total execution time: {datetime.now() - start_time}")
     return report
 
 
@@ -93,6 +94,8 @@ def main():
     parser.add_argument('-v', '--verbose', help="print the full error traceback", action="store_true")
     
     args = parser.parse_args()
+
+    start_time = datetime.now()
 
     if args.generate_ini:
         file_name = args.generate_ini if args.generate_ini != True else 'default_config.ini'
@@ -116,7 +119,9 @@ def main():
         config = IOPSConfig(config_path=args.conf)   
         config.print_config(skip_confirmation=args.yes)              
         report = run(config)
-        report.generate_report()        
+        report.generate_html()        
+        report.generate_txt(run_time=datetime.now() - start_time)
+
     except Exception as e:
         console.print(f"[bold white]{e}[/ bold white]")
         if args.verbose:
@@ -124,6 +129,8 @@ def main():
         else:
             console.print(f"[bold red]Run with --verbose to see the full error traceback.")
             sys.exit(1)
+        
+    console.print(f"[bold green]Execution completed successfully in {datetime.now() - start_time}.")
 
 
 if __name__ == "__main__":

@@ -49,7 +49,6 @@ class IOPSConfig:
         self.benchmark_tool = None
         self.modules = None
         self.workdir = None
-        self.reportdir = None # not in the .ini file
         self.repetitions = None
         self.tests = None
 
@@ -284,8 +283,6 @@ class IOPSConfig:
         
         if create_folder:
             self.workdir = self.workdir / f"execution_{self.__get_next_index()}"
-
-        self.reportdir = self.workdir / "report"
         
         if self.repetitions <= 0:
             self.errors.append(self.__format_error(section="execution",
@@ -398,7 +395,6 @@ class IOPSConfig:
         f"benchmark_tool = {self.benchmark_tool}\n" \
         f"modules = {self.modules}\n" \
         f"workdir = {self.workdir}\n" \
-        f"reportdir = {self.reportdir}\n" \
         f"repetitions = {self.repetitions}\n" \
         f"tests =  = {self.tests}\n\n" \
         f"[bold]Templates[/bold] \n" \
@@ -483,7 +479,6 @@ class IOPSConfig:
         # Create the workdir folder
         try:
             self.workdir.mkdir(parents=True, exist_ok=True)
-            self.reportdir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             console.print(f"[bold red]Error creating the workdir folder: {self.workdir}")
             raise e

@@ -20,10 +20,8 @@ class Report():
         self.report_id = report_id
         self.description = description
 
-        self.reportdir = self.config.reportdir / f"report_{self.report_id}"
-        self.reportdir.mkdir(parents=True, exist_ok=True)
-
-        self.report_file = self.reportdir / "report.html"   
+        self.report_file = self.config.workdir / "report.html"   
+        self.txt_file = self.config.workdir / "iops.txt"
 
         self.rounds : dict[int, Round] = {}
         
@@ -43,7 +41,7 @@ class Report():
         elif test_type == TestType.STRIPING:
             return "Varying the Striping Configuration"
 
-    def generate_report(self):    
+    def generate_html(self):    
 
         report_dict = {
             'current_date': datetime.now(),
@@ -52,8 +50,8 @@ class Report():
         
         for round in self.rounds.values():
             # Firstly, we copy the files to the report folder
-            round.graph_file.rename(self.reportdir / round.graph_file.name)
-            round.csv_file.rename(self.reportdir / round.csv_file.name)
+            round.graph_file.rename(self.config.workdir / round.graph_file.name)
+            round.csv_file.rename(self.config.workdir / round.csv_file.name)
 
             # update the report_dict
             report_dict['reports_info'].append({                
@@ -72,10 +70,29 @@ class Report():
 
         console.print(f"[bold green]Report {self.report_id} generated successfully.")
         console.print(f"[bold green]Report file: {self.report_file}")
-        
+
         
 
+    def generate_txt(self, run_time = None):
+         # write a file summarizing the execution of the tests
+        with open(self.txt_file, 'w') as f:
+            f.write(f"Execution completed successfully in {run_time}\n")
+            # print test setup
+            f.write(f"Test setup:\n")
+            f.write(f"\tMode: {self.config.mode}\n")
+            f.write(f"\tSearch method: {self.config.search_method}\n")
+            f.write(f"\tJob manager: {self.config.job_manager}\n")
+            f.write(f"\tBenchmark: {self.config.benchmark_tool}\n")
+            f.write(f"\tModules: {self.config.modules}\n")
+            f.write(f"\tWorkdir: {self.config.workdir}\n")
+            f.write(f"\tRepetitions: {self.config.repetitions}\n")
+            f.write(f"\tTests: {self.config.tests}\n")
+            f.write(f"\tIO Patterns: {self.config.io_patterns}\n")
+            
 
+            for round in self.rounds.values():
+                f.write(f"\tRound {round.round_id} -  {round.test_type.name}:{round.pattern.name}:{round.file_mode.name} - Best parameter: {round.best_parameter} Best Bandwidth: {round.best_bw}\n")
+                f.write("\n")
                 
 
 
