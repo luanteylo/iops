@@ -36,21 +36,40 @@ class Test(ABC):
         self.test_parameters = copy.deepcopy(test_parameters)
 
         self.batch_path = round_path / f"test_{self.test_id}"
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        
-        self.summary_file = self.batch_path / f"summary_test_{self.test_id}_{timestamp}.out"
-        self.csv_file = self.batch_path / f"test_{self.test_id}_{timestamp}.csv"
+
         self.batch_file = self.batch_path / f"batch_{self.test_id}.sh"
+        self.summary_file = self.batch_path / f"summary_test_{self.test_id}_$(date +%Y%m%d%H%M%S)_$RANDOM.out"
+        self.csv_file = self.batch_path / f"result.csv"
 
         self.df = None
     
     @property
     def bw(self):
         if self.df is not None:
-            return self.df["bw"].iloc[0]
+            return self.df["bw"].mean()
         else:
             return None
-
+    
+    @property
+    def volume(self) -> int:
+        """
+        The volume of data involved in the test, in MB.
+        """
+        return self.test_parameters[TestType.FILESIZE]
+    
+    @property
+    def folder_index(self) -> int:
+        """
+        The index of the directory within the storage hierarchy where the test files will be placed.
+        """
+        return self.test_parameters[TestType.STRIPING]
+    
+    @property
+    def computing(self) -> int:
+        """
+        The number of computing nodes or processes dedicated to this test.
+        """
+        return self.test_parameters[TestType.COMPUTING]
 
     @classmethod
     def create_test(cls, pattern: Pattern, file_mode: FileMode, config: 'IOPSConfig', round_path: Path, test_parameters: dict) -> 'Test':
@@ -92,14 +111,13 @@ class Test(ABC):
         """
         Load the results of the tests
         """
-        args = [self.config.ior_2_csv, self.summary_file, self.csv_file]
+        args = [self.config.ior_2_csv, self.batch_path, self.csv_file]
         result = subprocess.run(args, capture_output=True)
         if result.returncode != 0:
             raise ValueError(f"Error converting IOR output to CSV: {result.stderr}")
-        self.df = pd.read_csv(self.csv_file)
-
         
-
+        self.df = pd.read_csv(self.csv_file)
+        
 
     @classmethod
     def from_existing(cls, existing_test: 'Test'):
@@ -116,8 +134,6 @@ class Test(ABC):
                                   test_parameters=existing_test.test_parameters)
         else:
             raise TypeError(f"Cannot create a new instance from the given test object. It must be a non-abstract subclass of Test.")
-
-
 
     def __repr__(self):
         msg_str = f"\t{self.test_id:04}: "
@@ -199,27 +215,6 @@ class TestIORSeq(Test):
         # Generate the execution script
         Generator.from_template(template_path=self.template(), output_path=self.batch_file, info=parameters)
         
-    @property
-    def volume(self) -> int:
-        """
-        The volume of data involved in the test, in MB.
-        """
-        return self.test_parameters[TestType.FILESIZE]
-    
-    @property
-    def folder_index(self) -> int:
-        """
-        The index of the directory within the storage hierarchy where the test files will be placed.
-        """
-        return self.test_parameters[TestType.STRIPING]
-    
-    @property
-    def computing(self) -> int:
-        """
-        The number of computing nodes or processes dedicated to this test.
-        """
-        return self.test_parameters[TestType.COMPUTING]
-
 
 
 class TestIORRandom(Test):
@@ -295,24 +290,3 @@ class TestIORRandom(Test):
         
         # Generate the execution script
         Generator.from_template(template_path=self.template(), output_path=self.batch_file, info=parameters)
-        
-    @property
-    def volume(self) -> int:
-        """
-        The volume of data involved in the test, in MB.
-        """
-        return self.test_parameters[TestType.FILESIZE]
-    
-    @property
-    def folder_index(self) -> int:
-        """
-        The index of the directory within the storage hierarchy where the test files will be placed.
-        """
-        return self.test_parameters[TestType.STRIPING]
-    
-    @property
-    def computing(self) -> int:
-        """
-        The number of computing nodes or processes dedicated to this test.
-        """
-        return self.test_parameters[TestType.COMPUTING]

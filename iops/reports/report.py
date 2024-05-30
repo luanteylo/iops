@@ -8,7 +8,9 @@ from iops.util.generator import Generator
 
 from datetime import datetime
 
+from rich.console import Console
 
+console = Console()
 
 class Report():
 
@@ -68,6 +70,9 @@ class Report():
                     output_path=self.report_file,
                     info=report_dict)
 
+        console.print(f"[bold green]Report {self.report_id} generated successfully.")
+        console.print(f"[bold green]Report file: {self.report_file}")
+        
         
 
 

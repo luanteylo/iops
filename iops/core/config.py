@@ -87,13 +87,16 @@ class IOPSConfig:
     
     def __get_next_index(self):
         # Get the next index for the execution folder
-        existing_folders = [folder for folder in self.workdir.iterdir() if folder.name.startswith('execution_')]
-        if existing_folders:
-            indexes = [int(folder.name.split('_')[1]) for folder in existing_folders]
-            next_index = max(indexes) + 1
+        if self.workdir.is_dir() == False:
+            return 0
         else:
-            next_index = 0
-        return next_index
+            existing_folders = [folder for folder in self.workdir.iterdir() if folder.name.startswith('execution_')]
+            if existing_folders:
+                indexes = [int(folder.name.split('_')[1]) for folder in existing_folders]
+                next_index = max(indexes) + 1
+            else:
+                next_index = 0
+            return next_index
 
     def __build_io_patterns(self, patterns_str: List[str]) -> List[Tuple[Pattern, FileMode]]:
         io_patterns = []
@@ -183,7 +186,8 @@ class IOPSConfig:
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
         self.tests = self.__get("execution", "tests")
-        self.io_patterns = self.__get("execution", "io_patterns")        
+        self.io_patterns = self.__get("execution", "io_patterns")   
+
                 
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -279,23 +283,10 @@ class IOPSConfig:
                 create_folder = True        
         
         if create_folder:
-            try:
-                self.workdir = self.workdir / f"execution_{self.__get_next_index()}"            
-                self.workdir.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                self.errors.append(self.__format_error(section="execution",
-                                                       key="workdir",
-                                                       value=self.workdir,
-                                                       custom_message=str(e)))
-        try:       
-            self.reportdir = self.workdir / "report"
-            self.reportdir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            self.errors.append(self.__format_error(section="execution",
-                                                   key="workdir",
-                                                   value=self.reportdir,
-                                                   custom_message=str(e)))
+            self.workdir = self.workdir / f"execution_{self.__get_next_index()}"
 
+        self.reportdir = self.workdir / "report"
+        
         if self.repetitions <= 0:
             self.errors.append(self.__format_error(section="execution",
                                                    key="repetitions",
@@ -487,6 +478,15 @@ class IOPSConfig:
             if confirmed.lower() != "yes":
                 console.print("[bold red]Aborting test due to incorrect setup.")
                 exit(1)
+        
+        # the setup is correct create the folders
+        # Create the workdir folder
+        try:
+            self.workdir.mkdir(parents=True, exist_ok=True)
+            self.reportdir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            console.print(f"[bold red]Error creating the workdir folder: {self.workdir}")
+            raise e
             
         #console.print(Panel(f"[bold green]Starting test...", expand=True))
 

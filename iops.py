@@ -3,6 +3,7 @@ import argparse
 from argparse import RawTextHelpFormatter
 from rich.console import Console
 import sys
+from datetime import datetime
 
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
@@ -57,9 +58,10 @@ def run(config: IOPSConfig) ->  Report:
     :param round_parameters:
     :return:
     """
+    start_time = datetime.now()
+
     report = Report(config, 1, "IOPS Report") 
     
-
     for io_pattern, file_mode in config.io_patterns:
         parameters = {TestType.FILESIZE: 1024, TestType.STRIPING: 0, TestType.COMPUTING: 1}        
         for test_type in config.tests:
@@ -74,7 +76,11 @@ def run(config: IOPSConfig) ->  Report:
             parameters[test_type] = current_round.get_best_parameter()
             console.print(f"[bold green]Round {current_round.round_id} completed successfully.")
             console.print(f"[bold green]Best parameter for {test_type.name}: {parameters[test_type]}")
+
+    console.print(f"[bold green]All rounds completed successfully.")
+    console.print(f"[bold green]Total execution time: {datetime.now() - start_time}")
     return report
+
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter, description=app_description)
@@ -83,6 +89,8 @@ def main():
     parser.add_argument('--check_setup', help="check if all dependencies are correctly installed", action="store_true")
     parser.add_argument('--generate_ini', nargs='?', const='default_config.ini', default=None, help="generate a default .ini configuration file. Optionally, specify the file name and path.")
     parser.add_argument('-y', '--yes', help="automatically confirm the setup (Attention: the workdir directory will be cleaned without asking for confirmation)", action="store_true")   
+    # add verbose mode to print errors
+    parser.add_argument('-v', '--verbose', help="print the full error traceback", action="store_true")
     
     args = parser.parse_args()
 
@@ -110,8 +118,12 @@ def main():
         report = run(config)
         report.generate_report()        
     except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] [white]{e}[/white]")
-        raise e
+        console.print(f"[bold white]{e}[/ bold white]")
+        if args.verbose:
+            raise e
+        else:
+            console.print(f"[bold red]Run with --verbose to see the full error traceback.")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
