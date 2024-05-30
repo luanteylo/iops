@@ -60,6 +60,7 @@ class Round:
         load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
         it can also generate a graph based on the results
         '''
+     
         args = [self.config.ior_2_csv, self.round_path, self.csv_file]
 
         try:
@@ -208,6 +209,8 @@ class RoundSmart(Round):
         self.tolerance = 0.5
         self.alpha = 10
         
+        self.current_test = None
+        self.current_repetition = 0
     
     def heuristic(self) -> List | None:
         """
@@ -246,7 +249,7 @@ class RoundSmart(Round):
                 
                 mid = int((self.start_idx + self.end_idx) / 2)
                 
-                print(f"Start: {self.start_idx}, Mid: {mid}, End: {self.end_idx}")
+                #print(f"Start: {self.start_idx}, Mid: {mid}, End: {self.end_idx}")
                 return [self.all_tests[mid]]
             else:
                 return None
@@ -256,16 +259,23 @@ class RoundSmart(Round):
     
     def next(self, console: Console) -> Test:
 
+        if self.current_test is not None and self.current_repetition < self.config.repetitions:
+            self.current_repetition += 1    
+            return self.current_test
+        
+
         if len(self.tests_to_run) == 0:
             self.tests_to_run = self.heuristic()
-               
-        if self.tests_to_run is None:
+
+        if self.tests_to_run is None:        
             self.load_results()
             next_test =  None
         else:
             next_test = self.tests_to_run.pop(0)
             self.tests_already_run.append(next_test)
 
+        self.current_test = next_test
+        self.current_repetition = 0
         return next_test
 
         

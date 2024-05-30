@@ -139,7 +139,7 @@ class Graphs:
 
             sns.lineplot(x='aggregate_filesize_mb', y='bw', data=df,
                         linewidth=2.5, color='royalblue', marker='o', markersize=8, linestyle='-', errorbar='sd')
-
+            
             sns.scatterplot(x='aggregate_filesize_mb', y='bw', data=df,
                             color='royalblue', marker='x', s=50)
 

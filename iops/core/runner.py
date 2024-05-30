@@ -5,9 +5,8 @@ from iops.util.submitter import Submitter
 from iops.util.tags import  jobManager, ExecutionMode
 
 import sys
-import time
 from rich.console import Console
-from rich.progress import Progress, BarColumn, TextColumn, TaskProgressColumn
+from rich.progress import BarColumn, TextColumn, TaskProgressColumn
 from rich.panel import Panel
 
 
@@ -81,24 +80,15 @@ class Runner:
         Returns:
         - Round: The same Round object, after all tests have been executed.
         """
-        start_time = time.time()
 
         try:            
             console.print(Panel(f"{round}", style="bold green", expand=True))
-
-            # Create the Progress instance with the defined columns
-            with Progress(*progress_columns, console=console) as progress:
-                # Start a task with specific metadata for the round and total number of tests
-                round_task = progress.add_task("[green]Round", round_id=f"Round {round.round_id}",
-                                            total=round.number_of_tests)
-                while True:
-                    test = round.next(console)  # Move to the next test in the round.            
-                    if test:
-                        Runner._run(test)  # Execute the test using the static method.
-                    else:
-                        break  # Exit the loop if there are no more tests.
-                        
-                    progress.update(round_task, advance=1)  # Update the progress bar.
+            while True:
+                test = round.next(console)  # Move to the next test in the round.            
+                if test:
+                    Runner._run(test)  # Execute the test using the static method.
+                else:
+                    break  # Exit the loop if there are no more tests.
 
         except KeyboardInterrupt:
             # Handle user interruption.
@@ -118,18 +108,9 @@ class Runner:
             # Handle general exceptions.
             raise e
 
-        end_time = time.time()
-        execution_time = end_time - start_time  
-        formatted_time = Runner.__format_time(execution_time) 
-        console.print(f"[bold green]Round Execution Time:[/bold green] {formatted_time}")
-
         return round
 
-    @staticmethod
-    def __format_time(seconds: float) -> str:
-        hours, remainder = divmod(int(seconds), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        return f"{hours} hours, {minutes} minutes, and {seconds} seconds"
+
         
 
 
