@@ -301,8 +301,8 @@ class RoundBinary(Round):
         self.current_repetition = 1
 
 
-    def bw_equal(self, left_bw: float, right_bw: float) -> bool:
-        return abs(left_bw - right_bw) < self.tolerance
+    def bw_equal(self, bw1: float, bw2: float) -> bool:
+        return abs(bw1 - bw2) < self.tolerance
 
     def bw_greater_than(self, bw1: float, bw2: float) -> bool:
         return bw1 - bw2 > self.tolerance
@@ -312,7 +312,7 @@ class RoundBinary(Round):
     
 
     def binary_search(self) -> list:
-        
+
         if self.tests_already_run == []:
             return [self.all_tests[self.left],self.all_tests[self.mid], self.all_tests[self.right]]
 
@@ -332,7 +332,7 @@ class RoundBinary(Round):
                 return [self.all_tests[self.mid]]
             
             # case 2: the mid test has a bigger bandwidth than the left and smaller than the right
-            elif self.bw_greater_than(test_mid.bw, test_left.bw) and self.bw_less_than(test_mid.bw < test_right.bw):
+            elif self.bw_greater_than(test_mid.bw, test_left.bw) and self.bw_less_than(test_mid.bw, test_right.bw):
 
                 self.left = self.mid
                 if self.right - self.left == 1:
