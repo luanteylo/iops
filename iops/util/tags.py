@@ -49,6 +49,7 @@ class SearchType(Enum):
     """
     GREEDY = "greedy"
     SMART = "smart"
+    BINARY = "binary"
 
 class VolumeValidation:
     # 256MB to 1GB
