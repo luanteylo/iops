@@ -322,8 +322,8 @@ class RoundBinary(Round):
             test_right = self.all_tests[self.right]
             test_mid = self.all_tests[self.mid]
             
-            # case 1: the mid test has a small bandwidth than the left and bigger than the right
-            if self.bw_less_than(test_mid.bw,test_left.bw) and self.bw_greater_than(test_mid.bw, test_right.bw):
+            # case 1: the mid test has a small bandwidth than the left and bigger than the right or equal
+            if self.bw_less_than(test_mid.bw,test_left.bw) and (self.bw_greater_than(test_mid.bw, test_right.bw) or self.bw_equal(test_mid.bw, test_right.bw)):
 
                 self.right = self.mid
                 if self.right - self.left == 1:
@@ -332,7 +332,7 @@ class RoundBinary(Round):
                 return [self.all_tests[self.mid]]
             
             # case 2: the mid test has a bigger bandwidth than the left and smaller than the right
-            elif self.bw_greater_than(test_mid.bw, test_left.bw) and self.bw_less_than(test_mid.bw, test_right.bw):
+            elif (self.bw_greater_than(test_mid.bw, test_left.bw) or self.bw_equal(test_mid.bw, test_left.bw)) and self.bw_less_than(test_mid.bw, test_right.bw):
 
                 self.left = self.mid
                 if self.right - self.left == 1:
@@ -342,11 +342,11 @@ class RoundBinary(Round):
             
 
             # case 3: the mid test has a bigger bandwidth than the left and bigger than the right or the opposite
-            elif (self.bw_greater_than(test_mid.bw, test_left.bw) and self.bw_greater_than(test_mid.bw, test_right.bw)) or (self.bw_less_than(test_mid.bw, test_left.bw) and self.bw_less_than(test_mid.bw, test_right.bw)):
+            elif (self.bw_greater_than(test_mid.bw, test_left.bw) and self.bw_greater_than(test_mid.bw, test_right.bw)) or (self.bw_less_than(test_mid.bw, test_left.bw) and self.bw_less_than(test_mid.bw, test_right.bw)) or (self.bw_equal(test_mid.bw, test_left.bw) and self.bw_equal(test_mid.bw, test_right.bw)) :
 
                 self.left = int((self.left + self.mid) / 2)
                 self.right = int((self.mid + self.right) / 2)
-                # mid = int((left + right) / 2)
+                
                 return [self.all_tests[self.left], self.all_tests[self.right]]
             else: # case 4: the mid test has the same bandwidth as the left or right
                 print("Error: Test not found case to handle")
