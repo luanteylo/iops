@@ -285,7 +285,6 @@ class RoundSmart(Round):
 class RoundBinary(Round):
     def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
         super().__init__(pattern, file_mode, config, test_type, initial_parameters)
-
         self.left = 0
         self.right = len(self.all_tests) - 1
         self.mid = int((self.left + self.right) / 2)
@@ -293,38 +292,20 @@ class RoundBinary(Round):
         self.tests_already_run = []
         self.tests_to_run = []
 
-        self.file_size_threshold = 2
-        self.tolerance = 0.5
-        self.alpha = 10
-        
         self.current_test = None
-        self.current_repetition = 1
-
-
-    def bw_equal(self, bw1: float, bw2: float) -> bool:
-        return abs(bw1 - bw2) < self.tolerance
-
-    def bw_greater_than(self, bw1: float, bw2: float) -> bool:
-        return bw1 - bw2 > self.tolerance
-    
-    def bw_less_than(self, bw1: float, bw2: float) -> bool:
-        return bw1 - bw2 < self.tolerance
-    
-
+        self.current_repetition = 1        
+        
     def binary_search(self) -> list:
-
         if self.tests_already_run == []:
             return [self.all_tests[self.left],self.all_tests[self.mid], self.all_tests[self.right]]
 
         if self.left < self.right - 1:
-
             test_left = self.all_tests[self.left]
             test_right = self.all_tests[self.right]
             test_mid = self.all_tests[self.mid]
             
             # case 1: the mid test has a small bandwidth than the left and bigger than the right or equal
-            if self.bw_less_than(test_mid.bw,test_left.bw) and (self.bw_greater_than(test_mid.bw, test_right.bw) or self.bw_equal(test_mid.bw, test_right.bw)):
-
+            if test_left >= test_mid and test_left > test_right:
                 self.right = self.mid
                 if self.right - self.left == 1:
                     return None
@@ -332,35 +313,27 @@ class RoundBinary(Round):
                 return [self.all_tests[self.mid]]
             
             # case 2: the mid test has a bigger bandwidth than the left and smaller than the right
-            elif (self.bw_greater_than(test_mid.bw, test_left.bw) or self.bw_equal(test_mid.bw, test_left.bw)) and self.bw_less_than(test_mid.bw, test_right.bw):
-
+            elif test_right >= test_mid and test_right > test_left:
                 self.left = self.mid
                 if self.right - self.left == 1:
                     return None
                 self.mid = int((self.left + self.right) / 2)
                 return [self.all_tests[self.mid]]
-            
-
             # case 3: the mid test has a bigger bandwidth than the left and bigger than the right or the opposite
-            elif (self.bw_greater_than(test_mid.bw, test_left.bw) and self.bw_greater_than(test_mid.bw, test_right.bw)) or (self.bw_less_than(test_mid.bw, test_left.bw) and self.bw_less_than(test_mid.bw, test_right.bw)) or (self.bw_equal(test_mid.bw, test_left.bw) and self.bw_equal(test_mid.bw, test_right.bw)) :
-
+            else:
                 self.left = int((self.left + self.mid) / 2)
-                self.right = int((self.mid + self.right) / 2)
-                
-                return [self.all_tests[self.left], self.all_tests[self.right]]
-            else: # case 4: the mid test has the same bandwidth as the left or right
-                print("Error: Test not found case to handle")
+                self.right = int((self.mid + self.right) / 2)                
+                return [self.all_tests[self.left], self.all_tests[self.right]]            
         else:
             return None
     
     
     def next(self, console: Console) -> Test:
 
-        # if self.current_test is not None and self.current_repetition < self.config.repetitions:
-        #     self.current_repetition += 1    
-        #     return self.current_test
+        if self.current_test is not None and self.current_repetition < self.config.repetitions:
+            self.current_repetition += 1    
+            return self.current_test
         
-
         if len(self.tests_to_run) == 0:
             self.tests_to_run = self.binary_search()
 
@@ -371,6 +344,6 @@ class RoundBinary(Round):
             next_test = self.tests_to_run.pop(0)
             self.tests_already_run.append(next_test)
 
-        # self.current_test = next_test
-        # self.current_repetition = 1
+        self.current_test = next_test
+        self.current_repetition = 1
         return next_test

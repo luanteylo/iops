@@ -66,6 +66,10 @@ class IOPSConfig:
         # local the configuration (for now)
         self.local_template = None
 
+        # static parameters
+
+        self.static_bw_alpha = 10 # 10 mbps
+
         self.errors = []
         
         self.load_nodes()

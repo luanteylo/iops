@@ -142,7 +142,23 @@ class Test(ABC):
         
         return msg_str
 
+    def __eq__(self, other: 'Test') -> bool:
+        return abs(self.bw - other.bw) <= self.config.static_bw_alpha    
 
+    def __le__(self, other: 'Test') -> bool:
+        return  self.bw < other.bw or self.__eq__(other)     
+    
+    def __ge__(self, other: 'Test') -> bool:
+        return  self.bw > other.bw or self.__eq__(other)
+    
+    def __lt__(self, other: 'Test') -> bool:
+        return  self.bw < other.bw and not self.__eq__(other)
+    
+    def __gt__(self, other: 'Test') -> bool:
+        return  self.bw > other.bw and not self.__eq__(other)
+    
+
+        
 
 class TestIORSeq(Test):
     """
