@@ -1,7 +1,7 @@
 
 from iops.core.config import IOPSConfig
 from iops.util.generator import Generator
-from iops.util.tags import jobManager, TestType, Pattern, FileMode
+from iops.util.tags import jobManager, TestType, Pattern, FileMode, ExecutionMode
 
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -40,6 +40,8 @@ class Test(ABC):
         self.batch_file = self.batch_path / f"batch_{self.test_id}.sh"
         self.summary_file = self.batch_path / f"summary_test_{self.test_id}_$(date +%Y%m%d%H%M%S)_$RANDOM.out"
         self.csv_file = self.batch_path / f"result.csv"
+
+        self.number_of_executions = 0
 
         self.df = None
     
@@ -112,10 +114,20 @@ class Test(ABC):
         Load the results of the tests
         """
         args = [self.config.ior_2_csv, self.batch_path, self.csv_file]
-        result = subprocess.run(args, capture_output=True)
-        if result.returncode != 0:
-            raise ValueError(f"Error converting IOR output to CSV: {result.stderr}")
+        try:
+            if self.config.mode is not ExecutionMode.DEBUG:
+                # if not in debug mode, run the command
+                result = subprocess.run(args, capture_output=True)
+                if result.returncode != 0:
+                    raise ValueError(f"Error converting IOR output to CSV: {result.stderr}")
         
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Error: Script execution failed: {e}")
+        
+        except Exception as e:
+            raise Exception(f"Error: {e}")
+        
+        self.number_of_executions += 1
         self.df = pd.read_csv(self.csv_file)
         
 

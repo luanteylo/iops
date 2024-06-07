@@ -38,7 +38,7 @@ class Runner:
         """        
         console.print(f"{test}")
         # running the test
-        if test.config.mode != ExecutionMode.DEBUG:
+        if test.config.mode is not ExecutionMode.DEBUG:
             result = Submitter.submit(test.batch_file, test.config.job_manager)               
             if result.returncode != 0:                
                 # Decode the output only once
@@ -62,9 +62,7 @@ class Runner:
 
                 # Exit the script
                 sys.exit(1)
-            else:
-                # load the results of the test
-                test.load_results() # load the results of the test
+        test.load_results() # load the results of the test
                 
             
 

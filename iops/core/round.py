@@ -1,7 +1,7 @@
 from iops.core.config import IOPSConfig
 from iops.core.tests import Test
 from iops.util.generator import Graphs
-from iops.util.tags import TestType, Pattern, FileMode, SearchType
+from iops.util.tags import TestType, Pattern, FileMode, SearchType, ExecutionMode
 
 import pandas as pd
 import subprocess
@@ -64,9 +64,23 @@ class Round:
         args = [self.config.ior_2_csv, self.round_path, self.csv_file]
 
         try:
-            result = subprocess.run(args, check=True)
-            if result.returncode != 0:
-                raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")
+            if self.config.mode is not ExecutionMode.DEBUG:
+                # if not in debug mode, execute the script
+                result = subprocess.run(args, check=True)
+                if result.returncode != 0:
+                    raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")            
+            else: 
+                # DEBUG MODE
+                # if in regular mode, we check if the csv file do not exist than we generate it by reading the all csv files in the round folder
+                if not self.csv_file.exists():
+                    # get all csv files in the round folder (recursive considering all folders)
+                    csv_files = list(self.round_path.rglob("*.csv"))                    
+                    # concatenate the csv files
+                    df = pd.concat([pd.read_csv(f) for f in csv_files])
+                    # save the csv file
+                    df.to_csv(self.csv_file, index=False)
+                    
+                    
             # load the csv file into a pandas dataframe
             self.df = pd.read_csv(self.csv_file)
             # generate the graph
@@ -291,9 +305,10 @@ class RoundBinary(Round):
 
         self.tests_already_run = []
         self.tests_to_run = []
+        self.repetition = 1
 
-        self.current_test = None
-        self.current_repetition = 1        
+
+
         
     def binary_search(self) -> list:
         if self.tests_already_run == []:
@@ -321,6 +336,8 @@ class RoundBinary(Round):
                 return [self.all_tests[self.mid]]
             # case 3: the mid test has a bigger bandwidth than the left and bigger than the right or the opposite
             else:
+                if (self.left - self.mid == 1) or  (self.right - self.mid == 1):
+                    return None
                 self.left = int((self.left + self.mid) / 2)
                 self.right = int((self.mid + self.right) / 2)                
                 return [self.all_tests[self.left], self.all_tests[self.right]]            
@@ -330,12 +347,22 @@ class RoundBinary(Round):
     
     def next(self, console: Console) -> Test:
 
-        if self.current_test is not None and self.current_repetition < self.config.repetitions:
-            self.current_repetition += 1    
-            return self.current_test
-        
-        if len(self.tests_to_run) == 0:
+        if len(self.tests_to_run) == 0:                       
+            self.tests_to_run = self.binary_search()      
+          
+
+        # check if we did all repetitions
+        if self.tests_to_run is None and self.repetition < self.config.repetitions:
+            self.repetition += 1
+            self.left = 0
+            self.right = len(self.all_tests) - 1            
+            self.mid = int((self.left + self.right) / 2)
+            self.tests_already_run = []
+            self.tests_to_run = []           
             self.tests_to_run = self.binary_search()
+            console.print(f"Repetition {self.repetition}/{self.config.repetitions}", style="bold white on red")
+        
+            
 
         if self.tests_to_run is None:        
             self.load_results()
@@ -343,7 +370,5 @@ class RoundBinary(Round):
         else:
             next_test = self.tests_to_run.pop(0)
             self.tests_already_run.append(next_test)
-
-        self.current_test = next_test
-        self.current_repetition = 1
+  
         return next_test

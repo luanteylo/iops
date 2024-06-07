@@ -69,25 +69,42 @@ class Report():
         
 
     def generate_txt(self, run_time = None):
-         # write a file summarizing the execution of the tests
+        # write a file summarizing the execution of the tests
+
         with open(self.txt_file, 'w') as f:
             f.write(f"Execution completed successfully in {run_time}\n")
             # print test setup
             f.write(f"Test setup:\n")
-            f.write(f"\tMode: {self.config.mode}\n")
-            f.write(f"\tSearch method: {self.config.search_method}\n")
-            f.write(f"\tJob manager: {self.config.job_manager}\n")
-            f.write(f"\tBenchmark: {self.config.benchmark_tool}\n")
-            f.write(f"\tModules: {self.config.modules}\n")
-            f.write(f"\tWorkdir: {self.config.workdir}\n")
-            f.write(f"\tRepetitions: {self.config.repetitions}\n")
-            f.write(f"\tTests: {self.config.tests}\n")       
+            f.write("\t[nodes]\n")
+            f.write(f"\tmax_nodes: {self.config.max_nodes}\n")
+            f.write(f"\tprocesses_per_node: {self.config.processes_per_node}\n")
+            f.write(f"\t[storage]\n")
+            f.write(f"\tfilesystem_dir: {self.config.filesystem_dir}\n")
+            f.write(f"\tmin_volume: {self.config.min_volume}\n")
+            f.write(f"\tmax_volume: {self.config.max_volume}\n")
+            f.write(f"\tvolume_step: {self.config.volume_step}\n")
+            f.write(f"\tstripe_folders: {self.config.stripe_folders}\n")
+            f.write(f"\t[execution]\n")        
+            f.write(f"\tmode: {self.config.mode}\n")
+            f.write(f"\tsearch_method: {self.config.search_method}\n")
+            f.write(f"\tjob_manager: {self.config.job_manager}\n")
+            f.write(f"\tbenchmark_tool: {self.config.benchmark_tool}\n")
+            f.write(f"\tmodules: {self.config.modules}\n")
+            f.write(f"\tworkdir: {self.config.workdir}\n")
+            f.write(f"\trepetitions: {self.config.repetitions}\n")
+            f.write(f"\ttests: {self.config.tests}\n")  
+            f.write(f"\taccess_pattern: {self.config.io_patterns}\n")
+            f.write(f"\t[slurm]")
+            f.write(f"\tslurm_constraint: {self.config.slurm_constraint}\n")
+            f.write(f"\tslurm_partition: {self.config.slurm_partition}\n")
+            f.write(f"\tslurm_time: {self.config.slurm_time}\n")
+            # write all information about the configuration
 
             for round in self.rounds.values():
                 f.write(f"\tRound {round.round_id} -  {round.test_type.name}:{round.pattern.name}:{round.file_mode.name} - Best parameter: {round.best_parameter} Best Bandwidth: {round.best_bw}\n")
                 f.write("\n")
                 for test in round.all_tests:
-                    f.write(f"\t\tTest {test} - Bandwidth: {test.bw}\n")
+                    f.write(f"\t\tTest {test}: Bandwidth: {test.bw} ---  Executions: {test.number_of_executions} \n")
                 
 
 
