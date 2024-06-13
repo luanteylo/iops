@@ -35,12 +35,15 @@ class IOPSConfig:
 
 
         # Nodes configuration
+        self.min_nodes = None
         self.max_nodes = None
         self.processes_per_node = None
 
         # Storage configuration
         self.filesystem_dir = None
+        self.min_volume = None
         self.max_volume = None
+        self.volume_step = None
         self.stripe_folders = None       
 
         # Execution configuration
@@ -134,6 +137,7 @@ class IOPSConfig:
         return f"Invalid value: '{value}' for '{key}' in section '{section}'. Allowed values are '{', '.join(valid_values)}'"
 
     def load_nodes(self):
+        self.min_nodes = int(self.__get("nodes", "min_nodes"))
         self.max_nodes = int(self.__get("nodes", "max_nodes"))
         self.processes_per_node = int(self.__get("nodes", "processes_per_node"))
         
@@ -142,6 +146,26 @@ class IOPSConfig:
                                                    key="max_nodes", 
                                                    value=self.max_nodes,
                                                    custom_message="Number of nodes need to be greater than zero."))
+            
+        if self.min_nodes <= 0:
+            self.errors.append(self.__format_error(section="nodes", 
+                                                   key="min_nodes", 
+                                                   value=self.min_nodes,
+                                                   custom_message="Number of nodes need to be greater than zero."))
+
+        # check if the number of nodes is power of 2
+
+        if (self.max_nodes & (self.max_nodes - 1)) != 0:
+            self.errors.append(self.__format_error(section="nodes", 
+                                                   key="max_nodes", 
+                                                   value=self.max_nodes,
+                                                   custom_message="Number of nodes need to be a power of 2."))
+        
+        if (self.min_nodes & (self.min_nodes - 1)) != 0:
+            self.errors.append(self.__format_error(section="nodes", 
+                                                   key="min_nodes", 
+                                                   value=self.min_nodes,
+                                                   custom_message="Number of nodes need to be a power of 2."))
             
         if self.processes_per_node <= 0:
             self.errors.append(self.__format_error(section="nodes", 
@@ -414,7 +438,8 @@ class IOPSConfig:
         table = Table(show_header=True, header_style="bold blue", box=box.SIMPLE)        
         table.add_column("Setting", style="dim", width=30)
         table.add_column("Value")
-        table.add_row("Max Nodes", str(self.max_nodes))
+        table.add_row("Min Nodes", str(self.min_nodes))
+        table.add_row("Max Nodes", str(self.max_nodes))        
         table.add_row("Processes Per Node", str(self.processes_per_node))
 
         # Create a table for storage information

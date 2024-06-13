@@ -66,8 +66,6 @@ class Report():
         console.print(f"[bold green]Report {self.report_id} generated successfully.")
         console.print(f"[bold green]Report file: {self.report_file}")
 
-        
-
     def generate_txt(self, run_time = None):
         # write a file summarizing the execution of the tests
 
@@ -76,6 +74,7 @@ class Report():
             # print test setup
             f.write(f"Test setup:\n")
             f.write("\t[nodes]\n")
+            f.write(f"\tmin_nodes: {self.config.min_nodes}\n")
             f.write(f"\tmax_nodes: {self.config.max_nodes}\n")
             f.write(f"\tprocesses_per_node: {self.config.processes_per_node}\n")
             f.write(f"\t[storage]\n")

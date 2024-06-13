@@ -29,7 +29,8 @@ class Generator:
         config_template = configparser.ConfigParser()
     
         config_nodes['nodes'] = {
-            'max_nodes': '32 # Maximum number of nodes that can be allocated (limits computing tests)',
+            'min_nodes': '1 # Minimum number of nodes that can be allocated (limits computing tests). Must be a power of 2',
+            'max_nodes': '32 # Maximum number of nodes that can be allocated (limits computing tests). Must be a power of 2',
             'processes_per_node': '8 # Number of processes per node. Currently, this is a static parameter',            
         }
 

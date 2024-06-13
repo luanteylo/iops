@@ -167,8 +167,6 @@ class Round:
         '''
         if config.search_method == SearchType.GREEDY:
             return RoundGreedy(pattern, file_mode, config, test_type, initial_parameters)
-        elif config.search_method == SearchType.SMART:
-            return RoundSmart(pattern, file_mode, config, test_type, initial_parameters)
         elif config.search_method == SearchType.BINARY:
             return RoundBinary(pattern, file_mode, config, test_type, initial_parameters)
         else:
@@ -211,90 +209,6 @@ class RoundGreedy(Round):
             self.load_results() # load the results of the entire round
         
         return next_test
-
-
-class RoundSmart(Round):
-    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
-        super().__init__(pattern, file_mode, config, test_type, initial_parameters)
-
-        self.start_idx = 0
-        self.end_idx = len(self.all_tests) - 1
-        self.tests_already_run = []
-        self.tests_to_run = []
-
-        self.file_size_threshold = 2
-        self.tolerance = 0.5
-        self.alpha = 10
-        
-        self.current_test = None
-        self.current_repetition = 1
-    
-    def heuristic(self) -> List | None:
-        """
-        Search smartly the best test to be executed in the round.
-        """
-
-        if self.tests_already_run == []: # start with 3 tests to run
-            mid = int((self.end_idx + self.start_idx)) // 2
-            return [self.all_tests[self.start_idx],self.all_tests[mid], self.all_tests[self.end_idx]]
-        
-        # at this point we are sure that we have at least 3 tests runned
-        if self.start_idx < self.end_idx:
-            mid = int((self.end_idx + self.start_idx)) // 2
-
-            test_left = self.all_tests[self.start_idx]
-            test_right = self.all_tests[self.end_idx]
-            test_mid = self.all_tests[mid]
-            
-            max_bw = max(test_left.bw, test_right.bw)
-
-            if self.end_idx - self.start_idx > self.file_size_threshold and abs(test_left.bw - test_right.bw ) > self.tolerance:
-                if abs(test_mid.bw - max_bw) > self.tolerance: # if the difference between the mid test and the max bandwidth is greater than the tolerance
-                    if test_mid.bw > max_bw:                        
-                        max_bw = test_mid.bw
-                        self.start_idx = mid
-                    else:
-                        test_right = test_mid
-                        self.end_idx = mid
-                else:
-                    if abs(test_mid.bw - test_left.bw) < self.alpha: # if the bandwidth did not change much at the left side
-                        self.start_idx = mid
-                    else:
-                        self.end_idx = mid
-                if self.start_idx == self.end_idx - 1: # if we have only 2 tests to run and already runned
-                    return None
-                
-                mid = int((self.start_idx + self.end_idx) / 2)
-                
-                #print(f"Start: {self.start_idx}, Mid: {mid}, End: {self.end_idx}")
-                return [self.all_tests[mid]]
-            else:
-                return None
-        else:
-            return None
-
-    
-    def next(self, console: Console) -> Test:
-
-        if self.current_test is not None and self.current_repetition < self.config.repetitions:
-            self.current_repetition += 1    
-            return self.current_test
-        
-
-        if len(self.tests_to_run) == 0:
-            self.tests_to_run = self.heuristic()
-
-        if self.tests_to_run is None:        
-            self.load_results()
-            next_test =  None
-        else:
-            next_test = self.tests_to_run.pop(0)
-            self.tests_already_run.append(next_test)
-
-        self.current_test = next_test
-        self.current_repetition = 1
-        return next_test
-
         
 class RoundBinary(Round):
     def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
