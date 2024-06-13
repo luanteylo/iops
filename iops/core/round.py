@@ -1,0 +1,288 @@
+from iops.core.config import IOPSConfig
+from iops.core.tests import Test
+from iops.util.generator import Graphs
+from iops.util.tags import TestType, Pattern, FileMode, SearchType, ExecutionMode
+
+import pandas as pd
+import subprocess
+import random
+from typing import List
+from pathlib import Path
+from rich.console import Console
+from abc import ABC, abstractmethod
+
+
+class Round:
+    """
+    Represents a round of tests, generating and managing Test instances
+    based on the configured test type.
+    """
+    _id_counter = 0
+
+    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
+        type(self)._id_counter += 1
+        self.round_id = self._id_counter
+        
+        self.pattern = pattern
+        self.file_mode = file_mode
+        self.config = config
+        self.test_type = test_type        
+        self.initial_parameters = initial_parameters
+
+        self.best_bw = None
+        self.best_df = None
+        self.best_parameter = None
+        
+        self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
+        # create the directory
+        self.round_path.mkdir(parents=True, exist_ok=True)
+
+        # create a list of tests to store all the tests
+        self.list_test : List[Test] = []
+                
+        self.df = None
+        self.csv_file = self.round_path / f"{self.test_type.name}_{self.round_id}.csv"
+        self.graph_file = self.round_path / f"{self.test_type.name}_{self.round_id}.svg"
+
+        self.all_tests : List[Test] = []
+        self.current_pos = 0
+        self.repetition = 0
+        
+        # generate all tests
+        self.__generate_all_tests()
+
+        # computing the number of tests
+        self.number_of_tests = len(self.all_tests) * self.config.repetitions
+        
+       
+    def load_results(self):
+        '''
+        load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
+        it can also generate a graph based on the results
+        '''
+     
+        args = [self.config.ior_2_csv, self.round_path, self.csv_file]
+
+        try:
+            if self.config.mode is not ExecutionMode.DEBUG:
+                # if not in debug mode, execute the script
+                result = subprocess.run(args, check=True)
+                if result.returncode != 0:
+                    raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")            
+            else: 
+                # DEBUG MODE
+                # if in regular mode, we check if the csv file do not exist than we generate it by reading the all csv files in the round folder
+                if not self.csv_file.exists():
+                    # get all csv files in the round folder (recursive considering all folders)
+                    csv_files = list(self.round_path.rglob("*.csv"))                    
+                    # concatenate the csv files
+                    df = pd.concat([pd.read_csv(f) for f in csv_files])
+                    # save the csv file
+                    df.to_csv(self.csv_file, index=False)
+                    
+                    
+            # load the csv file into a pandas dataframe
+            self.df = pd.read_csv(self.csv_file)
+            # generate the graph
+            Graphs.generate(self.df, self.graph_file, self.test_type)
+            # load the best test
+            
+            if self.test_type == TestType.COMPUTING:
+                gb = self.df.groupby('nodes')
+            elif self.test_type == TestType.FILESIZE:
+                gb = self.df.groupby('aggregate_filesize')
+            elif self.test_type == TestType.STRIPING:
+                gb = self.df.groupby('path')
+            
+            # get the best test
+            self.best_bw = 0.0
+            for parameter, df_gb in gb:
+                if df_gb['bw'].mean() > self.best_bw:
+                    self.best_bw = df_gb['bw'].mean()
+                    self.best_df = df_gb.copy()
+                    self.best_parameter = parameter
+            
+            # if test_type == FileSize, we need to convert the parameter to MB
+            if self.test_type == TestType.FILESIZE:
+                self.best_parameter = self.best_parameter / 1024 / 1024
+
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Error: Script execution failed: {e}")
+        
+        except Exception as e:
+            raise Exception(f"Error: {e}")
+    
+    def __generate_all_tests(self):
+
+        next_test =  Test.create_test(pattern=self.pattern,
+                                      file_mode=self.file_mode,
+                                      config=self.config,
+                                      round_path=self.round_path,
+                                      test_parameters=self.initial_parameters)
+        
+        while next_test is not None:
+
+            # Before the append, we need to create the script for the test
+            next_test.build_files()
+            # save the test in the list of all tests and create a new test based on the current one
+            self.all_tests.append(next_test)
+            next_test = Test.from_existing(next_test)
+            
+            if self.test_type == TestType.COMPUTING:              
+                if  next_test.computing < self.config.max_nodes:
+                    next_test.test_parameters[TestType.COMPUTING] *= 2
+                else:
+                    next_test =  None # no more tests to run
+
+            if self.test_type == TestType.FILESIZE:            
+                if next_test.volume < self.config.max_volume:
+                    next_test.test_parameters[TestType.FILESIZE] += self.config.volume_step                                
+                else:
+                    next_test = None # no more tests to run        
+
+            if self.test_type == TestType.STRIPING:            
+                if next_test.folder_index < len(self.config.stripe_folders) - 1:
+                    next_test.test_parameters[TestType.STRIPING] += 1
+                else:
+                    next_test = None
+
+    def get_best_parameter(self) -> int | float | None:
+        '''
+        get the best parameter for the current round
+        '''
+        if self.test_type == TestType.COMPUTING:
+            return self.best_parameter
+        elif self.test_type == TestType.FILESIZE:
+            return self.best_parameter 
+        elif self.test_type == TestType.STRIPING:
+            folder_path = Path(Path(self.best_parameter).parent.name)
+            return self.config.stripe_folders.index(folder_path)
+        else:
+            raise Exception("Error: Test type not supported")
+    
+    @staticmethod
+    def factory(pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
+        '''
+        Factory method to create a Round instance based on the search type
+        '''
+        if config.search_method == SearchType.GREEDY:
+            return RoundGreedy(pattern, file_mode, config, test_type, initial_parameters)
+        elif config.search_method == SearchType.BINARY:
+            return RoundBinary(pattern, file_mode, config, test_type, initial_parameters)
+        else:
+            raise Exception("Error: Round type not supported")
+    
+    @abstractmethod
+    def next(self, console: Console) -> Test:
+        pass
+            
+    def __repr__(self) -> str:
+        return f"Round {self.round_id} \[{self.test_type.name}]\[{self.pattern.name}:{self.file_mode.name}] - up to {self.number_of_tests} tests"
+
+
+
+class RoundGreedy(Round):
+    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
+        super().__init__(pattern, file_mode, config, test_type, initial_parameters)
+        # randomize the list of tests
+        
+    
+    def next(self, console: Console) -> Test:
+        """
+        Updates the next Test instance to be executed in the round.
+        """                
+        if self.current_pos == 0 and self.repetition < self.config.repetitions:
+            console.print(f"Repetition {self.repetition + 1}/{self.config.repetitions}", style="bold white on red")
+
+        next_test = None
+   
+        if self.repetition < self.config.repetitions:
+            next_test = self.all_tests[self.current_pos]
+            self.current_pos += 1 
+            if self.current_pos >= len(self.all_tests):                                                
+                self.current_pos = 0
+                self.repetition += 1
+                random.shuffle(self.all_tests)
+        else:            
+            # sort the list of tests by test_id
+            self.all_tests.sort(key=lambda x: x.test_id)
+            self.load_results() # load the results of the entire round
+        
+        return next_test
+        
+class RoundBinary(Round):
+    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
+        super().__init__(pattern, file_mode, config, test_type, initial_parameters)
+        self.left = 0
+        self.right = len(self.all_tests) - 1
+        self.mid = int((self.left + self.right) / 2)
+
+        self.tests_already_run = []
+        self.tests_to_run = []
+        self.repetition = 1
+
+
+
+        
+    def binary_search(self) -> list:
+        if self.tests_already_run == []:
+            return [self.all_tests[self.left],self.all_tests[self.mid], self.all_tests[self.right]]
+
+        if self.left < self.right - 1:
+            test_left = self.all_tests[self.left]
+            test_right = self.all_tests[self.right]
+            test_mid = self.all_tests[self.mid]
+            
+            # case 1: the mid test has a small bandwidth than the left and bigger than the right or equal
+            if test_left >= test_mid and test_left > test_right:
+                self.right = self.mid
+                if self.right - self.left == 1:
+                    return None
+                self.mid = int((self.left + self.right) / 2)
+                return [self.all_tests[self.mid]]
+            
+            # case 2: the mid test has a bigger bandwidth than the left and smaller than the right
+            elif test_right >= test_mid and test_right > test_left:
+                self.left = self.mid
+                if self.right - self.left == 1:
+                    return None
+                self.mid = int((self.left + self.right) / 2)
+                return [self.all_tests[self.mid]]
+            # case 3: the mid test has a bigger bandwidth than the left and bigger than the right or the opposite
+            else:
+                if (self.left - self.mid == 1) or  (self.right - self.mid == 1):
+                    return None
+                self.left = int((self.left + self.mid) / 2)
+                self.right = int((self.mid + self.right) / 2)                
+                return [self.all_tests[self.left], self.all_tests[self.right]]            
+        else:
+            return None
+    
+    
+    def next(self, console: Console) -> Test:
+
+        if len(self.tests_to_run) == 0:                       
+            self.tests_to_run = self.binary_search()      
+          
+
+        # check if we did all repetitions
+        if self.tests_to_run is None and self.repetition < self.config.repetitions:
+            self.repetition += 1
+            self.left = 0
+            self.right = len(self.all_tests) - 1            
+            self.mid = int((self.left + self.right) / 2)
+            self.tests_already_run = []
+            self.tests_to_run = []           
+            self.tests_to_run = self.binary_search()
+            console.print(f"Repetition {self.repetition}/{self.config.repetitions}", style="bold white on red")
+        
+            
+
+        if self.tests_to_run is None:        
+            self.load_results()
+            next_test =  None
+        else:
+            next_test = self.tests_to_run.pop(0)
+            self.tests_already_run.append(next_test)
+  
+        return next_test

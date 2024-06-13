@@ -186,37 +186,40 @@
         <div class="info-panel panel-spacing">
         {% for report in reports_info %}                       
             <h4 style="font-size: 16px; color: #333;">
-                <span style="font-weight: bold; color: #007bff;">{{report.test_title}}</span>.                
+                <span style="font-weight: bold; color: #007bff;">{{report.description}}</span>.                
             </h4>
             <h4 style="font-size: 16px; color: #333;">
-                <span style="font-weight: normal; color: #555;">Max Bandwidth Found:</span>
-                <span style="font-weight: bold; color: #e74c3c;">{{report.max_bw}}</span> 
+                <span style="font-weight: normal; color: #555;">IO Pattern:</span>
+                <span style="font-weight: bold; color: #e74c3c;">{{report.round.io_pattern}}:{{report.round.file_mode}}</span>
+                <br>
+                <span style="font-weight: normal; color: #555;">Mean Bandwidth:</span>
+                <span style="font-weight: bold; color: #e74c3c;">{{report.round.df.bw.mean()}} mbps</span>
             </h4>
-             <div class="info-panel panel-spacing">                
-                <caption style="caption-side: top; font-size: 18px; font-weight: bold; color: #333; margin: 10px 0;">
-                    Configuration Details for Maximum Bandwidth in round {{report.round_id}}
-                </caption>
-                
+            <caption style="caption-side: top; font-size: 18px; font-weight: bold; color: #333; margin: 10px 0;">
+                Best result in round {{report.round.round_id}}
+            </caption>
+             <div class="info-panel panel-spacing">                    
+                <br>                
                     <table>
                         <tr>
                             <th>Computer Nodes</th>
-                            <td>{{report.num_nodes}}</td>
+                            <td>{{ report.round.best_df.nodes.iloc[0] }}</td>
                         </tr>
                         <tr>
                             <th>Processes</th>
-                            <td>{{report.num_tasks}}</td>
+                            <td>{{ report.round.best_df.tasks.iloc[0] }}</td>
                         </tr>
                         <tr>
                             <th>Processes per Node</th>
-                            <td>{{report.clients_per_node}}</td>
+                            <td>{{ report.round.best_df.clients_per_node.iloc[0] }}</td>
                         </tr>
                         <tr>
                             <th>File Size</th>
-                            <td>{{report.file_size}}</td>
+                            <td>{{ report.round.best_df.aggregate_filesize.iloc[0] / 1024.0 / 1024.0 }} MB</td>
                         </tr>
                         <tr>
                             <th>Striping</th>
-                            <td>{{ report.striping}}</td>
+                            <td>{{ report.round.best_df.path.iloc[0]}}</td>
                         </tr>
                     </table>
                 </div>     
@@ -227,20 +230,15 @@
     <div class="graph-section">
         {% for report in reports_info %}
             <div class="graph-container">
-                <h2 class="graph-title">{{ report.graph_title }}</h2>                
-                <img src="{{ report.graph_path }}" alt="{{ report.graph_title }}" class="graph" onclick="openLightbox('{{ report.graph_path }}', '{{ report.graph_title }}')">
+                <h2 class="graph-title">{{ report.description }}</h2>                
+                <img src="{{ report.round.graph_file.name }}" alt="{{ report.description }}" class="graph" onclick="openLightbox('{{ report.round.graph_file.name  }}', '{{ report.description }}')">
             </div>
         {% endfor %}
-        </div>                
-        
-   
-    
+        </div>    
     
     <div class="lightbox" id="lightbox" onclick="closeLightbox()">
         <img id="lightbox-img" src="" alt="">
     </div>
-
-    
 
 </div>
 

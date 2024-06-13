@@ -3,7 +3,7 @@ from enum import Enum
 class TestType(Enum):
     """
     Tags for tests
-    """
+    """    
     FILESIZE = "filesize"
     COMPUTING = "computing"
     STRIPING = "striping"
@@ -15,12 +15,13 @@ class Pattern(Enum):
     SEQUENTIAL = "sequential"
     RANDOM = "random"
 
-class Operation(Enum):
+
+
+class FileMode(Enum):
     """
-    Tags for operations
+    Tags for file modes
     """
-    WRITE = "write"
-    READ = "read"
+    SHARED = "shared"
 
 class jobManager(Enum):
     """
@@ -33,8 +34,7 @@ class ExecutionMode(Enum):
     """
     Tags for execution modes
     """
-    FAST = "fast"
-    COMPLETE = "complete"
+    NORMAL = "normal"
     DEBUG = "debug"
 
 class BenchmarkTool(Enum):
@@ -48,3 +48,9 @@ class SearchType(Enum):
     Tags for search methods
     """
     GREEDY = "greedy"
+    SMART = "smart"
+    BINARY = "binary"
+
+class VolumeValidation:
+    # 256MB to 1GB
+    VALID_VOLUME_STEPS = [2**i for i in range(8, 11)] 

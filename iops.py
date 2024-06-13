@@ -2,18 +2,22 @@
 import argparse
 from argparse import RawTextHelpFormatter
 from rich.console import Console
+
+
 import sys
+from datetime import datetime
 
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
-from iops.util.tags import TestType, jobManager, ExecutionMode
-from iops.core.runner import Runner, Round
+from iops.util.tags import TestType
+from iops.core.runner import Runner
+from iops.core.round import Round
 from iops.core.config import IOPSConfig
 from iops.reports.report import Report
 
 from version import __version__
 
-
+from typing import List
 console = Console()   
 
 
@@ -49,20 +53,49 @@ app_description = f"""
     """
 
 
+def run(config: IOPSConfig) ->  Report:
+    """
+    build the next round based on the previous round results
+    :param config:
+    :param round_parameters:
+    :return:
+    """
+    report = Report(config, 1, "IOPS Report") 
+
+    
+    
+    for io_pattern, file_mode in config.io_patterns:
+        parameters = {TestType.FILESIZE: config.min_volume, TestType.STRIPING: 0, TestType.COMPUTING: config.min_nodes}        
+        for test_type in config.tests:
+            current_round = Round.factory(pattern=io_pattern,
+                                          file_mode=file_mode, 
+                                          config=config, 
+                                          test_type=test_type, 
+                                          initial_parameters=parameters)
+            Runner.run(current_round)
+            report.add_round(current_round)
+            # build the round
+            parameters[test_type] = current_round.get_best_parameter()
+            console.print(f"[bold green]Round {current_round.round_id} completed successfully.")
+            console.print(f"[bold green]Best parameter for {test_type.name}: {parameters[test_type]}")
+
+    console.print(f"[bold green]All rounds completed successfully.")
+    return report
+
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter, description=app_description)
 
     parser.add_argument('conf', help="full path to the .ini file", type=str, nargs='?')
     parser.add_argument('--check_setup', help="check if all dependencies are correctly installed", action="store_true")
-    parser.add_argument('--generate_ini', nargs='?', const='default_config.ini', default=None,
-                    help="generate a default .ini configuration file. Optionally, specify the file name and path.")
-    parser.add_argument('-y', '--yes', help="automatically confirm the setup (Attention: the workdir directory will be cleaned without asking for confirmation)", action="store_true")
-
-
+    parser.add_argument('--generate_ini', nargs='?', const='default_config.ini', default=None, help="generate a default .ini configuration file. Optionally, specify the file name and path.")
+    parser.add_argument('-y', '--yes', help="automatically confirm the setup (Attention: the workdir directory will be cleaned without asking for confirmation)", action="store_true")   
+    # add verbose mode to print errors
+    parser.add_argument('-v', '--verbose', help="print the full error traceback", action="store_true")
+    
     args = parser.parse_args()
 
-
+    start_time = datetime.now()
 
     if args.generate_ini:
         file_name = args.generate_ini if args.generate_ini != True else 'default_config.ini'
@@ -83,45 +116,21 @@ def main():
     
     try:
         # Initialize and load configuration
-        config = IOPSConfig(config_path=args.conf)
-   
-        config.print_config(skip_confirmation=args.yes)
+        config = IOPSConfig(config_path=args.conf)   
+        config.print_config(skip_confirmation=args.yes)              
+        report = run(config)
+        report.generate_html()        
+        report.generate_txt(run_time=datetime.now() - start_time)
 
-        parameters = {"volume": 1024, "folder_index": 0, "computing": 1}
-
-        # Create a round object with static parameters
-        round_volume = Round(config=config, 
-                            test_type=TestType.FILESIZE,
-                            round_parameters=parameters)
-        
-        round_computing = Round(config=config, 
-                                test_type=TestType.COMPUTING,
-                                round_parameters=parameters)
-        
-        round_striping = Round(config=config, 
-                            test_type=TestType.STRIPING,
-                            round_parameters=parameters)    
-
-        report = Report(config, 1, "IOPS Report")                     
-        
-        for round in (round_volume, round_computing, round_striping):
-            if round.config.job_manager == jobManager.LOCAL:
-                if round.test_type == TestType.FILESIZE:
-                    Runner.run(round)
-                    report.add_round(round)
-                    
-            elif round.config.job_manager == jobManager.SLURM:
-                Runner.run(round)
-                report.add_round(round)
-        
-        report.generate_report()
-        
     except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] [white]{e}[/white]")
-        sys.exit(1)
-
+        console.print(f"[bold white]{e}[/ bold white]")
+        if args.verbose:
+            raise e
+        else:
+            console.print(f"[bold red]Run with --verbose to see the full error traceback.")
+            sys.exit(1)
         
-    console.print("[bold green]Exiting...")
+    console.print(f"[bold green]Execution completed successfully in {datetime.now() - start_time}.")
 
 
 if __name__ == "__main__":

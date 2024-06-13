@@ -271,7 +271,7 @@ class Loader:
 def main():
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter, description=app_description)
 
-    parser.add_argument('fullpath', help=f"The path for raw files.")   
+    parser.add_argument('fullpath', help=f"The path for raw files or full path to a file.")   
     parser.add_argument('output', help="file name of the output CSV file.")
     parser.add_argument('-e', '--extension', type=str, default='.out', help='File extension to filter by.')        
     parser.add_argument('-v', '--verbose', help="Verbose - print the dictionary with all arguments.", action='store_true')
@@ -292,8 +292,12 @@ def main():
     fullpath = Path(args.fullpath)
     search_by = args.extension   
 
-    # Use rglob to search recursively
-    files = set(fullpath.rglob('*' + search_by))
+
+    if fullpath.is_file():
+        files = [fullpath]
+    else:
+        # Use rglob to search recursively
+        files = set(fullpath.rglob('*' + search_by))
 
     # Load the data
     ld = Loader(files=files, verbose=args.verbose)

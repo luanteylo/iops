@@ -8,7 +8,9 @@ from iops.util.generator import Generator
 
 from datetime import datetime
 
+from rich.console import Console
 
+console = Console()
 
 class Report():
 
@@ -18,10 +20,8 @@ class Report():
         self.report_id = report_id
         self.description = description
 
-        self.reportdir = self.config.reportdir / f"report_{self.report_id}"
-        self.reportdir.mkdir(parents=True, exist_ok=True)
-
-        self.report_file = self.reportdir / "report.html"   
+        self.report_file = self.config.workdir / "report.html"   
+        self.txt_file = self.config.workdir / "iops.txt"
 
         self.rounds : dict[int, Round] = {}
         
@@ -41,42 +41,69 @@ class Report():
         elif test_type == TestType.STRIPING:
             return "Varying the Striping Configuration"
 
-    def generate_report(self):    
+    def generate_html(self):    
 
         report_dict = {
             'current_date': datetime.now(),
             'reports_info': []
         }
-
         
-
         for round in self.rounds.values():
             # Firstly, we copy the files to the report folder
-            round.graph_file.rename(self.reportdir / round.graph_file.name)
-            round.csv_file.rename(self.reportdir / round.csv_file.name)
+            round.graph_file.rename(self.config.workdir / round.graph_file.name)
+            round.csv_file.rename(self.config.workdir / round.csv_file.name)
 
             # update the report_dict
             report_dict['reports_info'].append({                
-                'test_title': self.__human_readable_title(round.test_type),
-                'round_id': round.round_id,                                
-                'max_bw': f"{round.df.bw.max()} MiB/s",
-                'graph_path': round.graph_file.name,
-                'graph_title': self.__human_readable_title(round.test_type),
-                'operation': 'write',
-                'num_tasks':round.df.loc[round.df['bw'].idxmax(), 'tasks'],
-                'clients_per_node': round.df.loc[round.df['bw'].idxmax(), 'clients_per_node'],
-                'num_nodes': round.df.loc[round.df['bw'].idxmax(), 'nodes'],
-                'file_size': f"{(round.df.loc[round.df['bw'].idxmax(), 'aggregate_filesize'])/1024/1024}MiB",
-                'striping': Path(round.df.loc[round.df['bw'].idxmax(), 'path']).parent,
+                'description': self.__human_readable_title(round.test_type),                
+                'round': round                     
             })
 
         Generator.from_template(template_path=self.config.report_template, 
                     output_path=self.report_file,
                     info=report_dict)
 
-        
+        console.print(f"[bold green]Report {self.report_id} generated successfully.")
+        console.print(f"[bold green]Report file: {self.report_file}")
 
+    def generate_txt(self, run_time = None):
+        # write a file summarizing the execution of the tests
 
+        with open(self.txt_file, 'w') as f:
+            f.write(f"Execution completed successfully in {run_time}\n")
+            # print test setup
+            f.write(f"Test setup:\n")
+            f.write("\t[nodes]\n")
+            f.write(f"\tmin_nodes: {self.config.min_nodes}\n")
+            f.write(f"\tmax_nodes: {self.config.max_nodes}\n")
+            f.write(f"\tprocesses_per_node: {self.config.processes_per_node}\n")
+            f.write(f"\t[storage]\n")
+            f.write(f"\tfilesystem_dir: {self.config.filesystem_dir}\n")
+            f.write(f"\tmin_volume: {self.config.min_volume}\n")
+            f.write(f"\tmax_volume: {self.config.max_volume}\n")
+            f.write(f"\tvolume_step: {self.config.volume_step}\n")
+            f.write(f"\tstripe_folders: {self.config.stripe_folders}\n")
+            f.write(f"\t[execution]\n")        
+            f.write(f"\tmode: {self.config.mode}\n")
+            f.write(f"\tsearch_method: {self.config.search_method}\n")
+            f.write(f"\tjob_manager: {self.config.job_manager}\n")
+            f.write(f"\tbenchmark_tool: {self.config.benchmark_tool}\n")
+            f.write(f"\tmodules: {self.config.modules}\n")
+            f.write(f"\tworkdir: {self.config.workdir}\n")
+            f.write(f"\trepetitions: {self.config.repetitions}\n")
+            f.write(f"\ttests: {self.config.tests}\n")  
+            f.write(f"\taccess_pattern: {self.config.io_patterns}\n")
+            f.write(f"\t[slurm]")
+            f.write(f"\tslurm_constraint: {self.config.slurm_constraint}\n")
+            f.write(f"\tslurm_partition: {self.config.slurm_partition}\n")
+            f.write(f"\tslurm_time: {self.config.slurm_time}\n")
+            # write all information about the configuration
+
+            for round in self.rounds.values():
+                f.write(f"\tRound {round.round_id} -  {round.test_type.name}:{round.pattern.name}:{round.file_mode.name} - Best parameter: {round.best_parameter} Best Bandwidth: {round.best_bw}\n")
+                f.write("\n")
+                for test in round.all_tests:
+                    f.write(f"\t\tTest {test}: Bandwidth: {test.bw} ---  Executions: {test.number_of_executions} \n")
                 
 
 
