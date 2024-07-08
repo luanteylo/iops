@@ -1,5 +1,6 @@
 import configparser
 import re
+import os
 from rich.console import Console
 from rich.traceback import install
 from pathlib import Path
@@ -69,8 +70,10 @@ class IOPSConfig:
         # local the configuration (for now)
         self.local_template = None
 
-        # static parameters
+        # environment variable to point the iops directory
+        self.iops_home = None
 
+        # static parameters
         self.static_bw_alpha = 10 # 10 mbps
 
         self.errors = []
@@ -236,8 +239,14 @@ class IOPSConfig:
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
         self.tests = self.__get("execution", "tests")
-        self.io_patterns = self.__get("execution", "io_patterns")   
-
+        self.io_patterns = self.__get("execution", "io_patterns")
+        # check if the environment variable IOPS_HOME is set
+        self.iops_home = os.getenv("IOPS_HOME")
+        if self.iops_home is None:
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="iops_home",
+                                                   value=self.iops_home,
+                                                   custom_message="Environment variable IOPS_HOME is not set."))
                 
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -342,10 +351,11 @@ class IOPSConfig:
                                                    custom_message="Must be greater than zero."))
 
     def load_templates(self):
-        slurm_template_str = self.__get("template", "slurm_template")
-        local_template_str = self.__get("template", "local_template")
+        slurm_template_str = os.path.expandvars(self.__get("template", "slurm_template"))
+        local_template_str = os.path.expandvars(self.__get("template", "local_template"))
 
-        self.report_template = Path(self.__get("template", "report_template"))        
+        self.report_template = os.path.expandvars(self.__get("template", "report_template"))    
+        self.report_template = Path(self.report_template)    
         self.ior_2_csv = Path(self.__get("template", "ior_2_csv"))        
 
         # check template file
@@ -354,7 +364,7 @@ class IOPSConfig:
         else:
             self.slurm_template = Path(slurm_template_str)
             # check if file exist
-            if not self.slurm_template.is_file():
+            if not self.slurm_template.is_file:
                 self.errors.append(self.__format_error(section="template",
                                                        key="slurm_template",
                                                        value=self.slurm_template,

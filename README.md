@@ -169,7 +169,16 @@ Then, run the script:
 ```bash
 ./install_ior.sh
 ```
+### Set up the environment variable
 
+Permanent Setting:
+add the export command to your shell's profile script (~/.bashrc, ~/.bash_profile, etc.):
+```bash
+echo 'export IOPS_HOME=/path/to/iops' >> ~/.bashrc
+```
+Replace `/path/to/iops` with the actual path and adjust the file (~/.bashrc in this example) according to your shell. Then, reload the profile with `source ~/.bashrc`
+
+Verify with this command `echo $IOPS_HOME` the path is correctly set.
 
 ### Verifying the Installation
 

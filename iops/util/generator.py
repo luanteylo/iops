@@ -57,13 +57,13 @@ class Generator:
             'tests': 'filesize, computing, striping # List of tests to execute. Supported tests: filesize, computing, striping',            
             'io_patterns': 'sequential:shared, random:shared # List of IO patterns to execute. Each pattern is defined by access_pattern:file_access.\n' \
             '             # Access pattern can be sequential or random. File access can be single (one file per process) or shared (all processes access the same file).\n' \
-            '             # Each test will be executed with the defined IO patterns. If multiple patterns are defined, tests will be repeated for each pattern.\n'
+            '             # Each test will be executed with the defined IO patterns. If multiple patterns are defined, tests will be repeated for each pattern.\n' \
         }
 
         config_template['template'] = {
-            'slurm_template': 'iops/templates/slurm_template.sh.j2 # Template file for Slurm to generate bash scripts. Use None if not using Slurm.',
-            'local_template': 'iops/templates/local_template.sh.j2 # Template for the bash script for local execution.',
-            'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
+            'slurm_template': '$IOPS_HOME/iops/templates/slurm_template.sh.j2 # Template file for Slurm to generate bash scripts. Use None if not using Slurm.',
+            'local_template': '$IOPS_HOME/iops/templates/local_template.sh.j2 # Template for the bash script for local execution.',
+            'report_template': '$IOPS_HOME/iops/templates/report_template.html # Template for the report HTML page.',
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',            
         }
 
