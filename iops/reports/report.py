@@ -69,6 +69,8 @@ class Report():
     def generate_txt(self, run_time = None):
         # write a file summarizing the execution of the tests
 
+        total_number_of_tests = 0
+        effective_execution_time = 0.0
         with open(self.txt_file, 'w') as f:
             f.write(f"Execution completed successfully in {run_time}\n")
             # print test setup
@@ -101,9 +103,16 @@ class Report():
 
             for round in self.rounds.values():
                 f.write(f"\tRound {round.round_id} -  {round.test_type.name}:{round.pattern.name}:{round.file_mode.name} - Best parameter: {round.best_parameter} Best Bandwidth: {round.best_bw}\n")
-                f.write("\n")
+                f.write("\n")                
                 for test in round.all_tests:
                     f.write(f"\t\tTest {test}: Bandwidth: {test.bw} ---  Executions: {test.number_of_executions} \n")
+
+                    if test.number_of_executions > 0:
+                        total_number_of_tests += test.number_of_executions
+                        effective_execution_time += test.df['total'].sum()
+            f.write("\n\n")
+            f.write(f"\nTotal number of tests: {total_number_of_tests}\n")
+            f.write(f"\nEffective execution time: {effective_execution_time}\n")
                 
 
 

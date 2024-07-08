@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+# This script was generated using CodeShooter 1.0.1
+# Date: 2024-06-19
+# The following parameters were used:
+#	./code_shooter.py "mkdir folder_#[0]"
+#	--d '{'#[0]': [['seq', 1, 10, 1]]}'
+#	--output run.sh
+#	--block 1 --mkd_format "#[{}]"
+
+
+mkdir folder_4
+mkdir folder_10
+mkdir folder_6
+mkdir folder_8
+mkdir folder_2
+mkdir folder_3
+mkdir folder_9
+mkdir folder_7
+mkdir folder_1
+mkdir folder_5

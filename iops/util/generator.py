@@ -144,6 +144,10 @@ class Graphs:
 
             plt.grid(True, which='both', linestyle='--', linewidth=0.5)
 
+            #fixed maximum limit for y-axis
+            max_bw = df['bw'].max() + 1000
+            plt.ylim(0, max_bw)
+
             # Axis labels
             plt.xlabel('Aggregate File Size (MiB)', fontsize=14)
             plt.ylabel('Bandwidth (MB/s)', fontsize=14)

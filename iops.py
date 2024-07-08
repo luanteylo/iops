@@ -48,8 +48,9 @@ app_description = f"""
 
      
     Authors:     
-    Luan Teylo (2023)
-    
+    Luan Teylo (2023-)
+    Francieli Boito (2024-)
+    Mahamat Abdraman (2024-)    
     """
 
 
@@ -61,11 +62,12 @@ def run(config: IOPSConfig) ->  Report:
     :return:
     """
     report = Report(config, 1, "IOPS Report") 
-
     
-    
-    for io_pattern, file_mode in config.io_patterns:
-        parameters = {TestType.FILESIZE: config.min_volume, TestType.STRIPING: 0, TestType.COMPUTING: config.min_nodes}        
+    for io_pattern, file_mode in config.io_patterns:        
+        parameters = {TestType.FILESIZE: config.min_volume, 
+                      TestType.STRIPING: 0, 
+                      TestType.COMPUTING: config.min_nodes}
+                
         for test_type in config.tests:
             current_round = Round.factory(pattern=io_pattern,
                                           file_mode=file_mode, 

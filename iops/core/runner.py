@@ -90,7 +90,7 @@ class Runner:
                 while True:
                     test = round.next(console)  # Move to the next test in the round.            
                     if test:
-                        Runner._run(test)  # Execute the test using the static method.
+                        Runner._run(test)  # Execute the test using the static method.                        
                         progress.update(round_task, advance=1)  # Update the progress bar.
                     else:
                         break  # Exit the loop if there are no more tests.

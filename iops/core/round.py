@@ -68,21 +68,26 @@ class Round:
                 # if not in debug mode, execute the script
                 result = subprocess.run(args, check=True)
                 if result.returncode != 0:
-                    raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")            
+                    raise Exception(f"Error: Script {self.config.ior_2_csv} finished with a non-zero return code: {result.returncode}")        
+                # load the csv file into a pandas dataframe
+                self.df = pd.read_csv(self.csv_file)    
             else: 
                 # DEBUG MODE
+                self.df = pd.DataFrame()
+                for test in self.all_tests:
+                    if test.number_of_executions > 0:
+                        self.df = pd.concat([self.df, test.df])                        
                 # if in regular mode, we check if the csv file do not exist than we generate it by reading the all csv files in the round folder
-                if not self.csv_file.exists():
+                #if not self.csv_file.exists():
                     # get all csv files in the round folder (recursive considering all folders)
-                    csv_files = list(self.round_path.rglob("*.csv"))                    
+                #    csv_files = list(self.round_path.rglob("*.csv"))                    
                     # concatenate the csv files
-                    df = pd.concat([pd.read_csv(f) for f in csv_files])
+                #    df = pd.concat([pd.read_csv(f) for f in csv_files])
                     # save the csv file
-                    df.to_csv(self.csv_file, index=False)
+                self.df.to_csv(self.csv_file, index=False)
                     
                     
-            # load the csv file into a pandas dataframe
-            self.df = pd.read_csv(self.csv_file)
+            
             # generate the graph
             Graphs.generate(self.df, self.graph_file, self.test_type)
             # load the best test
@@ -220,9 +225,6 @@ class RoundBinary(Round):
         self.tests_already_run = []
         self.tests_to_run = []
         self.repetition = 1
-
-
-
         
     def binary_search(self) -> list:
         if self.tests_already_run == []:
@@ -257,7 +259,6 @@ class RoundBinary(Round):
                 return [self.all_tests[self.left], self.all_tests[self.right]]            
         else:
             return None
-    
     
     def next(self, console: Console) -> Test:
 
