@@ -138,6 +138,14 @@ conda env create -f environment.yml
 
 This will create a new Conda environment and install all the dependencies listed in the `environment.yml` file.
 
+#### 2.1 Set the IOPS_HOME env variable in conda
+
+```bash
+conda env config vars set IOPS_HOME=/path/to/iops -n your_environment_name
+```
+Replace `/path/to/iops` with the actual path you want to set for IOPS_HOME
+And then activate your conda environnment as below.
+
 #### 3. Activate the Environment
 
 Activate your new Conda environment with:
