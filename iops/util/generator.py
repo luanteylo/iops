@@ -39,11 +39,8 @@ class Generator:
             'min_volume': '1024  # Minimum volume size in megabytes. Must be a power of 2 and less than max_volume',
             'max_volume':  '8192 # Maximum volume size in megabytes (limits the size of the benchmarked file). Must be a power of 2.',
             'volume_step': f'1024 # Step size for increasing volume in megabytes. Accepted values are: {VolumeValidation.VALID_VOLUME_STEPS}\n',
-            'stripe_folders': "ost_1, ost_2, ost_4, ost_8 # List of folders with different striping setups.\n" \
-            "# If 'None' is provided, the striping test will not be executed.\n" \
-            "# These folders should be created manually inside the benchmark_output directory using the file system utility\n"\
-            "# to set the correct striping setup. The folders should be sequentially numbered (higher numbers imply more OSTs).\n"\
-            "# Using the number of OSTs as the folder name is a good practice. Improper setup may cause striping graph issues.\n"
+            'default_stripe': '1 # Default striping value to use for the striping test.',
+            'stripe_folders': "folder1:1, folder2:2, folder3:3 # List of folders to use for the striping test. Each folder is defined by folder_name:stripe_value.\n" \
         }
 
         config_execution['execution'] = {

@@ -45,7 +45,9 @@ class IOPSConfig:
         self.min_volume = None
         self.max_volume = None
         self.volume_step = None
-        self.stripe_folders = None       
+        self.default_stripe = None
+        self.stripe_folders = None
+        self.stripe_counts = None      
 
         # Execution configuration
         self.mode = None
@@ -181,6 +183,7 @@ class IOPSConfig:
         self.min_volume = int(self.__get("storage", "min_volume"))
         self.max_volume = int(self.__get("storage", "max_volume"))
         self.volume_step = int(self.__get("storage", "volume_step"))
+        self.default_stripe = int(self.__get("storage", "default_stripe"))
         stripe_folders_str =  self.__get("storage", "stripe_folders")
         
         if not self.filesystem_dir.is_dir():
@@ -220,15 +223,47 @@ class IOPSConfig:
         if stripe_folders_str.lower() == 'none':
             self.stripe_folders = None
         else:
-            self.stripe_folders = [Path(stripe.strip()) for stripe in stripe_folders_str.split(',')]
-            # check if the stripe_folders are valid
+            # split the stripe_folders string and remove the white spaces
+            self.stripe_folders = [folder.strip() for folder in stripe_folders_str.split(',')]
+                    
+            # check if two folders have the same stripe count
+            stripe_dict = {}
             for folder in self.stripe_folders:
-                full_path = self.filesystem_dir / folder
-                if full_path.is_dir() == False:
+                name, count = folder.split(":")
+                count = int(count)
+                
+                if name in stripe_dict:
+                    if stripe_dict[name] != count:
+                        self.errors.append(self.__format_error(section="storage",
+                                                       key="stripe_folders",
+                                                       value=self.stripe_folders,
+                                                       custom_message="Different stripe count for the same folder."))
+                else:
+                    stripe_dict[name] = count
+            # check if the default stripe correspond to a valid stripe folder
+            if self.default_stripe not in stripe_dict.values():
+                self.errors.append(self.__format_error(section="storage",
+                                                       key="default_stripe",
+                                                       value=self.default_stripe,
+                                                       custom_message="Default stripe count not found in stripe_folders."))
+            # order the stripe_folders by the stripe count
+            self.stripe_folders = sorted(self.stripe_folders, key=lambda x: int(x.split(":")[1]))
+            # print("stripe_folders", self.stripe_folders)
+            # print("stripe_count dic",stripe_dict)
+            
+            # check if the stripe_folders are valid
+            for stripe in self.stripe_folders:
+                stripe = stripe.split(":")
+                if not Path(self.filesystem_dir / stripe[0]).is_dir():
                     self.errors.append(self.__format_error(section="storage",
-                                                          key="stripe_folders",
-                                                          value=full_path,
-                                                          custom_message="Invalid path."))
+                                                       key="stripe_folders",
+                                                       value=self.stripe_folders,
+                                                       custom_message="Invalid path."))
+                
+            # retrive the stripe counts
+            self.stripe_counts = [int(stripe.split(":")[1]) for stripe in self.stripe_folders]
+            # remove the stripe count from the stripe_folders
+            self.stripe_folders = [stripe.split(":")[0] for stripe in self.stripe_folders]
         
     def load_execution(self):                
         self.mode = self.__get("execution", "mode").lower()

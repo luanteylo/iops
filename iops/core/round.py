@@ -47,7 +47,9 @@ class Round:
         self.all_tests : List[Test] = []
         self.current_pos = 0
         self.repetition = 0
-        
+
+        # current folder
+        self.current_folder = 0        
         # generate all tests
         self.__generate_all_tests()
 
@@ -142,7 +144,8 @@ class Round:
 
             if self.test_type == TestType.STRIPING:            
                 if next_test.folder_index < len(self.config.stripe_folders) - 1:
-                    next_test.test_parameters[TestType.STRIPING] += 1
+                    next_test.test_parameters[TestType.STRIPING] = self.config.stripe_counts[self.current_folder + 1]
+                    self.current_folder += 1
                 else:
                     next_test = None
 
@@ -220,8 +223,6 @@ class RoundBinary(Round):
         self.tests_already_run = []
         self.tests_to_run = []
         self.repetition = 1
-
-
 
         
     def binary_search(self) -> list:
