@@ -65,7 +65,7 @@ def run(config: IOPSConfig) ->  Report:
     
     
     for io_pattern, file_mode in config.io_patterns:
-        parameters = {TestType.FILESIZE: config.min_volume, TestType.STRIPING: 0, TestType.COMPUTING: config.min_nodes}        
+        parameters = {TestType.FILESIZE: config.min_volume, TestType.STRIPING: config.default_stripe, TestType.COMPUTING: config.min_nodes}        
         for test_type in config.tests:
             current_round = Round.factory(pattern=io_pattern,
                                           file_mode=file_mode, 

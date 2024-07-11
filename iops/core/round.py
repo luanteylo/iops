@@ -143,9 +143,10 @@ class Round:
                     next_test = None # no more tests to run        
 
             if self.test_type == TestType.STRIPING:            
-                if next_test.folder_index < len(self.config.stripe_folders) - 1:
-                    next_test.test_parameters[TestType.STRIPING] = self.config.stripe_counts[self.current_folder + 1]
-                    self.current_folder += 1
+                if next_test.folder_index > self.config.default_stripe:
+                    next_index = (self.config.default_stripe + 1) % len(self.config.stripe_folders)
+                    next_test.test_parameters[TestType.STRIPING] = self.config.stripe_folders[next_index + 1]
+                    self.current_folder = next_index
                 else:
                     next_test = None
 

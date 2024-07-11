@@ -223,47 +223,27 @@ class IOPSConfig:
         if stripe_folders_str.lower() == 'none':
             self.stripe_folders = None
         else:
-            # split the stripe_folders string and remove the white spaces
             self.stripe_folders = [folder.strip() for folder in stripe_folders_str.split(',')]
-                    
-            # check if two folders have the same stripe count
-            stripe_dict = {}
-            for folder in self.stripe_folders:
-                name, count = folder.split(":")
-                count = int(count)
-                
-                if name in stripe_dict:
-                    if stripe_dict[name] != count:
-                        self.errors.append(self.__format_error(section="storage",
-                                                       key="stripe_folders",
-                                                       value=self.stripe_folders,
-                                                       custom_message="Different stripe count for the same folder."))
-                else:
-                    stripe_dict[name] = count
-            # check if the default stripe correspond to a valid stripe folder
-            if self.default_stripe not in stripe_dict.values():
+            # check if the default stripe is in the stripe folders
+            if self.default_stripe not in range(len(self.stripe_folders)):
                 self.errors.append(self.__format_error(section="storage",
                                                        key="default_stripe",
                                                        value=self.default_stripe,
-                                                       custom_message="Default stripe count not found in stripe_folders."))
-            # order the stripe_folders by the stripe count
-            self.stripe_folders = sorted(self.stripe_folders, key=lambda x: int(x.split(":")[1]))
-            # print("stripe_folders", self.stripe_folders)
-            # print("stripe_count dic",stripe_dict)
-            
-            # check if the stripe_folders are valid
-            for stripe in self.stripe_folders:
-                stripe = stripe.split(":")
-                if not Path(self.filesystem_dir / stripe[0]).is_dir():
-                    self.errors.append(self.__format_error(section="storage",
+                                                       custom_message="Invalid stripe folder index."))
+            # check if the stripe folders are unique
+            if len(self.stripe_folders) != len(set(self.stripe_folders)):
+                self.errors.append(self.__format_error(section="storage",
                                                        key="stripe_folders",
                                                        value=self.stripe_folders,
-                                                       custom_message="Invalid path."))
-                
-            # retrive the stripe counts
-            self.stripe_counts = [int(stripe.split(":")[1]) for stripe in self.stripe_folders]
-            # remove the stripe count from the stripe_folders
-            self.stripe_folders = [stripe.split(":")[0] for stripe in self.stripe_folders]
+                                                       custom_message="Stripe folders must be unique."))
+            # check if the folders exist
+            for folder in self.stripe_folders:
+                if not (self.filesystem_dir / folder).is_dir():
+                    self.errors.append(self.__format_error(section="storage",
+                                                           key="stripe_folders",
+                                                           value=self.stripe_folders,
+                                                           custom_message="Folder not found."))
+            
         
     def load_execution(self):                
         self.mode = self.__get("execution", "mode").lower()
@@ -353,13 +333,13 @@ class IOPSConfig:
                                                        custom_message=str(e)))
         
         # check if  the tests pattern is valid considering the execution mode
-        if self.job_manager == jobManager.LOCAL:
-            for test in self.tests:
-                if test in [TestType.COMPUTING, TestType.STRIPING]:
-                    self.errors.append(self.__format_error(section="execution",
-                                                       key="tests",
-                                                       value=f"{test.name}",
-                                                       custom_message=f"Test Type {test.name} is not allowed when using {self.job_manager.name} job manager."))
+        # if self.job_manager == jobManager.LOCAL:
+        #     for test in self.tests:
+        #         if test in [TestType.COMPUTING, TestType.STRIPING]:
+        #             self.errors.append(self.__format_error(section="execution",
+        #                                                key="tests",
+        #                                                value=f"{test.name}",
+        #                                                custom_message=f"Test Type {test.name} only filesize test is allowed when using {self.job_manager.name} job manager."))
         # Parse and load the modules
         if modules_str.lower() == 'none':
             self.modules = None
