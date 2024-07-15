@@ -60,7 +60,7 @@ class Test(ABC):
         return self.test_parameters[TestType.FILESIZE]
     
     @property
-    def folder_index(self) -> int:
+    def folder_index(self) -> Path:
         """
         The index of the directory within the storage hierarchy where the test files will be placed.
         """
@@ -207,7 +207,7 @@ class TestIORSeq(Test):
         ior_command += f" -O summaryFile={self.summary_file}" # Path where the output will be written 
         ior_command += f" -O summaryFormat=default"
         # Path where the output will be written 
-        ior_command += f" -o {self.config.get_stripe_folder(self.folder_index)}/test{self.test_id}.ior"
+        ior_command += f" -o {self.folder_index}/test{self.test_id}.ior"
         
         return ior_command
 
@@ -283,7 +283,7 @@ class TestIORRandom(Test):
         ior_command += f" -O summaryFile={self.summary_file}" # Path where the output will be written 
         ior_command += f" -O summaryFormat=default"
         # Path where the output will be written 
-        ior_command += f" -o {self.config.get_stripe_folder(self.folder_index)}/test{self.test_id}.ior"
+        ior_command += f" -o {self.folder_index}/test{self.test_id}.ior"
         
         return ior_command
 
