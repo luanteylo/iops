@@ -39,8 +39,8 @@ class Generator:
             'min_volume': '1024  # Minimum volume size in megabytes. Must be a power of 2 and less than max_volume',
             'max_volume':  '8192 # Maximum volume size in megabytes (limits the size of the benchmarked file). Must be a power of 2.',
             'volume_step': f'1024 # Step size for increasing volume in megabytes. Accepted values are: {VolumeValidation.VALID_VOLUME_STEPS}\n',
-            'default_stripe': '1 # Default striping value to use for the striping test.',
-            'stripe_folders': "folder1:1, folder2:2, folder3:3 # List of folders to use for the striping test. Each folder is defined by folder_name:stripe_value.\n" \
+            'default_stripe': '0 # Default striping value to use for the striping test.',
+            'stripe_folders': "folder1, folder2, folder3, folder4 # List of folders to use for the striping test in any order.\n" \
         }
 
         config_execution['execution'] = {
