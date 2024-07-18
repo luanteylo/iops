@@ -89,8 +89,8 @@ class Runner:
                 while True:
                     test = round.next(console)  # Move to the next test in the round.            
                     if test:
-                        if round.config.mode is ExecutionMode.STAGGED: # if the execution mode is STAGGED, wait the interval time between each test
-                            if round.config.wait_range[0] == round.config.wait_range[1] == 0: # no wait time between tests
+                        if round.config.mode is ExecutionMode.STAGGERED: # if the execution mode is STAGGED, wait the interval time between each test
+                            if round.config.wait_range[0] == round.config.wait_range[1] == 0: # no wait time between tests when [0,0] time interval is given
                                 Runner._run(test)
                             else:
                                 wait_time =  random.randrange(round.config.wait_range[0],round.config.wait_range[1])

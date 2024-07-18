@@ -32,7 +32,6 @@ class Submitter:
         return result
     
     def wait(interval: int):
-        print(f"Waiting for {interval} seconds")
         time.sleep(interval)
         return
             

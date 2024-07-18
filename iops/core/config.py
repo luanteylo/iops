@@ -365,6 +365,7 @@ class IOPSConfig:
                                                    key="repetitions",
                                                    value=self.repetitions,
                                                    custom_message="Must be greater than zero."))
+        # wait time between test execution 
         if wait_range_str.lower() == 'none':
             self.wait_range = None
         else:
@@ -375,17 +376,24 @@ class IOPSConfig:
                                                        key="wait_range",
                                                        value=self.wait_range,
                                                        custom_message="Invalid wait range."))
+
             if self.wait_range[0] < 0 or self.wait_range[1] < 0:
                 self.errors.append(self.__format_error(section="execution",
                                                        key="wait_range",
                                                        value=self.wait_range,
                                                        custom_message="Wait range must be greater than zero."))
+
+            if self.wait_range[0] == self.wait_range[1]:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="wait_range",
+                                                       value=self.wait_range,
+                                                       custom_message=f"Invalid wait range: {self.wait_range[0]} should be different than {self.wait_range[1]}"))
+
             if self.wait_range[0] > self.wait_range[1]:
                 self.errors.append(self.__format_error(section="execution",
                                                        key="wait_range",
                                                        value=self.wait_range,
-                                                       custom_message="Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
-        print("wait range", self.wait_range)
+                                                       custom_message=f"Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
 
         
 
