@@ -58,6 +58,7 @@ class IOPSConfig:
         self.workdir = None
         self.repetitions = None
         self.tests = None
+        self.wait_range = None
 
         # Templates & scripts
         self.slurm_template = None
@@ -219,7 +220,6 @@ class IOPSConfig:
                                                    custom_message=f"Must be one of the following values: {VolumeValidation.VALID_VOLUME_STEPS}."))
 
         # check stripe_folders
-        # Parse and load the modules
         if stripe_folders_str.lower() == 'none':
             self.stripe_folders = None
         else:
@@ -255,6 +255,7 @@ class IOPSConfig:
         self.repetitions = int(self.__get("execution", "repetitions"))
         self.tests = self.__get("execution", "tests")
         self.io_patterns = self.__get("execution", "io_patterns")
+        wait_range_str = self.__get("execution", "wait_range")
         # check if the environment variable IOPS_HOME is set
         self.iops_home = os.getenv("IOPS_HOME")
         if self.iops_home is None:
@@ -364,6 +365,29 @@ class IOPSConfig:
                                                    key="repetitions",
                                                    value=self.repetitions,
                                                    custom_message="Must be greater than zero."))
+        if wait_range_str.lower() == 'none':
+            self.wait_range = None
+        else:
+            self.wait_range = [int(wait.strip()) for wait in wait_range_str.split(',')]
+            # check the wait range
+            if len(self.wait_range) != 2:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="wait_range",
+                                                       value=self.wait_range,
+                                                       custom_message="Invalid wait range."))
+            if self.wait_range[0] < 0 or self.wait_range[1] < 0:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="wait_range",
+                                                       value=self.wait_range,
+                                                       custom_message="Wait range must be greater than zero."))
+            if self.wait_range[0] > self.wait_range[1]:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="wait_range",
+                                                       value=self.wait_range,
+                                                       custom_message="Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
+        print("wait range", self.wait_range)
+
+        
 
     def load_templates(self):
         slurm_template_str = os.path.expandvars(self.__get("template", "slurm_template"))
@@ -419,13 +443,8 @@ class IOPSConfig:
             self.errors.append(self.__format_error(section="template",
                                                    key="local_template",
                                                    value=self.local_template,
-                                                   custom_message="When using local, a template file needs to be provided."))
+                                                   custom_message="When using local, a local template file needs to be provided."))
 
-        # if self.job_manager == jobManager.LOCAL and self.slurm_template != None:
-        #     self.errors.append(self.__format_error(section="template",
-        #                                            key="slurm_template",
-        #                                            value=self.slurm_template,
-        #                                            custom_message="When using local, the slurm template file should be None."))
 
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")

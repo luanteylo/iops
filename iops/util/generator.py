@@ -54,7 +54,8 @@ class Generator:
             'tests': 'filesize, computing, striping # List of tests to execute. Supported tests: filesize, computing, striping',            
             'io_patterns': 'sequential:shared, random:shared # List of IO patterns to execute. Each pattern is defined by access_pattern:file_access.\n' \
             '             # Access pattern can be sequential or random. File access can be single (one file per process) or shared (all processes access the same file).\n' \
-            '             # Each test will be executed with the defined IO patterns. If multiple patterns are defined, tests will be repeated for each pattern.\n' \
+            '             # Each test will be executed with the defined IO patterns. If multiple patterns are defined, tests will be repeated for each pattern.\n',
+            'wait_range': '0, 0 # Range of time to wait between tests in seconds. Use 0, 0 for no wait time between test execution. \n'
         }
 
         config_template['template'] = {

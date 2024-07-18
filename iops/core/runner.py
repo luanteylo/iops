@@ -5,6 +5,7 @@ from iops.util.submitter import Submitter
 from iops.util.tags import  jobManager, ExecutionMode
 
 import sys
+import random
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, TaskProgressColumn
 from rich.panel import Panel
@@ -63,8 +64,6 @@ class Runner:
                 # Exit the script
                 sys.exit(1)
         test.load_results() # load the results of the test
-                
-            
 
     @staticmethod
     def run(round: Round) -> Round:
@@ -90,7 +89,15 @@ class Runner:
                 while True:
                     test = round.next(console)  # Move to the next test in the round.            
                     if test:
-                        Runner._run(test)  # Execute the test using the static method.
+                        if round.config.mode is ExecutionMode.STAGGED: # if the execution mode is STAGGED, wait the interval time between each test
+                            if round.config.wait_range[0] == round.config.wait_range[1] == 0: # no wait time between tests
+                                Runner._run(test)
+                            else:
+                                wait_time =  random.randrange(round.config.wait_range[0],round.config.wait_range[1])
+                                Submitter.wait(wait_time)
+                                Runner._run(test)
+                        else:
+                            Runner._run(test)  # Execute the test using the static method.
                         progress.update(round_task, advance=1)  # Update the progress bar.
                     else:
                         break  # Exit the loop if there are no more tests.

@@ -1,3 +1,4 @@
+import time
 import subprocess
 from pathlib import Path
 
@@ -29,6 +30,11 @@ class Submitter:
     def stop_slurm():
         result = subprocess.run("scancel -u $USER", shell=True, capture_output=True)
         return result
+    
+    def wait(interval: int):
+        print(f"Waiting for {interval} seconds")
+        time.sleep(interval)
+        return
             
 
         
