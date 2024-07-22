@@ -382,13 +382,7 @@ class IOPSConfig:
                                                        key="wait_range",
                                                        value=self.wait_range,
                                                        custom_message="Wait range must be greater than zero."))
-
-            if self.wait_range[0] == self.wait_range[1]:
-                self.errors.append(self.__format_error(section="execution",
-                                                       key="wait_range",
-                                                       value=self.wait_range,
-                                                       custom_message=f"Invalid wait range: {self.wait_range[0]} should be different than {self.wait_range[1]}"))
-
+            
             if self.wait_range[0] > self.wait_range[1]:
                 self.errors.append(self.__format_error(section="execution",
                                                        key="wait_range",
@@ -569,5 +563,17 @@ class IOPSConfig:
         if self.stripe_folders is None or index >= len(self.stripe_folders):
             return None
         return self.filesystem_dir / self.stripe_folders[index]
+    
+    @property
+    def wait_start(self):
+        if self.wait_range is None:
+            return 0
+        return self.wait_range[0]
+    
+    @property
+    def wait_end(self):
+        if self.wait_range is None:
+            return 0
+        return self.wait_range[1]
 
         

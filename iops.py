@@ -49,6 +49,8 @@ app_description = f"""
      
     Authors:     
     Luan Teylo (2023)
+    Francieli Boito (2024-)
+    Mahamat Abdraman (2024-)   
     
     """
 

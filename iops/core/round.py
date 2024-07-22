@@ -48,8 +48,6 @@ class Round:
         self.current_pos = 0
         self.repetition = 0
 
-        # current folder
-        self.current_folder = 0
         # next index set to default stripe index
         self.next_index = self.config.default_stripe
         # generate all tests
@@ -147,8 +145,7 @@ class Round:
             if self.test_type == TestType.STRIPING:
                 self.next_index = (self.next_index + 1) % len(self.config.stripe_folders)
                 if self.next_index != self.config.default_stripe:
-                    next_test.test_parameters[TestType.STRIPING] = self.config.get_stripe_folder(self.next_index)
-                    self.current_folder = 0                    
+                    next_test.test_parameters[TestType.STRIPING] = self.config.get_stripe_folder(self.next_index)             
                 else:
                     next_test = None
 
