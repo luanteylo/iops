@@ -65,7 +65,7 @@ def run(config: IOPSConfig) ->  Report:
     
     for io_pattern, file_mode in config.io_patterns:        
         parameters = {TestType.FILESIZE: config.min_volume, 
-                      TestType.STRIPING: 0, 
+                      TestType.STRIPING: config.get_stripe_folder(config.default_stripe), 
                       TestType.COMPUTING: config.min_nodes}
                 
         for test_type in config.tests:

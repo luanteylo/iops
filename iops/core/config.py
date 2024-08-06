@@ -225,7 +225,7 @@ class IOPSConfig:
         else:
             self.stripe_folders = [folder.strip() for folder in stripe_folders_str.split(',')]
             # check if the default stripe is in the stripe folders
-            if self.default_stripe not in range(len(self.stripe_folders)):
+            if self.default_stripe >= len(self.stripe_folders) or self.default_stripe < 0:
                 self.errors.append(self.__format_error(section="storage",
                                                        key="default_stripe",
                                                        value=self.default_stripe,
@@ -488,6 +488,7 @@ class IOPSConfig:
         table.add_row("Max Nodes", str(self.max_nodes))        
         table.add_row("Processes Per Node", str(self.processes_per_node))
 
+
         # Create a table for storage information
         table.add_row("")
         table.add_row("File System Dir:", str(self.filesystem_dir))      
@@ -499,6 +500,7 @@ class IOPSConfig:
         if stripe_folders is not None:        
             stripe_folders = ", ".join(f"{stripe}" for stripe in self.stripe_folders)
         table.add_row("Stripe Folders", str(stripe_folders))
+        table.add_row("Default Stripe", self.stripe_folders[self.default_stripe])
 
 
         # Create a table for execution information
@@ -506,6 +508,7 @@ class IOPSConfig:
         table.add_row("Mode", self.mode.name)    
         table.add_row("Search Method", self.search_method.name)
         table.add_row("Job Manager", self.job_manager.name)
+
         
         
         modules = self.modules
@@ -516,6 +519,7 @@ class IOPSConfig:
         table.add_row("Tests", ", ".join([f"{test.name}" for test in self.tests]  ))
         table.add_row("IO Patterns", ", ".join([f"{pattern[0].name}:{pattern[1].name}" for pattern in self.io_patterns]))
         table.add_row("Repetitions", str(self.repetitions))
+        table.add_row("Wait Range", str(self.wait_range))
 
         table.add_row("")  
         table.add_row("Slurm Template", str(self.slurm_template))
