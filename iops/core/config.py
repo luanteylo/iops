@@ -1,5 +1,6 @@
 import configparser
 import re
+import os
 from rich.console import Console
 from rich.traceback import install
 from pathlib import Path
@@ -44,7 +45,9 @@ class IOPSConfig:
         self.min_volume = None
         self.max_volume = None
         self.volume_step = None
-        self.stripe_folders = None       
+        self.default_stripe = None
+        self.stripe_folders = None
+        self.stripe_counts = None      
 
         # Execution configuration
         self.mode = None
@@ -55,6 +58,7 @@ class IOPSConfig:
         self.workdir = None
         self.repetitions = None
         self.tests = None
+        self.wait_range = None
 
         # Templates & scripts
         self.slurm_template = None
@@ -69,8 +73,10 @@ class IOPSConfig:
         # local the configuration (for now)
         self.local_template = None
 
-        # static parameters
+        # environment variable to point the iops directory
+        self.iops_home = None
 
+        # static parameters
         self.static_bw_alpha = 10 # 10 mbps
 
         self.errors = []
@@ -178,6 +184,7 @@ class IOPSConfig:
         self.min_volume = int(self.__get("storage", "min_volume"))
         self.max_volume = int(self.__get("storage", "max_volume"))
         self.volume_step = int(self.__get("storage", "volume_step"))
+        self.default_stripe = int(self.__get("storage", "default_stripe"))
         stripe_folders_str =  self.__get("storage", "stripe_folders")
         
         if not self.filesystem_dir.is_dir():
@@ -213,19 +220,30 @@ class IOPSConfig:
                                                    custom_message=f"Must be one of the following values: {VolumeValidation.VALID_VOLUME_STEPS}."))
 
         # check stripe_folders
-        # Parse and load the modules
         if stripe_folders_str.lower() == 'none':
             self.stripe_folders = None
         else:
-            self.stripe_folders = [Path(stripe.strip()) for stripe in stripe_folders_str.split(',')]
-            # check if the stripe_folders are valid
+            self.stripe_folders = [folder.strip() for folder in stripe_folders_str.split(',')]
+            # check if the default stripe is in the stripe folders
+            if self.default_stripe not in range(len(self.stripe_folders)):
+                self.errors.append(self.__format_error(section="storage",
+                                                       key="default_stripe",
+                                                       value=self.default_stripe,
+                                                       custom_message="Invalid stripe folder index."))
+            # check if the stripe folders are unique
+            if len(self.stripe_folders) != len(set(self.stripe_folders)):
+                self.errors.append(self.__format_error(section="storage",
+                                                       key="stripe_folders",
+                                                       value=self.stripe_folders,
+                                                       custom_message="Stripe folders must be unique."))
+            # check if the folders exist
             for folder in self.stripe_folders:
-                full_path = self.filesystem_dir / folder
-                if full_path.is_dir() == False:
+                if not (self.filesystem_dir / folder).is_dir():
                     self.errors.append(self.__format_error(section="storage",
-                                                          key="stripe_folders",
-                                                          value=full_path,
-                                                          custom_message="Invalid path."))
+                                                           key="stripe_folders",
+                                                           value=self.stripe_folders,
+                                                           custom_message="Folder not found."))
+            
         
     def load_execution(self):                
         self.mode = self.__get("execution", "mode").lower()
@@ -236,8 +254,15 @@ class IOPSConfig:
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
         self.tests = self.__get("execution", "tests")
-        self.io_patterns = self.__get("execution", "io_patterns")   
-
+        self.io_patterns = self.__get("execution", "io_patterns")
+        wait_range_str = self.__get("execution", "wait_range")
+        # check if the environment variable IOPS_HOME is set
+        self.iops_home = os.getenv("IOPS_HOME")
+        if self.iops_home is None:
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="iops_home",
+                                                   value=self.iops_home,
+                                                   custom_message="Environment variable IOPS_HOME is not set."))
                 
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
@@ -315,7 +340,7 @@ class IOPSConfig:
                     self.errors.append(self.__format_error(section="execution",
                                                        key="tests",
                                                        value=f"{test.name}",
-                                                       custom_message=f"Test Type {test.name} is not allowed when using {self.job_manager.name} job manager."))
+                                                       custom_message=f"Test Type {test.name} only filesize test is allowed when using {self.job_manager.name} job manager."))
         # Parse and load the modules
         if modules_str.lower() == 'none':
             self.modules = None
@@ -340,12 +365,38 @@ class IOPSConfig:
                                                    key="repetitions",
                                                    value=self.repetitions,
                                                    custom_message="Must be greater than zero."))
+        # wait time between test execution 
+        if wait_range_str.lower() == 'none':
+            self.wait_range = None
+        else:
+            self.wait_range = [int(wait.strip()) for wait in wait_range_str.split(',')]
+            # check the wait range
+            if len(self.wait_range) != 2:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="wait_range",
+                                                       value=self.wait_range,
+                                                       custom_message="Invalid wait range."))
+
+            if self.wait_range[0] < 0 or self.wait_range[1] < 0:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="wait_range",
+                                                       value=self.wait_range,
+                                                       custom_message="Wait range must be greater than zero."))
+            
+            if self.wait_range[0] > self.wait_range[1]:
+                self.errors.append(self.__format_error(section="execution",
+                                                       key="wait_range",
+                                                       value=self.wait_range,
+                                                       custom_message=f"Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
+
+        
 
     def load_templates(self):
-        slurm_template_str = self.__get("template", "slurm_template")
-        local_template_str = self.__get("template", "local_template")
+        slurm_template_str = os.path.expandvars(self.__get("template", "slurm_template"))
+        local_template_str = os.path.expandvars(self.__get("template", "local_template"))
 
-        self.report_template = Path(self.__get("template", "report_template"))        
+        self.report_template = os.path.expandvars(self.__get("template", "report_template"))    
+        self.report_template = Path(self.report_template)    
         self.ior_2_csv = Path(self.__get("template", "ior_2_csv"))        
 
         # check template file
@@ -354,7 +405,7 @@ class IOPSConfig:
         else:
             self.slurm_template = Path(slurm_template_str)
             # check if file exist
-            if not self.slurm_template.is_file():
+            if not self.slurm_template.is_file:
                 self.errors.append(self.__format_error(section="template",
                                                        key="slurm_template",
                                                        value=self.slurm_template,
@@ -394,13 +445,8 @@ class IOPSConfig:
             self.errors.append(self.__format_error(section="template",
                                                    key="local_template",
                                                    value=self.local_template,
-                                                   custom_message="When using local, a template file needs to be provided."))
+                                                   custom_message="When using local, a local template file needs to be provided."))
 
-        # if self.job_manager == jobManager.LOCAL and self.slurm_template != None:
-        #     self.errors.append(self.__format_error(section="template",
-        #                                            key="slurm_template",
-        #                                            value=self.slurm_template,
-        #                                            custom_message="When using local, the slurm template file should be None."))
 
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")
@@ -517,5 +563,17 @@ class IOPSConfig:
         if self.stripe_folders is None or index >= len(self.stripe_folders):
             return None
         return self.filesystem_dir / self.stripe_folders[index]
+    
+    @property
+    def wait_start(self):
+        if self.wait_range is None:
+            return 0
+        return self.wait_range[0]
+    
+    @property
+    def wait_end(self):
+        if self.wait_range is None:
+            return 0
+        return self.wait_range[1]
 
         

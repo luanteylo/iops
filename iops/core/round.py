@@ -47,7 +47,9 @@ class Round:
         self.all_tests : List[Test] = []
         self.current_pos = 0
         self.repetition = 0
-        
+
+        # next index set to default stripe index
+        self.next_index = self.config.default_stripe
         # generate all tests
         self.__generate_all_tests()
 
@@ -145,9 +147,10 @@ class Round:
                 else:
                     next_test = None # no more tests to run        
 
-            if self.test_type == TestType.STRIPING:            
-                if next_test.folder_index < len(self.config.stripe_folders) - 1:
-                    next_test.test_parameters[TestType.STRIPING] += 1
+            if self.test_type == TestType.STRIPING:
+                self.next_index = (self.next_index + 1) % len(self.config.stripe_folders)
+                if self.next_index != self.config.default_stripe:
+                    next_test.test_parameters[TestType.STRIPING] = self.config.get_stripe_folder(self.next_index)             
                 else:
                     next_test = None
 
@@ -161,7 +164,7 @@ class Round:
             return self.best_parameter 
         elif self.test_type == TestType.STRIPING:
             folder_path = Path(Path(self.best_parameter).parent.name)
-            return self.config.stripe_folders.index(folder_path)
+            return folder_path
         else:
             raise Exception("Error: Test type not supported")
     

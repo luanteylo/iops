@@ -39,11 +39,8 @@ class Generator:
             'min_volume': '1024  # Minimum volume size in megabytes. Must be a power of 2 and less than max_volume',
             'max_volume':  '8192 # Maximum volume size in megabytes (limits the size of the benchmarked file). Must be a power of 2.',
             'volume_step': f'1024 # Step size for increasing volume in megabytes. Accepted values are: {VolumeValidation.VALID_VOLUME_STEPS}\n',
-            'stripe_folders': "ost_1, ost_2, ost_4, ost_8 # List of folders with different striping setups.\n" \
-            "# If 'None' is provided, the striping test will not be executed.\n" \
-            "# These folders should be created manually inside the benchmark_output directory using the file system utility\n"\
-            "# to set the correct striping setup. The folders should be sequentially numbered (higher numbers imply more OSTs).\n"\
-            "# Using the number of OSTs as the folder name is a good practice. Improper setup may cause striping graph issues.\n"
+            'default_stripe': '0 # Default striping value to use for the striping test.',
+            'stripe_folders': "folder1, folder2, folder3, folder4 # List of folders to use for the striping test in any order.\n" \
         }
 
         config_execution['execution'] = {
@@ -57,13 +54,14 @@ class Generator:
             'tests': 'filesize, computing, striping # List of tests to execute. Supported tests: filesize, computing, striping',            
             'io_patterns': 'sequential:shared, random:shared # List of IO patterns to execute. Each pattern is defined by access_pattern:file_access.\n' \
             '             # Access pattern can be sequential or random. File access can be single (one file per process) or shared (all processes access the same file).\n' \
-            '             # Each test will be executed with the defined IO patterns. If multiple patterns are defined, tests will be repeated for each pattern.\n'
+            '             # Each test will be executed with the defined IO patterns. If multiple patterns are defined, tests will be repeated for each pattern.\n',
+            'wait_range': '0, 0 # Range of time to wait between tests in seconds. Use 0, 0 for no wait time between test execution. \n'
         }
 
         config_template['template'] = {
-            'slurm_template': 'iops/templates/slurm_template.sh.j2 # Template file for Slurm to generate bash scripts. Use None if not using Slurm.',
-            'local_template': 'iops/templates/local_template.sh.j2 # Template for the bash script for local execution.',
-            'report_template': 'iops/templates/report_template.html # Template for the report HTML page.',
+            'slurm_template': '$IOPS_HOME/iops/templates/slurm_template.sh.j2 # Template file for Slurm to generate bash scripts. Use None if not using Slurm.',
+            'local_template': '$IOPS_HOME/iops/templates/local_template.sh.j2 # Template for the bash script for local execution.',
+            'report_template': '$IOPS_HOME/iops/templates/report_template.html # Template for the report HTML page.',
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',            
         }
 

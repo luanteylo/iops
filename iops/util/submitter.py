@@ -1,5 +1,7 @@
+import time
 import subprocess
 from pathlib import Path
+import random
 
 from iops.util.tags import jobManager
 
@@ -29,6 +31,16 @@ class Submitter:
     def stop_slurm():
         result = subprocess.run("scancel -u $USER", shell=True, capture_output=True)
         return result
+    
+    def wait(start_time: int, end_time: int) -> int:
+        wait_time = start_time
+        if start_time !=  end_time:
+             wait_time =  random.randrange(start_time, end_time)                            
+        
+        time.sleep(wait_time)
+        return wait_time
+
+    
             
 
         

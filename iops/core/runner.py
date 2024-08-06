@@ -63,8 +63,6 @@ class Runner:
                 # Exit the script
                 sys.exit(1)
         test.load_results() # load the results of the test
-                
-            
 
     @staticmethod
     def run(round: Round) -> Round:
@@ -90,7 +88,11 @@ class Runner:
                 while True:
                     test = round.next(console)  # Move to the next test in the round.            
                     if test:
-                        Runner._run(test)  # Execute the test using the static method.                        
+                        if round.config.mode is ExecutionMode.STAGGERED: # if the execution mode is STAGGED, wait the interval time between each test
+                            waited_time = Submitter.wait(round.config.wait_start, round.config.wait_end)
+                            console.print(f"Waited {waited_time} seconds before running the next test")
+                            
+                        Runner._run(test)  # Execute the test using the static method.
                         progress.update(round_task, advance=1)  # Update the progress bar.
                     else:
                         break  # Exit the loop if there are no more tests.

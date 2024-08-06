@@ -36,6 +36,7 @@ class ExecutionMode(Enum):
     """
     NORMAL = "normal"
     DEBUG = "debug"
+    STAGGERED = "staggered"
 
 class BenchmarkTool(Enum):
     """
