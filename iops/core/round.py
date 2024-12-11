@@ -163,7 +163,8 @@ class Round:
         elif self.test_type == TestType.FILESIZE:
             return self.best_parameter 
         elif self.test_type == TestType.STRIPING:
-            folder_path = Path(Path(self.best_parameter).parent.name)
+            # get only the path (remove the file)
+            folder_path = Path(Path(self.best_parameter).parent)
             return folder_path
         else:
             raise Exception("Error: Test type not supported")
