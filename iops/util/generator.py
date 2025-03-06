@@ -37,6 +37,7 @@ class Generator:
         }
 
         config_execution['execution'] = {
+            'io_operation': 'write # IO operation to perform. Use "write" for write-only tests, or "write_read" for write-read tests',
             'mode': 'normal # Execution mode. Use "normal" to generate and execute the benchmark scripts, or "debug" to generate the scripts without executing them',
             'search_method' :'greedy # Search method to use. Currently, only greedy is supported',
             'job_manager': 'slurm # Specify the job manager. Use "local" for local execution',

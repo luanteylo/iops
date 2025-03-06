@@ -1,7 +1,7 @@
 from iops.core.config import IOPSConfig
 from iops.core.tests import Test
 from iops.util.generator import Graphs
-from iops.util.tags import TestType, Pattern, FileMode, SearchType, ExecutionMode
+from iops.util.tags import TestType, Pattern, FileMode, SearchType, ExecutionMode, IOoperation
 
 import pandas as pd
 import subprocess
@@ -32,6 +32,8 @@ class Round:
         self.best_bw = None
         self.best_df = None
         self.best_parameter = None
+
+        
         
         self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
         # create the directory
@@ -50,13 +52,11 @@ class Round:
 
         # next index set to default stripe index
         self.next_index = self.config.default_stripe
-        # generate all tests
-        self.__generate_all_tests()
+        self.number_of_tests = 0
 
-        # computing the number of tests
-        self.number_of_tests = len(self.all_tests) * self.config.repetitions
-        
        
+        
+    
     def load_results(self):
         '''
         load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
@@ -100,6 +100,8 @@ class Round:
                 gb = self.df.groupby('aggregate_filesize')
             elif self.test_type == TestType.STRIPING:
                 gb = self.df.groupby('path')
+            elif self.test_type == TestType.NUM_PROCESSES: # num_processes test
+                gb = self.df.groupby('clients_per_node')
             
             # get the best test
             self.best_bw = 0.0
@@ -119,13 +121,14 @@ class Round:
         except Exception as e:
             raise Exception(f"Error: {e}")
     
-    def __generate_all_tests(self):
+    def generate_all_tests(self, operation: IOoperation = IOoperation.WRITE):
 
         next_test =  Test.create_test(pattern=self.pattern,
                                       file_mode=self.file_mode,
                                       config=self.config,
                                       round_path=self.round_path,
-                                      test_parameters=self.initial_parameters)
+                                      test_parameters=self.initial_parameters,
+                                      operation=operation)
         
         while next_test is not None:
 
@@ -152,7 +155,10 @@ class Round:
                 if self.next_index != self.config.default_stripe:
                     next_test.test_parameters[TestType.STRIPING] = self.config.get_stripe_folder(self.next_index)             
                 else:
-                    next_test = None
+                    next_test = None # no more tests to run
+        # computing the number of tests
+        self.number_of_tests = len(self.all_tests) * self.config.repetitions
+
 
     def get_best_parameter(self) -> int | float | None:
         '''
@@ -166,6 +172,8 @@ class Round:
             # get only the path (remove the file)
             folder_path = Path(Path(self.best_parameter).parent)
             return folder_path
+        elif self.test_type == TestType.NUM_PROCESSES:
+            return self.best_parameter
         else:
             raise Exception("Error: Test type not supported")
     
@@ -184,6 +192,42 @@ class Round:
     @abstractmethod
     def next(self, console: Console) -> Test:
         pass
+
+    def build_read_round(self):
+        '''
+        Rebuild the tests for read operation
+        '''
+        type_class = type(self)
+        new_round = type_class(self.pattern, self.file_mode, self.config, self.test_type, self.initial_parameters)
+        
+        
+        for test in self.all_tests:
+            if test.df is not None:
+                test_read = Test.create_test(pattern=self.pattern,
+                                            file_mode=self.file_mode,
+                                            config=self.config,
+                                            round_path=new_round.round_path,
+                                            test_parameters=test.test_parameters,
+                                            operation=IOoperation.READ)
+                
+                test_read.output_file = test.output_file
+                test_read.build_files()
+                
+
+            new_round.all_tests.append(test_read)
+        
+        new_round.number_of_tests = len(new_round.all_tests) * self.config.repetitions
+        return new_round
+        
+
+
+    def delete_readed_files(self):
+        for test in self.all_tests:
+            test.output_file.unlink()   
+
+        
+            
+        
             
     def __repr__(self) -> str:
         return f"Round {self.round_id} \[{self.test_type.name}]\[{self.pattern.name}:{self.file_mode.name}] - up to {self.number_of_tests} tests"

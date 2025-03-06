@@ -13,7 +13,7 @@ from rich.prompt import Prompt
 
 
 from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, TestType, Pattern, FileMode
-from iops.util.tags import VolumeValidation
+from iops.util.tags import VolumeValidation, IOoperation
 from typing import List, Tuple
 
 
@@ -50,6 +50,7 @@ class IOPSConfig:
         self.stripe_counts = None      
 
         # Execution configuration
+        self.io_operation = None
         self.mode = None
         self.search_method = None
         self.job_manager = None
@@ -243,9 +244,9 @@ class IOPSConfig:
                                                            key="stripe_folders",
                                                            value=self.stripe_folders,
                                                            custom_message="Folder not found."))
-            
         
     def load_execution(self):                
+        self.io_operation = self.__get("execution", "io_operation")
         self.mode = self.__get("execution", "mode").lower()
         self.search_method = self.__get("execution", "search_method").lower()
         job_manager_str = self.__get("execution", "job_manager").lower()
@@ -263,7 +264,15 @@ class IOPSConfig:
                                                    key="iops_home",
                                                    value=self.iops_home,
                                                    custom_message="Environment variable IOPS_HOME is not set."))
-                
+
+        if self.io_operation.upper() not in IOoperation.__members__:
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="io_operation",
+                                                   value=self.io_operation,
+                                                   valid_values=IOoperation.__members__.keys()))
+        else:
+            self.io_operation = IOoperation[self.io_operation.upper()]
+
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
                                                    key="mode",
@@ -389,8 +398,6 @@ class IOPSConfig:
                                                        value=self.wait_range,
                                                        custom_message=f"Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
 
-        
-
     def load_templates(self):
         slurm_template_str = os.path.expandvars(self.__get("template", "slurm_template"))
         local_template_str = os.path.expandvars(self.__get("template", "local_template"))
@@ -446,7 +453,6 @@ class IOPSConfig:
                                                    key="local_template",
                                                    value=self.local_template,
                                                    custom_message="When using local, a local template file needs to be provided."))
-
 
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")
@@ -505,6 +511,7 @@ class IOPSConfig:
 
         # Create a table for execution information
         table.add_row("")    
+        table.add_row("IO Operation", self.io_operation.name)
         table.add_row("Mode", self.mode.name)    
         table.add_row("Search Method", self.search_method.name)
         table.add_row("Job Manager", self.job_manager.name)

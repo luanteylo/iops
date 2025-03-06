@@ -8,13 +8,21 @@ class TestType(Enum):
     COMPUTING = "computing"
     STRIPING = "striping"
 
+    
+
+class TestFlags(Enum):
+    """
+    Tags for test flags
+    """
+    KEEP_FILES = "keep_files"
+
+
 class Pattern(Enum):
     """
     Tags for I/O patterns
     """
     SEQUENTIAL = "sequential"
     RANDOM = "random"
-
 
 
 class FileMode(Enum):
@@ -36,7 +44,15 @@ class ExecutionMode(Enum):
     """
     NORMAL = "normal"
     DEBUG = "debug"
-    STAGGERED = "staggered"
+
+class IOoperation(Enum):
+    """
+    Tags for I/O operations
+    """
+    WRITE = "write"
+    WRITE_READ = "write_read"
+    READ = "read"
+    
 
 class BenchmarkTool(Enum):
     """

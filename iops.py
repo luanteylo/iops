@@ -9,7 +9,7 @@ from datetime import datetime
 
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
-from iops.util.tags import TestType
+from iops.util.tags import TestType, TestFlags, IOoperation
 from iops.core.runner import Runner
 from iops.core.round import Round
 from iops.core.config import IOPSConfig
@@ -66,7 +66,8 @@ def run(config: IOPSConfig) ->  Report:
     for io_pattern, file_mode in config.io_patterns:        
         parameters = {TestType.FILESIZE: config.min_volume, 
                       TestType.STRIPING: config.get_stripe_folder(config.default_stripe), 
-                      TestType.COMPUTING: config.min_nodes}
+                      TestType.COMPUTING: config.min_nodes,                      
+                      TestFlags.KEEP_FILES: True if config.io_operation == IOoperation.WRITE_READ else False}        
                 
         for test_type in config.tests:
             current_round = Round.factory(pattern=io_pattern,
@@ -74,6 +75,7 @@ def run(config: IOPSConfig) ->  Report:
                                           config=config, 
                                           test_type=test_type, 
                                           initial_parameters=parameters)
+            current_round.generate_all_tests()
             Runner.run(current_round)
             report.add_round(current_round)
             # build the round
@@ -81,6 +83,14 @@ def run(config: IOPSConfig) ->  Report:
             console.print(f"[bold green]Round {current_round.round_id} completed successfully.")
             console.print(f"[bold green]Best parameter for {test_type.name}: {parameters[test_type]}")
 
+            if config.io_operation == IOoperation.WRITE_READ:
+                read_round = current_round.build_read_round()
+                Runner.run(read_round)
+                report.add_round(read_round)
+                read_round.delete_readed_files()
+                console.print(f"[bold green]Round {current_round.round_id} completed successfully.")
+                console.print(f"[bold green]Best parameter for {test_type.name}: {read_round.get_best_parameter()}")
+                
     console.print(f"[bold green]All rounds completed successfully.")
     return report
 
