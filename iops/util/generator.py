@@ -7,7 +7,7 @@ import matplotlib as mpl
 import seaborn as sns
 from matplotlib.ticker import MaxNLocator
 import re
-from iops.util.tags import TestType, VolumeValidation
+from iops.util.tags import Parameter, VolumeValidation
 
 # Set the backend to Agg to avoid the need for a display when running on a headless server
 mpl.use('Agg')
@@ -37,7 +37,7 @@ class Generator:
         }
 
         config_execution['execution'] = {
-            'io_operation': 'write # IO operation to perform. Use "write" for write-only tests, or "write_read" for write-read tests',
+            'test_type': 'write_only # IO operation to perform. Use "write_only" for write-only tests, or "write_read" for write tests followed by read tests',
             'mode': 'normal # Execution mode. Use "normal" to generate and execute the benchmark scripts, or "debug" to generate the scripts without executing them',
             'search_method' :'greedy # Search method to use. Currently, only greedy is supported',
             'job_manager': 'slurm # Specify the job manager. Use "local" for local execution',
@@ -287,16 +287,16 @@ class Graphs:
             raise Exception(f"Error: {e}")
 
     @staticmethod
-    def generate(df: pd.DataFrame, graphfile: Path, test_type: TestType) -> None:
+    def generate(df: pd.DataFrame, graphfile: Path, test_type: Parameter) -> None:
         '''
         Generates a graph based on the test type.
         '''
 
-        if test_type == TestType.FILESIZE:
+        if test_type == Parameter.FILESIZE:
             return Graphs.__filesize(df, graphfile)
-        elif test_type == TestType.COMPUTING:
+        elif test_type == Parameter.COMPUTING:
             return Graphs.__computing(df, graphfile)
-        elif test_type == TestType.STRIPING:
+        elif test_type == Parameter.STRIPING:
             return Graphs.__striping(df, graphfile)
         else:
             raise ValueError(f"Invalid test type: {test_type}")

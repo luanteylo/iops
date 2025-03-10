@@ -1,6 +1,5 @@
 
 from iops.core.tests import Test
-from iops.core.round import Round
 from iops.util.submitter import Submitter
 from iops.util.tags import  jobManager, ExecutionMode
 
@@ -65,7 +64,7 @@ class Runner:
         test.load_results() # load the results of the test
 
     @staticmethod
-    def run(round: Round) -> Round:
+    def run(round):
         """
         Executes the tests within a given Round, sequentially calling the next test until all tests are completed.
      
@@ -114,8 +113,7 @@ class Runner:
         except Exception as e:
             # Handle general exceptions.
             raise e
-
-        return round
+        
 
 
         

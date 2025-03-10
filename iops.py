@@ -9,7 +9,7 @@ from datetime import datetime
 
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
-from iops.util.tags import TestType, TestFlags, IOoperation
+from iops.util.tags import Parameter, TestFlags, Operation, TestType
 from iops.core.runner import Runner
 from iops.core.round import Round
 from iops.core.config import IOPSConfig
@@ -64,32 +64,35 @@ def run(config: IOPSConfig) ->  Report:
     report = Report(config, 1, "IOPS Report") 
     
     for io_pattern, file_mode in config.io_patterns:        
-        parameters = {TestType.FILESIZE: config.min_volume, 
-                      TestType.STRIPING: config.get_stripe_folder(config.default_stripe), 
-                      TestType.COMPUTING: config.min_nodes,                      
-                      TestFlags.KEEP_FILES: True if config.io_operation == IOoperation.WRITE_READ else False}        
+        parameters = {Parameter.FILESIZE: config.min_volume, 
+                      Parameter.STRIPING: config.get_stripe_folder(config.default_stripe), 
+                      Parameter.COMPUTING: config.min_nodes,                      
+                      TestFlags.KEEP_FILES: True if config.test_type == TestType.WRITE_READ else False}        
                 
-        for test_type in config.tests:
+        for current_parameter in config.tests:
             current_round = Round.factory(pattern=io_pattern,
                                           file_mode=file_mode, 
+                                          operation=Operation.WRITE,
                                           config=config, 
-                                          test_type=test_type, 
+                                          parameter_name=current_parameter, 
                                           initial_parameters=parameters)
-            current_round.generate_all_tests()
-            Runner.run(current_round)
+            
+            current_round.build_tests()        
+            current_round.run()            
             report.add_round(current_round)
-            # build the round
-            parameters[test_type] = current_round.get_best_parameter()
-            console.print(f"[bold green]Round {current_round.round_id} completed successfully.")
-            console.print(f"[bold green]Best parameter for {test_type.name}: {parameters[test_type]}")
+            
+            parameters[current_parameter] = current_round.get_best_parameter()
 
-            if config.io_operation == IOoperation.WRITE_READ:
+            console.print(f"[bold green]{current_round.completed_message()}")
+
+
+            if config.test_type == TestType.WRITE_READ:
                 read_round = current_round.build_read_round()
-                Runner.run(read_round)
-                report.add_round(read_round)
+                read_round.run()
                 read_round.delete_readed_files()
-                console.print(f"[bold green]Round {current_round.round_id} completed successfully.")
-                console.print(f"[bold green]Best parameter for {test_type.name}: {read_round.get_best_parameter()}")
+
+                report.add_round(read_round)                
+                console.print(f"[bold green]{read_round.completed_message()}")                
                 
     console.print(f"[bold green]All rounds completed successfully.")
     return report

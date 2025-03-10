@@ -1,7 +1,7 @@
 
 from iops.core.config import IOPSConfig
 from iops.util.generator import Generator
-from iops.util.tags import jobManager, TestType, Pattern, FileMode, ExecutionMode, TestFlags, IOoperation
+from iops.util.tags import jobManager, Parameter, Pattern, FileMode, ExecutionMode, TestFlags, Operation
 
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -44,6 +44,7 @@ class Test(ABC):
 
         self.number_of_executions = 0
 
+        self.was_executed = False
         self.df = None
     
     @property
@@ -58,21 +59,21 @@ class Test(ABC):
         """
         The volume of data involved in the test, in MB.
         """
-        return self.test_parameters[TestType.FILESIZE]
+        return self.test_parameters[Parameter.FILESIZE]
     
     @property
     def folder_index(self) -> Path:
         """
         The index of the directory within the storage hierarchy where the test files will be placed.
         """
-        return self.test_parameters[TestType.STRIPING]
+        return self.test_parameters[Parameter.STRIPING]
     
     @property
     def computing(self) -> int:
         """
         The number of computing nodes or processes dedicated to this test.
         """
-        return self.test_parameters[TestType.COMPUTING]
+        return self.test_parameters[Parameter.COMPUTING]
 
     @property
     def keep_files(self) -> bool:
@@ -83,7 +84,7 @@ class Test(ABC):
 
 
     @classmethod
-    def create_test(cls, pattern: Pattern, file_mode: FileMode, config: 'IOPSConfig', round_path: Path, test_parameters: dict, operation: IOoperation) -> 'Test':
+    def create_test(cls, pattern: Pattern, file_mode: FileMode, config: 'IOPSConfig', round_path: Path, test_parameters: dict, operation: Operation) -> 'Test':
         """
         Factory method to create test instances based on the test pattern and operation.
         
@@ -94,16 +95,18 @@ class Test(ABC):
         :param test_parameters: Dictionary of specific test parameters.
         :return: An instance of a subclass of Test.
         """
-        if operation == IOoperation.WRITE:
+        if operation == Operation.WRITE:
             if pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SHARED:
                 return WriteIORSeq(config, round_path, test_parameters)
             elif pattern == Pattern.RANDOM and file_mode == FileMode.SHARED:
                 return WriteIORRandom(config, round_path, test_parameters)      
             else:
                 raise ValueError(f"Unsupported test pattern and file mode combination: {pattern}:{file_mode}")
-        elif operation == IOoperation.READ:
+        elif operation == Operation.READ:
             if pattern == Pattern.SEQUENTIAL and file_mode == FileMode.SHARED:
                 return ReadIORSeq(config, round_path, test_parameters)
+            elif pattern == Pattern.RANDOM and file_mode == FileMode.SHARED:
+                return ReadIORRandom(config, round_path, test_parameters)
             else:
                 raise ValueError(f"Unsupported test pattern and file mode combination: {pattern}:{file_mode}")
         else:
@@ -144,6 +147,7 @@ class Test(ABC):
                 result = subprocess.run(args, capture_output=True)
                 if result.returncode != 0:
                     raise ValueError(f"Error converting IOR output to CSV: {result.stderr}")
+                self.was_executed = True
         
         except subprocess.CalledProcessError as e:
             raise Exception(f"Error: Script execution failed: {e}")
@@ -311,11 +315,6 @@ class ReadIORSeq(TestIOR):
     '''
     I/O pattern: sequential read in a single shared file.
     '''
-
-    def __init__(self, config, round_path, test_parameters):
-        super().__init__(config, round_path, test_parameters)        
-
-
     def get_command(self) -> str:
         """
         Generate the IOR command based on the parameters defined in TestIOR.
@@ -340,4 +339,34 @@ class ReadIORSeq(TestIOR):
         ior_command += f" -o {self.output_file}"
         
         return ior_command
-    
+
+class ReadIORRandom(TestIOR):
+    '''
+    I/O pattern: random read in a single shared file.
+    '''
+
+    def get_command(self) -> str:
+        """
+        Generate the IOR command based on the parameters defined in TestIOR.
+        """        
+        ior_command : str = "ior"
+
+        block_size : int = self.volume / (self.config.processes_per_node * self.computing)
+       
+        # Add parameters to the command
+
+        ior_command += f" -r" 
+        ior_command += f" -t 1m"  
+        ior_command += f" -b {int(block_size)}m"  
+        
+
+        # delete the generate file at the end
+        if self.keep_files:
+            ior_command += f" -k"
+        ior_command += f" -z"
+        ior_command += f" --random-offset-seed={self.test_id}" # random seed
+        ior_command += f" -O summaryFile={self.summary_file}"
+        ior_command += f" -O summaryFormat=default"
+        # Path where the output will be read
+        ior_command += f" -o {self.output_file}"
+        return ior_command

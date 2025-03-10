@@ -1,20 +1,26 @@
 from enum import Enum
 
-class TestType(Enum):
+class Parameter(Enum):
     """
-    Tags for tests
+    Tags for the parameter types
     """    
     FILESIZE = "filesize"
     COMPUTING = "computing"
     STRIPING = "striping"
-
-    
 
 class TestFlags(Enum):
     """
     Tags for test flags
     """
     KEEP_FILES = "keep_files"
+
+class TestType(Enum):
+    """
+    Tags for test types
+    """
+    WRITE_ONLY = "write-only"
+    WRITE_READ = "write-read"
+
 
 
 class Pattern(Enum):
@@ -45,14 +51,13 @@ class ExecutionMode(Enum):
     NORMAL = "normal"
     DEBUG = "debug"
 
-class IOoperation(Enum):
+class Operation(Enum):
     """
     Tags for I/O operations
     """
-    WRITE = "write"
-    WRITE_READ = "write_read"
+    WRITE = "write"    
     READ = "read"
-    
+   
 
 class BenchmarkTool(Enum):
     """
@@ -71,3 +76,4 @@ class SearchType(Enum):
 class VolumeValidation:
     # 256MB to 1GB
     VALID_VOLUME_STEPS = [2**i for i in range(8, 11)] 
+
