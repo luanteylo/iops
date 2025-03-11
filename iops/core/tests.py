@@ -11,6 +11,7 @@ from datetime import datetime
 from abc import ABC, abstractmethod
 import subprocess
 import pandas as pd
+from random import randint
 
 class Test(ABC):
     """
@@ -303,7 +304,7 @@ class WriteIORRandom(TestIOR):
         if self.keep_files:
             ior_command += f" -k"
         ior_command += f" -z" # random access
-        ior_command += f" --random-offset-seed=1" # random seed
+        ior_command += f" --random-offset-seed={randint(1, 1000)}"
         ior_command += f" -O summaryFile={self.summary_file}" # Path where the output will be written 
         ior_command += f" -O summaryFormat=default"
         # Path where the output will be written 
@@ -364,7 +365,7 @@ class ReadIORRandom(TestIOR):
         if self.keep_files:
             ior_command += f" -k"
         ior_command += f" -z"
-        ior_command += f" --random-offset-seed={self.test_id}" # random seed
+        ior_command += f" --random-offset-seed={randint(1, 1000)}" # random seed
         ior_command += f" -O summaryFile={self.summary_file}"
         ior_command += f" -O summaryFormat=default"
         # Path where the output will be read
