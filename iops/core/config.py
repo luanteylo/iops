@@ -12,8 +12,8 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 
-from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, TestType, Pattern, FileMode
-from iops.util.tags import VolumeValidation
+from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, Parameter, Pattern, FileMode
+from iops.util.tags import VolumeValidation, TestType
 from typing import List, Tuple
 
 
@@ -50,6 +50,7 @@ class IOPSConfig:
         self.stripe_counts = None      
 
         # Execution configuration
+        self.test_type = None
         self.mode = None
         self.search_method = None
         self.job_manager = None
@@ -127,14 +128,14 @@ class IOPSConfig:
         
         return io_patterns
 
-    def __build_tests(self, tests_str: List[str]) -> List[TestType]:
+    def __build_tests(self, tests_str: List[str]) -> List[Parameter]:
         # Return the TestType based on the string
         tests = []        
         for test in tests_str:          
-            if test.upper() not in TestType.__members__:                
+            if test.upper() not in Parameter.__members__:                
                 raise ValueError(f"Invalid TestType: {test}")
             else:
-                tests.append(TestType[test.upper()])            
+                tests.append(Parameter[test.upper()])            
         return tests
 
     def __format_error(self, section, key, value, valid_values=None, custom_message=None):
@@ -243,9 +244,9 @@ class IOPSConfig:
                                                            key="stripe_folders",
                                                            value=self.stripe_folders,
                                                            custom_message="Folder not found."))
-            
         
     def load_execution(self):                
+        self.test_type = self.__get("execution", "test_type")
         self.mode = self.__get("execution", "mode").lower()
         self.search_method = self.__get("execution", "search_method").lower()
         job_manager_str = self.__get("execution", "job_manager").lower()
@@ -263,7 +264,15 @@ class IOPSConfig:
                                                    key="iops_home",
                                                    value=self.iops_home,
                                                    custom_message="Environment variable IOPS_HOME is not set."))
-                
+
+        if self.test_type.upper() not in TestType.__members__:
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="test_type",
+                                                   value=self.test_type,
+                                                   valid_values=TestType.__members__.keys()))
+        else:
+            self.test_type = TestType[self.test_type.upper()]
+
         if self.mode.upper() not in ExecutionMode.__members__:
             self.errors.append(self.__format_error(section="execution",
                                                    key="mode",
@@ -336,7 +345,7 @@ class IOPSConfig:
         # check if  the tests pattern is valid considering the execution mode
         if self.job_manager == jobManager.LOCAL:
             for test in self.tests:
-                if test in [TestType.COMPUTING, TestType.STRIPING]:
+                if test in [Parameter.COMPUTING, Parameter.STRIPING]:
                     self.errors.append(self.__format_error(section="execution",
                                                        key="tests",
                                                        value=f"{test.name}",
@@ -388,8 +397,6 @@ class IOPSConfig:
                                                        key="wait_range",
                                                        value=self.wait_range,
                                                        custom_message=f"Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
-
-        
 
     def load_templates(self):
         slurm_template_str = os.path.expandvars(self.__get("template", "slurm_template"))
@@ -446,7 +453,6 @@ class IOPSConfig:
                                                    key="local_template",
                                                    value=self.local_template,
                                                    custom_message="When using local, a local template file needs to be provided."))
-
 
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")
@@ -505,6 +511,7 @@ class IOPSConfig:
 
         # Create a table for execution information
         table.add_row("")    
+        table.add_row("Test Type", self.test_type.name)
         table.add_row("Mode", self.mode.name)    
         table.add_row("Search Method", self.search_method.name)
         table.add_row("Job Manager", self.job_manager.name)

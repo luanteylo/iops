@@ -24,7 +24,6 @@ class Submitter:
             submit_command = Submitter.__local(test)
         
         result = subprocess.run(submit_command, shell=True, capture_output=True)     
-
         return result
 
     @staticmethod

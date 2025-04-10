@@ -128,7 +128,7 @@ class Loader:
                     # Then we find the line we want to get the information
                     # Since IOR already put a <TaG> on the beggining of the write line
                     # We can use it to find the line
-                    elif line.startswith('write'):
+                    elif line.startswith('write') or line.startswith('read'):
                         if not second_time:
                             # then we split the info and
                             # aggregate it in a dictionary where the key is the blockSize parameter

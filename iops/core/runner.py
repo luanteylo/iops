@@ -1,6 +1,5 @@
 
 from iops.core.tests import Test
-from iops.core.round import Round
 from iops.util.submitter import Submitter
 from iops.util.tags import  jobManager, ExecutionMode
 
@@ -65,7 +64,7 @@ class Runner:
         test.load_results() # load the results of the test
 
     @staticmethod
-    def run(round: Round) -> Round:
+    def run(round):
         """
         Executes the tests within a given Round, sequentially calling the next test until all tests are completed.
      
@@ -84,15 +83,15 @@ class Runner:
                 # Start a task with specific metadata for the round and total number of tests
                 round_task = progress.add_task("[green]Round", round_id=f"Round {round.round_id}",
                                             total=round.number_of_tests)
-           
+
                 while True:
                     test = round.next(console)  # Move to the next test in the round.            
+                    
                     if test:
-                        if round.config.mode is ExecutionMode.STAGGERED: # if the execution mode is STAGGED, wait the interval time between each test
-                            waited_time = Submitter.wait(round.config.wait_start, round.config.wait_end)
-                            console.print(f"Waited {waited_time} seconds before running the next test")
-                            
                         Runner._run(test)  # Execute the test using the static method.
+                        waited_time = Submitter.wait(round.config.wait_start, round.config.wait_end)
+                        if waited_time > 0:
+                            console.print(f"\t[yellow]Waited {waited_time} seconds before running the next test")
                         progress.update(round_task, advance=1)  # Update the progress bar.
                     else:
                         break  # Exit the loop if there are no more tests.
@@ -114,8 +113,7 @@ class Runner:
         except Exception as e:
             # Handle general exceptions.
             raise e
-
-        return round
+        
 
 
         

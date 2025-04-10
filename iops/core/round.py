@@ -1,7 +1,9 @@
 from iops.core.config import IOPSConfig
 from iops.core.tests import Test
+from iops.core.runner import Runner
 from iops.util.generator import Graphs
-from iops.util.tags import TestType, Pattern, FileMode, SearchType, ExecutionMode
+from iops.util.tags import Parameter, Pattern, FileMode, SearchType, ExecutionMode, Operation
+
 
 import pandas as pd
 import subprocess
@@ -19,21 +21,23 @@ class Round:
     """
     _id_counter = 0
 
-    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
+    def __init__(self, pattern: Pattern, file_mode: FileMode, operation: Operation, config: IOPSConfig, parameter_name: Parameter, initial_parameters: dict):
         type(self)._id_counter += 1
         self.round_id = self._id_counter
         
         self.pattern = pattern
         self.file_mode = file_mode
+        self.operation = operation
         self.config = config
-        self.test_type = test_type        
+        self.parameter_name = parameter_name        
         self.initial_parameters = initial_parameters
 
         self.best_bw = None
         self.best_df = None
         self.best_parameter = None
         
-        self.round_path = self.config.workdir / self.test_type.name.lower() / f"round_{self.round_id}"
+        
+        self.round_path = self.config.workdir / self.parameter_name.name.lower() / f"round_{self.round_id}"
         # create the directory
         self.round_path.mkdir(parents=True, exist_ok=True)
 
@@ -41,8 +45,8 @@ class Round:
         self.list_test : List[Test] = []
                 
         self.df = None
-        self.csv_file = self.round_path / f"{self.test_type.name}_{self.round_id}.csv"
-        self.graph_file = self.round_path / f"{self.test_type.name}_{self.round_id}.svg"
+        self.csv_file = self.round_path / f"{self.parameter_name.name}_{self.round_id}.csv"
+        self.graph_file = self.round_path / f"{self.parameter_name.name}_{self.round_id}.svg"
 
         self.all_tests : List[Test] = []
         self.current_pos = 0
@@ -50,13 +54,8 @@ class Round:
 
         # next index set to default stripe index
         self.next_index = self.config.default_stripe
-        # generate all tests
-        self.__generate_all_tests()
-
-        # computing the number of tests
-        self.number_of_tests = len(self.all_tests) * self.config.repetitions
-        
-       
+        self.number_of_tests = 0
+    
     def load_results(self):
         '''
         load the results of the tests, for instance by generating a csv file and loading it into a pandas dataframe
@@ -91,15 +90,17 @@ class Round:
                     
             
             # generate the graph
-            Graphs.generate(self.df, self.graph_file, self.test_type)
+            Graphs.generate(self.df, self.graph_file, self.parameter_name)
             # load the best test
             
-            if self.test_type == TestType.COMPUTING:
+            if self.parameter_name == Parameter.COMPUTING:
                 gb = self.df.groupby('nodes')
-            elif self.test_type == TestType.FILESIZE:
+            elif self.parameter_name == Parameter.FILESIZE:
                 gb = self.df.groupby('aggregate_filesize')
-            elif self.test_type == TestType.STRIPING:
+            elif self.parameter_name == Parameter.STRIPING:
                 gb = self.df.groupby('path')
+            elif self.parameter_name == Parameter.NUM_PROCESSES: # num_processes test
+                gb = self.df.groupby('clients_per_node')
             
             # get the best test
             self.best_bw = 0.0
@@ -110,7 +111,7 @@ class Round:
                     self.best_parameter = parameter
             
             # if test_type == FileSize, we need to convert the parameter to MB
-            if self.test_type == TestType.FILESIZE:
+            if self.parameter_name == Parameter.FILESIZE:
                 self.best_parameter = self.best_parameter / 1024 / 1024
 
         except subprocess.CalledProcessError as e:
@@ -119,13 +120,17 @@ class Round:
         except Exception as e:
             raise Exception(f"Error: {e}")
     
-    def __generate_all_tests(self):
+    def build_tests(self):
+        '''
+        Build all tests of the current round and generate the files
+        '''
 
         next_test =  Test.create_test(pattern=self.pattern,
                                       file_mode=self.file_mode,
                                       config=self.config,
                                       round_path=self.round_path,
-                                      test_parameters=self.initial_parameters)
+                                      test_parameters=self.initial_parameters,
+                                      operation=self.operation)
         
         while next_test is not None:
 
@@ -135,66 +140,131 @@ class Round:
             self.all_tests.append(next_test)
             next_test = Test.from_existing(next_test)
             
-            if self.test_type == TestType.COMPUTING:              
+            if self.parameter_name == Parameter.COMPUTING:              
                 if  next_test.computing < self.config.max_nodes:
-                    next_test.test_parameters[TestType.COMPUTING] *= 2
+                    next_test.test_parameters[Parameter.COMPUTING] *= 2
                 else:
                     next_test =  None # no more tests to run
 
-            if self.test_type == TestType.FILESIZE:            
+            if self.parameter_name == Parameter.FILESIZE:            
                 if next_test.volume < self.config.max_volume:
-                    next_test.test_parameters[TestType.FILESIZE] += self.config.volume_step                                
+                    next_test.test_parameters[Parameter.FILESIZE] += self.config.volume_step                                
                 else:
                     next_test = None # no more tests to run        
 
-            if self.test_type == TestType.STRIPING:
+            if self.parameter_name == Parameter.STRIPING:
                 self.next_index = (self.next_index + 1) % len(self.config.stripe_folders)
                 if self.next_index != self.config.default_stripe:
-                    next_test.test_parameters[TestType.STRIPING] = self.config.get_stripe_folder(self.next_index)             
+                    next_test.test_parameters[Parameter.STRIPING] = self.config.get_stripe_folder(self.next_index)             
                 else:
-                    next_test = None
+                    next_test = None # no more tests to run
+        # computing the number of tests
+        self.number_of_tests = len(self.all_tests) * self.config.repetitions
 
     def get_best_parameter(self) -> int | float | None:
         '''
         get the best parameter for the current round
         '''
-        if self.test_type == TestType.COMPUTING:
+        if self.parameter_name == Parameter.COMPUTING:
             return self.best_parameter
-        elif self.test_type == TestType.FILESIZE:
+        elif self.parameter_name == Parameter.FILESIZE:
             return self.best_parameter 
-        elif self.test_type == TestType.STRIPING:
+        elif self.parameter_name == Parameter.STRIPING:
             # get only the path (remove the file)
             folder_path = Path(Path(self.best_parameter).parent)
             return folder_path
+        elif self.parameter_name == Parameter.NUM_PROCESSES:
+            return self.best_parameter
         else:
             raise Exception("Error: Test type not supported")
     
     @staticmethod
-    def factory(pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
+    def factory(*args, **kwargs):
         '''
         Factory method to create a Round instance based on the search type
         '''
+        pattern = kwargs.get('pattern')
+        file_mode = kwargs.get('file_mode')
+        operation = kwargs.get('operation')
+        config = kwargs.get('config')        
+        parameter_name = kwargs.get('parameter_name')
+        initial_parameters = kwargs.get('initial_parameters')
+        
         if config.search_method == SearchType.GREEDY:
-            return RoundGreedy(pattern, file_mode, config, test_type, initial_parameters)
+            return RoundGreedy(pattern=pattern, 
+                               file_mode=file_mode, 
+                               operation=operation, 
+                               config=config, 
+                               parameter_name=parameter_name, 
+                               initial_parameters=initial_parameters)
+        
         elif config.search_method == SearchType.BINARY:
-            return RoundBinary(pattern, file_mode, config, test_type, initial_parameters)
+            return RoundBinary(pattern=pattern, 
+                               file_mode=file_mode, 
+                               operation=operation, 
+                               config=config, 
+                               parameter_name=parameter_name, 
+                               initial_parameters=initial_parameters)        
         else:
             raise Exception("Error: Round type not supported")
     
     @abstractmethod
     def next(self, console: Console) -> Test:
         pass
+
+    def build_read_round(self):
+        '''
+        Rebuild the tests for read operation
+        '''
+        type_class = type(self)
+        new_round = type_class(pattern=self.pattern, 
+                               file_mode=self.file_mode,  
+                               operation=Operation.READ,
+                               config=self.config, 
+                               parameter_name=self.parameter_name, 
+                               initial_parameters=self.initial_parameters)
+        
+        
+        for test in self.all_tests:
+            if test.was_executed:
+                test_read = Test.create_test(pattern=self.pattern,
+                                            file_mode=self.file_mode,
+                                            config=self.config,
+                                            round_path=new_round.round_path,
+                                            test_parameters=test.test_parameters,
+                                            operation=Operation.READ)
+                
+                test_read.output_file = test.output_file
+                test_read.build_files()
+                
+
+            new_round.all_tests.append(test_read)
+        
+        new_round.number_of_tests = len(new_round.all_tests) * self.config.repetitions
+        return new_round
+        
+    def delete_readed_files(self):
+        for test in self.all_tests:
+            test.output_file.unlink()
+
+    def completed_message(self) -> str:
+        return f"Round {self.round_id} completed successfully.\nBest parameter for {self.parameter_name.name}: {self.best_parameter}"
+        
+    def run(self):
+        '''
+        Run the tests of the current round
+        '''
+        Runner.run(self)     
+        
             
     def __repr__(self) -> str:
-        return f"Round {self.round_id} \[{self.test_type.name}]\[{self.pattern.name}:{self.file_mode.name}] - up to {self.number_of_tests} tests"
+        return f"Round {self.round_id} \[{self.parameter_name.name}]\[{self.pattern.name}:{self.file_mode.name}]\[{self.operation.name}] - up to {self.number_of_tests} tests"
 
 
 
 class RoundGreedy(Round):
-    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
-        super().__init__(pattern, file_mode, config, test_type, initial_parameters)
-        # randomize the list of tests
-        
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
     
     def next(self, console: Console) -> Test:
         """
@@ -220,8 +290,9 @@ class RoundGreedy(Round):
         return next_test
         
 class RoundBinary(Round):
-    def __init__(self, pattern: Pattern, file_mode: FileMode, config: IOPSConfig, test_type: TestType, initial_parameters: dict):
-        super().__init__(pattern, file_mode, config, test_type, initial_parameters)
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.left = 0
         self.right = len(self.all_tests) - 1
         self.mid = int((self.left + self.right) / 2)

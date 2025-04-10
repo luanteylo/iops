@@ -1,6 +1,6 @@
 from iops.core.config import IOPSConfig
-from iops.core.runner import Round
-from iops.util.tags import TestType
+from iops.core.round import Round
+from iops.util.tags import Parameter
 
 from pathlib import Path
 
@@ -33,12 +33,12 @@ class Report():
                 
         self.rounds[round.round_id] = round
 
-    def __human_readable_title(self, test_type: TestType):
-        if test_type == TestType.FILESIZE:
+    def __human_readable_title(self, test_type: Parameter):
+        if test_type == Parameter.FILESIZE:
             return "Varying the File Size"
-        elif test_type == TestType.COMPUTING:
+        elif test_type == Parameter.COMPUTING:
             return "Varying the Number of Computing Nodes"
-        elif test_type == TestType.STRIPING:
+        elif test_type == Parameter.STRIPING:
             return "Varying the Striping Configuration"
 
     def generate_html(self):    
@@ -55,7 +55,7 @@ class Report():
 
             # update the report_dict
             report_dict['reports_info'].append({                
-                'description': self.__human_readable_title(round.test_type),                
+                'description': self.__human_readable_title(round.parameter_name),                
                 'round': round                     
             })
 
@@ -102,7 +102,7 @@ class Report():
             # write all information about the configuration
 
             for round in self.rounds.values():
-                f.write(f"\tRound {round.round_id} -  {round.test_type.name}:{round.pattern.name}:{round.file_mode.name} - Best parameter: {round.best_parameter} Best Bandwidth: {round.best_bw}\n")
+                f.write(f"\tRound {round.round_id} -  {round.parameter_name.name}:{round.pattern.name}:{round.file_mode.name} - Best parameter: {round.best_parameter} Best Bandwidth: {round.best_bw}\n")
                 f.write("\n")                
                 for test in round.all_tests:
                     f.write(f"\t\tTest {test}: Bandwidth: {test.bw} ---  Executions: {test.number_of_executions} \n")
