@@ -99,18 +99,22 @@ class IOPSConfig:
             value = value.split("#")[0].strip()
         return value
     
+
     def __get_next_index(self):
-        # Get the next index for the execution folder
-        if self.workdir.is_dir() == False:
+        # Pattern: execution_<number>, e.g., execution_0, execution_123
+        pattern = re.compile(r'^execution_(\d+)$')
+
+        if not self.workdir.is_dir():
             return 0
-        else:
-            existing_folders = [folder for folder in self.workdir.iterdir() if folder.name.startswith('execution_')]
-            if existing_folders:
-                indexes = [int(folder.name.split('_')[1]) for folder in existing_folders]
-                next_index = max(indexes) + 1
-            else:
-                next_index = 0
-            return next_index
+
+        indexes = []
+        for entry in self.workdir.iterdir():
+            if entry.is_dir():
+                match = pattern.match(entry.name)
+                if match:
+                    indexes.append(int(match.group(1)))
+
+        return max(indexes, default=-1) + 1
 
     def __build_io_patterns(self, patterns_str: List[str]) -> List[Tuple[Pattern, FileMode]]:
         io_patterns = []
