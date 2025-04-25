@@ -3,7 +3,6 @@ numpy
 pandas
 scipy
 seaborn
-readline
 python-dotenv
 paramiko
 rich
