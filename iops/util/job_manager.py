@@ -142,10 +142,11 @@ class SlurmJobManager(JobManager):
         job_id = None
         if output.returncode == 0:
             # Extract job ID from the output
-            job_id = output.stdout.decode().strip().split()[-1]
-        
+            job_id = output.stdout.decode().strip().split()[-1]        
         return job_id, output
     
+    import subprocess
+
     def get_status(self, job_id: str, opt_args: str = "") -> str:
         """
         Get the status of a SLURM job.
@@ -153,11 +154,19 @@ class SlurmJobManager(JobManager):
         - job_id (str): The ID of the job to check.
         - opt_args (str): Optional arguments for the status command.
         Returns:
-        - str: The return output of the status command.
+        - str: The job status as a string.
         """
-        # Implement SLURM status retrieval logic here
-        output = subprocess.run(f"squeue {opt_args} --job {job_id}", shell=True, capture_output=True)
-        return output.stdout.decode()
+        # First try squeue
+        squeue_cmd = f"squeue {opt_args} --job {job_id} --noheader --format='%T'"
+        squeue_output = subprocess.run(squeue_cmd, shell=True, capture_output=True, text=True)
+
+        status = squeue_output.stdout.strip()
+
+        if status:
+            return status  # Job is still in the queue (e.g., PENDING, RUNNING)       
+
+        return "UNKNOWN"  # If no found. It probably finished, so we can move to the next step
+
     
     def cancel(self, job_id: str, opt_args: str = "") -> None:
         """
