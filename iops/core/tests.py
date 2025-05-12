@@ -1,7 +1,7 @@
 
 from iops.core.config import IOPSConfig
 from iops.util.generator import Generator
-from iops.util.tags import jobManager, Parameter, Pattern, FileMode, ExecutionMode, TestFlags, Operation
+from iops.util.tags import jobManager_Tag, Parameter, Pattern, FileMode, ExecutionMode, TestFlags, Operation
 
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -63,11 +63,11 @@ class Test(ABC):
         return self.test_parameters[Parameter.FILESIZE]
     
     @property
-    def folder_index(self) -> Path:
+    def output_file(self) -> Path:
         """
-        The index of the directory within the storage hierarchy where the test files will be placed.
+        Full path to the output file written by the benchmark.
         """
-        return self.test_parameters[Parameter.STRIPING]
+        return Path(self.test_parameters[Parameter.STRIPING], f"test{self.test_id}.ior")
     
     @property
     def computing(self) -> int:
@@ -128,14 +128,6 @@ class Test(ABC):
         Subclasses should provide their own implementation to handle command generation based on the test configuration and parameters.
         """
         pass
-    
-    def template(self):
-        if self.config.job_manager == jobManager.SLURM:
-            return self.config.slurm_template   
-        elif self.config.job_manager == jobManager.LOCAL:
-            return self.config.local_template
-        else:
-            return None     
     
     def load_results(self):
         """
@@ -208,7 +200,7 @@ class TestIOR(Test):
 
     def __init__(self, config: 'IOPSConfig', round_path: Path, test_parameters: dict):
        super().__init__(config, round_path, test_parameters)
-       self.output_file = Path(self.folder_index, f"test{self.test_id}.ior")
+       
     
     def build_files(self) -> None:
         """
@@ -227,27 +219,28 @@ class TestIOR(Test):
         if self.config.slurm_partition is not None:
             parameters["partition"] = self.config.slurm_partition
         
-        if self.config.slurm_time is not None:
-            parameters["time"] = self.config.slurm_time
-        else:
-            parameters["time"] = "04:00:00"
+        parameters["time"] = self.config.slurm_time        
         
         parameters["job_name"] = f"iops_{self.test_id}"
         parameters["chdir"] = self.batch_file.parent
         parameters["ntasks"] = self.computing * self.config.processes_per_node
         parameters["nodes"] = self.computing
         parameters["ntasks_per_node"] = self.config.processes_per_node
+        
+        # number of cores per task
+        parameters['cores_per_task'] = self.config.cores_per_node // self.config.processes_per_node
+
         parameters["benchmark_cmd"] = self.get_command()
         
         # Generate the execution script
-        Generator.from_template(template_path=self.template(), output_path=self.batch_file, info=parameters)
+        Generator.from_template(template_path=self.config.bash_template, output_path=self.batch_file, info=parameters)
 
 class WriteIORSeq(TestIOR):
     """
     I/O pattern: sequential write in a single shared file.
     Parameters:
     - volume: The amount of data (in MB) involved in the test.
-    - folder_index: The index of the directory where the test files will be placed (each directory represents a different striping setup)
+    - output_file: The path where the output will be written.
     - computing: The number of computing nodes involved in the I/O operation.
     """
 
@@ -255,7 +248,7 @@ class WriteIORSeq(TestIOR):
         """
         Generate the IOR command based on the parameters defined in TestIOR.
         """
-        
+
         ior_command : str = "ior"
 
         block_size : int = self.volume / (self.config.processes_per_node * self.computing)
@@ -281,7 +274,7 @@ class WriteIORRandom(TestIOR):
     I/O pattern: random write in a single shared file.
     Parameters:
     - volume: The amount of data (in MB) involved in the test.
-    - folder_index: The index of the directory where the test files will be placed (each directory represents a different striping setup)
+    - output_file: The path where the output will be written.
     - computing: The number of computing nodes involved in the I/O operation.
     """
 
@@ -316,10 +309,27 @@ class ReadIORSeq(TestIOR):
     '''
     I/O pattern: sequential read in a single shared file.
     '''
+    def __init__(self, config: 'IOPSConfig', round_path: Path, test_parameters: dict):
+        super().__init__(config, round_path, test_parameters)
+        self.input_file = None
+
+    def set_input_file(self, input_file: Path) -> None:
+        """
+        Set the input file for the read operation.
+        
+        :param input_file: The path to the input file to be read.
+        """
+        self.input_file = input_file
+        if not self.config.mode == ExecutionMode.DEBUG and not self.input_file.exists():
+            raise ValueError(f"Input file {self.input_file} does not exist. Please set a valid input file.")
+
     def get_command(self) -> str:
         """
         Generate the IOR command based on the parameters defined in TestIOR.
         """        
+        if self.input_file is None:
+            raise ValueError("Input file not set. Please set the input file before generating the command.")
+        
         ior_command : str = "ior"
 
         block_size : int = self.volume / (self.config.processes_per_node * self.computing)
@@ -337,7 +347,7 @@ class ReadIORSeq(TestIOR):
         ior_command += f" -O summaryFile={self.summary_file}" # Path where the output will be written 
         ior_command += f" -O summaryFormat=default"
         # Path where the output will be read
-        ior_command += f" -o {self.output_file}"
+        ior_command += f" -o {self.input_file}"
         
         return ior_command
 
@@ -346,10 +356,27 @@ class ReadIORRandom(TestIOR):
     I/O pattern: random read in a single shared file.
     '''
 
+    def __init__(self, config: 'IOPSConfig', round_path: Path, test_parameters: dict):
+        super().__init__(config, round_path, test_parameters)
+        self.input_file = None
+    
+    def set_input_file(self, input_file: Path) -> None:
+        """
+        Set the input file for the read operation.
+        
+        :param input_file: The path to the input file to be read.
+        """
+        self.input_file = input_file
+        if not self.config.mode == ExecutionMode.DEBUG and not self.input_file.exists():
+            raise ValueError(f"Input file {self.input_file} does not exist. Please set a valid input file.")
+
     def get_command(self) -> str:
         """
         Generate the IOR command based on the parameters defined in TestIOR.
         """        
+        if self.input_file is None:
+            raise ValueError("Input file not set. Please set the input file before generating the command.")
+        
         ior_command : str = "ior"
 
         block_size : int = self.volume / (self.config.processes_per_node * self.computing)
@@ -369,5 +396,5 @@ class ReadIORRandom(TestIOR):
         ior_command += f" -O summaryFile={self.summary_file}"
         ior_command += f" -O summaryFormat=default"
         # Path where the output will be read
-        ior_command += f" -o {self.output_file}"
+        ior_command += f" -o {self.input_file}"
         return ior_command

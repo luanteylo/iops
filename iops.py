@@ -9,15 +9,13 @@ from datetime import datetime
 
 from iops.util.checkers import Checker
 from iops.util.generator import Generator
-from iops.util.tags import Parameter, TestFlags, Operation, TestType
-from iops.core.runner import Runner
+from iops.util.tags import Parameter, TestFlags, Operation, TestType, ExecutionMode
 from iops.core.round import Round
 from iops.core.config import IOPSConfig
 from iops.reports.report import Report
 
 from version import __version__
 
-from typing import List
 console = Console()   
 
 
@@ -77,21 +75,22 @@ def run(config: IOPSConfig) ->  Report:
                                           parameter_name=current_parameter, 
                                           initial_parameters=parameters)
             
-            current_round.build_tests()        
-            current_round.run()            
-            report.add_round(current_round)
-            
-            parameters[current_parameter] = current_round.get_best_parameter()
+            current_round.build_tests()
+            if config.mode == ExecutionMode.NORMAL:        
+                current_round.run()            
+                report.add_round(current_round)            
+                parameters[current_parameter] = current_round.get_best_parameter()
 
             console.print(f"[bold green]{current_round.completed_message()}")
 
 
             if config.test_type == TestType.WRITE_READ:
                 read_round = current_round.build_read_round()
-                read_round.run()
-                read_round.delete_readed_files()
+                if config.mode == ExecutionMode.NORMAL:
+                    read_round.run()
+                    read_round.delete_readed_files()
 
-                report.add_round(read_round)                
+                    report.add_round(read_round)                
                 console.print(f"[bold green]{read_round.completed_message()}")                
                 
     console.print(f"[bold green]All rounds completed successfully.")
@@ -134,8 +133,9 @@ def main():
         config = IOPSConfig(config_path=args.conf)   
         config.print_config(skip_confirmation=args.yes)              
         report = run(config)
-        report.generate_html()        
-        report.generate_txt(run_time=datetime.now() - start_time)
+        if config.mode == ExecutionMode.NORMAL:
+            report.generate_html()
+            report.generate_txt(run_time=datetime.now() - start_time)
 
     except Exception as e:
         console.print(f"[bold white]{e}[/ bold white]")

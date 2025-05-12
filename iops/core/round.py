@@ -154,8 +154,9 @@ class Round:
 
             if self.parameter_name == Parameter.STRIPING:
                 self.next_index = (self.next_index + 1) % len(self.config.stripe_folders)
+                
                 if self.next_index != self.config.default_stripe:
-                    next_test.test_parameters[Parameter.STRIPING] = self.config.get_stripe_folder(self.next_index)             
+                    next_test.test_parameters[Parameter.STRIPING] = self.config.get_stripe_folder(self.next_index)    
                 else:
                     next_test = None # no more tests to run
         # computing the number of tests
@@ -226,7 +227,8 @@ class Round:
         
         
         for test in self.all_tests:
-            if test.was_executed:
+            if test.was_executed or self.config.mode == ExecutionMode.DEBUG:
+                # create a new test based on the current one
                 test_read = Test.create_test(pattern=self.pattern,
                                             file_mode=self.file_mode,
                                             config=self.config,
@@ -234,7 +236,7 @@ class Round:
                                             test_parameters=test.test_parameters,
                                             operation=Operation.READ)
                 
-                test_read.output_file = test.output_file
+                test_read.set_input_file(test.output_file)
                 test_read.build_files()
                 
 

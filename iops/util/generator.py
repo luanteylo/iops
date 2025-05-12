@@ -25,6 +25,7 @@ class Generator:
             'min_nodes': '1 # Minimum number of nodes that can be allocated (limits computing tests). Must be a power of 2',
             'max_nodes': '32 # Maximum number of nodes that can be allocated (limits computing tests). Must be a power of 2',
             'processes_per_node': '8 # Number of processes per node. Currently, this is a static parameter',
+            'cores_per_node':   '32 # Total number of CPU cores available in each node (used to define the cores_per_process parameter when necessary).',
         }
 
         config_storage['storage'] = {
@@ -45,6 +46,7 @@ class Generator:
             'modules': 'None # List of modules to load using "module add <module>". Use "None" to load no modules',
             'workdir': '/path/to/workdir # Directory where the script files will be written',
             'repetitions': '5 # Number of repetitions for each test',
+            'status_check_delay': '10 # Delay in seconds to check the status of the job.',
             'tests': 'filesize, computing, striping # List of tests to execute. Supported tests: filesize, computing, striping',
             'io_patterns': 'sequential:shared, random:shared # List of IO patterns to execute. Each pattern is defined by access_pattern:file_access.\n' \
                             '             # Access pattern can be sequential or random. File access can be single (one file per process) or shared (all processes access the same file).\n' \
@@ -53,8 +55,9 @@ class Generator:
         }
 
         config_template['template'] = {
-            'slurm_template': '$IOPS_HOME/iops/templates/slurm_template.sh.j2 # Template file for Slurm to generate bash scripts. Use None if not using Slurm.',
-            'local_template': '$IOPS_HOME/iops/templates/local_template.sh.j2 # Template for the bash script for local execution.',
+            'bash_template': '$IOPS_HOME/iops/templates/slurm_template.sh.j2 # Template file used to generate the job script. This option is required.\n' \
+                            '        # See the Templates folder for examples.\n'   \
+                            '        # Required; default: Slurm. For first-time execution, we recommend checking and testing the template.',
             'report_template': '$IOPS_HOME/iops/templates/report_template.html # Template for the report HTML page.',
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',
         }
@@ -62,7 +65,7 @@ class Generator:
         config_slurm['slurm'] = {
             'slurm_constraint': 'None # Slurm constraint parameter (-c) for resource definition. Set list of constraints if applicable, otherwise use None',
             'slurm_partition': 'None # Partition to use. Use None if no partition is specified',
-            'slurm_time': 'None # Maximum job time. Use None if no time limit is specified'
+            'slurm_time': '00:30:00 # Maximum job time. Format: DD-HH:MM:SS or HH:MM:SS or MM:SS or SS (Required)'
         }
 
         with open(file_name, 'w') as config_file:

@@ -12,8 +12,9 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 
-from iops.util.tags import jobManager, ExecutionMode, BenchmarkTool, SearchType, Parameter, Pattern, FileMode
+from iops.util.tags import jobManager_Tag, ExecutionMode, BenchmarkTool, SearchType, Parameter, Pattern, FileMode
 from iops.util.tags import VolumeValidation, TestType
+from iops.util.job_manager import JobManager
 from typing import List, Tuple
 
 
@@ -34,11 +35,11 @@ class IOPSConfig:
         self.config_path = config_path
         self.config.read(config_path)
 
-
         # Nodes configuration
         self.min_nodes = None
         self.max_nodes = None
         self.processes_per_node = None
+        self.cores_per_node = None
 
         # Storage configuration
         self.filesystem_dir = None
@@ -58,10 +59,12 @@ class IOPSConfig:
         self.modules = None
         self.workdir = None
         self.repetitions = None
+        self.status_check_delay = 0
         self.tests = None
         self.wait_range = None
 
         # Templates & scripts
+        self.bash_template = None
         self.slurm_template = None
         self.report_template = None
         self.ior_2_csv = None
@@ -151,6 +154,8 @@ class IOPSConfig:
         self.min_nodes = int(self.__get("nodes", "min_nodes"))
         self.max_nodes = int(self.__get("nodes", "max_nodes"))
         self.processes_per_node = int(self.__get("nodes", "processes_per_node"))
+        self.cores_per_node = int(self.__get("nodes", "cores_per_node"))
+        
         
         if self.max_nodes <= 0:
             self.errors.append(self.__format_error(section="nodes", 
@@ -165,7 +170,6 @@ class IOPSConfig:
                                                    custom_message="Number of nodes need to be greater than zero."))
 
         # check if the number of nodes is power of 2
-
         if (self.max_nodes & (self.max_nodes - 1)) != 0:
             self.errors.append(self.__format_error(section="nodes", 
                                                    key="max_nodes", 
@@ -258,6 +262,7 @@ class IOPSConfig:
         modules_str = self.__get("execution", "modules")
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
+        self.status_check_delay = int(self.__get("execution", "status_check_delay"))
         self.tests = self.__get("execution", "tests")
         self.io_patterns = self.__get("execution", "io_patterns")
         wait_range_str = self.__get("execution", "wait_range")
@@ -294,14 +299,17 @@ class IOPSConfig:
             self.search_method = SearchType[self.search_method.upper()]
 
 
-        if job_manager_str.upper() not in jobManager.__members__:
+        if job_manager_str.upper() not in jobManager_Tag.__members__:
             self.errors.append(self.__format_error(section="execution",
                                                     key="job_manager",
                                                     value=job_manager_str,
-                                                    valid_values=jobManager.__members__.keys()))
+                                                    valid_values=jobManager_Tag.__members__.keys()))
         else:
-            self.job_manager = jobManager[job_manager_str.upper()]
+            # build the job manager
             
+            self.job_manager = JobManager.factory(jobManager_Tag[job_manager_str.upper()])
+            
+
         if benchmark_tool_str.upper() not in BenchmarkTool.__members__:
             self.errors.append(self.__format_error(section="execution",
                                                     key="benchmark_tool",
@@ -347,7 +355,7 @@ class IOPSConfig:
                                                        custom_message=str(e)))
         
         # check if  the tests pattern is valid considering the execution mode
-        if self.job_manager == jobManager.LOCAL:
+        if self.job_manager == jobManager_Tag.LOCAL:
             for test in self.tests:
                 if test in [Parameter.COMPUTING, Parameter.STRIPING]:
                     self.errors.append(self.__format_error(section="execution",
@@ -378,6 +386,13 @@ class IOPSConfig:
                                                    key="repetitions",
                                                    value=self.repetitions,
                                                    custom_message="Must be greater than zero."))
+        # check if the status_check_delay is greater or equal than 0
+        if self.status_check_delay < 0:
+            self.errors.append(self.__format_error(section="execution",
+                                                   key="status_check_delay",
+                                                   value=self.status_check_delay,
+                                                   custom_message="Must be greater than or equal to zero."))
+
         # wait time between test execution 
         if wait_range_str.lower() == 'none':
             self.wait_range = None
@@ -403,60 +418,32 @@ class IOPSConfig:
                                                        custom_message=f"Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
 
     def load_templates(self):
-        slurm_template_str = os.path.expandvars(self.__get("template", "slurm_template"))
-        local_template_str = os.path.expandvars(self.__get("template", "local_template"))
+        bash_template_str = os.path.expandvars(self.__get("template", "bash_template"))
+        self.report_template_str = os.path.expandvars(self.__get("template", "report_template"))    
 
-        self.report_template = os.path.expandvars(self.__get("template", "report_template"))    
-        self.report_template = Path(self.report_template)    
+        self.bash_template = Path(bash_template_str)
+        self.report_template = Path(self.report_template_str)    
         self.ior_2_csv = Path(self.__get("template", "ior_2_csv"))        
 
-        # check template file
-        if slurm_template_str.lower() == 'none':
-            self.slurm_template = None
-        else:
-            self.slurm_template = Path(slurm_template_str)
-            # check if file exist
-            if not self.slurm_template.is_file:
-                self.errors.append(self.__format_error(section="template",
-                                                       key="slurm_template",
-                                                       value=self.slurm_template,
-                                                       custom_message="File not found."))
-            
-        if self.job_manager == jobManager.SLURM and self.slurm_template == None:
+
+        # check if the bash template file exist
+        if not self.bash_template.is_file():
             self.errors.append(self.__format_error(section="template",
-                                                   key="slurm_template",
-                                                   value=self.slurm_template,
-                                                   custom_message="When using slurm, a template file needs to be provided."))
-        
-        if not self.ior_2_csv.is_file():
-            self.errors.append(self.__format_error(section="template",
-                                                   key="ior_2_csv",
-                                                   value=self.ior_2_csv,
+                                                   key="bash_template",
+                                                   value=self.bash_template,
                                                    custom_message="File not found."))
-        
+        # check if the report template file exist
         if not self.report_template.is_file():
             self.errors.append(self.__format_error(section="template",
                                                    key="report_template",
                                                    value=self.report_template,
                                                    custom_message="File not found."))
-        
-        # check local template file
-        if local_template_str.lower() == 'none':
-            self.local_template = None
-        else:
-            self.local_template = Path(local_template_str)
-            # check if file exist
-            if not self.local_template.is_file():
-                self.errors.append(self.__format_error(section="template",
-                                                       key="local_template",
-                                                       value=self.local_template,
-                                                       custom_message="File not found."))
-
-        if self.job_manager == jobManager.LOCAL and self.local_template == None:
+        # check if the ior_2_csv file exist
+        if not self.ior_2_csv.is_file():
             self.errors.append(self.__format_error(section="template",
-                                                   key="local_template",
-                                                   value=self.local_template,
-                                                   custom_message="When using local, a local template file needs to be provided."))
+                                                   key="ior_2_csv",
+                                                   value=self.ior_2_csv,
+                                                   custom_message="File not found."))
 
     def load_slurm(self):
         slurm_constraint_str = self.__get("slurm", "slurm_constraint")
@@ -473,18 +460,15 @@ class IOPSConfig:
             self.slurm_partition = None
         else:
             self.slurm_partition = slurm_partition_str
-        
-        if slurm_time_str.lower() == 'none':
-            self.slurm_time = None
+                
+        # check if the time is in the correct format DD-HH:MM:SS or HH:MM:SS or MM:SS or SS
+        if not re.match(r'^((\d+)-)?((\d+):)?((\d+):)?(\d+)$', slurm_time_str):
+            self.errors.append(self.__format_error(section="execution",
+                                                    key="slurm_time",
+                                                    value=slurm_time_str,
+                                                    custom_message="Invalid time format."))
         else:
-            # check if the time is in the correct format DD-HH:MM:SS or HH:MM:SS or MM:SS or SS
-            if not re.match(r'^((\d+)-)?((\d+):)?((\d+):)?(\d+)$', slurm_time_str):
-                self.errors.append(self.__format_error(section="execution",
-                                                       key="slurm_time",
-                                                       value=slurm_time_str,
-                                                       custom_message="Invalid time format."))
-            else:
-                self.slurm_time = slurm_time_str
+            self.slurm_time = slurm_time_str
 
     def print_config( self, skip_confirmation: bool):
         # Display startup message with a panel
@@ -497,6 +481,7 @@ class IOPSConfig:
         table.add_row("Min Nodes", str(self.min_nodes))
         table.add_row("Max Nodes", str(self.max_nodes))        
         table.add_row("Processes Per Node", str(self.processes_per_node))
+        table.add_row("Cores Per Node", str(self.cores_per_node))
 
 
         # Create a table for storage information
@@ -518,7 +503,7 @@ class IOPSConfig:
         table.add_row("Test Type", self.test_type.name)
         table.add_row("Mode", self.mode.name)    
         table.add_row("Search Method", self.search_method.name)
-        table.add_row("Job Manager", self.job_manager.name)
+        table.add_row("Job Manager", str(self.job_manager))
 
         
         
@@ -533,8 +518,7 @@ class IOPSConfig:
         table.add_row("Wait Range", str(self.wait_range))
 
         table.add_row("")  
-        table.add_row("Slurm Template", str(self.slurm_template))
-        table.add_row("Local Template", str(self.local_template))
+        table.add_row("Script Template", str(self.bash_template))
         table.add_row("Report Template", str(self.report_template))
         table.add_row("ior_2_csv script", str(self.ior_2_csv))
 

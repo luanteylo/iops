@@ -37,11 +37,12 @@ class FileMode(Enum):
     """
     SHARED = "shared"
 
-class jobManager(Enum):
+class jobManager_Tag(Enum):
     """
     Tags for job managers
     """
     SLURM = "slurm"
+    MSUB = "msub"
     LOCAL = "local"
 
 class ExecutionMode(Enum):
