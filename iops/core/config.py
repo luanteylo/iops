@@ -62,18 +62,14 @@ class IOPSConfig:
         self.status_check_delay = 0
         self.tests = None
         self.wait_range = None
+        self.walltime = None
 
         # Templates & scripts
         self.bash_template = None
-        self.slurm_template = None
         self.report_template = None
         self.ior_2_csv = None
 
-        # Slurm configuration
-        self.slurm_constraint = None
-        self.slurm_partition = None
-        self.slurm_time = None
-
+        
         # local the configuration (for now)
         self.local_template = None
 
@@ -89,7 +85,6 @@ class IOPSConfig:
         self.load_storage()
         self.load_execution()
         self.load_templates()
-        self.load_slurm()
 
         if self.errors:
             for error in self.errors:
@@ -151,11 +146,18 @@ class IOPSConfig:
         return f"Invalid value: '{value}' for '{key}' in section '{section}'. Allowed values are '{', '.join(valid_values)}'"
 
     def load_nodes(self):
-        self.min_nodes = int(self.__get("nodes", "min_nodes"))
-        self.max_nodes = int(self.__get("nodes", "max_nodes"))
-        self.processes_per_node = int(self.__get("nodes", "processes_per_node"))
-        self.cores_per_node = int(self.__get("nodes", "cores_per_node"))
-        
+        try:
+            self.min_nodes = int(self.__get("nodes", "min_nodes"))
+            self.max_nodes = int(self.__get("nodes", "max_nodes"))
+            self.processes_per_node = int(self.__get("nodes", "processes_per_node"))
+            self.cores_per_node = int(self.__get("nodes", "cores_per_node"))
+        except ValueError as e:
+            self.errors.append(self.__format_error(section="nodes",
+                                                   key="min_nodes/max_nodes/processes_per_node/cores_per_node",
+                                                   value="Value Error",
+                                                   custom_message="All values must be integers."))
+            return
+
         
         if self.max_nodes <= 0:
             self.errors.append(self.__format_error(section="nodes", 
@@ -187,6 +189,12 @@ class IOPSConfig:
                                                    key="processes_per_node", 
                                                    value=self.processes_per_node,
                                                    custom_message="Number of processes per node need to be greater than zero."))
+      
+        if self.cores_per_node <= 0:
+            self.errors.append(self.__format_error(section="nodes", 
+                                                   key="cores_per_node", 
+                                                   value=self.cores_per_node,
+                                                   custom_message="Number of cores per node need to be greater than zero."))
 
     def load_storage(self):
         self.filesystem_dir = Path(self.__get("storage", "filesystem_dir"))        
@@ -263,6 +271,7 @@ class IOPSConfig:
         self.workdir = Path(self.__get("execution", "workdir"))
         self.repetitions = int(self.__get("execution", "repetitions"))
         self.status_check_delay = int(self.__get("execution", "status_check_delay"))
+        self.walltime = self.__get("execution", "wall_time")
         self.tests = self.__get("execution", "tests")
         self.io_patterns = self.__get("execution", "io_patterns")
         wait_range_str = self.__get("execution", "wait_range")
@@ -416,6 +425,15 @@ class IOPSConfig:
                                                        key="wait_range",
                                                        value=self.wait_range,
                                                        custom_message=f"Invalid wait range: {self.wait_range[0]} should be greater than {self.wait_range[1]}"))
+        
+        # check if the walltime is a valid time format
+         # check if the time is in the correct format DD-HH:MM:SS or HH:MM:SS or MM:SS or SS
+        if not re.match(r'^((\d+)-)?((\d+):)?((\d+):)?(\d+)$', self.walltime):
+            self.errors.append(self.__format_error(section="execution",
+                                                    key="wall_time",
+                                                    value=self.walltime,
+                                                    custom_message="Invalid time format."))
+        
 
     def load_templates(self):
         bash_template_str = os.path.expandvars(self.__get("template", "bash_template"))
@@ -445,30 +463,7 @@ class IOPSConfig:
                                                    value=self.ior_2_csv,
                                                    custom_message="File not found."))
 
-    def load_slurm(self):
-        slurm_constraint_str = self.__get("slurm", "slurm_constraint")
-        slurm_partition_str = self.__get("slurm", "slurm_partition")
-        slurm_time_str = self.__get("slurm", "slurm_time")
-
-        # Parse the slurm_constraint
-        if slurm_constraint_str.lower() == 'none':
-            self.slurm_constraint = None
-        else:
-            self.slurm_constraint = [constraint.strip() for constraint in slurm_constraint_str.split(',')]
-        
-        if slurm_partition_str.lower() == 'none':
-            self.slurm_partition = None
-        else:
-            self.slurm_partition = slurm_partition_str
-                
-        # check if the time is in the correct format DD-HH:MM:SS or HH:MM:SS or MM:SS or SS
-        if not re.match(r'^((\d+)-)?((\d+):)?((\d+):)?(\d+)$', slurm_time_str):
-            self.errors.append(self.__format_error(section="execution",
-                                                    key="slurm_time",
-                                                    value=slurm_time_str,
-                                                    custom_message="Invalid time format."))
-        else:
-            self.slurm_time = slurm_time_str
+   
 
     def print_config( self, skip_confirmation: bool):
         # Display startup message with a panel
@@ -503,34 +498,20 @@ class IOPSConfig:
         table.add_row("Test Type", self.test_type.name)
         table.add_row("Mode", self.mode.name)    
         table.add_row("Search Method", self.search_method.name)
-        table.add_row("Job Manager", str(self.job_manager))
-
-        
-        
-        modules = self.modules
-        if modules is not None:        
-            modules = ", ".join(f"{module}" for module in self.modules)
-        table.add_row("Modules", str(modules))        
+        table.add_row("Job Manager", str(self.job_manager))             
         table.add_row("Workdir", str(self.workdir))
         table.add_row("Tests", ", ".join([f"{test.name}" for test in self.tests]  ))
         table.add_row("IO Patterns", ", ".join([f"{pattern[0].name}:{pattern[1].name}" for pattern in self.io_patterns]))
         table.add_row("Repetitions", str(self.repetitions))
         table.add_row("Wait Range", str(self.wait_range))
+        table.add_row("Status Check Delay", str(self.status_check_delay))
+        table.add_row("Walltime", str(self.walltime))
 
         table.add_row("")  
         table.add_row("Script Template", str(self.bash_template))
         table.add_row("Report Template", str(self.report_template))
         table.add_row("ior_2_csv script", str(self.ior_2_csv))
-
-        table.add_row("")
-        slurm_constraint = self.slurm_constraint
-        if slurm_constraint is not None:
-            slurm_constraint = ", ".join(f"{constraint}" for constraint in self.slurm_constraint)
-        table.add_row("Slurm Constraint", str(slurm_constraint))
-        table.add_row("Slurm Partition", str(self.slurm_partition))
-        table.add_row("Slurm Time", str(self.slurm_time))
-        table.add_row("")
-
+     
         table.add_row("")
         # Print the tables with section headers and horizontal rules   
         console.print(table)

@@ -95,10 +95,7 @@ class Report():
             f.write(f"\trepetitions: {self.config.repetitions}\n")
             f.write(f"\ttests: {self.config.tests}\n")  
             f.write(f"\taccess_pattern: {self.config.io_patterns}\n")
-            f.write(f"\t[slurm]")
-            f.write(f"\tslurm_constraint: {self.config.slurm_constraint}\n")
-            f.write(f"\tslurm_partition: {self.config.slurm_partition}\n")
-            f.write(f"\tslurm_time: {self.config.slurm_time}\n")
+               
             # write all information about the configuration
 
             for round in self.rounds.values():

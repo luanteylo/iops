@@ -271,68 +271,33 @@ class LocalJobManager(JobManager):
         """
         Initialize the local job manager.
         """
-        super().__init__()
-    
-    def submit(self, script_file: Path, opt_args: str = "") -> str:
+        super().__init__()    
+
+
+    def submit(self, script_file: Path, opt_args: str = "") -> Tuple[int, str]:
         """
         Submit a job script to the local system.
+
         Parameters:
         - script_file (Path): The path to the script file to be submitted.
         - opt_args (str): Optional arguments for the submission command.
+
         Returns:
-        - str: If successful, the job ID of the submitted job. Otherwise, None.
+        - Tuple[int, str]: The PID and the combined stdout/stderr output.
         """
-        # Implement local submission logic here
-        output = subprocess.run(f"bash {opt_args} {script_file}", shell=True, capture_output=True)
-        job_id = None
-        if output.returncode == 0:
-            # get process ID
-            job_id = str(output.pid)
+        cmd = f"bash {opt_args} {script_file}"
+        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pid = process.pid
+        comm = process.communicate()
+
+        return pid, comm
+
         
-        return job_id, output.stdout.decode()
-    
     def get_status(self, job_id: str, opt_args: str = "") -> str:
-        """
-        Get the status of a local job.
-        Parameters:
-        - job_id (str): The ID of the job to check.
-        - opt_args (str): Optional arguments for the status command.
-        Returns:
-        - str: The return output of the status command.
-        """
-        # Implement local status retrieval logic here
-        output = subprocess.run(f"ps -p {job_id}", shell=True, capture_output=True)
-        if output.returncode == 0:
-            # Check if the job is still running
-            if job_id in output.stdout.decode():
-                return self.STATUS_RUNNING
-            else:
-                return self.STATUS_COMPLETED
-        else:
-            return self.STATUS_FAILED
+        pass
     
-    def cancel(self, job_id: str, opt_args: str = "") -> None:
-        """
-        Cancel a local job.
-        Parameters:
-        - job_id (str): The ID of the job to cancel.
-        - opt_args (str): Optional arguments for the cancellation command.
-        """     
-        # Implement local cancellation logic here
+    def cancel(self, job_id: str, opt_args: str = "") -> None:     
         pass
 
     def wait(self, job_id: str, time_delay=5, opt_args: str = "") -> None:
-        """
-        Wait for a local job to finish. 
-        Parameters:
-        - job_id (str): The ID of the job to wait for.
-        - time_delay (int): The time delay between checks (in seconds).
-        - opt_args (str): Optional arguments for the wait command.
-        """
-        # Implement local wait logic here
-        while True:
-            status = self.get_status(job_id, opt_args)
-            if status != self.STATUS_RUNNING:
-                return status
-            time.sleep(time_delay)
-    
+        pass

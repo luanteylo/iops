@@ -47,6 +47,7 @@ class Generator:
             'workdir': '/path/to/workdir # Directory where the script files will be written',
             'repetitions': '5 # Number of repetitions for each test',
             'status_check_delay': '10 # Delay in seconds to check the status of the job.',
+            'wall_time' :  '00:30:00 # Maximum wall time for the job. Format: DD-HH:MM:SS or HH:MM:SS or MM:SS or SS (Required)',
             'tests': 'filesize, computing, striping # List of tests to execute. Supported tests: filesize, computing, striping',
             'io_patterns': 'sequential:shared, random:shared # List of IO patterns to execute. Each pattern is defined by access_pattern:file_access.\n' \
                             '             # Access pattern can be sequential or random. File access can be single (one file per process) or shared (all processes access the same file).\n' \
@@ -62,11 +63,6 @@ class Generator:
             'ior_2_csv': 'tools/ior_2_csv.py # Path to the ior_2_csv.py script.',
         }
 
-        config_slurm['slurm'] = {
-            'slurm_constraint': 'None # Slurm constraint parameter (-c) for resource definition. Set list of constraints if applicable, otherwise use None',
-            'slurm_partition': 'None # Partition to use. Use None if no partition is specified',
-            'slurm_time': '00:30:00 # Maximum job time. Format: DD-HH:MM:SS or HH:MM:SS or MM:SS or SS (Required)'
-        }
 
         with open(file_name, 'w') as config_file:
             config_file.write("# This is the default configuration file for IOPS.\n")

@@ -210,16 +210,8 @@ class TestIOR(Test):
         self.batch_path.mkdir(parents=True, exist_ok=True)
 
         parameters = {}
-        if self.config.modules is not None:
-            parameters["modules"] = self.config.modules
-    
-        if self.config.slurm_constraint is not None:
-            parameters["constraint"] = self.config.slurm_constraint
         
-        if self.config.slurm_partition is not None:
-            parameters["partition"] = self.config.slurm_partition
-        
-        parameters["time"] = self.config.slurm_time        
+        parameters["time"] = self.config.walltime        
         
         parameters["job_name"] = f"iops_{self.test_id}"
         parameters["chdir"] = self.batch_file.parent
