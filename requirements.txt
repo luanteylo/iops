@@ -1,11 +1,1 @@
-matplotlib
-numpy
-pandas
-scipy
-seaborn
-paramiko
-rich
-jinja2
-plotly
-nbformat
-pexpect
+colorama

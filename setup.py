@@ -1,19 +1,18 @@
 from setuptools import setup, find_packages
 
-from version import __version__
-
-with open('requirements.txt') as f:
-    required_packages = f.read().splitlines()
+# Read dependencies from requirements.txt
+def parse_requirements(filename):
+    with open(filename, "r") as f:
+        return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
 setup(
-    name='iops_env',
-    version=__version__,
-    author='Luan Teylo',
-    author_email='luan.teylo@inria.fr',
-    long_description=open('README.md').read(),
-    long_description_content_type='text/markdown',
-    url='https://gitlab.inria.fr/lgouveia/iops',
+    name="iops",
+    version="0.1",
     packages=find_packages(),
-    install_requires=required_packages,
-    python_requires='>=3.10',
+    install_requires=parse_requirements("requirements.txt"),
+    entry_points={
+        "console_scripts": [
+            "iops=iops.main:main",
+        ],
+    },
 )
