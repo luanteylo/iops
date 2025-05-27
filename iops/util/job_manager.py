@@ -4,7 +4,7 @@ import subprocess
 import time
 from pathlib import Path
 import re
-
+import subprocess
 from typing import Tuple
 
 from iops.util.tags import jobManager_Tag
@@ -115,6 +115,14 @@ class JobManager:
     def __str__(self):
         return self.__name__
     
+    def get_tag(self) -> jobManager_Tag:
+        """
+        Get the tag of the job manager.
+        Returns:
+        - jobManager_Tag: The tag of the job manager.
+        """
+        return jobManager_Tag[self.__name__]
+    
 class SlurmJobManager(JobManager):
     """
     Class for handling SLURM job submission and management.
@@ -145,7 +153,7 @@ class SlurmJobManager(JobManager):
             job_id = output.stdout.decode().strip().split()[-1]        
         return job_id, output
     
-    import subprocess
+    
 
     def get_status(self, job_id: str, opt_args: str = "") -> str:
         """

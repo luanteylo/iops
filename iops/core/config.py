@@ -364,13 +364,13 @@ class IOPSConfig:
                                                        custom_message=str(e)))
         
         # check if  the tests pattern is valid considering the execution mode
-        if self.job_manager == jobManager_Tag.LOCAL:
+        if self.job_manager.get_tag() == jobManager_Tag.LOCAL:            
             for test in self.tests:
                 if test in [Parameter.COMPUTING, Parameter.STRIPING]:
                     self.errors.append(self.__format_error(section="execution",
                                                        key="tests",
                                                        value=f"{test.name}",
-                                                       custom_message=f"Test Type {test.name} only filesize test is allowed when using {self.job_manager.name} job manager."))
+                                                       custom_message=f"Test Type {test.name} only filesize test is allowed when using {self.job_manager} job manager."))
         # Parse and load the modules
         if modules_str.lower() == 'none':
             self.modules = None
