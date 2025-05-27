@@ -173,7 +173,7 @@ class SlurmJobManager(JobManager):
         if status:
             return status  # Job is still in the queue (e.g., PENDING, RUNNING)       
 
-        return "UNKNOWN"  # If no found. It probably finished, so we can move to the next step
+        return "FINISHED"  # If no found. It probably finished, so we can move to the next step
 
     
     def cancel(self, job_id: str, opt_args: str = "") -> None:
