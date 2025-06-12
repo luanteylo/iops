@@ -5,32 +5,33 @@ from pathlib import Path
 from iops.utils.file_utils import FileUtils
 from iops.utils.logger import setup_logger
 from iops.controller.runner import IOPSRunner
+from iops.utils.config_loader import ConfigValidationError
 
 
 def main():
-    parser = argparse.ArgumentParser(description="IOPS Benchmark Tool")
+    parser = argparse.ArgumentParser(description="IOPS Tool")
 
     parser.add_argument(
         'setup_file',
         type=Path,
         nargs='?',
         default=None,
-        help="Path to the .ini setup file to load (optional unless running execution)"
+        help="Path to the YAML setup file (e.g., iops_config.yaml)"
     )
 
     parser.add_argument(
         '--generate_setup',
         nargs='?',
-        const="iops_config.ini",
+        const=Path("iops_config.yaml"),
         default=None,
         type=Path,
-        help="Generate a default setup .ini file. Optionally specify a path (default: iops_config.ini)"
+        help="Generate a default setup YAML file. Optionally specify a path (default: iops_config.yaml)"
     )
 
     parser.add_argument(
         '--check_setup',
         action='store_true',
-        help="Check the validity of the setup .ini file but do not start the execution"
+        help="Check the validity of the setup YAML file but do not start the execution"
     )
 
     parser.add_argument(
@@ -53,6 +54,12 @@ def main():
         help="Set the logging level (default: INFO)"
     )
 
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help="Show full traceback for errors"
+    )
+
     args = parser.parse_args()
 
     logger = setup_logger(
@@ -66,7 +73,7 @@ def main():
     fu = FileUtils()
 
     if args.generate_setup is not None:
-        logger.info(f"Generating setup file at: {args.generate_setup}")
+        logger.info(f"Generating default YAML setup file at: {args.generate_setup}")
         fu.generate_iops_config(args.generate_setup)
         logger.info("Setup file generated successfully.")
         return
@@ -77,6 +84,8 @@ def main():
 
     logger.info(f"Loading configuration from: {args.setup_file}")
     config = fu.load_iops_config(args.setup_file)
+
+    logger.debug(f"Configuration loaded: {config}")
     logger.info("Configuration loaded successfully.")
 
     try:
@@ -84,9 +93,20 @@ def main():
         logger.info("Configuration is valid.")
         if args.check_setup:
             return
-    except ValueError as e:
-        logger.error(f"Configuration validation failed: {e}")
-        return
+
+    except ConfigValidationError as e:
+        if args.verbose:
+            raise
+        else:
+            logger.error(f"Configuration validation failed:\n  → {e}")
+            return
+
+    except Exception as e:
+        if args.verbose:
+            raise
+        else:
+            logger.error(f"Unexpected error: {e}")
+            return
 
     logger.info("Starting IOPS execution with the provided configuration.")
     runner = IOPSRunner(config)

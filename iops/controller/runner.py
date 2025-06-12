@@ -24,42 +24,45 @@ class IOPSRunner(HasLogger):
 
     def run(self):
         """
-        Execute the full benchmarking workflow.
-        - Plan benchmark phases
-        - Select executor (Slurm or Local)
-        - Generate and submit jobs
-        - Analyze results and select best parameters
+        Execute the full benchmarking workflow with phase repetition and randomization.
+            - Plan benchmark phases
+            - Select executor (Slurm or Local)
+            - Generate and submit jobs
+            - Analyze results and select best parameters
         """
         self.logger.info("Starting IOPS benchmarking process")
-
-        planner = SweepPlanner(self.config)
-        analyzer = MetricsAnalyzer()
         benchmark = IORBenchmark(self.config)
-
-        job_manager = self.config.execution.job_manager.lower()
-        if job_manager == "slurm":
-            executor = SlurmExecutor(self.config)
-        elif job_manager == "local":
-            executor = LocalExecutor(self.config)
-        else:
-            raise ValueError(f"Unsupported job manager: {self.config.execution.job_manager}")
+        planner = SweepPlanner(self.config, benchmark)
+        analyzer = MetricsAnalyzer()
+        executor = SlurmExecutor(self.config)
+     
 
         for phase in planner.phases():
-            self.logger.info(f"Running phase: {phase.name}")
+            self.logger.info(f"Running phase: {phase.sweep_param}")
 
-            for params in phase.get_parameter_combinations():
-                self.logger.info(f"Submitting job with parameters: {params}")
+            all_combinations = list(phase.get_parameter_combinations())
+
+            for params in all_combinations:
+                self.logger.info(f"Submitting Test {params.get('__test_uid__')} - Repetition: {params.get('__rep__')}. Parameters:")
+                self.logger.info(f"\tnodes: {params.get('nodes')}, volume: {params.get('volume')}, ost_count: {params.get('ost_count').name}")  
+                self.logger.info(f"\tPattern: {params.get('io_pattern')}, Operation: {params.get('operation')}")
+
+                
                 job_script = benchmark.generate(params)
-                job_id = executor.submit(job_script)
+                job_id = executor.submit(job_script)                
                 output_data = executor.wait_and_collect(job_id)
                 result = benchmark.parse_output(output_data["output_path"])
-
-                self.logger.info(f"Received result for job {job_id}: {result}")
+                self.logger.info(f"\tBandwidth: {result.get('bandwidth', 'N/A')} MB/s, {result.get('latency', 'N/A')} ms")              
                 analyzer.record(result, params)
 
             best = analyzer.select_best(phase.criterion)
-            self.logger.info(f"Best parameters for phase '{phase.name}': {best}")
+            self.logger.info(f"Best parameters for phase '{phase.sweep_param}': ")
+            self.logger.info(f"\t nodes: {best.get('nodes')}, volume: {best.get('volume')}, ost_count: {best.get('ost_count').name}")            
+            self.logger.info(f"\t Best {phase.criterion}: {best.get(phase.criterion)}")
 
-            planner.update_for_next_phase(PhaseResult(phase.name, best))
+            planner.update_for_next_phase(PhaseResult(phase.sweep_param, best))
+            analyzer.clean() # Clear results for next phase
 
         self.logger.info("All benchmarking phases completed.")
+
+

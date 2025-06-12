@@ -1,0 +1,30 @@
+nodes:
+  min_nodes: 32  # Minimum number of nodes to use
+  max_nodes: 32 # Maximum number of nodes to use
+  processes_per_node: 8 # Number of processes per node
+  cores_per_node: 32 # Number of physical cores per node
+storage:
+  filesystem_dir: /home/luan/filesystem  # Root path of the storage filesystem
+  min_volume: 1024 # Minimum data volume in MB
+  max_volume: 2048 # Maximum data volume in MB
+  volume_step: 1024 # Step size (MB) to increase volume per test
+  default_stripe: 0 # Default stripe count to apply
+# Folders under filesystem_dir to apply striping, with stripe count per folder
+  stripe_folders:
+    - name: folder1  # Folder under filesystem_dir
+      stripe_count: 1 # Number of OSTs to stripe across
+execution:
+  test_type: write_only  # write_only or write_read  
+  search_method: greedy # Search method for test generation
+  job_manager: slurm # Job scheduler to use
+  benchmark_tool: ior # Benchmark tool to run  
+  workdir: /home/luan/workdir # Where test jobs and results are written
+  repetitions: 1 # Repetitions per test case
+  status_check_delay: 10 # Delay (s) between job status checks
+  wall_time: 00:30:00 # Max walltime for each job (hh:mm:ss)
+  tests: # Test dimensions (matrix axes)
+    - volume
+    - nodes
+  io_pattern: sequential:shared    
+template:
+  bash_template: $IOPS_HOME/iops/config/templates/slurm_template.sh.j2  # Path to job submission script template

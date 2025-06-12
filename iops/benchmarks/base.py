@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 from iops.utils.logger import HasLogger
+from typing import List, Dict, Any
+from iops.utils.config_loader import IOPSConfig
+from iops.controller.planner.base_planner import BasePlanner, PhaseResult, Phase
 
 class BenchmarkRunner(ABC, HasLogger):
     """
@@ -24,5 +27,14 @@ class BenchmarkRunner(ABC, HasLogger):
         """
         Parse the output of the benchmark run and return relevant metrics as a dictionary.
         Example: {'bandwidth_avg': 1234.5, 'latency': 4.2}
+        """
+        pass
+
+    @abstractmethod
+    def build_phases(self) -> list:
+        """
+        Build the phases for the benchmark execution.
+        Each phase should define a set of parameters to vary and the expected results.
+        Returns a list of Phase objects.
         """
         pass

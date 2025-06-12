@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import List
-import configparser
+from typing import List, Optional
 from pathlib import Path
+import yaml
+import os
 
 
 @dataclass
@@ -12,38 +13,39 @@ class NodesConfig:
     cores_per_node: int
 
 
+@dataclass(frozen=True)  # <- frozen makes it hashable
+class StripeFolder:
+    name: Path
+    stripe_count: int
+
+
 @dataclass
 class StorageConfig:
-    filesystem_dir: str
+    filesystem_dir: Path
     min_volume: int
     max_volume: int
     volume_step: int
     default_stripe: int
-    stripe_folders: List[str]
+    stripe_folders: List[StripeFolder]
 
 
 @dataclass
 class ExecutionConfig:
-    test_type: str
-    mode: str
+    test_type: str    
     search_method: str
     job_manager: str
-    benchmark_tool: str
-    modules: str
-    workdir: str
+    benchmark_tool: str    
+    workdir: Path
     repetitions: int
     status_check_delay: int
     wall_time: str
     tests: List[str]
-    io_patterns: List[str]
-    wait_range: List[int]
+    io_pattern: str    
 
 
 @dataclass
 class TemplateConfig:
-    bash_template: str
-    report_template: str
-    ior_2_csv: str
+    bash_template: Path
 
 
 @dataclass
@@ -58,58 +60,51 @@ class ConfigValidationError(Exception):
     pass
 
 
-def _get_value(config: configparser.ConfigParser, section: str, key: str) -> str:
-    value = config.get(section, key)
-    return value.split("#")[0].strip() if "#" in value else value.strip()
-
-
 def _is_power_of_two(n: int) -> bool:
     return (n > 0) and (n & (n - 1) == 0)
 
 
+def _expand(p: str) -> Path:
+    return Path(os.path.expandvars(p)).expanduser().resolve()
+
+
 def load_config(config_path: Path) -> IOPSConfig:
-    config = configparser.ConfigParser()
-    config.read(config_path)
+    with open(config_path, "r") as f:
+        data = yaml.safe_load(f)
 
-    nodes = NodesConfig(
-        min_nodes=int(_get_value(config, "nodes", "min_nodes")),
-        max_nodes=int(_get_value(config, "nodes", "max_nodes")),
-        processes_per_node=int(_get_value(config, "nodes", "processes_per_node")),
-        cores_per_node=int(_get_value(config, "nodes", "cores_per_node")),
+    fs_dir = _expand(data["storage"]["filesystem_dir"])
+
+    return IOPSConfig(
+        nodes=NodesConfig(**data["nodes"]),
+        storage=StorageConfig(
+            filesystem_dir=fs_dir,
+            min_volume=data["storage"]["min_volume"],
+            max_volume=data["storage"]["max_volume"],
+            volume_step=data["storage"]["volume_step"],
+            default_stripe=data["storage"]["default_stripe"],
+            stripe_folders=[
+                StripeFolder(
+                    name=fs_dir / Path(entry["name"]),
+                    stripe_count=entry["stripe_count"]
+                ) for entry in data["storage"]["stripe_folders"]
+            ],
+        ),
+        execution=ExecutionConfig(
+            test_type=data["execution"]["test_type"],            
+            search_method=data["execution"]["search_method"],
+            job_manager=data["execution"]["job_manager"],
+            benchmark_tool=data["execution"]["benchmark_tool"],            
+            workdir=_expand(data["execution"]["workdir"]),
+            repetitions=data["execution"]["repetitions"],
+            status_check_delay=data["execution"]["status_check_delay"],
+            wall_time=data["execution"]["wall_time"],
+            tests=data["execution"]["tests"],
+            io_pattern=data["execution"]["io_pattern"],            
+        ),
+        template=TemplateConfig(
+            bash_template=_expand(data["template"]["bash_template"]),
+        ),
     )
-
-    storage = StorageConfig(
-        filesystem_dir=_get_value(config, "storage", "filesystem_dir"),
-        min_volume=int(_get_value(config, "storage", "min_volume")),
-        max_volume=int(_get_value(config, "storage", "max_volume")),
-        volume_step=int(_get_value(config, "storage", "volume_step")),
-        default_stripe=int(_get_value(config, "storage", "default_stripe")),
-        stripe_folders=[s.strip() for s in _get_value(config, "storage", "stripe_folders").split(",")]
-    )
-
-    execution = ExecutionConfig(
-        test_type=_get_value(config, "execution", "test_type"),
-        mode=_get_value(config, "execution", "mode"),
-        search_method=_get_value(config, "execution", "search_method"),
-        job_manager=_get_value(config, "execution", "job_manager"),
-        benchmark_tool=_get_value(config, "execution", "benchmark_tool"),
-        modules=_get_value(config, "execution", "modules"),
-        workdir=_get_value(config, "execution", "workdir"),
-        repetitions=int(_get_value(config, "execution", "repetitions")),
-        status_check_delay=int(_get_value(config, "execution", "status_check_delay")),
-        wall_time=_get_value(config, "execution", "wall_time"),
-        tests=[t.strip() for t in _get_value(config, "execution", "tests").split(",")],
-        io_patterns=[p.strip() for p in _get_value(config, "execution", "io_patterns").split(",")],
-        wait_range=[int(x.strip()) for x in _get_value(config, "execution", "wait_range").split(",")]
-    )
-
-    template = TemplateConfig(
-        bash_template=_get_value(config, "template", "bash_template"),
-        report_template=_get_value(config, "template", "report_template"),
-        ior_2_csv=_get_value(config, "template", "ior_2_csv")
-    )
-
-    return IOPSConfig(nodes, storage, execution, template)
 
 
 def validate_config(config: IOPSConfig):
@@ -133,11 +128,42 @@ def validate_config(config: IOPSConfig):
 
     if config.execution.test_type not in {"write_only", "write_read"}:
         raise ConfigValidationError(f"Invalid test_type: {config.execution.test_type}")
-    if config.execution.mode not in {"normal", "debug"}:
-        raise ConfigValidationError(f"Invalid mode: {config.execution.mode}")
     if config.execution.repetitions <= 0:
         raise ConfigValidationError("repetitions must be greater than 0")
-    if not config.execution.workdir:
-        raise ConfigValidationError("execution.workdir must be specified")
+
+    if not config.execution.workdir.exists():
+        raise ConfigValidationError(f"execution.workdir does not exist: {config.execution.workdir}")
+    if not config.execution.workdir.is_dir():
+        raise ConfigValidationError("execution.workdir must be a directory")
+
+    if not config.storage.filesystem_dir.exists():
+        raise ConfigValidationError(f"filesystem_dir does not exist: {config.storage.filesystem_dir}")
+    if not config.storage.filesystem_dir.is_dir():
+        raise ConfigValidationError("filesystem_dir must be a directory")
+
     if not config.storage.stripe_folders:
         raise ConfigValidationError("At least one stripe folder must be provided")
+    for sf in config.storage.stripe_folders:
+        if not sf.name.exists():
+            raise ConfigValidationError(f"Stripe folder does not exist: {sf.name}")
+        if not sf.name.is_dir():
+            raise ConfigValidationError(f"Stripe folder is not a directory: {sf.name}")
+        if sf.stripe_count <= 0:
+            raise ConfigValidationError(f"Invalid stripe_count for {sf.name}: must be > 0")
+        
+    # if benchmark is IOR, validate specific parameters
+    if config.execution.benchmark_tool.lower() == "ior":
+        if not config.execution.tests:
+            raise ConfigValidationError("At least one test must be specified for IOR benchmark")
+        if not config.execution.io_pattern:
+            raise ConfigValidationError("An IO pattern must be specified for the IOR benchmark")
+        if config.execution.io_pattern not in {"sequential:shared", "random:shared"}:
+            raise ConfigValidationError(f"Invalid IO pattern for IOR: {config.execution.io_pattern}")
+        for test in config.execution.tests:
+            if test not in {"nodes", "volume", "ost_count"}:
+                raise ConfigValidationError(f"Invalid test type for IOR: {test}")
+        
+    if not config.template.bash_template.exists():
+        raise ConfigValidationError(f"bash_template file does not exist: {config.template.bash_template}")
+    if not config.template.bash_template.is_file():
+        raise ConfigValidationError(f"bash_template path is not a file: {config.template.bash_template}")
