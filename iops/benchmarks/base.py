@@ -31,7 +31,7 @@ class BenchmarkRunner(ABC, HasLogger):
         pass
 
     @abstractmethod
-    def build_phases(self) -> list:
+    def build_phase(self) -> list:
         """
         Build the phases for the benchmark execution.
         Each phase should define a set of parameters to vary and the expected results.

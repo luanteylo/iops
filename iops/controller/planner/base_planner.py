@@ -58,7 +58,11 @@ class Phase:
 
 class BasePlanner(ABC):
     @abstractmethod
-    def phases(self):
+    def next_phase(self):
+        pass
+
+    @abstractmethod
+    def has_next_phase(self) -> bool:
         pass
 
     @abstractmethod

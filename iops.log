@@ -6223,3 +6223,190 @@
 [2025-06-12 13:01:18] [SweepPlanner    ]    DEBUG: History after update: {'processes_per_node': 8, 'operation': 'write_only', 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'volume': 1024, 'cores_per_node': 32, 'nodes': 32, 'io_pattern': 'sequential:shared', 'bandwidth': 701.1777370461648}
 [2025-06-12 13:01:18] [MetricsAnalyzer ]    DEBUG: Clearing recorded results
 [2025-06-12 13:01:18] [IOPSRunner      ]     INFO: All benchmarking phases completed.
+[2025-06-12 13:13:03] [iops            ]     INFO: Loading configuration from: iops_config.yaml
+[2025-06-12 13:13:03] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-12 13:13:03] [iops            ]     INFO: Configuration is valid.
+[2025-06-12 13:13:03] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-12 13:13:03] [IOPSRunner      ]     INFO: Starting IOPS benchmarking process
+[2025-06-12 13:13:55] [iops            ]     INFO: Loading configuration from: iops_config.yaml
+[2025-06-12 13:13:55] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-12 13:13:55] [iops            ]     INFO: Configuration is valid.
+[2025-06-12 13:13:55] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-12 13:13:55] [IOPSRunner      ]     INFO: Starting IOPS benchmarking process
+[2025-06-12 13:15:02] [iops            ]     INFO: Loading configuration from: iops_config.yaml
+[2025-06-12 13:15:02] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-12 13:15:02] [iops            ]     INFO: Configuration is valid.
+[2025-06-12 13:15:02] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-12 13:15:02] [IOPSRunner      ]     INFO: Starting IOPS benchmarking process
+[2025-06-12 13:15:02] [SweepPlanner    ]     INFO: Generating phase for parameter: volume
+[2025-06-12 13:15:29] [iops            ]     INFO: Loading configuration from: iops_config.yaml
+[2025-06-12 13:15:29] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-12 13:15:29] [iops            ]     INFO: Configuration is valid.
+[2025-06-12 13:15:29] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Starting IOPS benchmarking process
+[2025-06-12 13:15:29] [SweepPlanner    ]     INFO: Generating phase for parameter: volume
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Running phase: volume
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Submitting Test e10735cc-fc2e-432e-bc0e-19d85f1a7d16 - Repetition: 0. Parameters:
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	Bandwidth: 430.68795452355346 MB/s, 3.7701014039790812 ms
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Submitting Test 098ee26d-5fbb-433b-b918-9fcef8593e9a - Repetition: 0. Parameters:
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	Bandwidth: 352.6664037381223 MB/s, 3.5128094522949533 ms
+[2025-06-12 13:15:29] [MetricsAnalyzer ]     INFO: Test UID e10735cc-fc2e-432e-bc0e-19d85f1a7d16: avg bandwidth = 430.68795452355346, group size = 1
+[2025-06-12 13:15:29] [MetricsAnalyzer ]     INFO: Test UID 098ee26d-5fbb-433b-b918-9fcef8593e9a: avg bandwidth = 352.6664037381223, group size = 1
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Best parameters for phase 'volume': 
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	 Best bandwidth: 430.68795452355346
+[2025-06-12 13:15:29] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='volume', best_params={'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'processes_per_node': 8, 'nodes': 32, 'cores_per_node': 32, 'io_pattern': 'sequential:shared', 'operation': 'write_only', 'volume': 1024, 'bandwidth': 430.68795452355346})
+[2025-06-12 13:15:29] [SweepPlanner    ]     INFO: Generating phase for parameter: nodes
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Running phase: nodes
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Submitting Test 527db491-2374-410f-a895-78f39761a751 - Repetition: 0. Parameters:
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	Bandwidth: 509.27664554075045 MB/s, 3.390288951762444 ms
+[2025-06-12 13:15:29] [MetricsAnalyzer ]     INFO: Test UID 527db491-2374-410f-a895-78f39761a751: avg bandwidth = 509.27664554075045, group size = 1
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: Best parameters for phase 'nodes': 
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: 	 Best bandwidth: 509.27664554075045
+[2025-06-12 13:15:29] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='nodes', best_params={'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'processes_per_node': 8, 'nodes': 32, 'cores_per_node': 32, 'io_pattern': 'sequential:shared', 'operation': 'write_only', 'volume': 1024, 'bandwidth': 509.27664554075045})
+[2025-06-12 13:15:29] [IOPSRunner      ]     INFO: All benchmarking phases completed.
+[2025-06-12 13:15:58] [iops            ]     INFO: Loading configuration from: iops_config.yaml
+[2025-06-12 13:15:58] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-12 13:15:58] [iops            ]     INFO: Configuration is valid.
+[2025-06-12 13:15:58] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Starting IOPS benchmarking process
+[2025-06-12 13:15:58] [SweepPlanner    ]     INFO: Generating phase for parameter: volume
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Running phase: volume
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Submitting Test 9d7467ba-f25a-4c37-aa34-03cc6890cd4d - Repetition: 0. Parameters:
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Bandwidth: 697.6007360883074 MB/s, 3.5455661968179104 ms
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Submitting Test 88fcf0a0-ad17-4763-b3a7-e71e9132fc44 - Repetition: 1. Parameters:
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Bandwidth: 820.5837196036663 MB/s, 4.869356249908263 ms
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Submitting Test 88fcf0a0-ad17-4763-b3a7-e71e9132fc44 - Repetition: 0. Parameters:
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Bandwidth: 660.5571168819572 MB/s, 4.968907051550611 ms
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Submitting Test 9d7467ba-f25a-4c37-aa34-03cc6890cd4d - Repetition: 1. Parameters:
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Bandwidth: 858.469304878068 MB/s, 3.3927249210390378 ms
+[2025-06-12 13:15:58] [MetricsAnalyzer ]     INFO: Test UID 9d7467ba-f25a-4c37-aa34-03cc6890cd4d: avg bandwidth = 778.0350204831877, group size = 2
+[2025-06-12 13:15:58] [MetricsAnalyzer ]     INFO: Test UID 88fcf0a0-ad17-4763-b3a7-e71e9132fc44: avg bandwidth = 740.5704182428117, group size = 2
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Best parameters for phase 'volume': 
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	 Best bandwidth: 778.0350204831877
+[2025-06-12 13:15:58] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='volume', best_params={'volume': 2048, 'io_pattern': 'sequential:shared', 'cores_per_node': 32, 'operation': 'write_only', 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'processes_per_node': 8, 'nodes': 32, 'bandwidth': 778.0350204831877})
+[2025-06-12 13:15:58] [SweepPlanner    ]     INFO: Generating phase for parameter: nodes
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Running phase: nodes
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Submitting Test 2041e2dd-892c-4a13-b4cd-4b30d94ed4a4 - Repetition: 1. Parameters:
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Bandwidth: 680.3236077977197 MB/s, 3.582028297822556 ms
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Submitting Test 2041e2dd-892c-4a13-b4cd-4b30d94ed4a4 - Repetition: 0. Parameters:
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	Bandwidth: 450.39066478600273 MB/s, 4.198282533311857 ms
+[2025-06-12 13:15:58] [MetricsAnalyzer ]     INFO: Test UID 2041e2dd-892c-4a13-b4cd-4b30d94ed4a4: avg bandwidth = 565.3571362918613, group size = 2
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: Best parameters for phase 'nodes': 
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: 	 Best bandwidth: 565.3571362918613
+[2025-06-12 13:15:58] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='nodes', best_params={'volume': 2048, 'io_pattern': 'sequential:shared', 'cores_per_node': 32, 'operation': 'write_only', 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'processes_per_node': 8, 'nodes': 32, 'bandwidth': 565.3571362918613})
+[2025-06-12 13:15:58] [IOPSRunner      ]     INFO: All benchmarking phases completed.
+[2025-06-12 13:17:04] [iops            ]     INFO: Loading configuration from: iops_config.yaml
+[2025-06-12 13:17:04] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-12 13:17:04] [iops            ]     INFO: Configuration is valid.
+[2025-06-12 13:17:04] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Starting IOPS benchmarking process
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Generating phase for parameter: volume
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Running phase: volume
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test c732284a-b044-4ba7-bc59-bbbbda2a648a - Repetition: 1. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 756.0453128419954 MB/s, 4.4695756675336895 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 0c8983a2-61f4-494e-a3ce-8600b2d9a0e3 - Repetition: 1. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 458.9711614310622 MB/s, 4.159589845993551 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 0c8983a2-61f4-494e-a3ce-8600b2d9a0e3 - Repetition: 0. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 572.63949129763 MB/s, 3.392659460017008 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test c732284a-b044-4ba7-bc59-bbbbda2a648a - Repetition: 0. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 421.634342705138 MB/s, 4.132269884494649 ms
+[2025-06-12 13:17:04] [MetricsAnalyzer ]     INFO: Test UID c732284a-b044-4ba7-bc59-bbbbda2a648a: avg bandwidth = 588.8398277735666, group size = 2
+[2025-06-12 13:17:04] [MetricsAnalyzer ]     INFO: Test UID 0c8983a2-61f4-494e-a3ce-8600b2d9a0e3: avg bandwidth = 515.8053263643461, group size = 2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Best parameters for phase 'volume': 
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 Best bandwidth: 588.8398277735666
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='volume', best_params={'io_pattern': 'sequential:shared', 'nodes': 32, 'processes_per_node': 8, 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'volume': 2048, 'operation': 'write_only', 'cores_per_node': 32, 'bandwidth': 588.8398277735666})
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Generating phase for parameter: nodes
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Running phase: nodes
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test f2f7b686-4116-44b3-8da2-0cba5553431c - Repetition: 1. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 565.2735248441463 MB/s, 3.0620354928030324 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test f2f7b686-4116-44b3-8da2-0cba5553431c - Repetition: 0. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 370.50173656720096 MB/s, 3.642806028750803 ms
+[2025-06-12 13:17:04] [MetricsAnalyzer ]     INFO: Test UID f2f7b686-4116-44b3-8da2-0cba5553431c: avg bandwidth = 467.88763070567364, group size = 2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Best parameters for phase 'nodes': 
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 Best bandwidth: 467.88763070567364
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='nodes', best_params={'io_pattern': 'sequential:shared', 'nodes': 32, 'processes_per_node': 8, 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'volume': 2048, 'operation': 'write_only', 'cores_per_node': 32, 'bandwidth': 467.88763070567364})
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Generating phase for parameter: ost_count
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Running phase: ost_count
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 5456c174-9512-46bd-a57c-f3c3bd6c33fe - Repetition: 0. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 351.335723375837 MB/s, 3.530872337322545 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test e896e36f-477a-4b64-a514-a44786ef63d6 - Repetition: 0. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 867.7512144246411 MB/s, 4.505266480884775 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test e896e36f-477a-4b64-a514-a44786ef63d6 - Repetition: 1. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 581.3522133688822 MB/s, 4.166067459392482 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 5456c174-9512-46bd-a57c-f3c3bd6c33fe - Repetition: 1. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder1
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 374.812399518063 MB/s, 4.343061442354504 ms
+[2025-06-12 13:17:04] [MetricsAnalyzer ]     INFO: Test UID 5456c174-9512-46bd-a57c-f3c3bd6c33fe: avg bandwidth = 363.07406144695, group size = 2
+[2025-06-12 13:17:04] [MetricsAnalyzer ]     INFO: Test UID e896e36f-477a-4b64-a514-a44786ef63d6: avg bandwidth = 724.5517138967616, group size = 2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Best parameters for phase 'ost_count': 
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 Best bandwidth: 724.5517138967616
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='ost_count', best_params={'io_pattern': 'sequential:shared', 'nodes': 32, 'processes_per_node': 8, 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder2'), stripe_count=2), 'volume': 2048, 'operation': 'write_only', 'cores_per_node': 32, 'bandwidth': 724.5517138967616})
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Generating phase for parameter: volume
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Running phase: volume
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 3372fed2-f48d-4c40-ac47-4211985bb719 - Repetition: 0. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 501.0626259002747 MB/s, 3.5554494200037583 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 4cfc9e3f-abda-42cd-849a-beb7bc97db63 - Repetition: 0. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 396.64991776775014 MB/s, 3.9655388128130538 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 4cfc9e3f-abda-42cd-849a-beb7bc97db63 - Repetition: 1. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 1024, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 363.9616417499254 MB/s, 3.1980869256623166 ms
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Submitting Test 3372fed2-f48d-4c40-ac47-4211985bb719 - Repetition: 1. Parameters:
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Pattern: sequential:shared, Operation: write_only
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	Bandwidth: 625.5715851465889 MB/s, 4.5854229525475825 ms
+[2025-06-12 13:17:04] [MetricsAnalyzer ]     INFO: Test UID 3372fed2-f48d-4c40-ac47-4211985bb719: avg bandwidth = 563.3171055234318, group size = 2
+[2025-06-12 13:17:04] [MetricsAnalyzer ]     INFO: Test UID 4cfc9e3f-abda-42cd-849a-beb7bc97db63: avg bandwidth = 380.30577975883773, group size = 2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: Best parameters for phase 'volume': 
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 nodes: 32, volume: 2048, ost_count: /home/luan/filesystem/folder2
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: 	 Best bandwidth: 563.3171055234318
+[2025-06-12 13:17:04] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='volume', best_params={'io_pattern': 'sequential:shared', 'nodes': 32, 'processes_per_node': 8, 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder2'), stripe_count=2), 'volume': 2048, 'operation': 'write_only', 'cores_per_node': 32, 'bandwidth': 563.3171055234318})
+[2025-06-12 13:17:04] [IOPSRunner      ]     INFO: All benchmarking phases completed.

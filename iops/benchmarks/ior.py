@@ -38,65 +38,57 @@ class IORBenchmark(BenchmarkRunner):
             "latency": latency
         }
     
-    def build_phases(self) -> List[Phase]:
+  
+    def build_phase(self, sweep_param: str, fixed_params: dict) -> Phase:
         """
-        Builds the phases for the IOR benchmark execution.
-        Each phase defines a set of parameters to vary and the expected results.
-        Returns a list of Phase objects.
+        Builds a single Phase based on the sweep_param and current best fixed_params.
         """
-        self.logger.debug("Building IOR benchmark phases")
-        # with IOR we need to define thre parameters range for the sweep
+        self.logger.debug(f"Building phase for: {sweep_param} with fixed_params: {fixed_params}")
+
         volume_range = list(range(
-                self.config.storage.min_volume,
-                self.config.storage.max_volume + 1,
-                self.config.storage.volume_step))
-        
+            self.config.storage.min_volume,
+            self.config.storage.max_volume + 1,
+            self.config.storage.volume_step))
+
         nodes_range = [2**i for i in range(
             self.config.nodes.min_nodes.bit_length() - 1,
             self.config.nodes.max_nodes.bit_length())]
 
         stripe_folders = self.config.storage.stripe_folders
 
-        phases = []
-        
-        fixed_params = {
-            "processes_per_node": self.config.nodes.processes_per_node,
-            "cores_per_node": self.config.nodes.cores_per_node,                        
-            "io_pattern": self.config.execution.io_pattern,
-            "operation": self.config.execution.test_type,
-        }
+        # Choose sweep values based on parameter
+        if sweep_param == "volume":
+            values = volume_range
+        elif sweep_param == "nodes":
+            values = nodes_range
+        elif sweep_param == "ost_count":
+            values = stripe_folders
+        else:
+            raise ValueError(f"Unknown test parameter: {sweep_param}")
+
         full_param_space = {
             "volume": volume_range,
             "nodes": nodes_range,
             "ost_count": stripe_folders
-        }        
+        }
 
-        
-        # for each test_type we will create a phase
-        for test in self.config.execution.tests:
-            # if test is  file_size
-            self.logger.debug(f"Creating phase for test: {test}")
+        # Fill in standard fixed parameters
+        full_fixed = {
+            "processes_per_node": self.config.nodes.processes_per_node,
+            "cores_per_node": self.config.nodes.cores_per_node,
+            "io_pattern": self.config.execution.io_pattern,  # string now
+            "operation": self.config.execution.test_type,
+        }
+        full_fixed.update(fixed_params)
 
-            if test == "volume":                
-                values = volume_range
-                self.logger.debug(f"Setting up phase for filesize with values: {values}")
-            elif test == "nodes":                
-                values = nodes_range
-                self.logger.debug(f"Setting up phase for computing with values: {values}")
-            elif test == "ost_count":                
-                values = stripe_folders
-                self.logger.debug(f"Setting up phase for striping with values: {values}")
-            else:
-                self.logger.error(f"Unknown test type: {test}")
-                raise ValueError(f"Unknown test type: {test}")
+        return Phase(
+            sweep_param=sweep_param,
+            values=values,
+            fixed_params=full_fixed,
+            full_param_space=full_param_space,
+            repetitions=self.config.execution.repetitions
+        )
 
-            phases.append(Phase(sweep_param=test,
-                                values=values,
-                                fixed_params=fixed_params.copy(),
-                                full_param_space=full_param_space,                                
-                                repetitions=self.config.execution.repetitions))
-        
-        return phases
             
 
             

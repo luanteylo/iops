@@ -13,18 +13,22 @@ storage:
   stripe_folders:
     - name: folder1  # Folder under filesystem_dir
       stripe_count: 1 # Number of OSTs to stripe across
+    - name: folder2
+      stripe_count: 2
 execution:
   test_type: write_only  # write_only or write_read  
   search_method: greedy # Search method for test generation
   job_manager: slurm # Job scheduler to use
   benchmark_tool: ior # Benchmark tool to run  
   workdir: /home/luan/workdir # Where test jobs and results are written
-  repetitions: 1 # Repetitions per test case
+  repetitions: 2 # Repetitions per test case
   status_check_delay: 10 # Delay (s) between job status checks
   wall_time: 00:30:00 # Max walltime for each job (hh:mm:ss)
   tests: # Test dimensions (matrix axes)
     - volume
     - nodes
+    - ost_count
+    - volume
   io_pattern: sequential:shared    
 template:
   bash_template: $IOPS_HOME/iops/config/templates/slurm_template.sh.j2  # Path to job submission script template
