@@ -128,3 +128,39 @@ class FileUtils(HasLogger):
         except Exception as e:
             raise e  # Can wrap with more context if desired
     
+    def create_workdir(self, config: IOPSConfig) -> None:
+        """
+        Creates a new execution directory inside the configured work directory.
+        If the base work directory does not exist, it will be created.
+        Then, a subdirectory named 'execution_<id>' is created, where <id> is the next available integer.
+        """
+        base_workdir = config.execution.workdir
+
+        # Ensure the base work directory exists
+        if not base_workdir.exists():
+            base_workdir.mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"Created base work directory: {base_workdir}")
+        else:
+            self.logger.info(f"Base work directory already exists: {base_workdir}")
+
+        # Find all existing execution directories
+        execution_dirs = [
+            d for d in base_workdir.iterdir()
+            if d.is_dir() and d.name.startswith("execution_") and d.name.split('_')[1].isdigit()
+        ]
+
+        # Determine the next execution ID
+        next_id = (
+            max(int(d.name.split('_')[1]) for d in execution_dirs) + 1
+            if execution_dirs else 1
+        )
+
+        # Create the new execution directory
+        new_execution_dir = base_workdir / f"execution_{next_id}"
+        new_execution_dir.mkdir(parents=True, exist_ok=True)
+        self.logger.info(f"Created new execution directory: {new_execution_dir}")
+
+        # Update the config to point to the new execution directory
+        config.execution.workdir = new_execution_dir
+
+        

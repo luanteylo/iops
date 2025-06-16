@@ -26,9 +26,7 @@ execution:
   wall_time: 00:30:00 # Max walltime for each job (hh:mm:ss)
   tests: # Test dimensions (matrix axes)
     - volume
-    - nodes
     - ost_count
-    - volume
   io_pattern: sequential:shared    
 template:
   bash_template: $IOPS_HOME/iops/config/templates/slurm_template.sh.j2  # Path to job submission script template

@@ -3,7 +3,7 @@ from typing import List, Optional
 from pathlib import Path
 import yaml
 import os
-
+import shutil
 
 @dataclass
 class NodesConfig:
@@ -162,8 +162,21 @@ def validate_config(config: IOPSConfig):
         for test in config.execution.tests:
             if test not in {"nodes", "volume", "ost_count"}:
                 raise ConfigValidationError(f"Invalid test type for IOR: {test}")
+            
+        ior_path = shutil.which("ior")
+        if not ior_path:
+            raise ConfigValidationError("IOR benchmark tool is not installed or not found in PATH")
         
     if not config.template.bash_template.exists():
         raise ConfigValidationError(f"bash_template file does not exist: {config.template.bash_template}")
     if not config.template.bash_template.is_file():
         raise ConfigValidationError(f"bash_template path is not a file: {config.template.bash_template}")
+    
+
+                
+    # check if job manager is valid
+    valid_job_managers = {"slurm", "local"}
+    if config.execution.job_manager not in valid_job_managers:
+        raise ConfigValidationError(f"Invalid job manager: {config.execution.job_manager}. Must be one of {valid_job_managers}")
+    # check if search method is valid
+

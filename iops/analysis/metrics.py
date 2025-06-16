@@ -27,9 +27,7 @@ class MetricsAnalyzer(HasLogger):
         self.logger.debug(f"\t Nodes: {combined.get('nodes')}, Volume: {combined.get('volume')}, OST Count: {combined.get('ost_count').name}.")
         self.logger.debug(f"\t Bandwidth: {combined.get('bandwidth', 'N/A')} MB/s, Latency: {combined.get('latency', 'N/A')} ms")
         self.results.append(combined)        
-        
  
-
     def select_best(self, criterion: str) -> Dict[str, Any]:
         """
         Select the best parameter configuration based on the average of the given criterion,
