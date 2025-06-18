@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from iops.utils.logger import HasLogger
 from iops.utils.config_loader import IOPSConfig
 from iops.controller.planner import Phase
+from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
 
 
 class BenchmarkRunner(ABC, HasLogger):
@@ -14,12 +16,27 @@ class BenchmarkRunner(ABC, HasLogger):
     def __init__(self, config):
         super().__init__()
         self.config = config
+    
+    def _save_script(self, script_content: str, params: dict) -> bool:
+        """
+        Save the generated script content to a file.
+        """
+        try:
+            script_path = params.get("__file__")            
+            script_path.write_text(script_content)
+            script_path.chmod(0o755)
+            self.logger.info(f"Script saved successfully at {script_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to save script: {e}")
+            return False
+
 
     @abstractmethod
-    def generate(self, params: dict) -> str:
+    def generate(self, params: dict):
         """
         Generate the job script or command required to run the benchmark with the given parameters.
-        Should return the path to the generated script or command string.
+        This function need to call _save_script at the end to save the generated script content.
         """
         pass
 
@@ -50,12 +67,32 @@ class IORBenchmark(BenchmarkRunner):
 
     def generate(self, params: dict) -> str:
         """
-        Generates a placeholder IOR job script path for the given parameters.
-        In the full version, this would render a script template and save it.
+        Generate a script from a Jinja2 template using provided parameters.
+
+        Args:
+            params (dict): Parameters to fill into the Jinja2 template.
+
+        Returns:
+            str: Path to the generated script file.
         """
-        self.logger.debug(f"Generating IOR job script with parameters: {params}")
-        # TODO: implement script file generation based on params
-        return f"/tmp/ior-job-script-{hash(frozenset(params.items()))}.sh"  # Simulated script path
+        template_path: Path = self.config.template.bash_template
+
+        # Load Jinja2 environment from the template's directory
+        env = Environment(loader=FileSystemLoader(template_path.parent))
+        template = env.get_template(template_path.name)
+
+        # Render the template
+        full_params = {            
+            "output_file": params.get("output_file"),
+            "num_processes": params.get("num_processes"),
+            "block_size": params.get("block_size"),
+            "transfer_size": params.get("transfer_size"),
+        }
+        rendered_script = template.render(full_params)
+
+        self._save_script(rendered_script, params)
+
+        
 
     def parse_output(self, job_output_path: str) -> dict:
         """

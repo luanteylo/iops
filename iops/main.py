@@ -52,6 +52,9 @@ def main():
         logger.info("Configuration is valid.")
         if args.check_setup:
             return
+        # Creating the workdir if it does not exist
+        fu.create_workdir(config=config)
+    
 
     except ConfigValidationError as e:
         if args.verbose:

@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# IOR local execution script (generated from template)
+
+FILENAME={{ output_file }}
+NUM_PROCS={{ num_procs | default(1) }}
+BLOCK_SIZE={{ block_size | default('1m') }}
+TRANSFER_SIZE={{ transfer_size | default('1m') }}
+
+
+
+mpirun -np $NUM_PROCS ior \
+  -w -r \
+  -t $TRANSFER_SIZE \
+  -b $BLOCK_SIZE \
+  -o $FILENAME \
+  -F -C -Q 1 \

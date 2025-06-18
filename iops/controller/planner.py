@@ -59,38 +59,8 @@ class Phase:
             yield combo
 
 class BasePlanner(ABC):
-    @abstractmethod
-    def next_phase(self) -> Phase:
-        pass
-
-    @abstractmethod
-    def has_next_phase(self) -> bool:
-        pass
-
-    @abstractmethod
-    def update_for_next_phase(self, result: PhaseResult):
-        pass
-
-    @abstractmethod
-    def has_next_combination(self) -> bool:
-        pass
-
-    @abstractmethod
-    def next_combination(self, last_result: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Returns the next parameter combination to test.
-        Optionally takes in the result of the previous test to inform adaptive logic.
-        """
-        pass
-
-class SweepPlanner(BasePlanner, HasLogger):
-    """
-    Sweep-based planner that iteratively explores parameter spaces
-    by sweeping one parameter at a time.
-    """
 
     def __init__(self, config: IOPSConfig, benchmark):
-        super().__init__()
         self.config = config
         self.benchmark = benchmark
         self.tests = list(config.execution.tests)  # List of parameter names to sweep
@@ -99,21 +69,32 @@ class SweepPlanner(BasePlanner, HasLogger):
         self.current_phase: Phase | None = None
         self.current_combinations: Iterator[Dict[str, Any]] = iter([])
         self._next_combo: Dict[str, Any] | None = None
+        self.current_phase_path = None
+        self.combinations_path = {} # uses the uid to store the path to the combinations file
+    
 
     def has_next_phase(self) -> bool:
         return self.index < len(self.tests)
 
     def next_phase(self) -> Phase:
+        """
+        Creates the next phase of the sweep based on the current index.
+        # 
+        """
         sweep_param = self.tests[self.index]
         self.logger.info(f"Generating phase for parameter: {sweep_param}")
-        self.index += 1
+
+        self.current_phase_path = self.config.execution.workdir / f"phase{self.index}_{sweep_param}"
+        self.current_phase_path.mkdir(parents=True, exist_ok=True)
 
         self.current_phase = self.benchmark.build_phase(
             sweep_param=sweep_param,
             fixed_params=self.history
         )
         self.current_combinations = self._generate_combinations(self.current_phase)
+
         self._next_combo = next(self.current_combinations, None)
+        self.index += 1
         return self.current_phase
 
     def has_next_combination(self) -> bool:
@@ -131,11 +112,8 @@ class SweepPlanner(BasePlanner, HasLogger):
             self._next_combo = next(self.current_combinations)
         except StopIteration:
             self._next_combo = None
+        print(combo)
         return combo
-
-    def update_for_next_phase(self, result: PhaseResult):
-        self.logger.info(f"Updating history with best result: {result}")
-        self.history.update(result.best_params)
 
     def _generate_combinations(self, phase: Phase) -> Iterator[Dict[str, Any]]:
         """
@@ -159,10 +137,39 @@ class SweepPlanner(BasePlanner, HasLogger):
                 combo = base_params.copy()
                 combo["__rep__"] = rep
                 combo["__test_uid__"] = test_uid
+                combo["__phase__"] = phase.sweep_param
+                combo["__path__"] = self.current_phase_path             
+                combo["__file__"] = self.current_phase_path / f"run_{test_uid}_rep{rep}.sh"
                 all_combinations.append(combo)
 
         random.shuffle(all_combinations)
         return iter(all_combinations)
+    
+    @abstractmethod
+    def update_for_next_phase(self, result: PhaseResult):
+        pass
+
+    @abstractmethod 
+    def update_for_nex_combination(self, result: PhaseResult):
+        pass
+
+class SweepPlanner(BasePlanner, HasLogger):
+    """
+    Sweep-based planner that iteratively explores parameter spaces
+    by sweeping one parameter at a time.
+    """
+
+    def __init__(self, config: IOPSConfig, benchmark):
+        super().__init__(config, benchmark)
+
+    def update_for_nex_combination(self, result):
+        pass
+
+    def update_for_next_phase(self, result: PhaseResult):
+        self.logger.info(f"Updating history with best result: {result}")
+        self.history.update(result.best_params)
+
+
 
 class BayesianPlanner(BasePlanner):
     def __init__(self, config):
@@ -173,8 +180,8 @@ class BayesianPlanner(BasePlanner):
         self.history = []
         #...
 
-    def phases(self):
-        yield {"min_nodes": 2, "volume": 4096}  # Just an example
-
+    def update_for_nex_combination(self, result):
+        pass
     def update_for_next_phase(self, result):
-        self.optimizer.tell(list(result.values()), result["bandwidth_avg"])
+        pass
+        
