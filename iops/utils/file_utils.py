@@ -89,7 +89,7 @@ class FileUtils(HasLogger):
         execution.yaml_add_eol_comment("Delay (s) between job status checks", "status_check_delay")
         execution["wall_time"] = "00:30:00"
         execution.yaml_add_eol_comment("Max walltime for each job (hh:mm:ss)", "wall_time")
-        execution["tests"] = ["filesize", "computing", "striping"]
+        execution["tests"] = ["volume", "nodes", "ost_count"]
         execution.yaml_add_eol_comment("Test dimensions (matrix axes)", "tests")
         execution["io_pattern"] = "sequential:shared"
         execution.yaml_add_eol_comment("I/O access patterns (e.g., sequential:shared or random:shared)", "io_pattern")

@@ -13,4 +13,4 @@ traces.md
 doc/
 showcases/
 todo/
-
+*.logs

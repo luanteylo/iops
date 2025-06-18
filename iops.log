@@ -7226,3 +7226,50 @@
 [2025-06-16 11:26:17] [IOPSRunner      ]     INFO: 	Best bandwidth: 680.6405108783781
 [2025-06-16 11:26:17] [SweepPlanner    ]     INFO: Updating history with best result: PhaseResult(sweep_param='ost_count', best_params={'io_pattern': 'sequential:shared', 'ost_count': StripeFolder(name=PosixPath('/home/luan/filesystem/folder1'), stripe_count=1), 'volume': 2048, 'processes_per_node': 8, 'cores_per_node': 32, 'operation': 'write_only', 'nodes': 32, 'bandwidth': 680.6405108783781})
 [2025-06-16 11:26:17] [IOPSRunner      ]     INFO: All benchmarking phases completed.
+[2025-06-18 09:20:01] [iops            ]     INFO: Generating default YAML setup file at: /tmp/pytest-of-luan/pytest-0/test_main_generates_setup0/my_setup.yaml
+[2025-06-18 09:20:01] [FileUtils       ]     INFO: Default IOPS config written to /tmp/pytest-of-luan/pytest-0/test_main_generates_setup0/my_setup.yaml
+[2025-06-18 09:20:01] [iops            ]     INFO: Setup file generated successfully.
+[2025-06-18 09:20:01] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-0/test_main_validates_config0/iops_config.yaml
+[2025-06-18 09:20:01] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:20:01] [iops            ]     INFO: Configuration is valid.
+[2025-06-18 09:20:01] [iops            ]     INFO: Loading configuration from: nonexistent.yaml
+[2025-06-18 09:20:01] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-0/test_main_invalid_config0/invalid.yaml
+[2025-06-18 09:20:01] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:20:01] [iops            ]    ERROR: Configuration validation failed:
+  → min_nodes must be greater than 0
+[2025-06-18 09:20:01] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-0/test_main_invalid_config_verbo0/invalid_verbose.yaml
+[2025-06-18 09:20:01] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:21:58] [iops            ]     INFO: Generating default YAML setup file at: /tmp/pytest-of-luan/pytest-1/test_main_generates_setup0/my_setup.yaml
+[2025-06-18 09:21:58] [FileUtils       ]     INFO: Default IOPS config written to /tmp/pytest-of-luan/pytest-1/test_main_generates_setup0/my_setup.yaml
+[2025-06-18 09:21:58] [iops            ]     INFO: Setup file generated successfully.
+[2025-06-18 09:21:58] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-1/test_main_validates_config0/iops_config.yaml
+[2025-06-18 09:21:58] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:21:58] [iops            ]     INFO: Configuration is valid.
+[2025-06-18 09:21:58] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-1/test_main_runs_execution0/iops_config.yaml
+[2025-06-18 09:21:58] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:21:58] [iops            ]     INFO: Configuration is valid.
+[2025-06-18 09:21:58] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-18 09:21:58] [iops            ]     INFO: Loading configuration from: nonexistent.yaml
+[2025-06-18 09:21:58] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-1/test_main_invalid_config0/invalid.yaml
+[2025-06-18 09:21:58] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:21:58] [iops            ]    ERROR: Configuration validation failed:
+  → min_nodes must be greater than 0
+[2025-06-18 09:21:58] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-1/test_main_invalid_config_verbo0/invalid_verbose.yaml
+[2025-06-18 09:21:58] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:22:57] [iops            ]     INFO: Generating default YAML setup file at: /tmp/pytest-of-luan/pytest-2/test_main_generates_setup0/my_setup.yaml
+[2025-06-18 09:22:57] [FileUtils       ]     INFO: Default IOPS config written to /tmp/pytest-of-luan/pytest-2/test_main_generates_setup0/my_setup.yaml
+[2025-06-18 09:22:57] [iops            ]     INFO: Setup file generated successfully.
+[2025-06-18 09:22:57] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-2/test_main_validates_config0/iops_config.yaml
+[2025-06-18 09:22:57] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:22:57] [iops            ]     INFO: Configuration is valid.
+[2025-06-18 09:22:57] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-2/test_main_runs_execution0/iops_config.yaml
+[2025-06-18 09:22:57] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:22:57] [iops            ]     INFO: Configuration is valid.
+[2025-06-18 09:22:57] [iops            ]     INFO: Starting IOPS execution with the provided configuration.
+[2025-06-18 09:22:57] [iops            ]     INFO: Loading configuration from: nonexistent.yaml
+[2025-06-18 09:22:57] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-2/test_main_invalid_config0/invalid.yaml
+[2025-06-18 09:22:57] [iops            ]     INFO: Configuration loaded successfully.
+[2025-06-18 09:22:57] [iops            ]    ERROR: Configuration validation failed:
+  → min_nodes must be greater than 0
+[2025-06-18 09:22:57] [iops            ]     INFO: Loading configuration from: /tmp/pytest-of-luan/pytest-2/test_main_invalid_config_verbo0/invalid_verbose.yaml
+[2025-06-18 09:22:57] [iops            ]     INFO: Configuration loaded successfully.
