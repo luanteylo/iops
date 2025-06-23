@@ -39,9 +39,9 @@ class IOPSRunner(HasLogger):
 
                 try:
                     job_script = benchmark.generate(params=params)
-                    #job_id = executor.submit(script=job_script)  # Replace with actual job submission logic
-                    #output_data = executor.wait_and_collect(job_id)                    
-                    #result = benchmark.parse_output(output_data["output_path"])
+                    job_id = executor.submit(script=job_script)  # Replace with actual job submission logic
+                    output_data = executor.wait_and_collect(job_id)                    
+                    # result = benchmark.parse_output(output_data["output_path"])
 
                     #self.logger.info(f"\tBandwidth: {result.get('bandwidth', 'N/A')} MB/s, Latency: {result.get('latency', 'N/A')} ms")
 
