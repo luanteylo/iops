@@ -53,6 +53,7 @@ class LocalExecutor(BaseExecutor, HasLogger):
         Returns:
             str: The process PID as a string.
         """
+        self.logger.debug(f"Submitting local job script: {script}")
         if not script or not script.exists():
             raise ValueError(f"Script not found: {script}")
 
@@ -177,10 +178,10 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         """
         self.logger.debug(f"Waiting for SLURM job to complete: {job_id}")
         
-        poll_interval = self.config.status_check_delay  # seconds to wait between status checks
+        poll_interval = self.config.execution.status_check_delay  # seconds to wait between status checks
         if not poll_interval:
             poll_interval = 10
-        timeout = self.config.wall_time  # total time to wait for job completion in seconds
+        timeout = self.config.execution.wall_time  # total time to wait for job completion in seconds
         if not timeout:
             timeout = 3600
         start_time = datetime.datetime.now()

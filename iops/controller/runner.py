@@ -18,12 +18,9 @@ class IOPSRunner(HasLogger):
         benchmark = IORBenchmark(self.config)
         planner = SweepPlanner(self.config, benchmark)
         analyzer = MetricsAnalyzer()
-        #executor = SlurmExecutor(self.config)  # or LocalExecutor depending on config
-        executor = LocalExecutor(self.config)  # For local testing, replace with SlurmExecutor for actual cluster runs
-        
-
-        
-        
+        executor = SlurmExecutor(self.config)  # or LocalExecutor depending on config
+        # executor = LocalExecutor(self.config)  # For local testing, replace with SlurmExecutor for actual cluster runs
+                
         while planner.has_next_phase():
             phase = planner.next_phase()
             self.logger.info(f"Running phase: {phase.sweep_param}")
@@ -32,14 +29,13 @@ class IOPSRunner(HasLogger):
 
             while planner.has_next_combination():
                 params = planner.next_combination(last_result=last_result)
-
                 self.logger.info(f"Submitting Test {params.get('__test_uid__')} - Repetition: {params.get('__rep__')}. Parameters:")
                 self.logger.info(f"\tnodes: {params.get('nodes')}, volume: {params.get('volume')}, ost_count: {params.get('ost_count').name}")
                 self.logger.info(f"\tPattern: {params.get('io_pattern')}, Operation: {params.get('operation')}")
 
                 try:
                     job_script = benchmark.generate(params=params)
-                    job_id = executor.submit(script=job_script)  # Replace with actual job submission logic
+                    job_id = executor.submit(job_script)  # Replace with actual job submission logic
                     output_data = executor.wait_and_collect(job_id)                    
                     # result = benchmark.parse_output(output_data["output_path"])
 

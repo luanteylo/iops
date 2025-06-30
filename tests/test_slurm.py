@@ -28,4 +28,4 @@ def test_slurm_executor_submit(mock_submit, tmp_path):
 @patch("iops.controller.executors.SlurmExecutor.wait_and_collect")
 def test_slurm_executor_wait_and_collect(mock_wait_and_collect, tmp_path):
     #TODO: Implement the test for wait_and_collect
-    
+    pass

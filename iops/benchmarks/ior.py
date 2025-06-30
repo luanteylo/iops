@@ -1,7 +1,7 @@
 
 from abc import ABC, abstractmethod
 from iops.utils.logger import HasLogger
-from iops.utils.config_loader import IOPSConfig
+from iops.utils.config_loader import IOPSConfig, StripeFolder, StorageConfig
 from iops.controller.planner import Phase
 from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
@@ -64,7 +64,35 @@ class IORBenchmark(BenchmarkRunner):
     """
     def __init__(self, config : IOPSConfig): 
         super().__init__(config)
+        # self.ior_test_path 
 
+    def build_files(self) -> None:
+        """
+        Build the files required for the IOR benchmark.
+        This method can be used to create any necessary input files or directories.
+        """
+        self.logger.debug("Building files for IOR benchmark")
+
+        self.params["nodes"] = self.config.nodes.max_nodes
+        self.params["ntasks"] = self.config.nodes.processes_per_node * self.config.nodes.max_nodes
+        self.params["ntasks_per_node"] = self.config.nodes.processes_per_node
+        self.params["chdir"] = self.config.execution.workdir
+        self.params["cmd"] = self.get_commands()
+        
+    def get_commands(self, params) -> str:
+        """
+        Returns the IOR command based on the configuration.
+        """
+        commands: str = "ior"
+
+        block_size: int = params.get("volume") / params.get("processes_per_node") * params.get("nodes")
+
+        commands += f" -w"
+        commands += f" -b {block_size}m"
+        commands += f" -t 1m"  
+        
+        return commands
+        
     def generate(self, params: dict) -> str:
         """
         Generate a script from a Jinja2 template using provided parameters.
@@ -75,22 +103,31 @@ class IORBenchmark(BenchmarkRunner):
         Returns:
             str: Path to the generated script file.
         """
+        
         template_path: Path = self.config.template.bash_template
 
         # Load Jinja2 environment from the template's directory
         env = Environment(loader=FileSystemLoader(template_path.parent))
         template = env.get_template(template_path.name)
 
+        
         # Render the template
-        full_params = {            
-            "output_file": params.get("output_file"),
-            "num_processes": params.get("num_processes"),
-            "block_size": params.get("block_size"),
-            "transfer_size": params.get("transfer_size"),
+        full_params = {
+            "nodes": params.get("nodes"),
+            "ntasks": params.get("processes_per_node") * params.get("nodes"),
+            "ntasks_per_node": params.get("processes_per_node"),
+            "chdir": self.config.execution.workdir,
+            "job_name": f"job_name",
+            "output_file": f"{params.get('ost_count').name}_output.ior",
+            "summary_results": f"{params.get('__path__')}/summary.out",
+            "cmd": self.get_commands(params),
         }
         rendered_script = template.render(full_params)
 
-        self._save_script(rendered_script, params)
+        if not self._save_script(rendered_script, params):
+            self.logger.error("Failed to save the generated script.")
+            return None
+        return params.get("__file__")
 
         
 

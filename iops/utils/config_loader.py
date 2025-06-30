@@ -17,6 +17,15 @@ class NodesConfig:
 class StripeFolder:
     name: Path
     stripe_count: int
+    
+    def get_stripe_folder(stripe_count: int):
+        """
+        Returns the StripeFolder with the specified stripe_count, or None if not found.
+        """
+        for folder in IOPSConfig.storage.stripe_folders:
+            if folder.stripe_count == stripe_count:
+                return folder
+        return None
 
 
 @dataclass
@@ -179,4 +188,5 @@ def validate_config(config: IOPSConfig):
     if config.execution.job_manager not in valid_job_managers:
         raise ConfigValidationError(f"Invalid job manager: {config.execution.job_manager}. Must be one of {valid_job_managers}")
     # check if search method is valid
+
 
