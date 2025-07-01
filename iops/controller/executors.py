@@ -185,7 +185,7 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         if not timeout:
             timeout = 15
         start_time = datetime.datetime.now()
-
+        timeout = float(timeout)  # Ensure timeout is a float for comparison
         try:
             while True:
                 status = self.check_job_status(job_id)
