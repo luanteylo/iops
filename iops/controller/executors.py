@@ -140,25 +140,19 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         
         try:
             result = subprocess.run(
-                ["squeue", "-j", job_id, "--noheader"], # noheader to avoid extra output
+            ["squeue", "-j", job_id, "--noheader", "--format=%T"],  # %T gives only the state
                 capture_output=True,
                 text=True,
                 check=True,
-                # timeout=30  # Timeout after 30 seconds
             )
             output = result.stdout.strip()
-            if output == "PENDING":
-                return "PENDING"
-            elif output == "RUNNING":
-                return "RUNNING"
-            elif output == "COMPLETED":
-                return "COMPLETED"
-            elif output == "FAILED":
-                return "FAILED"
-            elif output == "CANCELLED":
+
+            if output == "CANCELLED":
+                self.logger.info(f"SLURM job {job_id} was cancelled.")
                 return "CANCELLED"
-            elif output == "PREEMPTED":
-                return "PREEMPTED"
+            elif output == "COMPLETED":
+                self.logger.info(f"SLURM job {job_id} completed successfully.")
+                return "COMPLETED"
             else:
                 self.logger.warning(f"Unknown job status for job {job_id}: {output}")
                 return "UNKNOWN"
@@ -181,9 +175,15 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         poll_interval = self.config.execution.status_check_delay  # seconds to wait between status checks
         if not poll_interval:
             poll_interval = 10
-        timeout = self.config.execution.wall_time  # total time to wait for job completion in seconds
+        # Parse wall_time in HH:MM:SS format to seconds
+        wall_time_str = self.config.execution.wall_time  # e.g., "00:30:00"
+        if wall_time_str:
+            h, m, s = map(int, wall_time_str.split(":"))
+            timeout = h * 3600 + m * 60 + s
+        else:
+            timeout = None
         if not timeout:
-            timeout = 3600
+            timeout = 15
         start_time = datetime.datetime.now()
 
         try:
@@ -208,7 +208,6 @@ class SlurmExecutor(BaseExecutor, HasLogger):
                 "job_id": job_id,
                 "status": status,
                 "exit_code": 0,  # Assuming job completed successfully
-                "job_duration": (datetime.datetime.now() - start_time).total_seconds(),
             }
         except Exception as e:
             self.logger.error(f"Error while waiting for SLURM job {job_id}: {e}")

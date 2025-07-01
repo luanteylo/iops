@@ -3,15 +3,18 @@
 # IOR local execution script (generated from template)
 
 FILENAME={{ output_file }}
+SUMMARY_RESULTS={{ summary_results }}
 NUM_PROCS={{ num_procs | default(1) }}
-BLOCK_SIZE={{ block_size | default('1m') }}
-TRANSFER_SIZE={{ transfer_size | default('1m') }}
+BLOCK_SIZE={{ '2m' }}
+TRANSFER_SIZE={{ '1m' }}
 
 
 
-mpirun -np $NUM_PROCS ior \
+mpirun -np $NUM_PROCS --oversubscribe ior \
   -w -r \
   -t $TRANSFER_SIZE \
   -b $BLOCK_SIZE \
+  -O summaryFile=${SUMMARY_RESULTS} \
+  -O summaryFormat=default \
   -o $FILENAME \
   -F -C -Q 1 \

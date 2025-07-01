@@ -16,8 +16,12 @@ SUMMARY_RESULTS={{ summary_results }}
 mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \
 {{cmd}} \
 -O summaryFile=${SUMMARY_RESULTS} \
---summaryFormat=default \ 
--o $FILENAME
+-O summaryFormat=default -o ${FILENAME}
 
 
+STATUS_FILE={{ status_file }}
+exit_code=$?
 
+#log status 
+echo "$exit_code" >> "${STATUS_FILE}"
+exit $exit_code

@@ -1,5 +1,6 @@
 
 from abc import ABC, abstractmethod
+import shutil
 from iops.utils.logger import HasLogger
 from iops.utils.config_loader import IOPSConfig, StripeFolder, StorageConfig
 from iops.controller.planner import Phase
@@ -64,20 +65,9 @@ class IORBenchmark(BenchmarkRunner):
     """
     def __init__(self, config : IOPSConfig): 
         super().__init__(config)
-        # self.ior_test_path 
+        # status file to track job status
+        self.status_file: Path = config.execution.workdir / "ior_status.txt"
 
-    def build_files(self) -> None:
-        """
-        Build the files required for the IOR benchmark.
-        This method can be used to create any necessary input files or directories.
-        """
-        self.logger.debug("Building files for IOR benchmark")
-
-        self.params["nodes"] = self.config.nodes.max_nodes
-        self.params["ntasks"] = self.config.nodes.processes_per_node * self.config.nodes.max_nodes
-        self.params["ntasks_per_node"] = self.config.nodes.processes_per_node
-        self.params["chdir"] = self.config.execution.workdir
-        self.params["cmd"] = self.get_commands()
         
     def get_commands(self, params) -> str:
         """
@@ -85,10 +75,10 @@ class IORBenchmark(BenchmarkRunner):
         """
         commands: str = "ior"
 
-        block_size: int = params.get("volume") / params.get("processes_per_node") * params.get("nodes")
+        block_size: int = params.get("volume") / (params.get("processes_per_node") * params.get("nodes"))
 
         commands += f" -w"
-        commands += f" -b {block_size}m"
+        commands += f" -b {int(block_size)}m"
         commands += f" -t 1m"  
         
         return commands
@@ -110,16 +100,20 @@ class IORBenchmark(BenchmarkRunner):
         env = Environment(loader=FileSystemLoader(template_path.parent))
         template = env.get_template(template_path.name)
 
-        
+        # folder for tests
+        test_folder = params.get("__path__") / f"test_{params.get('__test_uid__')}"
+        test_folder.mkdir(parents=True, exist_ok=True)
+
         # Render the template
         full_params = {
             "nodes": params.get("nodes"),
             "ntasks": params.get("processes_per_node") * params.get("nodes"),
             "ntasks_per_node": params.get("processes_per_node"),
-            "chdir": self.config.execution.workdir,
+            "chdir": test_folder,
             "job_name": f"job_name",
-            "output_file": f"{params.get('ost_count').name}_output.ior",
-            "summary_results": f"{params.get('__path__')}/summary.out",
+            "output_file": f"{params.get('ost_count').name}/test_output.ior",
+            "summary_results": test_folder / f"summary.out",
+            "status_file": self.status_file,
             "cmd": self.get_commands(params),
         }
         rendered_script = template.render(full_params)
@@ -127,9 +121,10 @@ class IORBenchmark(BenchmarkRunner):
         if not self._save_script(rendered_script, params):
             self.logger.error("Failed to save the generated script.")
             return None
-        return params.get("__file__")
-
         
+        # move the script to the test folder
+        shutil.move(str(params.get("__file__")), str(test_folder / Path(params.get("__file__")).name))
+        return str(test_folder / Path(params.get("__file__")).name)
 
     def parse_output(self, job_output_path: str) -> dict:
         """
