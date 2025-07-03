@@ -7,6 +7,13 @@ import time
 from pathlib import Path
 import datetime
 
+from enum import Enum
+
+class JobStatus(Enum):
+    CANCELLED = "CANCELLED"
+    COMPLETED = "COMPLETED"
+    UNKNOWN = "UNKNOWN"
+
 class BaseExecutor(ABC):
     """
     Abstract base class for all execution environments (e.g., SLURM, local).
@@ -147,15 +154,16 @@ class SlurmExecutor(BaseExecutor, HasLogger):
             )
             output = result.stdout.strip()
 
-            if output == "CANCELLED":
+            if output == JobStatus.CANCELLED.value:
                 self.logger.info(f"SLURM job {job_id} was cancelled.")
-                return "CANCELLED"
-            elif output == "COMPLETED":
+                return JobStatus.CANCELLED.value
+            elif output == JobStatus.COMPLETED.value or output == "":
+                # Assuming an empty output means the job has completed successfully
                 self.logger.info(f"SLURM job {job_id} completed successfully.")
-                return "COMPLETED"
+                return JobStatus.COMPLETED.value
             else:
                 self.logger.warning(f"Unknown job status for job {job_id}: {output}")
-                return "UNKNOWN"
+                return JobStatus.UNKNOWN.value
     
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to check SLURM job status: {e}")
@@ -189,7 +197,7 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         try:
             while True:
                 status = self.check_job_status(job_id)
-                if status == "COMPLETED":
+                if status == JobStatus.COMPLETED.value:
                     # Job completed successfully
                     self.logger.info(f"SLURM job {job_id} completed successfully.")
                     break
