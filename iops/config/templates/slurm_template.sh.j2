@@ -16,7 +16,7 @@ SUMMARY_RESULTS={{ summary_results }}
 mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \
 {{cmd}} \
 -O summaryFile=${SUMMARY_RESULTS} \
--O summaryFormat=default -o ${FILENAME}
+-O summaryFormat=csv -o ${FILENAME}
 
 
 STATUS_FILE={{ status_file }}

@@ -112,7 +112,7 @@ class IORBenchmark(BenchmarkRunner):
             "chdir": test_folder,
             "job_name": f"job_name",
             "output_file": f"{params.get('ost_count').name}/test_output.ior",
-            "summary_results": test_folder / f"summary.out",
+            "summary_results": test_folder / f"summary.csv",
             "status_file": self.status_file,
             "cmd": self.get_commands(params),
         }
