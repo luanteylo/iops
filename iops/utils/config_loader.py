@@ -83,17 +83,6 @@ def load_config(config_path: Path) -> IOPSConfig:
 
     fs_dir = _expand(data["storage"]["filesystem_dir"])
 
-    # Parse wall_time (hh:mm:ss) to seconds
-    def parse_wall_time(wall_time_str: str) -> int:
-        parts = wall_time_str.strip().split(":")
-        if len(parts) != 3:
-            raise ConfigValidationError(f"Invalid wall_time format: {wall_time_str}. Expected hh:mm:ss")
-        try:
-            hours, minutes, seconds = map(int, parts)
-        except ValueError:
-            raise ConfigValidationError(f"Invalid wall_time values: {wall_time_str}. Expected integers in hh:mm:ss")
-        return hours * 3600 + minutes * 60 + seconds
-
     return IOPSConfig(
         nodes=NodesConfig(**data["nodes"]),
         storage=StorageConfig(
@@ -124,7 +113,7 @@ def load_config(config_path: Path) -> IOPSConfig:
         template=TemplateConfig(
             bash_template=_expand(data["template"]["bash_template"]),
         ),
-    ), parse_wall_time(data["execution"]["wall_time"])
+    )
 
 
 def validate_config(config: IOPSConfig):
