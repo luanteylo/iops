@@ -46,11 +46,12 @@ class IOPSRunner(HasLogger):
                     # check if output_data is valid
                     if output_data.get('status') == 'completed':
                         # call parse_output to extract metrics
-                        result = benchmark.parse_output(params=params)
+                        result = benchmark.parse_output(params=params)                    
+                        self.logger.debug(f"Parsed result: {result}")
+                        analyzer.record(result, params)
+                    else:
+                        self.logger.error(f"Job {job_id} failed or did not complete successfully. Output: {output_data}")
                     
-                    self.logger.debug(f"Parsed result: {result}")
-
-                    analyzer.record(result, params)
                     #last_result = {"params": params, "result": result}
                     #self.logger.info(f"Simulating test execution for parameters: {params}")
 
