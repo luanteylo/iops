@@ -133,13 +133,18 @@ class BasePlanner(ABC):
                     base_params[key] = options[0]
 
             test_uid = str(uuid.uuid4())
+            test_folder = self.current_phase_path / f"test_{test_uid}"
+            test_folder.mkdir(parents=True, exist_ok=True)
+            
+            base_params["__test_uid__"] = test_uid
+            base_params["__phase__"] = phase.sweep_param
+            base_params["__path__"] = test_folder
+
             for rep in range(phase.repetitions):
                 combo = base_params.copy()
-                combo["__rep__"] = rep
-                combo["__test_uid__"] = test_uid
-                combo["__phase__"] = phase.sweep_param
-                combo["__path__"] = self.current_phase_path             
-                combo["__file__"] = self.current_phase_path / f"run_{test_uid}_rep{rep}.sh"
+                combo["__rep__"] = rep            
+                combo["__script__"] = test_folder / f"run_{rep}.sh"
+                combo["__output__"] = test_folder / f"output_{rep}.csv"
                 all_combinations.append(combo)
 
         random.shuffle(all_combinations)
