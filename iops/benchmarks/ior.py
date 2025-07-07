@@ -6,7 +6,7 @@ from iops.utils.config_loader import IOPSConfig, StripeFolder, StorageConfig
 from iops.controller.planner import Phase
 from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
-
+import time
 
 class BenchmarkRunner(ABC, HasLogger):
     """
@@ -86,9 +86,6 @@ class IORBenchmark(BenchmarkRunner):
   
     def __init__(self, config : IOPSConfig): 
         super().__init__(config)
-        # status file to track job status
-        self.status_file: Path = config.execution.workdir / "ior_status.txt"
-
         
     def get_commands(self, params) -> str: 
         """
@@ -130,8 +127,7 @@ class IORBenchmark(BenchmarkRunner):
             "chdir": params.get("__path__"),
             "job_name": f"job_name",
             "output_file": f"{params.get('ost_count').name}/test_output.ior",
-            "summary_results": params.get("__output__"),
-            "status_file": self.status_file,
+            "summary_results": params.get("__output__"),            
             "cmd": self.get_commands(params),
         }
         rendered_script = template.render(full_params)
@@ -142,11 +138,13 @@ class IORBenchmark(BenchmarkRunner):
 
         return params.get("__script__")
 
+
     def parse_output(self, params: dict) -> dict:
         """
         Parses the IOR output CSV file, renames columns, and returns a cleaned-up dictionary.
+        Retries up to 5 times if the file is not immediately available.
         """
-        output_file = params.get("__output__")
+        
         results = {}
 
         IOR_CSV_RENAME_MAP = {
@@ -164,20 +162,33 @@ class IORBenchmark(BenchmarkRunner):
             "iter": "iteration"
         }
 
-        if output_file.exists():
-            with output_file.open("r") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    results = {
-                        IOR_CSV_RENAME_MAP.get(key.strip(), key.strip()):
-                            value.strip() if key.strip() == "access" else float(value)
-                        for key, value in row.items()
-                    }
-                    break  # Only one line expected
-        else:
+        # Retry logic
+        retries = 10
+        delay = 5  # seconds
+
+        for attempt in range(1, retries + 1):
+            output_file = Path(params.get("__output__"))            
+            if output_file.exists():
+                break
             self.logger.warning(f"Output file not found: {output_file}")
+            self.logger.warning(f"Waiting {attempt * delay} seconds. Retry {attempt + 1}/{retries}")
+            time.sleep(attempt * delay)
+        else:
+           return None
+
+        # Parse the CSV
+        with output_file.open("r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                results = {
+                    IOR_CSV_RENAME_MAP.get(key.strip(), key.strip()):
+                        value.strip() if key.strip() == "access" else float(value)
+                    for key, value in row.items()
+                }
+                break  # Only one line expected
 
         return results
+
 
    
   

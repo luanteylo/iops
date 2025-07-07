@@ -9,10 +9,7 @@ import datetime
 
 from enum import Enum
 
-class JobStatus(Enum):
-    CANCELLED = "CANCELLED"
-    COMPLETED = "COMPLETED"
-    UNKNOWN = "UNKNOWN"
+
 
 class BaseExecutor(ABC):
     """
@@ -40,6 +37,7 @@ class BaseExecutor(ABC):
         Initialize executor with configuration.
         """
         self.config = config
+        self.last_status = None
 
     @abstractmethod
     def submit(self, script : Path) -> str:
@@ -136,6 +134,10 @@ class SlurmExecutor(BaseExecutor, HasLogger):
     """
     Executor for submitting and managing jobs via SLURM.
     """
+    SLURM_FINISHED = "FINISHED"
+    SLURM_PENDING = "PENDING"
+    SLURM_RUNNING = "RUNNING"
+
     def submit(self, test: Path) -> str:
         """
         Simulates SLURM job submission.
@@ -144,7 +146,7 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         self.logger.debug(f"Submitting SLURM job script: {test}")
         try:
             result = subprocess.run(
-                ["sbatch", str(test)],
+                ["sbatch", f"--time={self.config.execution.wall_time}",  str(test)],
                 capture_output=True,
                 text=True,
                 check=True
@@ -172,107 +174,65 @@ class SlurmExecutor(BaseExecutor, HasLogger):
                 check=True,
             )
             output = result.stdout.strip()
+            self.logger.info(f"SLURM job {job_id}: {output}")
 
-            if output == JobStatus.CANCELLED.value:
-                self.logger.info(f"SLURM job {job_id} was cancelled.")
-                return JobStatus.CANCELLED.value
-            elif output == JobStatus.COMPLETED.value or output == "":
-                # Assuming an empty output means the job has completed successfully
-                self.logger.info(f"SLURM job {job_id} completed successfully.")
-                return JobStatus.COMPLETED.value
-            else:
-                self.logger.warning(f"Unknown job status for job {job_id}: {output}")
-                return JobStatus.UNKNOWN.value
+            if output == "":
+                output = self.SLURM_FINISHED
+            self.last_status = output
+            return output
     
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to check SLURM job status: {e}")
             raise RuntimeError("SLURM job status check failed") from e
         
 
-    def wait_and_collect(self, job_id: str) -> dict:
+ 
+    def wait_and_collect(self, job_id: str, execution_dir: Path) -> dict:
         """
         Wait for the SLURM job to complete and collect metrics.
         Args:
             job_id (str): The SLURM job ID to wait for.
+            execution_dir (Path): Path to the job's execution directory.
         Returns:
-            dict: A dictionary containing job ID, status, exit code, and metrics.
+            dict: A dictionary containing job ID, status, start time, end time, and any error message.
         """
         self.logger.debug(f"Waiting for SLURM job to complete: {job_id}")
-        
-        poll_interval = self.config.execution.status_check_delay  # seconds to wait between status checks
-        if not poll_interval:
-            poll_interval = 10
-        # Parse wall_time in HH:MM:SS format to seconds
-        wall_time_str = self.config.execution.wall_time  # e.g., "00:30:00"
-        if wall_time_str:
-            h, m, s = map(int, wall_time_str.split(":"))
-            timeout = h * 3600 + m * 60 + s
-        else:
-            timeout = None
-        if not timeout:
-            timeout = 15
-        start_time = datetime.datetime.now()
-        timeout = float(timeout)  # Ensure timeout is a float for comparison
+        poll_interval = self.config.execution.status_check_delay
+
         try:
-            while True:
-                status = self.check_job_status(job_id)
-                if status == JobStatus.COMPLETED.value:
-                    # Job completed successfully
-                    self.logger.info(f"SLURM job {job_id} completed successfully.")
-                    break
-                elapsed = (datetime.datetime.now() - start_time).total_seconds()
-                if elapsed > timeout:
-                    self.logger.error(f"SLURM job {job_id} timed out after {timeout} seconds")
-                    return {
-                        "job_id": job_id,
-                        "status": "timeout",
-                        "exit_code": None,
-                        "error": "Job timed out"
-                    }
+            while self.check_job_status(job_id) in [self.SLURM_PENDING, self.SLURM_RUNNING]:
                 time.sleep(poll_interval)
-            self.logger.info(f"SLURM job {job_id} completed with status: {status}")
+
+            self.logger.info(f"SLURM job {job_id} completed with status: {self.last_status}")
+
+            # Define expected file paths
+            job_start_path = execution_dir / "job.start"
+            job_end_path = execution_dir / "job.end"
+            job_status_path = execution_dir / "job.status"
+
+            # Read contents of the files
+            start_time = job_start_path.read_text().strip() if job_start_path.exists() else None
+            end_time = job_end_path.read_text().strip() if job_end_path.exists() else None
+            final_status = job_status_path.read_text().strip() if job_status_path.exists() else "UNKNOWN"
+
             return {
                 "job_id": job_id,
-                "status": status,
-                "exit_code": 0,  # Assuming job completed successfully
+                "status": final_status,
+                "slurm_status": self.last_status,
+                "start_time": start_time,
+                "end_time": end_time,
+                "error": None
             }
+
         except Exception as e:
             self.logger.error(f"Error while waiting for SLURM job {job_id}: {e}")
             return {
                 "job_id": job_id,
-                "status": "error",
-                "exit_code": None,
+                "status": "ERROR",
+                "slurm_status": self.last_status,
+                "start_time": None,
+                "end_time": None,
                 "error": str(e)
             }
-    # def collect_metrics(self, job_id: str) -> dict:
-    #     """
-    #     Collect metrics from the SLURM job output files.
-    #     This is a placeholder for actual metric collection logic.
-        
-    #     Args:
-    #         job_id (str): The SLURM job ID to collect metrics for.
-        
-    #     Returns:
-    #         dict: A dictionary containing collected metrics.
-    #     """
-    #     self.logger.debug(f"Collecting metrics for SLURM job: {job_id}")
-    #     output_dir = self.config.get("slurm_output_dir", ".")
-    #     output_files = list(Path(output_dir).glob(f"*{job_id}*"))
-    #     if not output_files:
-    #         self.logger.warning(f"No output files found for SLURM job {job_id} in {output_dir}")
-    #         return {"job_id": job_id, "output_files": [], "outputs": {}}
 
-    #     outputs = {}
-    #     for file in output_files:
-    #         try:
-    #             with open(file, "r") as f:
-    #                 outputs[str(file)] = f.read()
-    #         except Exception as e:
-    #             self.logger.error(f"Failed to read output file {file}: {e}")
-    #             outputs[str(file)] = f"Error reading file: {e}"
-
-    #     return {
-    #         "job_id": job_id,
-    #         "output_files": [str(f) for f in output_files],
-    #         "outputs": outputs
-    #     }
+  
