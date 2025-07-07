@@ -48,7 +48,7 @@ class BaseExecutor(ABC):
         pass
 
     @abstractmethod
-    def wait_and_collect(self, job_id: str) -> dict:
+    def wait_and_collect(self, job_id: str, execution_dir : Path) -> dict:
         """
         Wait for the job to finish and collect execution results.
         Returns a dictionary with metrics like bandwidth and latency.
@@ -63,69 +63,82 @@ class LocalExecutor(BaseExecutor, HasLogger):
     Executor for simulating local benchmark jobs.
     """
 
+    
     def submit(self, script: Path) -> str:
         """
-        Execute the script locally.
-        Gets the process PID and returns it.
-
-        Args:
-            script (Path): The path to the script to execute.
-
-        Returns:
-            str: The process PID as a string.
+        Execute the script locally and wait for it to finish.
+        Returns "local" when completed.
         """
         self.logger.debug(f"Submitting local job script: {script}")
         if not script or not script.exists():
             raise ValueError(f"Script not found: {script}")
 
-        command = f"bash {script}"  # or use `sh` depending on your shell
+        command = f"bash {script}"
         self.logger.debug(f"Executing local script with command: {command}")
 
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        self.logger.info(f"Started process with PID: {process.pid}")
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=script.parent  # Ensures relative files are created in the right place
+            )
+            self.logger.info(f"Process completed with return code {result.returncode}")
+            self.logger.debug(f"stdout:\n{result.stdout}")
+            self.logger.debug(f"stderr:\n{result.stderr}")
 
-        return str(process.pid)
+            if result.returncode != 0:
+                raise RuntimeError(f"Script failed with code {result.returncode}: {result.stderr}")
 
+            return "local"
 
+        except Exception as e:
+            self.logger.error(f"Error running script {script}: {e}")
+            raise
 
-
-    def wait_and_collect(self, job_id: str) -> dict:
+    def wait_and_collect(self, job_id: str, execution_dir: Path = None) -> dict:
         """
-        Wait for the local job to complete and collect .
+        Collect metrics from a local job that has already been executed (we don't actually wait here).
         
         Args:
             job_id (str): The PID of the local process as a string.
+            execution_dir (Path, optional): Path to the job's execution directory. Not used in local execution.
         
         Returns:
             dict: A dictionary containing the job status and exit code.
         """
-        pid = int(job_id)
+        pid = str(job_id)
         self.logger.debug(f"Waiting for process with PID {pid} to complete.")
 
-        try:
-            proc = psutil.Process(pid)
-            while proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
-                time.sleep(1)
+        try:           
+             # Define expected file paths
+            job_start_path = execution_dir / "job.start"
+            job_end_path = execution_dir / "job.end"
+            job_status_path = execution_dir / "job.status"
+
+            # Read contents of the files
+            start_time = job_start_path.read_text().strip() if job_start_path.exists() else None
+            end_time = job_end_path.read_text().strip() if job_end_path.exists() else None
+            final_status = job_status_path.read_text().strip() if job_status_path.exists() else "UNKNOWN"
+
             return {
                 "job_id": job_id,
-                "status": "completed",
-                "exit_code": proc.wait(),
+                "status": final_status,
+                "slurm_status": None,
+                "start_time": start_time,
+                "end_time": end_time,
                 "error": None
             }
-        except psutil.NoSuchProcess:
-            self.logger.warning(f"No process found with PID {pid}")
-            return {
-                "job_id": job_id,
-                "status": "not_found",
-                "exit_code": None,
-                "error": "Process not found"
-            }
+        
         except Exception as e:
             self.logger.error(f"Error while waiting for PID {pid}: {e}")
             return {
                 "job_id": job_id,
-                "status": "error",
-                "exit_code": None,
+                "status": "ERROR",
+                "slurm_status": self.last_status,
+                "start_time": None,
+                "end_time": None,
                 "error": str(e)
             }
 
