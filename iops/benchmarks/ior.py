@@ -1,6 +1,6 @@
 
 from abc import ABC, abstractmethod
-import shutil
+import csv
 from iops.utils.logger import HasLogger
 from iops.utils.config_loader import IOPSConfig, StripeFolder, StorageConfig
 from iops.controller.planner import Phase
@@ -13,6 +13,23 @@ class BenchmarkRunner(ABC, HasLogger):
     Abstract base class for all benchmark implementations.
     Defines the interface required for benchmark execution.
     """
+    _registry = {}
+  
+
+
+    @classmethod
+    def register(cls, name):
+        def decorator(subclass):
+            cls._registry[name.lower()] = subclass
+            return subclass
+        return decorator
+
+    @classmethod
+    def build(cls, name: str, config) -> "BenchmarkRunner":
+        benchmark_cls = cls._registry.get(name.lower())
+        if benchmark_cls is None:
+            raise ValueError(f"Benchmark '{name}' is not registered.")
+        return benchmark_cls(config)
 
     def __init__(self, config):
         super().__init__()
@@ -23,7 +40,7 @@ class BenchmarkRunner(ABC, HasLogger):
         Save the generated script content to a file.
         """
         try:
-            script_path = params.get("__file__")            
+            script_path = params.get("__script__")            
             script_path.write_text(script_content)
             script_path.chmod(0o755)
             self.logger.info(f"Script saved successfully at {script_path}")
@@ -31,6 +48,8 @@ class BenchmarkRunner(ABC, HasLogger):
         except Exception as e:
             self.logger.error(f"Failed to save script: {e}")
             return False
+        
+    
 
 
     @abstractmethod
@@ -58,18 +77,20 @@ class BenchmarkRunner(ABC, HasLogger):
         """
         pass
 
+@BenchmarkRunner.register("ior")
 class IORBenchmark(BenchmarkRunner):
     """
     IOR benchmark integration.
     Responsible for generating job scripts and parsing benchmark output.
     """
+  
     def __init__(self, config : IOPSConfig): 
         super().__init__(config)
         # status file to track job status
         self.status_file: Path = config.execution.workdir / "ior_status.txt"
 
         
-    def get_commands(self, params) -> str:
+    def get_commands(self, params) -> str: 
         """
         Returns the IOR command based on the configuration.
         """
@@ -83,7 +104,7 @@ class IORBenchmark(BenchmarkRunner):
         
         return commands
         
-    def generate(self, params: dict) -> str:
+    def generate(self, params: dict) -> Path:
         """
         Generate a script from a Jinja2 template using provided parameters.
 
@@ -91,7 +112,7 @@ class IORBenchmark(BenchmarkRunner):
             params (dict): Parameters to fill into the Jinja2 template.
 
         Returns:
-            str: Path to the generated script file.
+            Path: Path to the generated script file.
         """
         
         template_path: Path = self.config.template.bash_template
@@ -99,20 +120,17 @@ class IORBenchmark(BenchmarkRunner):
         # Load Jinja2 environment from the template's directory
         env = Environment(loader=FileSystemLoader(template_path.parent))
         template = env.get_template(template_path.name)
-
-        # folder for tests
-        test_folder = params.get("__path__") / f"test_{params.get('__test_uid__')}"
-        test_folder.mkdir(parents=True, exist_ok=True)
+      
 
         # Render the template
         full_params = {
             "nodes": params.get("nodes"),
             "ntasks": params.get("processes_per_node") * params.get("nodes"),
             "ntasks_per_node": params.get("processes_per_node"),
-            "chdir": test_folder,
+            "chdir": params.get("__path__"),
             "job_name": f"job_name",
             "output_file": f"{params.get('ost_count').name}/test_output.ior",
-            "summary_results": test_folder / f"summary.csv",
+            "summary_results": params.get("__output__"),
             "status_file": self.status_file,
             "cmd": self.get_commands(params),
         }
@@ -120,29 +138,48 @@ class IORBenchmark(BenchmarkRunner):
 
         if not self._save_script(rendered_script, params):
             self.logger.error("Failed to save the generated script.")
-            return None
-        
-        # move the script to the test folder
-        shutil.move(str(params.get("__file__")), str(test_folder / Path(params.get("__file__")).name))
-        return str(test_folder / Path(params.get("__file__")).name)
+            return None       
 
-    def parse_output(self, job_output_path: str) -> dict:
-        """
-        Parses a simulated IOR output file.
-        In a real implementation, it would extract bandwidth, latency, etc.
-        """
-        # random generated bandwidth and latency for demonstration
-        import random
-        bw = random.uniform(300, 900)  # Simulated bandwidth in MB/s
-        latency = random.uniform(3, 5)
+        return params.get("__script__")
 
-        self.logger.debug(f"Parsing IOR output from: {job_output_path}")
-        # TODO: parse actual IOR output file
-        return {
-            "bandwidth": bw,
-            "latency": latency
+    def parse_output(self, params: dict) -> dict:
+        """
+        Parses the IOR output CSV file, renames columns, and returns a cleaned-up dictionary.
+        """
+        output_file = params.get("__output__")
+        results = {}
+
+        IOR_CSV_RENAME_MAP = {
+            "access": "operation",
+            "bw(MiB/s)": "bandwidth",
+            "IOPS": "iops",
+            "Latency": "latency",
+            "block(KiB)": "block_size",
+            "xfer(KiB)": "transfer_size",
+            "open(s)": "open_time",
+            "wr/rd(s)": "operation_time",
+            "close(s)": "close_time",
+            "total(s)": "total_time",
+            "numTasks": "num_tasks",
+            "iter": "iteration"
         }
-    
+
+        if output_file.exists():
+            with output_file.open("r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    results = {
+                        IOR_CSV_RENAME_MAP.get(key.strip(), key.strip()):
+                            value.strip() if key.strip() == "access" else float(value)
+                        for key, value in row.items()
+                    }
+                    break  # Only one line expected
+        else:
+            self.logger.warning(f"Output file not found: {output_file}")
+
+        return results
+
+   
   
     def build_phase(self, sweep_param: str, fixed_params: dict) -> Phase:
         """
@@ -198,6 +235,6 @@ class IORBenchmark(BenchmarkRunner):
 
             
                         
-            
+           
 
             

@@ -8,8 +8,21 @@ from iops.controller.runner import IOPSRunner
 from iops.utils.config_loader import ConfigValidationError
 
 
+def load_version():
+    """
+    Load the version of the IOPS Tool from the version file.
+    """
+    version_file = Path(__file__).parent / "VERSION"
+    if not version_file.exists():
+        raise FileNotFoundError(f"Version file not found: {version_file}")
+    
+    with version_file.open() as f:
+        return f.read().strip()
+
 def main():
-    parser = argparse.ArgumentParser(description="IOPS Tool")
+    ## get version
+
+    parser = argparse.ArgumentParser(description=f"IOPS Tool")
 
     parser.add_argument('setup_file', type=Path, nargs='?', default=None, help="Path to the YAML setup file (e.g., iops_config.yaml)")
 
@@ -24,6 +37,8 @@ def main():
     parser.add_argument('--log_level', type=str, default='INFO', help="Set the logging level (default: INFO)")
 
     parser.add_argument('--verbose', action='store_true', help="Show full traceback for errors")
+
+    parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}', help="Show the version of the IOPS Tool")
 
     args = parser.parse_args()
 

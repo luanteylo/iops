@@ -130,10 +130,10 @@ def validate_config(config: IOPSConfig):
         raise ConfigValidationError("min_volume must be greater than 0")
     if config.storage.max_volume < config.storage.min_volume:
         raise ConfigValidationError("max_volume must be >= min_volume")
-    if not _is_power_of_two(config.storage.min_volume):
-        raise ConfigValidationError("min_volume must be a power of 2")
-    if not _is_power_of_two(config.storage.max_volume):
-        raise ConfigValidationError("max_volume must be a power of 2")
+    #if not _is_power_of_two(config.storage.min_volume):
+    #    raise ConfigValidationError("min_volume must be a power of 2")
+    #if not _is_power_of_two(config.storage.max_volume):
+    #    raise ConfigValidationError("max_volume must be a power of 2")
 
     if config.execution.test_type not in {"write_only", "write_read"}:
         raise ConfigValidationError(f"Invalid test_type: {config.execution.test_type}")

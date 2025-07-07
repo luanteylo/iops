@@ -15,3 +15,4 @@ showcases/
 todo/
 *.logs
 iops.log
+iops_config.yaml
