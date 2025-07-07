@@ -207,22 +207,22 @@ class SlurmExecutor(BaseExecutor, HasLogger):
                     return {
                         "job_id": job_id,
                         "status": "timeout",
-                        "exit_code": None,
-                        "error": "Job timed out"
+                        "error": "Job timed out",
+                        "output_path": None,
                     }
                 time.sleep(poll_interval)
             self.logger.info(f"SLURM job {job_id} completed with status: {status}")
             return {
                 "job_id": job_id,
                 "status": status,
-                "exit_code": 0,  # Assuming job completed successfully
+                "error": None,
+                
             }
         except Exception as e:
             self.logger.error(f"Error while waiting for SLURM job {job_id}: {e}")
             return {
                 "job_id": job_id,
                 "status": "error",
-                "exit_code": None,
                 "error": str(e)
             }
     # def collect_metrics(self, job_id: str) -> dict:
