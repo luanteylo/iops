@@ -118,7 +118,7 @@ class FileUtils(HasLogger):
             return load_config(file_path)
         except (ParserError, ValueError) as e:
             raise ValueError(f"Error parsing the configuration file {file_path}: {e}") from e
-    
+ 
     def validate_iops_config(self, config: IOPSConfig) -> None:
         """
         Validates a loaded configuration object.
