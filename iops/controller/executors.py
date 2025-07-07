@@ -19,6 +19,22 @@ class BaseExecutor(ABC):
     Abstract base class for all execution environments (e.g., SLURM, local).
     """
 
+    _registry = {}
+
+    @classmethod
+    def register(cls, name):
+        def decorator(subclass):
+            cls._registry[name.lower()] = subclass
+            return subclass
+        return decorator
+
+    @classmethod
+    def build(cls, name: str, config) -> "BaseExecutor":
+        executor_cls = cls._registry.get(name.lower())
+        if executor_cls is None:
+            raise ValueError(f"Executor '{name}' is not registered.")
+        return executor_cls(config)
+
     def __init__(self, config):
         """
         Initialize executor with configuration.
@@ -43,7 +59,7 @@ class BaseExecutor(ABC):
 
 
 
-
+@BaseExecutor.register("local")
 class LocalExecutor(BaseExecutor, HasLogger):
     """
     Executor for simulating local benchmark jobs.
@@ -67,7 +83,7 @@ class LocalExecutor(BaseExecutor, HasLogger):
         command = f"bash {script}"  # or use `sh` depending on your shell
         self.logger.debug(f"Executing local script with command: {command}")
 
-        process = subprocess.Popen(command, shell=True)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.logger.info(f"Started process with PID: {process.pid}")
 
         return str(process.pid)
@@ -95,14 +111,16 @@ class LocalExecutor(BaseExecutor, HasLogger):
             return {
                 "job_id": job_id,
                 "status": "completed",
-                "exit_code": proc.wait()
+                "exit_code": proc.wait(),
+                "error": None
             }
         except psutil.NoSuchProcess:
             self.logger.warning(f"No process found with PID {pid}")
             return {
                 "job_id": job_id,
                 "status": "not_found",
-                "exit_code": None
+                "exit_code": None,
+                "error": "Process not found"
             }
         except Exception as e:
             self.logger.error(f"Error while waiting for PID {pid}: {e}")
@@ -113,6 +131,7 @@ class LocalExecutor(BaseExecutor, HasLogger):
                 "error": str(e)
             }
 
+@BaseExecutor.register("slurm")
 class SlurmExecutor(BaseExecutor, HasLogger):
     """
     Executor for submitting and managing jobs via SLURM.

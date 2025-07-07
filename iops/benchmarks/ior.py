@@ -90,7 +90,7 @@ class IORBenchmark(BenchmarkRunner):
         self.status_file: Path = config.execution.workdir / "ior_status.txt"
 
         
-    def get_commands(self, params) -> str:
+    def get_commands(self, params) -> str: 
         """
         Returns the IOR command based on the configuration.
         """
