@@ -8,13 +8,16 @@
 #SBATCH -o batch%j.out
 #SBATCH -e batch%j.err
 #SBATCH --exclusive 
-
+#SBATCH --constraint=bora
 
 FILENAME={{ output_file }}
 SUMMARY_RESULTS={{ summary_results }}
 
 # Record job start time
 date "+%Y-%m-%d %H:%M:%S" > job.start
+
+module purge
+module load mpi/openmpi/4.0.1
 
 # Execute the command
 mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \

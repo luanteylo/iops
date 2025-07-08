@@ -28,36 +28,6 @@ class Phase:
     criterion: str = "bandwidth"
     repetitions: int = 1
 
-
-    
-    def get_parameter_combinations(self):
-        """
-        Yields full parameter dictionaries for each value in the sweep,a
-        with support for repetitions and randomization.
-        """       
-        all_combinations = []        
-
-        for value in self.values:
-            params = self.fixed_params.copy()
-            params[self.sweep_param] = value
-
-            for key, options in self.full_param_space.items():
-                if key not in params:
-                    params[key] = options[0]  # fallback default
-            
-            # Generate a unique identifier for this combination
-            test_uid = str(uuid.uuid4())
-            for rep in range(self.repetitions):
-                combo = params.copy()
-                combo["__rep__"] = rep
-                combo["__test_uid__"] = test_uid
-                all_combinations.append(combo)
-
-        random.shuffle(all_combinations)
-
-        for combo in all_combinations:
-            yield combo
-
 class BasePlanner(ABC):
 
     def __init__(self, config: IOPSConfig, benchmark):

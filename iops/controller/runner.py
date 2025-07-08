@@ -37,17 +37,17 @@ class IOPSRunner(HasLogger):
                 self.logger.info(f"\tnodes: {params.get('nodes')}, volume: {params.get('volume')}, ost_count: {params.get('ost_count').name}")
                 self.logger.info(f"\tPattern: {params.get('io_pattern')}, Operation: {params.get('operation')}")
 
-                try:
+                try:                    
                     job_script = benchmark.generate(params=params)
                     job_id = executor.submit(job_script)  # Replace with actual job submission logic
-                    output_data = executor.wait_and_collect(job_id)      
-                    self.logger.debug(f"Job {job_id} completed. Output data: {output_data}")              
+                    output_data = executor.wait_and_collect(job_id, params["__path__"])
+                    self.logger.info(f"Job {job_id} completed. Output data: {output_data}")              
 
                     # check if output_data is valid
-                    if output_data.get('status') == 'completed':
+                    if output_data and output_data.get('status') == 'SUCCESS':
                         # call parse_output to extract metrics
                         result = benchmark.parse_output(params=params)                    
-                        self.logger.debug(f"Parsed result: {result}")
+                        self.logger.info(f"Parsed result: {result}")
                         analyzer.record(result, params)
                     else:
                         self.logger.error(f"Job {job_id} failed or did not complete successfully. Output: {output_data}")
