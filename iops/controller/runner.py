@@ -1,11 +1,12 @@
-from iops.controller.executors import SlurmExecutor, LocalExecutor, BaseExecutor
+from iops.controller.executors import BaseExecutor
 from iops.analysis.metrics import MetricsAnalyzer
-from iops.benchmarks.ior import IORBenchmark, BenchmarkRunner
+from iops.benchmarks.ior import  BenchmarkRunner
 from iops.utils.logger import HasLogger
-from iops.controller.planner import SweepPlanner
-from iops.controller.planner import PhaseResult
+from iops.controller.planner import BruteForce
 from iops.utils.config_loader import IOPSConfig
-from iops.utils.file_utils import FileUtils 
+
+
+from pathlib import Path
 
 class IOPSRunner(HasLogger):
     def __init__(self, config: IOPSConfig):
@@ -21,27 +22,37 @@ class IOPSRunner(HasLogger):
         executor = BaseExecutor.build(name=self.config.execution.job_manager, 
                                       config=self.config)
     
-        planner = SweepPlanner(self.config, benchmark)
+        planner = BruteForce(self.config, benchmark)
         analyzer = MetricsAnalyzer()        
         
                 
         while planner.has_next_phase():
             phase = planner.next_phase()
+            phase_folder = Path(phase.meta_params.get("__phase_folder"))
+            phase_folder.mkdir(parents=True, exist_ok=True)
+
             self.logger.info(f"Running phase: {phase.sweep_param}")
 
-            last_result = None
-
             while planner.has_next_combination():
-                params = planner.next_combination(last_result=last_result)
-                self.logger.info(f"Submitting Test {params.get('__test_uid__')} - Repetition: {params.get('__rep__')}. Parameters:")
-                self.logger.info(f"\tnodes: {params.get('nodes')}, volume: {params.get('volume')}, ost_count: {params.get('ost_count').name}")
-                self.logger.info(f"\tPattern: {params.get('io_pattern')}, Operation: {params.get('operation')}")
+                params = planner.next_combination()
+                test_folder = Path(params.get("__test_folder"))
+                test_index = params.get("__test_index")
+                test_repetition = params.get("__test_repetition")
 
+                # create the test folder 
+                test_folder.mkdir(parents=True, exist_ok=True)                
+
+                self.logger.info(f"Submitting Test: {test_index}, Repetition: {test_repetition}")
+                self.logger.info(f"Execution directory: {test_folder}")
+                self.logger.info(f"Parameters:")
+                # Print only parameters that are not metadata "__test_id__", "__repetition__", "__path__", "__script__"                
+                self.logger.info(params)                
+                
                 try:                    
                     job_script = benchmark.generate(params=params)
                     job_id = executor.submit(job_script)  # Replace with actual job submission logic
-                    output_data = executor.wait_and_collect(job_id, params["__path__"])
-                    self.logger.info(f"Job {job_id} completed. Output data: {output_data}")              
+                    output_data = executor.wait_and_collect(job_id, test_folder)
+                    self.logger.info(f"Job {job_id} completed. Status: {output_data.get('status')}")              
 
                     # check if output_data is valid
                     if output_data and output_data.get('status') == 'SUCCESS':
@@ -59,14 +70,19 @@ class IOPSRunner(HasLogger):
                     self.logger.error(f"Error during test execution: {e}")
                     raise
 
-            best = analyzer.select_best(phase.criterion)
-            self.logger.info(f"Best parameters for phase '{phase.sweep_param}':")
-            self.logger.info(f"\tnodes: {best.get('nodes')}, volume: {best.get('volume')}, ost_count: {best.get('ost_count').name}")
-            self.logger.info(f"\tBest {phase.criterion}: {best.get(phase.criterion)}")
-            analyzer.save_record_csv(planner.current_phase_path / f"results_{phase.sweep_param}.")
+            best = analyzer.select_best(criterion=benchmark.get_criterion(),
+                                        operation=benchmark.get_operation())
+            
 
-            planner.update_for_next_phase(PhaseResult(phase.sweep_param, best))
+            
+            self.logger.info(f"Best parameters for phase '{phase.sweep_param}':")
+            self.logger.info(best)
+            #self.logger.info(f"\tBest {phase.criterion}: {best.get(phase.criterion)}")
+            analyzer.save_record_csv(phase_folder / f"results_{phase.sweep_param}.csv")
+
+            planner.update_phase(param=best.get("parameters"), result=best.get("results"))
 
             analyzer.clean()
         
         self.logger.info("All benchmarking phases completed.")
+        analyzer.save_history_yaml(self.config.execution.workdir / "history.yaml")

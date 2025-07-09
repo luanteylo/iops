@@ -1,10 +1,6 @@
 #!/bin/bash
 
 # IOR local execution script (generated from template)
-
-FILENAME={{ output_file }}
-SUMMARY_RESULTS={{ summary_results }}
-
 # Record job start time
 date "+%Y-%m-%d %H:%M:%S" > job.start
 
@@ -15,9 +11,8 @@ date "+%Y-%m-%d %H:%M:%S" > job.start
 # module load mpi/openmpi/4.0.1
 
 # Execute the IOR benchmark
-mpirun {{cmd}} \
--O summaryFile=${SUMMARY_RESULTS} \
--O summaryFormat=csv -o ${FILENAME}
+mpirun -np {{ntasks}}  --oversubscribe {{cmd}} 
+
 
 # Capture exit code
 exit_code=$?

@@ -2,11 +2,12 @@
 from abc import ABC, abstractmethod
 import csv
 from iops.utils.logger import HasLogger
-from iops.utils.config_loader import IOPSConfig, StripeFolder, StorageConfig
+from iops.utils.config_loader import IOPSConfig
 from iops.controller.planner import Phase
 from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
 import time
+import json
 
 class BenchmarkRunner(ABC, HasLogger):
     """
@@ -35,12 +36,11 @@ class BenchmarkRunner(ABC, HasLogger):
         super().__init__()
         self.config = config
     
-    def _save_script(self, script_content: str, params: dict) -> bool:
+    def _save_script(self, script_content: str, script_path: Path) -> bool:
         """
         Save the generated script content to a file.
         """
-        try:
-            script_path = params.get("__script__")            
+        try:            
             script_path.write_text(script_content)
             script_path.chmod(0o755)
             self.logger.info(f"Script saved successfully at {script_path}")
@@ -48,8 +48,23 @@ class BenchmarkRunner(ABC, HasLogger):
         except Exception as e:
             self.logger.error(f"Failed to save script: {e}")
             return False
-        
     
+    @abstractmethod
+    def get_criterion():
+        """
+        all benchmarks should implement this method to return the criterion for optimization.
+        For example, IOR might return 'bandwidth' or 'latency'.
+        """
+        pass
+
+    @abstractmethod
+    def get_operation():
+        """
+        Returns the operation applied on the criterion value.
+        Supported operations are 'mean', median, 'max', 'min'.  
+        For example, IOR might return 'mean' for bandwidth or latency.
+        """
+        pass
 
 
     @abstractmethod
@@ -83,6 +98,8 @@ class IORBenchmark(BenchmarkRunner):
     IOR benchmark integration.
     Responsible for generating job scripts and parsing benchmark output.
     """
+    criterion = "bandwidth"  # Example criterion for IOR
+    operation = "mean"  # Example operation for IOR
   
     def __init__(self, config : IOPSConfig): 
         super().__init__(config)
@@ -91,13 +108,20 @@ class IORBenchmark(BenchmarkRunner):
         """
         Returns the IOR command based on the configuration.
         """
+
         commands: str = "ior"
+
+        summary_file = params.get("__test_output")
+        output_file = Path(params.get("ost_count")) / "test_output.ior"
+        
 
         block_size: int = params.get("volume") / (params.get("processes_per_node") * params.get("nodes"))
 
         commands += f" -w"
         commands += f" -b {int(block_size)}m"
         commands += f" -t 1m"  
+        commands += f" -O summaryFile={summary_file} -O summaryFormat=JSON"
+        commands += f" -o {output_file}"
         
         return commands
         
@@ -113,134 +137,135 @@ class IORBenchmark(BenchmarkRunner):
         """
         
         template_path: Path = self.config.template.bash_template
+        script_path = Path(params.get("__test_script"))
+        
 
         # Load Jinja2 environment from the template's directory
         env = Environment(loader=FileSystemLoader(template_path.parent))
         template = env.get_template(template_path.name)
-      
+
 
         # Render the template
         full_params = {
             "nodes": params.get("nodes"),
             "ntasks": params.get("processes_per_node") * params.get("nodes"),
             "ntasks_per_node": params.get("processes_per_node"),
-            "chdir": params.get("__path__"),
+            "chdir": params.get("__test_folder"),
             "job_name": f"job_name",
-            "output_file": f"{params.get('ost_count').name}/test_output.ior",
-            "summary_results": params.get("__output__"),            
             "cmd": self.get_commands(params),
         }
         rendered_script = template.render(full_params)
 
-        if not self._save_script(rendered_script, params):
-            self.logger.error("Failed to save the generated script.")
+        if not self._save_script(rendered_script, script_path):
+            self.logger.error(f"Failed to save the generated script '{script_path}'")
             return None       
 
-        return params.get("__script__")
-
+        return script_path
 
     def parse_output(self, params: dict) -> dict:
         """
-        Parses the IOR output CSV file, renames columns, and returns a cleaned-up dictionary.
-        Retries up to 5 times if the file is not immediately available.
+        Parses the IOR JSON summary file and returns a cleaned-up dictionary
+        with renamed keys to match expected output format.
         """
-        
+
         results = {}
 
-        IOR_CSV_RENAME_MAP = {
-            "access": "operation",
-            "bw(MiB/s)": "bandwidth",
-            "IOPS": "iops",
-            "Latency": "latency",
-            "block(KiB)": "block_size",
-            "xfer(KiB)": "transfer_size",
-            "open(s)": "open_time",
-            "wr/rd(s)": "operation_time",
-            "close(s)": "close_time",
-            "total(s)": "total_time",
+        IOR_JSON_RENAME_MAP = {
+            "operation": "operation",
+            "bwMeanMIB": "bandwidth", # The criterion used for IOR
+            "OPsMean": "iops",
+            "MeanTime": "total_time",
+            "blockSize": "block_size",
+            "transferSize": "transfer_size",
             "numTasks": "num_tasks",
-            "iter": "iteration"
         }
 
-        # Retry logic
-        retries = 10
-        delay = 5  # seconds
+        output_file = Path(params.get("__test_output"))
+        if not output_file.exists():
+            self.logger.warning(f"JSON summary file not found: {output_file}")
+            return None
 
-        for attempt in range(1, retries + 1):
-            output_file = Path(params.get("__output__"))            
-            if output_file.exists():
-                break
-            self.logger.warning(f"Output file not found: {output_file}")
-            self.logger.warning(f"Waiting {attempt * delay} seconds. Retry {attempt + 1}/{retries}")
-            time.sleep(attempt * delay)
-        else:
-           return None
-
-        # Parse the CSV
         with output_file.open("r") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                results = {
-                    IOR_CSV_RENAME_MAP.get(key.strip(), key.strip()):
-                        value.strip() if key.strip() == "access" else float(value)
-                    for key, value in row.items()
-                }
-                break  # Only one line expected
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                self.logger.error(f"Invalid JSON in {output_file}")
+                return None
+
+        # We parse the first 'write' or 'read' summary entry
+        for entry in data.get("summary", []):
+            result = {
+                IOR_JSON_RENAME_MAP.get(key, key): (
+                    entry[key] if isinstance(entry[key], str) else float(entry[key])
+                )
+                for key in IOR_JSON_RENAME_MAP
+                if key in entry
+            }
+
+            # Optional: add the iteration number if provided
+            result["iteration"] = params.get("iteration", 0)
+
+            results = result
+            break  # Only parse the first result 
 
         return results
 
-
-   
+    def get_criterion(self) -> str:
+        """
+        Returns the criterion for IOR benchmark.
+        """
+        return self.criterion
+    
+    def get_operation(self) -> str:
+        """
+        Returns the operation applied on the criterion value for IOR benchmark.
+        """
+        return self.operation
   
-    def build_phase(self, sweep_param: str, fixed_params: dict) -> Phase:
+    def build_phase(self, sweep_param: str, params: dict) -> Phase:
         """
-        Builds a single Phase based on the sweep_param and current best fixed_params.
+        Builds a single Phase based on the sweep_param and current best params.
+        inputs:
+        - sweep_param: The parameter to sweep over (e.g., 'volume', 'nodes', 'ost_count').
+        - params: A dictionary of parameters that will be used to fill the parameters of the phase.
         """
-        self.logger.debug(f"Building phase for: {sweep_param} with fixed_params: {fixed_params}")
-
-        volume_range = list(range(
-            self.config.storage.min_volume,
-            self.config.storage.max_volume + 1,
-            self.config.storage.volume_step))
-
-        nodes_range = [2**i for i in range(
-            self.config.nodes.min_nodes.bit_length() - 1,
-            self.config.nodes.max_nodes.bit_length())]
-
-        stripe_folders = self.config.storage.stripe_folders
+        self.logger.debug(f"Building phase for: {sweep_param} with fixed_params: {params}")
 
         # Choose sweep values based on parameter
         if sweep_param == "volume":
-            values = volume_range
+            values = list(range(
+                self.config.storage.min_volume,
+                self.config.storage.max_volume + 1,
+                self.config.storage.volume_step
+            ))
         elif sweep_param == "nodes":
-            values = nodes_range
+            values = list(range(
+                self.config.nodes.min_nodes,
+                self.config.nodes.max_nodes + 1,
+                self.config.nodes.node_step
+            ))
         elif sweep_param == "ost_count":
-            values = stripe_folders
+            values = [str(stf) for stf in self.config.storage.stripe_folders]
         else:
             raise ValueError(f"Unknown test parameter: {sweep_param}")
 
-        full_param_space = {
-            "volume": volume_range,
-            "nodes": nodes_range,
-            "ost_count": stripe_folders
-        }
-
         # Fill in standard fixed parameters
-        full_fixed = {
+        all_parameters = {
             "processes_per_node": self.config.nodes.processes_per_node,
             "cores_per_node": self.config.nodes.cores_per_node,
-            "io_pattern": self.config.execution.io_pattern,  # string now
+            "io_pattern": self.config.execution.io_pattern, 
             "operation": self.config.execution.test_type,
+            "ost_count": str(self.config.storage.stripe_folders[0]), # always start with the default values
+            "volume": self.config.storage.min_volume, # always start with the default values
+            "nodes": self.config.nodes.min_nodes, # always start with the default values
         }
-        full_fixed.update(fixed_params)
+        # Update the phase parameters with the previous sweep parameter values
+        all_parameters.update(params)        
+        all_parameters.update({sweep_param: None})  # Placeholder for the sweep parameter
+        return Phase(sweep_param = sweep_param,
+                     values = values,
+                     params=all_parameters)
 
-        return Phase(
-            sweep_param=sweep_param,
-            values=values,
-            fixed_params=full_fixed,
-            full_param_space=full_param_space,
-            repetitions=self.config.execution.repetitions
-        )
 
             
 

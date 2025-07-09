@@ -2,31 +2,29 @@ from typing import Dict, Any
 from iops.utils.config_loader import IOPSConfig
 from iops.utils.logger import HasLogger
 
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Any, List, Iterator
 import random
-import uuid
-
-@dataclass
-class PhaseResult:
-    """
-    Holds the result of a completed optimization phase.
-    """
-    sweep_param: str
-    best_params: Dict[str, Any]
+from pathlib import Path
 
 @dataclass
 class Phase:
     """
     Represents a phase of the sweep with a single parameter being optimized.
     """    
-    sweep_param: str
-    values: List[Any]
-    fixed_params: Dict[str, Any]
-    full_param_space: Dict[str, List[Any]]
-    criterion: str = "bandwidth"
-    repetitions: int = 1
+    sweep_param: str # The parameter being swept (e.g., "volume", "nodes")
+    values: List[Any] # Possible values for the sweep parameter
+    params: Dict[str, Any]  # Fixed parameters (or default values) for the phase
+    meta_params: Dict[str, Any] = None  # Metadata parameters used by the IOPS framework
+  
+    phase_best_param: Dict[str, Any] = None  # Best parameters found in this phase
+    phase_best_result: Dict[str, Any] = None  # Best result found in this phase
+
+
+
+    
 
 class BasePlanner(ABC):
 
@@ -34,58 +32,103 @@ class BasePlanner(ABC):
         self.config = config
         self.benchmark = benchmark
         self.tests = list(config.execution.tests)  # List of parameter names to sweep
-        self.index = 0  # Phase index
-        self.history: Dict[str, Any] = {}  # Best parameters found so far
-        self.current_phase: Phase | None = None
+        self.phase_index = 0  # Phase index
+        self.test_index = 0  # Index for the current combination within the phase
+
+        self.current_phase: Phase | None = None  # Current phase being processed
+        self.all_phases: List[Phase] = []  # All phases created during the sweep
+        self.current_best: Dict[str, Any] = {}  # Best parameter found so far
+
         self.current_combinations: Iterator[Dict[str, Any]] = iter([])
         self._next_combo: Dict[str, Any] | None = None
-        self.current_phase_path = None
-        self.combinations_path = {} # uses the uid to store the path to the combinations file
+
+        
     
 
     def has_next_phase(self) -> bool:
-        return self.index < len(self.tests)
+        return self.phase_index < len(self.tests)
 
     def next_phase(self) -> Phase:
         """
         Creates the next phase of the sweep based on the current index.
         # 
         """
-        sweep_param = self.tests[self.index]
+
+        if self.current_phase is not None:
+            self.all_phases.append(self.current_phase)
+        
+
+        sweep_param = self.tests[self.phase_index]
         self.logger.info(f"Generating phase for parameter: {sweep_param}")
 
-        self.current_phase_path = self.config.execution.workdir / f"phase{self.index}_{sweep_param}"
-        self.current_phase_path.mkdir(parents=True, exist_ok=True)
+        #self.current_phase_path = self.config.execution.workdir / f"{sweep_param}_{self.phase_index}"
+        #self.current_phase_path.mkdir(parents=True, exist_ok=True)
 
-        self.current_phase = self.benchmark.build_phase(
-            sweep_param=sweep_param,
-            fixed_params=self.history
-        )
-        self.current_combinations = self._generate_combinations(self.current_phase)
+        self.current_phase = self.benchmark.build_phase(sweep_param=sweep_param, 
+                                           params=self.current_best)
+        
+        self.logger.debug(f"Current phase: {self.current_phase}")   
 
+        # update meta parameters for the phase
+        self.current_phase.meta_params = {
+            "__phase_index": self.phase_index,
+            "__phase_folder": str(self.config.execution.workdir / f"{self.current_phase.sweep_param}_{self.phase_index}"),
+            "__phase_repetitions": self.config.execution.repetitions,
+            "__phase_sweep_param": sweep_param,            
+
+            "__test_output": None, 
+            "__test_script": None,
+            "__test_index": None,       
+            "__test_folder": None,  
+            "__test_repetition": None, 
+        }
+
+        # call the generate_combinations method to generate all combinations for the current phase
+        self.current_combinations = self.generate_combinations(self.current_phase)
         self._next_combo = next(self.current_combinations, None)
-        self.index += 1
+        
+        self.phase_index += 1
         return self.current_phase
-
-    def has_next_combination(self) -> bool:
-        return self._next_combo is not None
-
-    def next_combination(self, last_result: Dict[str, Any] = None) -> Dict[str, Any]:
+    
+    def update_phase(self, param: Dict[str, Any], result) -> None:
         """
-        Returns the next parameter combination to test.
-        Optionally uses last_result (not used in sweep mode).
+        Updates the current phase with the best parameters and result found.
         """
-        if not self.has_next_combination():
-            raise StopIteration("No more combinations.")
-        combo = self._next_combo
-        try:
-            self._next_combo = next(self.current_combinations)
-        except StopIteration:
-            self._next_combo = None
-        print(combo)
-        return combo
+        self.current_phase.phase_best_param = param
+        self.current_phase.phase_best_result = result
+        self.current_best = param
+        
 
-    def _generate_combinations(self, phase: Phase) -> Iterator[Dict[str, Any]]:
+
+    @classmethod   
+    def generate_combinations(cls, phase: Phase) -> Iterator[Dict[str, Any]]:
+        """
+        Generates all test parameter combinations for a phase,
+        assigning a test ID.
+        This method should be overridden in subclasses.
+        """
+        raise NotImplementedError("This method should be implemented in subclasses.")
+    
+    @classmethod
+    def next_combination(cls) -> Dict[str, Any]:
+        """
+        Returns a dictionary with the next parameter combination to test.
+        This method should be overridden in subclasses.
+        """
+        raise NotImplementedError("This method should be implemented in subclasses.")
+   
+
+
+class BruteForce(BasePlanner, HasLogger):
+    """
+    A brute-force planner that exhaustively searches the parameter space    
+    """
+
+    def __init__(self, config: IOPSConfig, benchmark):
+        super().__init__(config, benchmark)
+
+
+    def generate_combinations(self, phase: Phase) -> Iterator[Dict[str, Any]]:
         """
         Generates all test parameter combinations for a phase,
         assigning a test UID and repetition count.
@@ -94,69 +137,48 @@ class BasePlanner(ABC):
         sweep_param = phase.sweep_param
 
         for value in phase.values:
-            base_params = phase.fixed_params.copy()
-            base_params[sweep_param] = value
+            meta_params = phase.meta_params.copy()            
+            meta_params["__test_index"] = self.test_index
+            #all_params = {**params, **phase.meta_params}  # Merge with meta parameters            
+            test_folder = Path(meta_params["__phase_folder"]) / f"test_{self.test_index}"
+            meta_params["__test_folder"] = str(test_folder)
+            for rep_index in range(meta_params.get("__phase_repetitions")):
+                parameters = phase.params.copy()  # Start with fixed parameters
+                parameters[sweep_param] = value
+                meta_params["__test_output"] = str(test_folder / f"output_{rep_index}.out")
+                meta_params["__test_script"] = str(test_folder / f"run_{rep_index}.sh")
+                meta_params["__test_repetition"] = rep_index
 
-            # Fill in default values for other parameters not swept in this phase
-            for key, options in phase.full_param_space.items():
-                if key not in base_params:
-                    base_params[key] = options[0]
-
-            test_uid = str(uuid.uuid4())
-            test_folder = self.current_phase_path / f"test_{test_uid}"
-            test_folder.mkdir(parents=True, exist_ok=True)
+                all_combinations.append({**parameters, **meta_params})
             
-            base_params["__test_uid__"] = test_uid
-            base_params["__phase__"] = phase.sweep_param
-            base_params["__path__"] = test_folder
-
-            for rep in range(phase.repetitions):
-                combo = base_params.copy()
-                combo["__rep__"] = rep            
-                combo["__script__"] = test_folder / f"run_{rep}.sh"
-                combo["__output__"] = test_folder / f"output_{rep}.csv"
-                all_combinations.append(combo)
+            self.test_index += 1
 
         random.shuffle(all_combinations)
         return iter(all_combinations)
     
-    @abstractmethod
-    def update_for_next_phase(self, result: PhaseResult):
-        pass
 
-    @abstractmethod 
-    def update_for_nex_combination(self, result: PhaseResult):
-        pass
-
-class SweepPlanner(BasePlanner, HasLogger):
-    """
-    Sweep-based planner that iteratively explores parameter spaces
-    by sweeping one parameter at a time.
-    """
-
-    def __init__(self, config: IOPSConfig, benchmark):
-        super().__init__(config, benchmark)
-
-    def update_for_nex_combination(self, result):
-        pass
-
-    def update_for_next_phase(self, result: PhaseResult):
-        self.logger.info(f"Updating history with best result: {result}")
-        self.history.update(result.best_params)
-
-
-
-class BayesianPlanner(BasePlanner):
-    def __init__(self, config):
-        #self.optimizer = Optimizer(
-        #    dimensions=[(1, 32), (1024, 8192)],
-        #    base_estimator="GP"
-        #)
-        self.history = []
-        #...
-
-    def update_for_nex_combination(self, result):
-        pass
-    def update_for_next_phase(self, result):
-        pass
+    def next_combination(self) -> Dict[str, Any]:
+        """"
+        Returns the next parameter combination to test.
+        """
+        if self._next_combo is None:
+            raise StopIteration("No more combinations available.")
         
+        next_combo = self._next_combo
+        self._next_combo = next(self.current_combinations, None)
+        return next_combo
+    
+    def has_next_combination(self) -> bool:
+        """
+        Returns True if there are more combinations to test.
+        """
+        return self._next_combo is not None
+
+
+    
+
+
+
+    
+
+
