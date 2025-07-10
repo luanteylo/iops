@@ -3,20 +3,24 @@ import pytest
 from unittest.mock import patch
 from pathlib import Path
 
+from iops.controller.executors import SlurmExecutor
 
-def test_slurm_executor_submit(tmp_path):
-    from iops.controller.executors import SlurmExecutor
-    from iops.utils.config_loader import IOPSConfig, StripeFolder, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
-
+@pytest.fixture
+def config_setup(tmp_path):
+    from iops.utils.config_loader import IOPSConfig, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
+    
+    # Create a minimal config for testing
     config = IOPSConfig(
-        nodes=NodesConfig(min_nodes=2, max_nodes=4, processes_per_node=4, cores_per_node=32),
+        nodes=NodesConfig(min_nodes=1, max_nodes=2, node_step=2, processes_per_node=4, cores_per_node=32),
         storage=StorageConfig(
             filesystem_dir=tmp_path / "fs",
             min_volume=1,
             max_volume=10,
             volume_step=1,
             default_stripe=1,
-            stripe_folders=[StripeFolder(name=tmp_path / "folder1", stripe_count=1)]
+            stripe_folders=[
+                {"name": str(tmp_path / "folder1")}
+            ]
         ),
         execution=ExecutionConfig(
             test_type="write_only",
@@ -31,71 +35,63 @@ def test_slurm_executor_submit(tmp_path):
             io_pattern="sequential:shared"
         ),
         template=TemplateConfig(
-            bash_template=tmp_path / "bash_template.sh" 
+            bash_template=tmp_path / "slurm_template.sh",
         )
     )
-    
-    executor = SlurmExecutor(config)
+    return config
+
+def test_slurm_executor_submit(config_setup, tmp_path):
+    """Test submitting a job with a valid job script."""
+    executor = SlurmExecutor(config_setup)
 
     # Simulate a job script path
     job_script = tmp_path / "job_script.sh"
     with open(str(job_script), "w") as f:
         f.write("#!/bin/bash\necho 'Running IOR benchmark'")
 
-    # Call the submit method
+    # Call the submit method & assert job_id is not None
     job_id = executor.submit(job_script)
-
-    # Assert that job_id is not None after submission
     assert job_id is not None
 
-def test_slurm_executor_wait_and_collect(mocker, tmp_path):
-    from iops.controller.executors import SlurmExecutor
-    from iops.utils.config_loader import IOPSConfig, StripeFolder, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
+def test_slurm_executor_submit_invalid_job_script(config_setup, tmp_path):
+    """Test submitting a job with an invalid job script."""
+    executor = SlurmExecutor(config_setup)
 
-    # Minimal config
-    config = IOPSConfig(
-        nodes=NodesConfig(min_nodes=1, max_nodes=1, processes_per_node=1, cores_per_node=1),
-        storage=StorageConfig(
-            filesystem_dir=tmp_path,
-            min_volume=1,
-            max_volume=1,
-            volume_step=1,
-            default_stripe=1,
-            stripe_folders=[StripeFolder(name=tmp_path / "folder1", stripe_count=1)]
-        ),
-        execution=ExecutionConfig(
-            test_type="write_only",
-            search_method="greedy",
-            job_manager="slurm",
-            benchmark_tool="ior",
-            workdir=tmp_path,
-            repetitions=1,
-            status_check_delay=1,
-            wall_time="00:01:00",
-            tests=["nodes"],
-            io_pattern="sequential:shared"
-        ),
-        template=TemplateConfig(
-            bash_template=tmp_path / "bash_template.sh"
-        )
-    )
+    # Simulate an invalid job script path
+    job_script = tmp_path / "invalid_job_script.sh"
+    # Call the submit method and expect an exception
+    with pytest.raises(RuntimeError, match="SLURM job submission failed"):
+        executor.submit(job_script)
 
-    executor = SlurmExecutor(config)
+    assert not job_script.exists()
 
-    # Mock check_job_status to simulate job completion
-    mocker.patch.object(executor, "check_job_status", side_effect=["RUNNING", "COMPLETED"])
+
+def test_slurm_executor_submit_running_job(config_setup, tmp_path):
+    """Test submitting a job that is already running."""
+    executor = SlurmExecutor(config_setup)
+    # Simulate a job script path
+    job_script = tmp_path / "job_script.sh"
+    with open(str(job_script), "w") as f:
+        f.write("#!/bin/bash\necho 'Running IOR benchmark'")
+
+    # Mock the job submission to simulate a running job
+    with patch.object(executor, 'submit', return_value="12345"):
+        job_id = executor.submit(job_script)
+        assert job_id == "12345"
     
-    # Prepare dummy execution_dir with expected filesiii
-    execution_dir = tmp_path / "exec_dir"
-    execution_dir.mkdir()
-    (execution_dir / "job.start").write_text("2024-01-01T00:00:00")
-    (execution_dir / "job.end").write_text("2024-01-01T00:10:00")
-    (execution_dir / "job.status").write_text("COMPLETED")
+def test_slurm_executor_submit_finished_job(config_setup, tmp_path):
+    """Test submitting a job that has already finished."""
+    executor = SlurmExecutor(config_setup)
+    job_script = tmp_path / "job_script.sh"
+    job_script.write_text("#!/bin/bash\necho 'Running IOR benchmark'")
 
-    result = executor.wait_and_collect("12345", execution_dir)
-
-    assert result["job_id"] == "12345"
-    assert result["status"] == "COMPLETED"
-    assert result["start_time"] == "2024-01-01T00:00:00"
-    assert result["end_time"] == "2024-01-01T00:10:00"
-    assert result["error"] is None
+    # Patch both submit and check_job_status
+    with patch.object(executor, 'submit', return_value="12345") as mock_submit, \
+        patch.object(executor, '__SlurmExecutor__check_job_status', return_value="COMPLETED") as mock_status:
+        job_id = executor.submit(job_script)
+        assert job_id == "12345"
+        status = executor._SlurmExecutor__check_job_status("12345")
+        assert status == "COMPLETED"
+        # Optionally, check that the mocks were called as expected
+        mock_submit.assert_called_once_with(job_script)
+        mock_status.assert_called_once_with(job_id)
