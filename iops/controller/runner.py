@@ -23,7 +23,8 @@ class IOPSRunner(HasLogger):
                                       config=self.config)
     
         planner = BruteForce(self.config, benchmark)
-        analyzer = MetricsAnalyzer()        
+        analyzer = MetricsAnalyzer(criterion=benchmark.get_criterion(), 
+                                   operation=benchmark.get_operation())
         
                 
         while planner.has_next_phase():
@@ -70,19 +71,20 @@ class IOPSRunner(HasLogger):
                     self.logger.error(f"Error during test execution: {e}")
                     raise
 
-            best = analyzer.select_best(criterion=benchmark.get_criterion(),
-                                        operation=benchmark.get_operation())
+            best = analyzer.select_best()
             
 
             
             self.logger.info(f"Best parameters for phase '{phase.sweep_param}':")
-            self.logger.info(best)
+            self.logger.info(best.get("__parameters"))
+            self.logger.info(f"Best results for phase '{phase.sweep_param}':")
+            self.logger.info(best.get("__results"))
+                             
             #self.logger.info(f"\tBest {phase.criterion}: {best.get(phase.criterion)}")
-            analyzer.save_record_csv(phase_folder / f"results_{phase.sweep_param}.csv")
-
-            planner.update_phase(param=best.get("parameters"), result=best.get("results"))
-
-            analyzer.clean()
+            
+            planner.update_phase(param=best.get("__parameters"), 
+                                 result=best.get("__results"))            
         
         self.logger.info("All benchmarking phases completed.")
+        analyzer.save_csv(self.config.execution.workdir / "results.csv")
         analyzer.save_history_yaml(self.config.execution.workdir / "history.yaml")

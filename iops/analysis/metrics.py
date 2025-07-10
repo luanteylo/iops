@@ -13,28 +13,60 @@ class MetricsAnalyzer(HasLogger):
     according to a specified performance criterion and statistical operation.
     """
 
-    def __init__(self):        
-        self.results: List[Dict[str, Any]] = []
-        self.history: Dict[str, Dict[str, Any]] = {}  # stepN -> {parameters, results}
+    def __init__(self, criterion: str, operation: str):        
+        self.logger.debug(f"MetricsAnalyzer initialized with criterion '{criterion}' and operation '{operation}'")
+        self.current_records: Dict[str, Dict[str, Any]] = {}  # List of all recorded results grouped by test index
+        self.best_per_phase: Dict[str, Dict[str, Any]] = {}  # stepN -> {parameters, results}
+        self.all_records: List[Dict[str, Any]] = []  # History of all entries for all phases
+        self.criterion = criterion
+        self.operation = operation     
+        self.op_func = {
+            "mean": statistics.mean,
+            "median": statistics.median,
+            "max": max,
+            "min": min
+        }.get(self.operation)
+
+        if self.op_func is None:
+            raise ValueError(f"Unsupported operation '{operation}'. Choose from mean, median, max, min")
+        
+        
+
 
     def record(self, result: Dict[str, Any], params: Dict[str, Any]):
         """
         Store a benchmark result together with the parameters used.
         """
         self.logger.debug("Recording benchmark result")
+        
+        # check if criterion is in results
+        if self.criterion not in result:
+            self.logger.error(f"Criterion '{self.criterion}' not found in results: {result}")
+            raise ValueError(f"Criterion '{self.criterion}' not found in results")
+        
+        # check if __test_index is in parameters
+        if "__test_index" not in params:
+            self.logger.error(f"Missing '__test_index' in parameters: {params}")
+            raise ValueError("Missing '__test_index' in parameters")
+    
+        
         combined = {"__parameters": params, "__results": result}
 
-        self.logger.debug(f"Parameters: {params}")
-        self.logger.debug(f"Results: {result}")
+        self.logger.debug(f"__parameters: {params}")
+        self.logger.debug(f"__results: {result}")
         
+        
+        test_index = params["__test_index"]
+        if test_index not in self.current_records:
+            self.current_records[test_index] = []        
+        self.current_records[test_index].append(combined)
+        self.all_records.append(combined)
 
-        self.results.append(combined)
-
-    def save_record_csv(self, file_path: Path):
+    def save_csv(self, file_path: Path):
         """
-        Save benchmark results to a flat CSV file with readable structure.
+        Save all recorded results to a CSV file.
         """
-        if not self.results:
+        if not self.all_records:
             self.logger.warning("No results to save")
             return
 
@@ -51,7 +83,7 @@ class MetricsAnalyzer(HasLogger):
                         flat[f"{group_key[2:-2]}_{key}"] = value
             return flat
 
-        flat_results = [flatten(e) for e in self.results]
+        flat_results = [flatten(e) for e in self.all_records]
         fieldnames = sorted({k for r in flat_results for k in r.keys()})
 
         try:
@@ -68,78 +100,59 @@ class MetricsAnalyzer(HasLogger):
         """
         Save the history of best parameters to a YAML file.
         """
-        if not self.history:
+        if not self.best_per_phase:
             self.logger.warning("No history to save")
             return
 
         try:
             with file_path.open("w") as f:
-                yaml.dump(self.history, f, default_flow_style=False, sort_keys=False)
+                yaml.dump(self.best_per_phase, f, default_flow_style=False, sort_keys=False)
             self.logger.info(f"History saved to {file_path}")
         except Exception as e:
             self.logger.error(f"Failed to save history: {e}")
 
-    def select_best(self, criterion: str, operation: str = "mean") -> Dict[str, Any]:
+    def __compare_score(self, score: Any, best_score: Any) -> bool:
+        """
+        Compare the current score with the best score found so far.
+        Returns True if the current score is better than the best score.
+        """
+        if best_score is None:
+            return True
+        if self.operation in ["max", "mean", "median"]:
+            return score > best_score
+        elif self.operation in ["min"]:
+            return score < best_score
+
+
+    def select_best(self) -> Dict[str, Any]:
         """
         Select the best parameter configuration based on the given criterion using the specified operation.
         Supported operations: mean, median, max, min
-        The criterion must be a key in the results' __results__ dictionary.
+        The criterion must be a key in the results' __results dictionary.
         """
-        if not self.results:
+        if not self.current_records:
             raise ValueError("No results recorded")
 
-        grouped = defaultdict(list)
-        for entry in self.results:
-            uid = entry["__parameters"].get("__test_index")
-            if uid is not None:
-                grouped[uid].append(entry)
-            else:
-                self.logger.warning(f"Missing __test_index in parameters: {entry}")
-
-        op_func = {
-            "mean": statistics.mean,
-            "median": statistics.median,
-            "max": max,
-            "min": min
-        }.get(operation)
-
-        if op_func is None:
-            raise ValueError(f"Unsupported operation '{operation}'. Choose from mean, median, max, min")
-
-        best_score = float("-inf")
+        best_score = None
         best_entry = None
 
-        for uid, group in grouped.items():
-            values = [e["__results"].get(criterion) for e in group if criterion in e["__results"]]
-            if not values:
-                continue
-            try:
-                score = op_func(values)
-            except Exception as e:
-                self.logger.warning(f"Failed to compute {operation} for {uid}: {e}")
-                continue
-
-            self.logger.info(f"Test {uid}: {operation} {criterion} = {score}, group size = {len(group)}")
-
-            if score > best_score:
+        for test_index, entries in self.current_records.items():
+            self.logger.debug(f"Processing test index {test_index} with {len(entries)} entries")
+            score = self.op_func([e["__results"].get(self.criterion) for e in entries])
+            self.logger.info(f"Computed score for test index {test_index}: {score}")
+            if self.__compare_score(score, best_score):
                 best_score = score
-                base = group[0]
-                parameters = base["__parameters"]
-                results = base["__results"].copy()
-                results[criterion] = score  # explicitly store selected criterion value
-                best_entry = {"parameters": parameters, "results": results}
+                best_entry = {
+                    "__parameters": entries[0]["__parameters"],
+                    "__results": {self.criterion: score}                    
+                }
+                self.logger.debug(f"New best score found: {best_score} for test index {test_index}")        
+        
+        self.best_per_phase[f"phase_{len(self.best_per_phase)}"] = best_entry
 
-        if best_entry is None:
-            raise ValueError(f"No valid groups found for criterion '{criterion}'")
-
-        phase_name = f"phase_{len(self.history)}"
-        self.history[phase_name] = best_entry
+        # clear current records after selection
+        self.current_records = {}
 
         return best_entry
 
-    def clean(self):
-        """
-        Clear all recorded results.
-        """
-        self.logger.debug("Clearing recorded results")
-        self.results.clear()
+        
