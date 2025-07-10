@@ -6,6 +6,7 @@ sample_yaml_content = """
 nodes:
   min_nodes: 2
   max_nodes: 4
+  node_step: 2
   processes_per_node: 8
   cores_per_node: 32
 

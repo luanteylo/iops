@@ -42,6 +42,7 @@ def test_load_iops_config_success(file_utils, tmp_path):
         "nodes": {
             "min_nodes": 2,
             "max_nodes": 4,
+            "node_step": 2,
             "processes_per_node": 8,
             "cores_per_node": 32
         },
@@ -96,6 +97,7 @@ def test_validate_iops_config_fails_on_invalid_value(file_utils, tmp_path):
         "nodes": {
             "min_nodes": -1,  # Invalid
             "max_nodes": 4,
+            "node_step": 2,
             "processes_per_node": 8,
             "cores_per_node": 32
         },
@@ -147,7 +149,7 @@ def test_create_workdir_creates_execution_folder(file_utils, tmp_path):
     (tmp_path / "bash_template.sh").write_text("# template")
 
     config_data = {
-        "nodes": {"min_nodes": 2, "max_nodes": 4, "processes_per_node": 8, "cores_per_node": 32},
+        "nodes": {"min_nodes": 2, "max_nodes": 4, "node_step": 2, "processes_per_node": 8, "cores_per_node": 32},
         "storage": {
             "filesystem_dir": str(tmp_path),
             "min_volume": 1024, "max_volume": 2048, "volume_step": 1024, "default_stripe": 0,

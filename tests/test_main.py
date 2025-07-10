@@ -20,7 +20,7 @@ def config_setup(tmp_path):
 
     import yaml
     cfg = {
-        "nodes": {"min_nodes": 2, "max_nodes": 4, "processes_per_node": 8, "cores_per_node": 32},
+        "nodes": {"min_nodes": 2, "max_nodes": 4, "node_step": 2, "processes_per_node": 8, "cores_per_node": 32},
         "storage": {
             "filesystem_dir": str(tmp_path),
             "min_volume": 1024, "max_volume": 2048, "volume_step": 1024,
@@ -101,7 +101,7 @@ def test_main_invalid_config(tmp_path):
 
     import yaml
     yaml.dump({
-        "nodes": {"min_nodes": -1, "max_nodes": 2, "processes_per_node": 4, "cores_per_node": 32},
+        "nodes": {"min_nodes": -1, "max_nodes": 2, "node_step": 1, "processes_per_node": 4, "cores_per_node": 32},
         "storage": {
             "filesystem_dir": str(tmp_path),
             "min_volume": 1024, "max_volume": 2048, "volume_step": 1024,
@@ -133,7 +133,7 @@ def test_main_invalid_config_verbose(tmp_path):
     (tmp_path / "bash_template.sh").write_text("#!")
 
     yaml.dump({
-        "nodes": {"min_nodes": -1, "max_nodes": 2, "processes_per_node": 4, "cores_per_node": 32},
+        "nodes": {"min_nodes": -1, "max_nodes": 2, "node_step": 1, "processes_per_node": 4, "cores_per_node": 32},
         "storage": {
             "filesystem_dir": str(tmp_path),
             "min_volume": 1024, "max_volume": 2048, "volume_step": 1024,
