@@ -51,10 +51,11 @@ class IOPSRunner(HasLogger):
                 
                 try:
                     job_script = benchmark.generate(params=params)
-                    job_id = executor.submit(job_script)
-                    execution_summary = executor.wait_and_collect(job_id, test_folder)
+                    job_id = executor.submit(script=job_script)
+                    execution_summary = executor.wait_and_collect(job_id=job_id, 
+                                                                  execution_dir=test_folder)
                     self.logger.debug(f"Execution_summary: {execution_summary}")
-                     
+
                     job_start = execution_summary.get("__start")
                     job_end = execution_summary.get("__end")
                     job_status = execution_summary.get("__status")

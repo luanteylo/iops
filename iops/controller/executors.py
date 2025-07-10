@@ -15,7 +15,9 @@ class BaseExecutor(ABC):
     """
     Abstract base class for all execution environments (e.g., SLURM, local).
     """
-
+    JOB_STATUS_FILE = "job.status"
+    JOB_START_FILE = "job.start"
+    JOB_END_FILE = "job.end"
 
     _registry = {}
 
@@ -49,14 +51,39 @@ class BaseExecutor(ABC):
         pass
 
     @abstractmethod
-    def wait_and_collect(self, job_id: str, execution_dir : Path) -> dict:
+    def _wait_and_collect(self, job_id: str, execution_dir : Path) -> dict:
         """
         Wait for the job to finish and collect execution results.
         Returns a dictionary with metrics like bandwidth and latency.
         """
         pass
+    
+    def __clean_up_temp_files(self, execution_dir: Path) -> None:
+        """        
+        This method is called after job completion to remove temporary files.
+        """
+        self.logger.debug(f"Cleaning up temporary files in {execution_dir}")
+        try:
+            for file in [self.JOB_END_FILE, self.JOB_START_FILE, self.JOB_STATUS_FILE]:
+                file_path = execution_dir / file
+                if file_path.exists():
+                    self.logger.debug(f"Removing temporary file: {file_path}")
+                    file_path.unlink(missing_ok=True)
+                else:
+                    self.logger.warning(f"Temporary file not found, skipping: {file_path}")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
 
-    def default_execution_summary(self) -> dict:
+    def wait_and_collect(self, job_id: str, execution_dir: Path) -> dict:
+        """
+        Wrapper method that ensures cleanup after wait_and_collect.
+        """
+        try:
+            return self._wait_and_collect(job_id, execution_dir)
+        finally:
+            self.__clean_up_temp_files(execution_dir)
+
+    def _default_execution_summary(self) -> dict:
         """
         Returns a default dictionary for recording execution metadata.
         """
@@ -68,6 +95,9 @@ class BaseExecutor(ABC):
             "__end": None,
             "__error": None
         }
+    
+   
+
 
 
 
@@ -114,7 +144,7 @@ class LocalExecutor(BaseExecutor, HasLogger):
             self.logger.error(f"Error running script {script}: {e}")
             raise
 
-    def wait_and_collect(self, job_id: str, execution_dir: Path = None) -> dict:
+    def _wait_and_collect(self, job_id: str, execution_dir: Path = None) -> dict:
         """
         Collect metrics from a local job that has already been executed (we don't actually wait here).
         
@@ -125,15 +155,15 @@ class LocalExecutor(BaseExecutor, HasLogger):
         Returns:
             dict: A dictionary containing the job status and exit code.
         """   
-        self.logger.debug(f"Waiting for process with PID {pid} to complete.")
+        self.logger.debug(f"Waiting for process with PID {job_id} to complete.")
 
-        execution_summary = self.default_execution_summary()
+        execution_summary = self._default_execution_summary()
         execution_summary['__jobid'] = job_id
         try:           
              # Define expected file paths
-            job_start_path = execution_dir / "job.start"
-            job_end_path = execution_dir / "job.end"
-            job_status_path = execution_dir / "job.status"
+            job_start_path = execution_dir / self.JOB_START_FILE
+            job_end_path = execution_dir / self.JOB_END_FILE
+            job_status_path = execution_dir / self.JOB_STATUS_FILE
 
             # Read contents of the files
             execution_summary["__start"] = job_start_path.read_text().strip() if job_start_path.exists() else None
@@ -205,7 +235,7 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         
 
  
-    def wait_and_collect(self, job_id: str, execution_dir: Path) -> dict:
+    def _wait_and_collect(self, job_id: str, execution_dir: Path) -> dict:
         """
         Wait for the SLURM job to complete and collect metrics.
         Args:
@@ -216,7 +246,7 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         """
         self.logger.debug(f"Waiting for SLURM job to complete: {job_id}")
         poll_interval = self.config.execution.status_check_delay
-        execution_summary = self.default_execution_summary()
+        execution_summary = self._default_execution_summary()
         execution_summary["__jobid"] = job_id
 
         try:
@@ -226,9 +256,9 @@ class SlurmExecutor(BaseExecutor, HasLogger):
             self.logger.info(f"SLURM job {job_id} completed with status: {self.last_status}")
 
             # Define expected file paths
-            job_start_path = execution_dir / "job.start"
-            job_end_path = execution_dir / "job.end"
-            job_status_path = execution_dir / "job.status"        
+            job_start_path = execution_dir / self.JOB_START_FILE
+            job_end_path = execution_dir / self.JOB_END_FILE
+            job_status_path = execution_dir / self.JOB_STATUS_FILE      
 
             # Read contents of the files
             execution_summary["__start"] = job_start_path.read_text().strip() if job_start_path.exists() else None
