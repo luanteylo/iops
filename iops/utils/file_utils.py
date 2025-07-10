@@ -37,8 +37,10 @@ class FileUtils(HasLogger):
         nodes = data["nodes"] = CommentedMap()
         nodes["min_nodes"] = 1
         nodes.yaml_add_eol_comment("Minimum number of nodes to use", "min_nodes")
-        nodes["max_nodes"] = 32
+        nodes["max_nodes"] = 32        
         nodes.yaml_add_eol_comment("Maximum number of nodes to use", "max_nodes")
+        nodes["node_step"] = 1
+        nodes.yaml_add_eol_comment("Step size to increase nodes per test", "node_step")
         nodes["processes_per_node"] = 8
         nodes.yaml_add_eol_comment("Number of processes per node", "processes_per_node")
         nodes["cores_per_node"] = 32
@@ -58,17 +60,15 @@ class FileUtils(HasLogger):
         storage.yaml_add_eol_comment("Default stripe count to apply", "default_stripe")
 
         stripe_folders = CommentedSeq()
-        for folder_name, stripe_count in [("folder1", 1), ("folder2", 2), ("folder3", 3)]:
+        for folder_name  in ["folder1", "folder2", "folder3"]:
             folder = CommentedMap()
             folder["name"] = folder_name
             folder.yaml_add_eol_comment("Folder under filesystem_dir", "name")
-            folder["stripe_count"] = stripe_count
-            folder.yaml_add_eol_comment("Number of OSTs to stripe across", "stripe_count")
             stripe_folders.append(folder)
         storage["stripe_folders"] = stripe_folders
         storage.yaml_set_comment_before_after_key(
             "stripe_folders",
-            before="Folders under filesystem_dir to apply striping, with stripe count per folder"
+            before="Folders under filesystem_dir to apply striping"
         )
 
         # --- Execution ---

@@ -9,23 +9,9 @@ import shutil
 class NodesConfig:
     min_nodes: int
     max_nodes: int
+    node_step: int
     processes_per_node: int
     cores_per_node: int
-
-
-@dataclass(frozen=True)  # <- frozen makes it hashable
-class StripeFolder:
-    name: Path
-    stripe_count: int
-    
-    def get_stripe_folder(stripe_count: int):
-        """
-        Returns the StripeFolder with the specified stripe_count, or None if not found.
-        """
-        for folder in IOPSConfig.storage.stripe_folders:
-            if folder.stripe_count == stripe_count:
-                return folder
-        return None
 
 
 @dataclass
@@ -35,7 +21,7 @@ class StorageConfig:
     max_volume: int
     volume_step: int
     default_stripe: int
-    stripe_folders: List[StripeFolder]
+    stripe_folders: List[Path]
 
 
 @dataclass
@@ -88,15 +74,10 @@ def load_config(config_path: Path) -> IOPSConfig:
         storage=StorageConfig(
             filesystem_dir=fs_dir,
             min_volume=data["storage"]["min_volume"],
-            max_volume=data["storage"]["max_volume"],
+            max_volume=data["storage"]["max_volume"],            
             volume_step=data["storage"]["volume_step"],
             default_stripe=data["storage"]["default_stripe"],
-            stripe_folders=[
-                StripeFolder(
-                    name=fs_dir / Path(entry["name"]),
-                    stripe_count=entry["stripe_count"]
-                ) for entry in data["storage"]["stripe_folders"]
-            ],
+            stripe_folders=[fs_dir/ Path(entry["name"]) for entry in data["storage"]["stripe_folders"]],
         ),
         execution=ExecutionConfig(
             test_type=data["execution"]["test_type"],            
@@ -121,10 +102,13 @@ def validate_config(config: IOPSConfig):
         raise ConfigValidationError("min_nodes must be greater than 0")
     if config.nodes.max_nodes < config.nodes.min_nodes:
         raise ConfigValidationError("max_nodes must be >= min_nodes")
-    if not _is_power_of_two(config.nodes.min_nodes):
-        raise ConfigValidationError("min_nodes must be a power of 2")
-    if not _is_power_of_two(config.nodes.max_nodes):
-        raise ConfigValidationError("max_nodes must be a power of 2")
+
+    if config.nodes.node_step <= 0:
+        raise ConfigValidationError("node_step must be greater than 0")
+    #if not _is_power_of_two(config.nodes.min_nodes):
+    #    raise ConfigValidationError("min_nodes must be a power of 2")
+    #if not _is_power_of_two(config.nodes.max_nodes):
+    #    raise ConfigValidationError("max_nodes must be a power of 2")
 
     if config.storage.min_volume <= 0:
         raise ConfigValidationError("min_volume must be greater than 0")
@@ -153,12 +137,10 @@ def validate_config(config: IOPSConfig):
     if not config.storage.stripe_folders:
         raise ConfigValidationError("At least one stripe folder must be provided")
     for sf in config.storage.stripe_folders:
-        if not sf.name.exists():
+        if not sf.exists():
             raise ConfigValidationError(f"Stripe folder does not exist: {sf.name}")
-        if not sf.name.is_dir():
-            raise ConfigValidationError(f"Stripe folder is not a directory: {sf.name}")
-        if sf.stripe_count <= 0:
-            raise ConfigValidationError(f"Invalid stripe_count for {sf.name}: must be > 0")
+        if not sf.is_dir():
+            raise ConfigValidationError(f"Stripe folder is not a directory: {sf.name}")     
         
     # if benchmark is IOR, validate specific parameters
     if config.execution.benchmark_tool.lower() == "ior":
