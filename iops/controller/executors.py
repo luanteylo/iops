@@ -16,6 +16,7 @@ class BaseExecutor(ABC):
     Abstract base class for all execution environments (e.g., SLURM, local).
     """
 
+
     _registry = {}
 
     @classmethod
@@ -54,6 +55,22 @@ class BaseExecutor(ABC):
         Returns a dictionary with metrics like bandwidth and latency.
         """
         pass
+
+    def default_execution_summary(self) -> dict:
+        """
+        Returns a default dictionary for recording execution metadata.
+        """
+        return {
+            "__jobid": None,
+            "__status": None,
+            "__executor_status": None,
+            "__start": None,
+            "__end": None,
+            "__error": None
+        }
+
+
+
 
 
 
@@ -107,10 +124,11 @@ class LocalExecutor(BaseExecutor, HasLogger):
         
         Returns:
             dict: A dictionary containing the job status and exit code.
-        """
-        pid = str(job_id)
+        """   
         self.logger.debug(f"Waiting for process with PID {pid} to complete.")
 
+        execution_summary = self.default_execution_summary()
+        execution_summary['__jobid'] = job_id
         try:           
              # Define expected file paths
             job_start_path = execution_dir / "job.start"
@@ -118,29 +136,16 @@ class LocalExecutor(BaseExecutor, HasLogger):
             job_status_path = execution_dir / "job.status"
 
             # Read contents of the files
-            start_time = job_start_path.read_text().strip() if job_start_path.exists() else None
-            end_time = job_end_path.read_text().strip() if job_end_path.exists() else None
-            final_status = job_status_path.read_text().strip() if job_status_path.exists() else "UNKNOWN"
-
-            return {
-                "job_id": job_id,
-                "status": final_status,
-                "slurm_status": None,
-                "start_time": start_time,
-                "end_time": end_time,
-                "error": None
-            }
+            execution_summary["__start"] = job_start_path.read_text().strip() if job_start_path.exists() else None
+            execution_summary["__end"] = job_end_path.read_text().strip() if job_end_path.exists() else None
+            execution_summary["__status"] = job_status_path.read_text().strip() if job_status_path.exists() else None            
         
         except Exception as e:
-            self.logger.error(f"Error while waiting for PID {pid}: {e}")
-            return {
-                "job_id": job_id,
-                "status": "ERROR",
-                "slurm_status": self.last_status,
-                "start_time": None,
-                "end_time": None,
-                "error": str(e)
-            }
+            self.logger.error(f"Error while collecting status for job {job_id}: {e}")
+            execution_summary["__status"] = "ERROR"
+            execution_summary["__error"] = str(e)
+        
+        return execution_summary
 
 @BaseExecutor.register("slurm")
 class SlurmExecutor(BaseExecutor, HasLogger):
@@ -173,7 +178,7 @@ class SlurmExecutor(BaseExecutor, HasLogger):
             raise RuntimeError("SLURM job submission failed") from e
         
     
-    def check_job_status(self, job_id: str) -> str:
+    def __check_job_status(self, job_id: str) -> str:
         """
         Check the status of a SLURM job.
         In practice, would use `squeue` or `sacct` to get job status.
@@ -211,9 +216,11 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         """
         self.logger.debug(f"Waiting for SLURM job to complete: {job_id}")
         poll_interval = self.config.execution.status_check_delay
+        execution_summary = self.default_execution_summary()
+        execution_summary["__jobid"] = job_id
 
         try:
-            while self.check_job_status(job_id) in [self.SLURM_PENDING, self.SLURM_RUNNING]:
+            while self.__check_job_status(job_id) in [self.SLURM_PENDING, self.SLURM_RUNNING]:
                 time.sleep(poll_interval)
 
             self.logger.info(f"SLURM job {job_id} completed with status: {self.last_status}")
@@ -221,31 +228,17 @@ class SlurmExecutor(BaseExecutor, HasLogger):
             # Define expected file paths
             job_start_path = execution_dir / "job.start"
             job_end_path = execution_dir / "job.end"
-            job_status_path = execution_dir / "job.status"
+            job_status_path = execution_dir / "job.status"        
 
             # Read contents of the files
-            start_time = job_start_path.read_text().strip() if job_start_path.exists() else None
-            end_time = job_end_path.read_text().strip() if job_end_path.exists() else None
-            final_status = job_status_path.read_text().strip() if job_status_path.exists() else "UNKNOWN"
-
-            return {
-                "job_id": job_id,
-                "status": final_status,
-                "slurm_status": self.last_status,
-                "start_time": start_time,
-                "end_time": end_time,
-                "error": None
-            }
+            execution_summary["__start"] = job_start_path.read_text().strip() if job_start_path.exists() else None
+            execution_summary["__end"] = job_end_path.read_text().strip() if job_end_path.exists() else None
+            execution_summary["__status"] = job_status_path.read_text().strip() if job_status_path.exists() else "UNKNOWN"
+            execution_summary["__executor_status"] = self.last_status                        
 
         except Exception as e:
             self.logger.error(f"Error while waiting for SLURM job {job_id}: {e}")
-            return {
-                "job_id": job_id,
-                "status": "ERROR",
-                "slurm_status": self.last_status,
-                "start_time": None,
-                "end_time": None,
-                "error": str(e)
-            }
-
-  
+            execution_summary["__status"] = "ERROR"
+            execution_summary["__error"] = str(e)
+        
+        return execution_summary

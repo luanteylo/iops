@@ -49,27 +49,31 @@ class IOPSRunner(HasLogger):
                 # Print only parameters that are not metadata "__test_id__", "__repetition__", "__path__", "__script__"                
                 self.logger.info(params)                
                 
-                try:                    
+                try:
                     job_script = benchmark.generate(params=params)
-                    job_id = executor.submit(job_script)  # Replace with actual job submission logic
-                    output_data = executor.wait_and_collect(job_id, test_folder)
-                    self.logger.info(f"Job {job_id} completed. Status: {output_data.get('status')}")              
+                    job_id = executor.submit(job_script)
+                    execution_summary = executor.wait_and_collect(job_id, test_folder)
+                    self.logger.debug(f"Execution_summary: {execution_summary}")
+                     
+                    job_start = execution_summary.get("__start")
+                    job_end = execution_summary.get("__end")
+                    job_status = execution_summary.get("__status")
+                    self.logger.info(f"Job {job_id} completed. Status: {job_status}. Start: {job_start} End: {job_end}")         
 
-                    # check if output_data is valid
-                    if output_data and output_data.get('status') == 'SUCCESS':
-                        # call parse_output to extract metrics
-                        result = benchmark.parse_output(params=params)                    
-                        self.logger.info(f"Parsed result: {result}")
-                        analyzer.record(result, params)
+                    if job_status == 'SUCCESS':
+                        result = benchmark.parse_output(params=params)
+                        if result is not None:
+                            self.logger.info(f"Parsed result: {result}")
+                            analyzer.record(result, params)
+                        else:
+                            self.logger.error(f"Job {job_id} succeeded, but output could not be parsed.")
                     else:
-                        self.logger.error(f"Job {job_id} failed or did not complete successfully. Output: {output_data}")
-                    
-                    #last_result = {"params": params, "result": result}
-                    #self.logger.info(f"Simulating test execution for parameters: {params}")
+                        self.logger.error(f"Job {job_id} failed or did not complete successfully. Output: {execution_summary}")
 
                 except Exception as e:
                     self.logger.error(f"Error during test execution: {e}")
-                    raise
+                    raise 
+
 
             best = analyzer.select_best()
             

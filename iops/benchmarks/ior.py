@@ -162,6 +162,35 @@ class IORBenchmark(BenchmarkRunner):
 
         return script_path
 
+    def __load_json_with_retry(self, output_file: Path, retry_limit: int = 10) -> dict | None:
+        """
+        Retry loading a JSON file until it exists and is valid, or retry limit is reached.
+        
+        Args:
+            output_file (Path): Path to the JSON file to load.
+            logger: Logger to use for messages.
+            retry_limit (int): Number of attempts before giving up.
+
+        Returns:
+            dict or None: Parsed JSON data or None if loading fails.
+        """
+        for retry in range(1, retry_limit + 1):
+            if output_file.exists():
+                try:
+                    with output_file.open("r") as f:
+                        return json.load(f)
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Attempt {retry}/{retry_limit}: Invalid JSON in {output_file}")
+            else:
+                self.logger.warning(f"Attempt {retry}/{retry_limit}: File not found: {output_file}")
+            
+            sleep_time = retry * 5
+            self.logger.info(f"Waiting {sleep_time} seconds before next attempt...")
+            time.sleep(sleep_time)
+
+        self.logger.error(f"Failed to load valid JSON after {retry_limit} attempts: {output_file}")
+        return None
+
     def parse_output(self, params: dict) -> dict:
         """
         Parses the IOR JSON summary file and returns a cleaned-up dictionary
@@ -181,17 +210,12 @@ class IORBenchmark(BenchmarkRunner):
         }
 
         output_file = Path(params.get("__test_output"))
-        if not output_file.exists():
-            self.logger.warning(f"JSON summary file not found: {output_file}")
+        retry_limit = 10
+        data = self.__load_json_with_retry(output_file, retry_limit)
+
+        if data is None:
             return None
-
-        with output_file.open("r") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                self.logger.error(f"Invalid JSON in {output_file}")
-                return None
-
+        
         # We parse the first 'write' or 'read' summary entry
         for entry in data.get("summary", []):
             result = {
