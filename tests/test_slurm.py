@@ -40,6 +40,17 @@ def config_setup(tmp_path):
     )
     return config
 
+@pytest.fixture
+def slurm_executor(config_setup):
+    """Fixture to create a SlurmExecutor instance with a mock config."""
+    return SlurmExecutor(config_setup)
+
+@pytest.fixture
+def mock_subprocess_run():
+    """Mock for subprocess.run to simulate SLURM commands."""
+    with patch('iops.controller.executors.subprocess.run') as mock_run:
+        yield mock_run
+        
 def test_slurm_executor_submit(config_setup, tmp_path):
     """Test submitting a job with a valid job script."""
     executor = SlurmExecutor(config_setup)
@@ -108,6 +119,6 @@ def test_slurm_executor_check_job_status(config_setup):
             assert result == status
 
 
-def test_slurm_executor_wait_and_collect(job_id, execution_dir, config_setup):
+def test_slurm_executor_wait_and_collect(config_setup):
     """Test waiting for a SLURM job to finish and collecting results."""
     pass
