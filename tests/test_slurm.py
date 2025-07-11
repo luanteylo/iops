@@ -96,9 +96,10 @@ def test_slurm_executor_submit_finished_job(config_setup, tmp_path):
         mock_submit.assert_called_once_with(job_script)
         mock_status.assert_called_once_with(job_id)
 
-def test_slurm_executor_check_job_status(job_id, config_setup):
+def test_slurm_executor_check_job_status(config_setup):
     """Test checking the status of a SLURM job."""
     executor = SlurmExecutor(config_setup)  # Pass None or a mock config if needed
+    job_id = "12345"
 
     list_status = ["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]
     for status in list_status:
