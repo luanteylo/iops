@@ -87,7 +87,7 @@ def test_slurm_executor_submit_finished_job(config_setup, tmp_path):
 
     # Patch both submit and check_job_status
     with patch.object(executor, 'submit', return_value="12345") as mock_submit, \
-        patch.object(executor, '__SlurmExecutor__check_job_status', return_value="COMPLETED") as mock_status:
+        patch.object(executor, '_SlurmExecutor__check_job_status', return_value="COMPLETED") as mock_status:
         job_id = executor.submit(job_script)
         assert job_id == "12345"
         status = executor._SlurmExecutor__check_job_status("12345")
