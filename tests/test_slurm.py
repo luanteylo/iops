@@ -95,3 +95,18 @@ def test_slurm_executor_submit_finished_job(config_setup, tmp_path):
         # Optionally, check that the mocks were called as expected
         mock_submit.assert_called_once_with(job_script)
         mock_status.assert_called_once_with(job_id)
+
+def test_slurm_executor_check_job_status(job_id, config_setup):
+    """Test checking the status of a SLURM job."""
+    executor = SlurmExecutor(config_setup)  # Pass None or a mock config if needed
+
+    list_status = ["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]
+    for status in list_status:
+        with patch.object(executor, '_SlurmExecutor__check_job_status', return_value=status):
+            result = executor._SlurmExecutor__check_job_status(job_id)
+            assert result == status
+
+
+def test_slurm_executor_wait_and_collect(job_id, execution_dir, config_setup):
+    """Test waiting for a SLURM job to finish and collecting results."""
+    pass
