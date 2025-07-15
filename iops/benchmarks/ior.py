@@ -109,7 +109,7 @@ class IORBenchmark(BenchmarkRunner):
         Returns the IOR command based on the configuration.
         """
 
-        commands: str = "ior"
+        commands: str = 'ior'
 
         summary_file = params.get("__test_output")
         output_file = Path(params.get("ost_count")) / "test_output.ior"
@@ -117,11 +117,11 @@ class IORBenchmark(BenchmarkRunner):
 
         block_size: int = params.get("volume") / (params.get("processes_per_node") * params.get("nodes"))
 
-        commands += f" -w"
-        commands += f" -b {int(block_size)}m"
-        commands += f" -t 1m"  
-        commands += f" -O summaryFile={summary_file} -O summaryFormat=JSON"
-        commands += f" -o {output_file}"
+        commands += f' -w'
+        commands += f' -b {int(block_size)}m'
+        commands += f' -t 1m'  
+        commands += f' -O summaryFile="{summary_file}" -O summaryFormat=JSON'
+        commands += f' -o "{output_file}"'
         
         return commands
         

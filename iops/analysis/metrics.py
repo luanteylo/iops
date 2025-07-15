@@ -29,10 +29,7 @@ class MetricsAnalyzer(HasLogger):
 
         if self.op_func is None:
             raise ValueError(f"Unsupported operation '{operation}'. Choose from mean, median, max, min")
-        
-        
-
-
+    
     def record(self, result: Dict[str, Any], params: Dict[str, Any]):
         """
         Store a benchmark result together with the parameters used.
@@ -122,7 +119,6 @@ class MetricsAnalyzer(HasLogger):
             return score > best_score
         elif self.operation in ["min"]:
             return score < best_score
-
 
     def select_best(self) -> Dict[str, Any]:
         """
