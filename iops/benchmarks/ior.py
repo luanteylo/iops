@@ -136,7 +136,7 @@ class IORBenchmark(BenchmarkRunner):
             Path: Path to the generated script file.
         """
         
-        template_path: Path = self.config.template.bash_template
+        template_path: Path = self.config.environment.bash_template
         script_path = Path(params.get("__test_script"))
         
 

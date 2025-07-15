@@ -1,6 +1,5 @@
 from typing import Dict, Any, List
 from iops.utils.logger import HasLogger
-from collections import defaultdict
 from pathlib import Path
 import statistics
 import yaml

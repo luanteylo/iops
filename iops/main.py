@@ -37,8 +37,14 @@ def main():
     parser.add_argument('--log_level', type=str, default='INFO', help="Set the logging level (default: INFO)")
 
     parser.add_argument('--verbose', action='store_true', help="Show full traceback for errors")
+    parser.add_argument('--use_cached_results', 
+                        action='store_true', 
+                        help=("Enable cache-aware mode: if results for a given parameter set are already in the database, "
+                        "reuse them instead of executing the benchmark. Only unseen parameter sets will be executed.")
+        )
 
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}', help="Show the version of the IOPS Tool")
+    
 
     args = parser.parse_args()
 

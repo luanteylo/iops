@@ -13,7 +13,7 @@ class FileUtils(HasLogger):
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from iops.utils.config_loader import load_config, validate_config, IOPSConfig
+from iops.utils.config_loader import load_config, validate_config, to_dictionary, IOPSConfig
 from iops.utils.logger import HasLogger
 from ruamel.yaml.parser import ParserError
 
@@ -83,13 +83,16 @@ class FileUtils(HasLogger):
         execution.yaml_add_eol_comment("Test dimensions (matrix axes)", "tests")
         execution["io_pattern"] = "sequential:shared"
         execution.yaml_add_eol_comment("I/O access patterns (e.g., sequential:shared or random:shared)", "io_pattern")
-        
 
-        # --- Template ---
-        template = data["template"] = CommentedMap()
-        
-        template["bash_template"] = "$IOPS_HOME/iops/templates/slurm_template.sh.j2"
-        template.yaml_add_eol_comment("Path to job submission script template", "bash_template")
+
+        # --- Environment ---
+        environment = data["environment"] = CommentedMap()
+
+        environment["bash_template"] = "$IOPS_HOME/iops/templates/slurm_template.sh.j2"
+        environment.yaml_add_eol_comment("Path to job submission script template", "bash_template")
+        environment["sqlite_db"] = "$IOPS_HOME/iops.db"
+        environment.yaml_add_eol_comment("Path to SQLite database for storing results", "sqlite_db")
+
 
         # --- Dump to file ---
         file_name = file_name.with_suffix('.yaml')
@@ -97,6 +100,7 @@ class FileUtils(HasLogger):
             yaml.dump(data, f)
 
         self.logger.info(f"Default IOPS config written to {file_name}")
+        
 
     def load_iops_config(self, file_path: Path) -> IOPSConfig:
         """
@@ -154,4 +158,4 @@ class FileUtils(HasLogger):
         # Update the config to point to the new execution directory
         config.execution.workdir = new_execution_dir
 
-        
+    

@@ -35,12 +35,12 @@ class ExecutionConfig:
     status_check_delay: int
     wall_time: str
     tests: List[str]
-    io_pattern: str    
-
+    io_pattern: str 
 
 @dataclass
-class TemplateConfig:
+class EnvironmentConfig:
     bash_template: Path
+    sqlite_db: Optional[Path] 
 
 
 @dataclass
@@ -48,7 +48,8 @@ class IOPSConfig:
     nodes: NodesConfig
     storage: StorageConfig
     execution: ExecutionConfig
-    template: TemplateConfig
+    environment: EnvironmentConfig
+
 
 
 class ConfigValidationError(Exception):
@@ -91,8 +92,9 @@ def load_config(config_path: Path) -> IOPSConfig:
             tests=data["execution"]["tests"],
             io_pattern=data["execution"]["io_pattern"],            
         ),
-        template=TemplateConfig(
-            bash_template=_expand(data["template"]["bash_template"]),
+        environment=EnvironmentConfig(
+            bash_template=_expand(data["environment"]["bash_template"]),
+            sqlite_db=_expand(data["environment"].get("sqlite_db", "iops.db")),
         ),
     )
 
@@ -158,10 +160,10 @@ def validate_config(config: IOPSConfig):
         if not ior_path:
             raise ConfigValidationError("IOR benchmark tool is not installed or not found in PATH")
         
-    if not config.template.bash_template.exists():
-        raise ConfigValidationError(f"bash_template file does not exist: {config.template.bash_template}")
-    if not config.template.bash_template.is_file():
-        raise ConfigValidationError(f"bash_template path is not a file: {config.template.bash_template}")
+    if not config.environment.bash_template.exists():
+        raise ConfigValidationError(f"bash_template file does not exist: {config.environment.bash_template}")
+    if not config.environment.bash_template.is_file():
+        raise ConfigValidationError(f"bash_template path is not a file: {config.environment.bash_template}")
     
 
                 
@@ -172,3 +174,21 @@ def validate_config(config: IOPSConfig):
     # check if search method is valid
 
 
+def to_dictionary(config: IOPSConfig) -> dict:
+    """
+    Convert the IOPSConfig dataclass to a dictionary.
+    """
+    return {
+        "nodes": config.nodes.__dict__,
+        "storage": {
+            **config.storage.__dict__,
+            "filesystem_dir": str(config.storage.filesystem_dir),
+            "stripe_folders": [str(sf) for sf in config.storage.stripe_folders]
+        },
+        "execution": {
+            **config.execution.__dict__,
+            "workdir": str(config.execution.workdir),
+            "bash_template": str(config.environment.bash_template),
+            "sqlite_db": str(config.environment.sqlite_db) if config.environment.sqlite_db else None
+        }
+    }

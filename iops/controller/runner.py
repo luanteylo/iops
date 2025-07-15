@@ -1,9 +1,11 @@
 from iops.controller.executors import BaseExecutor
-from iops.analysis.metrics import MetricsAnalyzer
+from iops.analytics.analyzer import MetricsAnalyzer
+from iops.analytics.storage import MetricsStorage
 from iops.benchmarks.ior import  BenchmarkRunner
 from iops.utils.logger import HasLogger
 from iops.controller.planner import BruteForce
 from iops.utils.config_loader import IOPSConfig
+
 
 
 from pathlib import Path
@@ -15,6 +17,10 @@ class IOPSRunner(HasLogger):
 
     def run(self):
         self.logger.info("Starting IOPS benchmarking process")
+        
+        # Initialize Storage
+        storage = MetricsStorage(self.config)
+        execution_id = storage.save_execution()        
 
         benchmark = BenchmarkRunner.build(name=self.config.execution.benchmark_tool, 
                                           config=self.config)
@@ -61,6 +67,7 @@ class IOPSRunner(HasLogger):
                     job_status = execution_summary.get("__status")
                     self.logger.info(f"Job {job_id} completed. Status: {job_status}. Start: {job_start} End: {job_end}")         
 
+                    result = None
                     if job_status == 'SUCCESS':
                         result = benchmark.parse_output(params=params)
                         if result is not None:
@@ -70,6 +77,15 @@ class IOPSRunner(HasLogger):
                             self.logger.error(f"Job {job_id} succeeded, but output could not be parsed.")
                     else:
                         self.logger.error(f"Job {job_id} failed or did not complete successfully. Output: {execution_summary}")
+
+                    # Save the test result to storage
+                    storage.save_test(
+                        execution_id=execution_id,
+                        params=params,
+                        repetition=test_repetition,
+                        status=job_status,
+                        result=result,
+                    )
 
                 except Exception as e:
                     self.logger.error(f"Error during test execution: {e}")
