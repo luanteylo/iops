@@ -87,7 +87,8 @@ class FileUtils(HasLogger):
 
         # --- Template ---
         template = data["template"] = CommentedMap()
-        template["bash_template"] = "$IOPS_HOME/iops/config/templates/slurm_template.sh.j2"
+        
+        template["bash_template"] = "$IOPS_HOME/iops/templates/slurm_template.sh.j2"
         template.yaml_add_eol_comment("Path to job submission script template", "bash_template")
 
         # --- Dump to file ---
