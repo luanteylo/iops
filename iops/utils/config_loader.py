@@ -77,7 +77,7 @@ def load_config(config_path: Path) -> IOPSConfig:
             max_volume=data["storage"]["max_volume"],            
             volume_step=data["storage"]["volume_step"],
             default_stripe=data["storage"]["default_stripe"],
-            stripe_folders=[fs_dir/ Path(entry["name"]) for entry in data["storage"]["stripe_folders"]],
+            stripe_folders=[fs_dir/ Path(entry) for entry in data["storage"]["stripe_folders"]],
         ),
         execution=ExecutionConfig(
             test_type=data["execution"]["test_type"],            

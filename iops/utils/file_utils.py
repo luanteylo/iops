@@ -58,18 +58,8 @@ class FileUtils(HasLogger):
         storage.yaml_add_eol_comment("Step size (MB) to increase volume per test", "volume_step")
         storage["default_stripe"] = 0
         storage.yaml_add_eol_comment("Default stripe count to apply", "default_stripe")
-
-        stripe_folders = CommentedSeq()
-        for folder_name  in ["folder1", "folder2", "folder3"]:
-            folder = CommentedMap()
-            folder["name"] = folder_name
-            folder.yaml_add_eol_comment("Folder under filesystem_dir", "name")
-            stripe_folders.append(folder)
-        storage["stripe_folders"] = stripe_folders
-        storage.yaml_set_comment_before_after_key(
-            "stripe_folders",
-            before="Folders under filesystem_dir to apply striping"
-        )
+        storage["stripe_folders"] = ["folder1", "folder2", "folder3"]
+        storage.yaml_set_comment_before_after_key("stripe_folders",before="Folders under filesystem_dir to apply striping")
 
         # --- Execution ---
         execution = data["execution"] = CommentedMap()
