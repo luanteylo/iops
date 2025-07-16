@@ -44,6 +44,7 @@ def config_setup_local(tmp_path):
 
 
 def test_local_submit_success(config_setup_local):
+    """Test successful submission of a local job script."""
     executor = LocalExecutor(config_setup_local)
     with tempfile.TemporaryDirectory() as tmpdir:
         script_path = Path(tmpdir) / "test.sh"
@@ -54,12 +55,14 @@ def test_local_submit_success(config_setup_local):
         assert result == "local"
 
 def test_local_submit_missing_script(config_setup_local):
+    """Test submission failure when script does not exist."""
     executor = LocalExecutor(config_setup_local)
     with pytest.raises(ValueError):
         executor.submit(Path("/nonexistent/script.sh"))
 
 
 def test_local_submit_script_failure(config_setup_local):
+    """Test submission failure when script execution fails."""
     executor = LocalExecutor(config_setup_local)
     with tempfile.TemporaryDirectory() as tmpdir:
         script_path = Path(tmpdir) / "fail.sh"
@@ -67,6 +70,55 @@ def test_local_submit_script_failure(config_setup_local):
         script_path.chmod(0o755)
         with pytest.raises(RuntimeError):
             executor.submit(script_path)
+
+def test_local_wait_and_collect_success(tmp_path):
+    """Test successful collection of job metadata."""
+    executor = LocalExecutor(config_setup)
+    job_id = "12345"
+    
+    # Create fake files
+    (tmp_path / executor.JOB_START_FILE).write_text("start-time")
+    (tmp_path / executor.JOB_END_FILE).write_text("end-time")
+    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
+
+    result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+
+    assert result["__jobid"] == job_id
+    assert result["__start"] == "start-time"
+    assert result["__end"] == "end-time"
+    assert result["__status"] == "COMPLETED"
+    assert "__error" not in result
+
+def test_local_wait_and_collect_missing_files(tmp_path):
+    """Test behavior when some expected files are missing."""
+    executor = LocalExecutor(config_setup)
+    job_id = "12345"
+
+    # Only one file exists
+    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
+
+    result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+
+    assert result["__start"] is None
+    assert result["__end"] is None
+    assert result["__status"] == "COMPLETED"
+
+def test_local_wait_and_collect_file_error(config_setup, tmp_path):
+    """Test behavior when reading files raises an error."""
+    executor = LocalExecutor(config_setup)
+    job_id = "12345"
+
+    # Create a file that will raise exception on read
+    bad_file = tmp_path / executor.JOB_STATUS_FILE
+    bad_file.write_text("invalid")
+
+    # Simulate read_text() raising error using patch
+    with patch.object(Path, "read_text", side_effect=Exception("Read error")):
+        result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+
+    assert result["__jobid"] == job_id
+    assert result["__status"] == "ERROR"
+    assert "Read error" in result["__error"]
 
 @pytest.fixture
 def config_setup(tmp_path):
@@ -109,17 +161,6 @@ def config_setup(tmp_path):
     )
     return config
 
-@pytest.fixture
-def slurm_executor(config_setup):
-    """Fixture to create a SlurmExecutor instance with a mock config."""
-    return SlurmExecutor(config_setup)
-
-@pytest.fixture
-def mock_subprocess_run():
-    """Mock for subprocess.run to simulate SLURM commands."""
-    with patch('iops.controller.executors.subprocess.run') as mock_run:
-        yield mock_run
-        
 def test_slurm_submit(config_setup, tmp_path):
     """Test submitting a job with a valid job script."""
     executor = SlurmExecutor(config_setup)
@@ -188,6 +229,52 @@ def test_slurm_check_job_status(config_setup):
             assert result == status
 
 
-def test_slurm_wait_and_collect(config_setup):
-    """Test waiting for a SLURM job to finish and collecting results."""
-    pass
+def test_slurm_wait_and_collect_success(config_setup, tmp_path):
+    """Test successful collection of job metadata."""
+    executor = SlurmExecutor(config_setup)
+    job_id = "12345"
+    
+    # Create fake files
+    (tmp_path / executor.JOB_START_FILE).write_text("start-time")
+    (tmp_path / executor.JOB_END_FILE).write_text("end-time")
+    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
+
+    result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+
+    assert result["__jobid"] == job_id
+    assert result["__start"] == "start-time"
+    assert result["__end"] == "end-time"
+    assert result["__status"] == "COMPLETED"
+    assert "__error" not in result
+
+def test_slurm_wait_and_collect_missing_files(config_setup, tmp_path):
+    """Test behavior when some expected files are missing."""
+    executor = SlurmExecutor(config_setup)
+    job_id = "12345"
+
+    # Only one file exists
+    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
+
+    result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+
+    assert result["__start"] is None
+    assert result["__end"] is None
+    assert result["__status"] == "COMPLETED"
+
+def test_slurm_wait_and_collect_file_error(config_setup, tmp_path):
+    """Test behavior when reading files raises an error."""
+    executor = SlurmExecutor(config_setup)
+    job_id = "12345"
+
+    # Create a file that will raise exception on read
+    bad_file = tmp_path / executor.JOB_STATUS_FILE
+    bad_file.write_text("invalid")
+
+    # Simulate read_text() raising error using patch
+    with patch.object(Path, "read_text", side_effect=Exception("Read error")):
+        result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+
+    assert result["__jobid"] == job_id
+    assert result["__status"] == "ERROR"
+    assert "Read error" in result["__error"]
+    
