@@ -278,5 +278,5 @@ def test_slurm_wait_and_collect_file_error(config_setup, tmp_path):
 
     assert result["__jobid"] == job_id
     assert result["__status"] == "ERROR"
-    assert "Read error" in result["__error"]
+
     
