@@ -59,10 +59,6 @@ class BasePlanner(ABC):
         
 
         sweep_param = self.tests[self.phase_index]
-        self.logger.info(f"Generating phase for parameter: {sweep_param}")
-
-        #self.current_phase_path = self.config.execution.workdir / f"{sweep_param}_{self.phase_index}"
-        #self.current_phase_path.mkdir(parents=True, exist_ok=True)
 
         self.current_phase = self.benchmark.build_phase(sweep_param=sweep_param, 
                                            params=self.current_best)
@@ -156,7 +152,10 @@ class BruteForce(BasePlanner, HasLogger):
         random.shuffle(all_combinations)
         return iter(all_combinations)
     
-
+    def __iter__(self):
+        while self.has_next_combination():            
+            yield self.next_combination()
+            
     def next_combination(self) -> Dict[str, Any]:
         """"
         Returns the next parameter combination to test.

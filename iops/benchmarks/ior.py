@@ -43,7 +43,7 @@ class BenchmarkRunner(ABC, HasLogger):
         try:            
             script_path.write_text(script_content)
             script_path.chmod(0o755)
-            self.logger.info(f"Script saved successfully at {script_path}")
+            self.logger.debug(f"Script saved successfully at {script_path}")
             return True
         except Exception as e:
             self.logger.error(f"Failed to save script: {e}")

@@ -41,6 +41,7 @@ class ExecutionConfig:
 class EnvironmentConfig:
     bash_template: Path
     sqlite_db: Optional[Path] 
+    machine_name: Optional[str] 
 
 
 @dataclass
@@ -56,10 +57,6 @@ class ConfigValidationError(Exception):
     pass
 
 
-def _is_power_of_two(n: int) -> bool:
-    return (n > 0) and (n & (n - 1) == 0)
-
-
 def _expand(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
 
@@ -69,6 +66,9 @@ def load_config(config_path: Path) -> IOPSConfig:
         data = yaml.safe_load(f)
 
     fs_dir = _expand(data["storage"]["filesystem_dir"])
+    # get machine name from OS
+
+    machine_name = os.uname().nodename if hasattr(os, 'uname') else os.environ.get('HOSTNAME', 'unknown')
 
     return IOPSConfig(
         nodes=NodesConfig(**data["nodes"]),
@@ -95,6 +95,7 @@ def load_config(config_path: Path) -> IOPSConfig:
         environment=EnvironmentConfig(
             bash_template=_expand(data["environment"]["bash_template"]),
             sqlite_db=_expand(data["environment"].get("sqlite_db", "iops.db")),
+            machine_name=machine_name,
         ),
     )
 

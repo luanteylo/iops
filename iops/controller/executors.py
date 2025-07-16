@@ -131,7 +131,7 @@ class LocalExecutor(BaseExecutor, HasLogger):
                 text=True,
                 cwd=script.parent  # Ensures relative files are created in the right place
             )
-            self.logger.info(f"Process completed with return code {result.returncode}")
+            self.logger.debug(f"Process completed with return code {result.returncode}")
             self.logger.debug(f"stdout:\n{result.stdout}")
             self.logger.debug(f"stderr:\n{result.stderr}")
 

@@ -48,7 +48,11 @@ def main():
 
     args = parser.parse_args()
 
-    logger = setup_logger(name="iops", log_file=args.log_file, to_stdout=args.log_terminal, to_file=args.log_file is not None, level=getattr(logging, args.log_level.upper(), logging.INFO))
+    logger = setup_logger(name="iops", 
+                          log_file=args.log_file, 
+                          to_stdout=args.log_terminal, 
+                          to_file=args.log_file is not None, 
+                          level=getattr(logging, args.log_level.upper(), logging.INFO))
 
     fu = FileUtils()
 
@@ -66,16 +70,13 @@ def main():
     config = fu.load_iops_config(args.setup_file)
 
     logger.debug(f"Configuration loaded: {config}")
-    logger.info("Configuration loaded successfully.")
-
+    
     try:
         fu.validate_iops_config(config)
-        logger.info("Configuration is valid.")
         if args.check_setup:
             return
         # Creating the workdir if it does not exist
         fu.create_workdir(config=config)
-    
 
     except ConfigValidationError as e:
         if args.verbose:
@@ -90,9 +91,10 @@ def main():
         else:
             logger.error(f"Unexpected error: {e}")
             return
+    if args.use_cached_results:
+        logger.info("Cache-aware mode enabled: using cached results where available.")
 
-    logger.info("Starting IOPS execution with the provided configuration.")
-    runner = IOPSRunner(config)
+    runner = IOPSRunner(config, args)
     runner.run()
 
 

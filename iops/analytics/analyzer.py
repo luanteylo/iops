@@ -132,9 +132,8 @@ class MetricsAnalyzer(HasLogger):
         best_entry = None
 
         for test_index, entries in self.current_records.items():
-            self.logger.debug(f"Processing test index {test_index} with {len(entries)} entries")
             score = self.op_func([e["__results"].get(self.criterion) for e in entries])
-            self.logger.info(f"Computed score for test index {test_index}: {score}")
+            self.logger.info(f"Computed score for test index {test_index} - {len(entries)} entries: {score}")
             if self.__compare_score(score, best_score):
                 best_score = score
                 best_entry = {
