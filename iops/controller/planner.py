@@ -70,8 +70,7 @@ class BasePlanner(ABC):
             "__phase_index": self.phase_index,
             "__phase_folder": str(self.config.execution.workdir / f"{self.current_phase.sweep_param}_{self.phase_index}"),
             "__phase_repetitions": self.config.execution.repetitions,
-            "__phase_sweep_param": sweep_param,            
-
+            "__phase_sweep_param": sweep_param,   
             "__test_output": None, 
             "__test_script": None,
             "__test_index": None,       

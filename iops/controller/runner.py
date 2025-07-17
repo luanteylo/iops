@@ -1,6 +1,6 @@
 from iops.controller.executors import BaseExecutor
 from iops.analytics.analyzer import MetricsAnalyzer
-from iops.analytics.storage import MetricsStorage, Executions, Tests, TestSummaries
+from iops.analytics.storage import MetricsStorage, Tests
 from iops.benchmarks.ior import  BenchmarkRunner
 from iops.utils.logger import HasLogger
 from iops.controller.planner import BruteForce
@@ -43,7 +43,7 @@ class IOPSRunner(HasLogger):
 
         return MetricsStorage(
             db_path=self.config.environment.sqlite_db,
-            create_file=True
+            read_only=False
         )
    
     def _run_test(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,21 +73,6 @@ class IOPSRunner(HasLogger):
                 return None
         return value
 
-    def _load_test_db(self, execution_id: int, params: Dict[str, Any], repetition: int) -> Tests:
-            
-            test = self.storage.get_test(param=params,
-                                   repetition=repetition)
-
-            if test is not None:
-                self.logger.debug(f"Test found in DB: {test.test_id}, status: {test.status}")
-                return test
-            
-            test = self.storage.save_test(execution_id=execution_id,
-                                        params=params,
-                                        repetition=repetition,                                        
-                                        status="PENDING",
-                                        result=None)
-            return test
 
     def _log_params(self, params: dict):        
         for k, v in params.items():
@@ -100,10 +85,13 @@ class IOPSRunner(HasLogger):
         
         # Initialize Storage
 
-        start_time = datetime.now()
+        start_time = datetime.now()                    
+        criterion_key = self.benchmark.get_criterion()
+
+        ## Start couters
+        cache_hits = 0
+        total_tests = 0
         
-        execution : Executions = self.storage.save_execution(self.config.to_dictionary())                
-        self.logger.info(f"Execution ID: {execution.execution_id}, status: {execution.status}")       
 
         
         while self.planner.has_next_phase():
@@ -114,26 +102,31 @@ class IOPSRunner(HasLogger):
             self.logger.info(f"Running phase: {phase.sweep_param}")            
 
             for params in self.planner:
+                total_tests += 1
                 test_index = params.get("__test_index")
                 test_repetition = params.get("__test_repetition")
 
-                test = self._load_test_db(
-                    execution_id=execution.execution_id,
-                    params=params,
+                # each parameter + repeition we check if 
+                cached_test = self.storage.get_test(
+                    param=params,
                     repetition=test_repetition
                 )
-
                 
-                self.logger.info(msg=f"Phase: {phase.sweep_param}, Test: {test_index} Repetition: {test_repetition}. Status: {test.status}")
+                self.logger.info(msg=f"Phase: {phase.sweep_param}, Test: {test_index} Repetition: {test_repetition}. Status: {cached_test.status if cached_test else 'PENDING'}")
                 self._log_params(params)
 
-                if test.status == "SUCCESS" and self.args.use_cache:
-                    result = json.loads(test.result_json)
-                    self.analyzer.record(json.loads(test.result_json), params)                                       
-                    self.logger.info(f"Result (CACHED): {self.benchmark.get_criterion()}: {result.get(self.benchmark.get_criterion())}")
+                if self.args.use_cache and (cached_test and cached_test.status == "SUCCESS"): 
+                    result = json.loads(cached_test.result_json)
+                    self.analyzer.record(result=result,
+                                         params=params)
+                                                           
+                    self.logger.info(f"Result (CACHED): {criterion_key}: {result.get(criterion_key)}")                    
+                    cache_hits += 1 
                     continue
-
-                
+                else:
+                    # save the test                    
+                    cached_test = self.storage.save_test(params=params,
+                                                         status="PENDING")
 
                 execution_summary = self._run_test(params)
                 self.logger.debug(f"Execution_summary: {execution_summary}")
@@ -156,22 +149,15 @@ class IOPSRunner(HasLogger):
                         else f"Job failed or did not complete successfully. Status: {job_status}"
                     )
 
-                self.storage.update_test(test=test, status=job_status, result=result)
+                self.storage.update_test(test=cached_test, status=job_status, result=result)
+
+                
 
 
                
 
-            best = self.analyzer.select_best()
-            
-            
-            self.storage.save_summary(
-                execution_id=execution.execution_id,
-                param_sweep=phase.sweep_param,
-                param=best.get("__parameters"),
-                metrics=best.get("__results"),
-                
-            )
-            
+            best = self.analyzer.select_best()            
+          
             self.logger.info(f"Best parameters for phase '{phase.sweep_param}':")
             self._log_params(best.get("__parameters"))
             
@@ -185,4 +171,5 @@ class IOPSRunner(HasLogger):
         self.analyzer.save_csv(self.config.execution.workdir / "results.csv")
         self.analyzer.save_history_yaml(self.config.execution.workdir / "history.yaml")
         self.logger.info(f"Execution completed in {datetime.now() - start_time}. Results saved to {self.config.execution.workdir}")
+        self.logger.info(f"Total tests: {total_tests}. Cache hit ratio: {cache_hits / total_tests if total_tests > 0 else 0:.2%} ({cache_hits})")
 

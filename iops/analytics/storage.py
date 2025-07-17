@@ -17,40 +17,19 @@ import json
 from pathlib import Path
 
 
-class Executions(SQLModel, table=True):
-    execution_id: Optional[int] = Field(primary_key=True, default=None)
-    created_at: datetime = Field(default_factory=datetime.now)
-    setup_json: str
-    setup_hash: str = Field(default=None, index=True)
-    machine_name: Optional[str] = Field(default=None)
-    status: str = Field(default="running")  # running, interrupted, completed
-
-    tests: list["Tests"] = Relationship(back_populates="execution")
-    summaries: list["TestSummaries"] = Relationship(back_populates="execution")
-
-
 class Tests(SQLModel, table=True):
-    test_id: Optional[int] = Field(default=None, primary_key=True)
-    param_hash: str 
-    repetition: int 
-    execution_id: int = Field(foreign_key="executions.execution_id")    
+    id: Optional[int] = Field(default=None, primary_key=True)    
+    param_hash: str    
+    repetition: int  
+    phase_index: int    
+    test_index: int     
+    sweep_param: str    
     param_json: str
     result_json: Optional[str] = Field(default=None)
     status: str = Field(default="pending")  # pending, running, completed, failed
+    created_at: datetime = Field(default_factory=datetime.now) 
 
-    execution: Optional[Executions] = Relationship(back_populates="tests")
 
-
-class TestSummaries(SQLModel, table=True):
-    summary_id: Optional[int] = Field(default=None, primary_key=True)
-    execution_id: int = Field(foreign_key="executions.execution_id")
-    sweep_param: str
-    created_at: datetime = Field(default_factory=datetime.now)
-    param_hash: str
-    param_json: str
-    metrics_json: str
-
-    execution: Optional[Executions] = Relationship(back_populates="summaries")
 
 
 class MetricsStorage(HasLogger):
@@ -67,47 +46,31 @@ class MetricsStorage(HasLogger):
         norm = {k: v for k, v in sorted(params.items()) if not k.startswith("__")}
         return hashlib.md5(json.dumps(norm, sort_keys=True).encode()).hexdigest()
 
-    def save_execution(self, setup_dict) -> Executions:
-        setup_json = json.dumps(setup_dict, sort_keys=True)
-        setup_hash = self.hash_params(setup_dict)
-        machine = setup_dict.get("machine_name", "unknown")
-
-        with Session(self.engine) as session:
-            existing = session.exec(
-                select(Executions).where(Executions.setup_hash == setup_hash)
-            ).first()
-            if existing:
-                self.logger.debug(f"Execution already exists (id={existing.execution_id}).")
-                return existing
-
-            exec_entry = Executions(
-                setup_json=setup_json,
-                setup_hash=setup_hash,
-                machine_name=machine
-            )
-            session.add(exec_entry)
-            session.commit()
-            session.refresh(exec_entry)
-            self.logger.debug(f"New execution saved with id={exec_entry.execution_id}")
-            return exec_entry
-
-    def save_test(self, execution_id: int, params: dict[str, Any], repetition: int, status: str, result: dict[str, Any]) -> Tests:
+    
+    def save_test(self, params: dict[str, Any], status: str, result: dict[str, Any] = None) -> Tests:
+        phase_index = params.get("__phase_index")
+        sweep_param = params.get("__phase_sweep_param")
+        test_index = params.get("__test_index")        
+        repetition_index = params.get("__test_repetition")
+       
         params_clean = {k: v for k, v in params.items() if not k.startswith("__")}
         param_hash = self.hash_params(params_clean)
 
         with Session(self.engine) as session:          
             test = Tests(
-                execution_id=execution_id,
                 param_hash=param_hash,
-                param_json=json.dumps(params_clean, sort_keys=True),                
-                repetition=repetition,
+                repetition=repetition_index,
+                phase_index=phase_index,
+                test_index=test_index,
+                sweep_param=sweep_param,
+                param_json=json.dumps(params_clean, sort_keys=True),
+                result_json= json.dumps(result, sort_keys=True) if result else None,
                 status=status,
-                result_json=json.dumps(result) 
             )
             session.add(test)
             session.commit()
             session.refresh(test)
-            self.logger.debug(f"New test saved: {param_hash} (rep={repetition})")
+            self.logger.debug(f"New test saved: {param_hash} (rep={repetition_index})")
 
             return test
     
@@ -123,47 +86,18 @@ class MetricsStorage(HasLogger):
             self.logger.debug(f"Test updated: {test.param_hash} (rep={test.repetition}), status={status}")
             return test
 
-    def get_test(self, param: dict[str, Any], repetition: int) -> Optional[Tests]:
+    def get_test(self, param: dict[str, Any], repetition: int, status="SUCCESS") -> Optional[Tests]:
+        # get the most recent test for the given parameters and repetition
         param_hash = self.hash_params(param)
         with Session(self.engine) as session:
             return session.exec(
-                select(Tests).where(
+                select(Tests)
+                .where(
                     Tests.param_hash == param_hash,
-                    Tests.repetition == repetition
+                    Tests.repetition == repetition,
+                    Tests.status == status
                 )
-            ).first()
+                .order_by(Tests.created_at.desc())
+            ).first()                            
     
-    def get_execution(self, execution_id: int) -> Optional[Executions]:
-        with Session(self.engine) as session:
-            return session.exec(
-                select(Executions).where(Executions.execution_id == execution_id)
-                .options(selectinload(Executions.tests))  # 👈 eager load tests
-            ).first()
-    def save_summary(self, execution_id: int, param_sweep: str, param: dict[str, Any], metrics: dict[str, Any]) -> None:
-        param_hash = self.hash_params(param)
-
-        with Session(self.engine) as session:       
-            summary = TestSummaries(
-                execution_id=execution_id,
-                param_hash=param_hash,
-                sweep_param=param_sweep,
-                param_json=json.dumps(param, sort_keys=True),
-                metrics_json=json.dumps(metrics, sort_keys=True)
-            )
-            session.add(summary)
-            session.commit()
-            self.logger.debug(f"Summary saved for execution {execution_id}, sweep_param {param_sweep}, hash {param_hash}")
-
-    def refresh(self, obj: SQLModel) -> SQLModel:
-        """Refresh a SQLModel instance from the database."""
-        with Session(self.engine) as session:
-            session.refresh(obj)
-            return obj
-
-    def update_status(self, obj: SQLModel, status: str) -> None:
-        """Update the status of an Executions or Tests instance."""
-        with Session(self.engine) as session:
-            obj.status = status
-            session.add(obj)
-            session.commit()
-            session.refresh(obj)
+   
