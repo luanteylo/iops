@@ -1,6 +1,6 @@
 
 from iops.utils.logger import HasLogger
-
+from sqlalchemy.orm import selectinload
 from sqlmodel import (
     SQLModel,
     Field,
@@ -54,14 +54,14 @@ class TestSummaries(SQLModel, table=True):
 
 
 class MetricsStorage(HasLogger):
-    def __init__(self, db_path: Path, create_file: bool = True):
+    def __init__(self, db_path: Path, read_only: bool = False):
         super().__init__()
-        if not create_file and not db_path.exists():
-            raise FileNotFoundError(f"The database file {db_path} does not exist.")
         
         self.db_path = db_path
         self.engine = create_engine(f"sqlite:///{self.db_path}")
-        SQLModel.metadata.create_all(self.engine)
+
+        if not read_only:
+            SQLModel.metadata.create_all(self.engine)
 
     def hash_params(self, params: dict[str, Any]) -> str:
         norm = {k: v for k, v in sorted(params.items()) if not k.startswith("__")}
@@ -137,6 +137,7 @@ class MetricsStorage(HasLogger):
         with Session(self.engine) as session:
             return session.exec(
                 select(Executions).where(Executions.execution_id == execution_id)
+                .options(selectinload(Executions.tests))  # 👈 eager load tests
             ).first()
     def save_summary(self, execution_id: int, param_sweep: str, param: dict[str, Any], metrics: dict[str, Any]) -> None:
         param_hash = self.hash_params(param)
