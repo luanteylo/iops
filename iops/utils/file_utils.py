@@ -134,9 +134,9 @@ class FileUtils(HasLogger):
         # Ensure the base work directory exists
         if not base_workdir.exists():
             base_workdir.mkdir(parents=True, exist_ok=True)
-            self.logger.info(f"Created base work directory: {base_workdir}")
+            self.logger.debug(f"Created base work directory: {base_workdir}")
         else:
-            self.logger.info(f"Base work directory already exists: {base_workdir}")
+            self.logger.debug(f"Base work directory already exists: {base_workdir}")
 
         # Find all existing execution directories
         execution_dirs = [
@@ -153,7 +153,7 @@ class FileUtils(HasLogger):
         # Create the new execution directory
         new_execution_dir = base_workdir / f"execution_{next_id}"
         new_execution_dir.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"Created new execution directory: {new_execution_dir}")
+        self.logger.debug(f"Created new execution directory: {new_execution_dir}")
 
         # Update the config to point to the new execution directory
         config.execution.workdir = new_execution_dir

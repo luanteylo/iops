@@ -150,9 +150,7 @@ class MetricsStorage(HasLogger):
             )
             session.add(summary)
             session.commit()
-            self.logger.info(
-                f"Summary saved for execution {execution_id}, sweep_param {param_sweep}, hash {param_hash}"
-            )
+            self.logger.debug(f"Summary saved for execution {execution_id}, sweep_param {param_sweep}, hash {param_hash}")
 
     def refresh(self, obj: SQLModel) -> SQLModel:
         """Refresh a SQLModel instance from the database."""

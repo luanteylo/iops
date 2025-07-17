@@ -15,4 +15,5 @@ showcases/
 todo/
 *.logs
 iops.log
+iops.db
 iops_config.yaml

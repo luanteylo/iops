@@ -5,7 +5,7 @@ from pathlib import Path
 from iops.utils.file_utils import FileUtils
 from iops.utils.logger import setup_logger
 from iops.controller.runner import IOPSRunner
-from iops.utils.config_loader import ConfigValidationError
+from iops.utils.config_loader import ConfigValidationError, to_dictionary, IOPSConfig
 
 
 def load_version():
@@ -18,84 +18,98 @@ def load_version():
     
     with version_file.open() as f:
         return f.read().strip()
+    
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="IOPS Tool")
 
-def main():
-    ## get version
-
-    parser = argparse.ArgumentParser(description=f"IOPS Tool")
-
-    parser.add_argument('setup_file', type=Path, nargs='?', default=None, help="Path to the YAML setup file (e.g., iops_config.yaml)")
-
-    parser.add_argument('--generate_setup', nargs='?', const=Path("iops_config.yaml"), default=None, type=Path, help="Generate a default setup YAML file. Optionally specify a path (default: iops_config.yaml)")
-
-    parser.add_argument('--check_setup', action='store_true', help="Check the validity of the setup YAML file but do not start the execution")
-
-    parser.add_argument('--log_file', type=Path, default=Path("iops.log"), help="Path to the log file (default: iops.log)")
-
-    parser.add_argument('--log_terminal', action='store_true', help="Also print logs to terminal")
-
-    parser.add_argument('--log_level', type=str, default='INFO', help="Set the logging level (default: INFO)")
-
+    parser.add_argument('setup_file', type=Path, nargs='?', help="Path to the YAML setup file (e.g., iops_config.yaml)")
+    parser.add_argument('--generate_setup', nargs='?', const=Path("iops_config.yaml"), type=Path,
+                        help="Generate a default setup YAML file. Optionally specify a path (default: iops_config.yaml)")
+    parser.add_argument('--check_setup', action='store_true', help="Validate the setup YAML file and exit")
+    parser.add_argument('--log_file', type=Path, default=Path("iops.log"), help="Path to the log file")
+    parser.add_argument('--log_terminal', action='store_true', help="Print logs to terminal")
+    parser.add_argument('--log_level', type=str, default='INFO', help="Logging level (default: INFO)")
     parser.add_argument('--verbose', action='store_true', help="Show full traceback for errors")
-    parser.add_argument('--use_cached_results', 
-                        action='store_true', 
-                        help=("Enable cache-aware mode: if results for a given parameter set are already in the database, "
-                        "reuse them instead of executing the benchmark. Only unseen parameter sets will be executed.")
-        )
+    parser.add_argument('--use_cache', action='store_true',
+                        help="Reuse cached results if available, skipping already executed parameter sets")
+    parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
-    parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}', help="Show the version of the IOPS Tool")
+    return parser.parse_args()
+
+
+def initialize_logger(args):
+    return setup_logger(
+        name="iops",
+        log_file=args.log_file,
+        to_stdout=args.log_terminal,
+        to_file=args.log_file is not None,
+        level=getattr(logging, args.log_level.upper(), logging.INFO)
+    )
+
+
+def handle_generate_setup(args, logger):
+    if args.generate_setup:
+        logger.info(f"Generating default YAML setup file at: {args.generate_setup}")
+        FileUtils().generate_iops_config(args.generate_setup)
+        logger.info("Setup file generated successfully.")
+        return True
+    return False
+
+
+def log_execution_context(config: IOPSConfig, args, logger):
+    """
+    Logs the initial parameters before execution, including command-line arguments and the setup configuration.
+    """
+    logger.info("==== Execution Arguments ====")
+    logger.info(f"Setup file: {args.setup_file}")
+    logger.info(f"Log file: {args.log_file}")
+    logger.info(f"Use cache: {args.use_cache}")
     
 
-    args = parser.parse_args()
+    logger.info("==== Setup Configuration ====")
 
-    logger = setup_logger(name="iops", 
-                          log_file=args.log_file, 
-                          to_stdout=args.log_terminal, 
-                          to_file=args.log_file is not None, 
-                          level=getattr(logging, args.log_level.upper(), logging.INFO))
+    config_dict = to_dictionary(config)
 
-    fu = FileUtils()
+    for section, params in config_dict.items():
+        logger.info(f"{section.capitalize()} settings:")
+        if isinstance(params, dict):
+            for key, value in params.items():
+                logger.info(f"  {key}: {value}")
+        else:
+            logger.info(f"  {section}: {params}")
 
-    if args.generate_setup is not None:
-        logger.info(f"Generating default YAML setup file at: {args.generate_setup}")
-        fu.generate_iops_config(args.generate_setup)
-        logger.info("Setup file generated successfully.")
+
+def main():
+    args = parse_arguments()
+    logger = initialize_logger(args)
+
+    if handle_generate_setup(args, logger):
         return
 
-    if args.setup_file is None:
+    if not args.setup_file:
         logger.error("No setup file provided for validation or execution.")
         return
 
-    logger.info(f"Loading configuration from: {args.setup_file}")
+    fu = FileUtils()
     config = fu.load_iops_config(args.setup_file)
-
     logger.debug(f"Configuration loaded: {config}")
-    
+
     try:
         fu.validate_iops_config(config)
         if args.check_setup:
+            logger.info("Setup file validation successful.")
             return
-        # Creating the workdir if it does not exist
-        fu.create_workdir(config=config)
-
+        fu.create_workdir(config)
     except ConfigValidationError as e:
-        if args.verbose:
-            raise
-        else:
-            logger.error(f"Configuration validation failed:\n  → {e}")
-            return
-
+        logger.exception(f"Configuration validation failed: {e}" if args.verbose else f"Configuration validation failed:\n  → {e}")
+        return
     except Exception as e:
-        if args.verbose:
-            raise
-        else:
-            logger.error(f"Unexpected error: {e}")
-            return
-    if args.use_cached_results:
-        logger.info("Cache-aware mode enabled: using cached results where available.")
+        logger.exception("Unexpected error during setup.") if args.verbose else logger.error(f"Unexpected error: {e}")
+        return
 
-    runner = IOPSRunner(config, args)
-    runner.run()
+    log_execution_context(config, args, logger)
+    IOPSRunner(config, args).run()
+
 
 
 if __name__ == "__main__":

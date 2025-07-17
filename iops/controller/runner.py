@@ -85,17 +85,18 @@ class IOPSRunner(HasLogger):
                                         result=None)
             return test
 
-    def _log_params(self, params: dict):
+    def _log_params(self, params: dict):        
         for k, v in params.items():
             if not k.startswith("__"):
-                self.logger.info(f"\t{k}: {v}")
-
-
-
+                self.logger.info(f"{k}: {v}")
+                
+        
     
     def run(self):
         
         # Initialize Storage
+
+        start_time = datetime.now()
                    
         execution : Executions = self.storage.save_execution()         
         self.logger.info(f"Execution ID: {execution.execution_id}, status: {execution.status}")       
@@ -118,18 +119,17 @@ class IOPSRunner(HasLogger):
                     repetition=test_repetition
                 )
 
-                self.logger.debug(f"Test {test_index}-{test_repetition} Status: {test.status}")
+                
+                self.logger.info(msg=f"Phase: {phase.sweep_param}, Test: {test_index} Repetition: {test_repetition}. Status: {test.status}")
+                self._log_params(params)
 
-                if test.status == "SUCCESS" and self.args.use_cached_results:
+                if test.status == "SUCCESS" and self.args.use_cache:
                     result = json.loads(test.result_json)
-                    self.analyzer.record(json.loads(test.result_json), params)
-                    self.logger.info(f"Test {test_index}-{test_repetition} (using cache) with parameters:")
-                    self._log_params(params)
-                    self.logger.info(f"Result: {self.benchmark.get_criterion()}: {result.get(self.benchmark.get_criterion())}")
+                    self.analyzer.record(json.loads(test.result_json), params)                                       
+                    self.logger.info(f"Result (CACHED): {self.benchmark.get_criterion()}: {result.get(self.benchmark.get_criterion())}")
                     continue
 
-                self.logger.info(f"Test {test_index}-{test_repetition} (running) with parameters:")
-                self._log_params(params)
+                
 
                 execution_summary = self._run_test(params)
                 self.logger.debug(f"Execution_summary: {execution_summary}")
@@ -143,7 +143,7 @@ class IOPSRunner(HasLogger):
 
                 result = None
                 if job_status == "SUCCESS" and (result := self.benchmark.parse_output(params=params)):
-                    self.logger.info(f"Result: {self.benchmark.get_criterion()}: {result.get(self.benchmark.get_criterion())}")
+                    self.logger.info(f"Result (EXECUTED): {self.benchmark.get_criterion()}: {result.get(self.benchmark.get_criterion())}")
                     self.analyzer.record(result, params)
                 else:
                     self.logger.error(
@@ -169,10 +169,7 @@ class IOPSRunner(HasLogger):
             )
             
             self.logger.info(f"Best parameters for phase '{phase.sweep_param}':")
-            for key, value in best.get("__parameters", {}).items():
-                if key.startswith("__"):
-                    continue
-                self.logger.info(f"\t{key}: {value}")
+            self._log_params(best.get("__parameters"))
             
             self.logger.info(f"Best results for phase '{phase.sweep_param}': {best.get('__results')}")
                              
@@ -183,3 +180,5 @@ class IOPSRunner(HasLogger):
         self.logger.info("All benchmarking phases completed.")
         self.analyzer.save_csv(self.config.execution.workdir / "results.csv")
         self.analyzer.save_history_yaml(self.config.execution.workdir / "history.yaml")
+        self.logger.info(f"Execution completed in {datetime.now() - start_time}. Results saved to {self.config.execution.workdir}")
+
