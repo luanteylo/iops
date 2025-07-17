@@ -1,4 +1,4 @@
-from iops.utils.config_loader import IOPSConfig, to_dictionary
+
 from iops.utils.logger import HasLogger
 
 from sqlmodel import (
@@ -8,13 +8,13 @@ from sqlmodel import (
     create_engine,
     Session,
     select,
-    UniqueConstraint,
 )
 
 from typing import Optional, Any
 from datetime import datetime
 import hashlib
 import json
+from pathlib import Path
 
 
 class Executions(SQLModel, table=True):
@@ -54,10 +54,12 @@ class TestSummaries(SQLModel, table=True):
 
 
 class MetricsStorage(HasLogger):
-    def __init__(self, config: IOPSConfig):
+    def __init__(self, db_path: Path, create_file: bool = True):
         super().__init__()
-        self.config = config
-        self.db_path = self.config.environment.sqlite_db
+        if not create_file and not db_path.exists():
+            raise FileNotFoundError(f"The database file {db_path} does not exist.")
+        
+        self.db_path = db_path
         self.engine = create_engine(f"sqlite:///{self.db_path}")
         SQLModel.metadata.create_all(self.engine)
 
@@ -65,11 +67,10 @@ class MetricsStorage(HasLogger):
         norm = {k: v for k, v in sorted(params.items()) if not k.startswith("__")}
         return hashlib.md5(json.dumps(norm, sort_keys=True).encode()).hexdigest()
 
-    def save_execution(self) -> Executions:
-        setup_dict = to_dictionary(self.config)
+    def save_execution(self, setup_dict) -> Executions:
         setup_json = json.dumps(setup_dict, sort_keys=True)
         setup_hash = self.hash_params(setup_dict)
-        machine = self.config.environment.machine_name
+        machine = setup_dict.get("machine_name", "unknown")
 
         with Session(self.engine) as session:
             existing = session.exec(

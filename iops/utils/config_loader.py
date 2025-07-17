@@ -50,8 +50,25 @@ class IOPSConfig:
     storage: StorageConfig
     execution: ExecutionConfig
     environment: EnvironmentConfig
-
-
+    
+    def to_dictionary(self) -> dict:
+        """
+        Convert the IOPSConfig dataclass to a dictionary.
+        """
+        return {
+            "nodes": self.nodes.__dict__,
+            "storage": {
+                **self.storage.__dict__,
+                "filesystem_dir": str(self.storage.filesystem_dir),
+                "stripe_folders": [str(sf) for sf in self.storage.stripe_folders]
+            },
+            "execution": {
+                **self.execution.__dict__,
+                "workdir": str(self.execution.workdir),
+                "bash_template": str(self.environment.bash_template),
+                "sqlite_db": str(self.environment.sqlite_db) if self.environment.sqlite_db else None
+            }
+        }
 
 class ConfigValidationError(Exception):
     pass
@@ -175,21 +192,3 @@ def validate_config(config: IOPSConfig):
     # check if search method is valid
 
 
-def to_dictionary(config: IOPSConfig) -> dict:
-    """
-    Convert the IOPSConfig dataclass to a dictionary.
-    """
-    return {
-        "nodes": config.nodes.__dict__,
-        "storage": {
-            **config.storage.__dict__,
-            "filesystem_dir": str(config.storage.filesystem_dir),
-            "stripe_folders": [str(sf) for sf in config.storage.stripe_folders]
-        },
-        "execution": {
-            **config.execution.__dict__,
-            "workdir": str(config.execution.workdir),
-            "bash_template": str(config.environment.bash_template),
-            "sqlite_db": str(config.environment.sqlite_db) if config.environment.sqlite_db else None
-        }
-    }

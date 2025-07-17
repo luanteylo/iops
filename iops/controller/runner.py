@@ -40,7 +40,11 @@ class IOPSRunner(HasLogger):
         )
     
     def _build_storage(self):
-        return MetricsStorage(config=self.config)
+
+        return MetricsStorage(
+            db_path=self.config.environment.sqlite_db,
+            create_file=True
+        )
    
     def _run_test(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -97,8 +101,8 @@ class IOPSRunner(HasLogger):
         # Initialize Storage
 
         start_time = datetime.now()
-                   
-        execution : Executions = self.storage.save_execution()         
+        
+        execution : Executions = self.storage.save_execution(self.config.to_dictionary())                
         self.logger.info(f"Execution ID: {execution.execution_id}, status: {execution.status}")       
 
         

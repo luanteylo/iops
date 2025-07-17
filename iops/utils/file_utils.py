@@ -13,7 +13,7 @@ class FileUtils(HasLogger):
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from iops.utils.config_loader import load_config, validate_config, to_dictionary, IOPSConfig
+from iops.utils.config_loader import load_config, validate_config, IOPSConfig
 from iops.utils.logger import HasLogger
 from ruamel.yaml.parser import ParserError
 

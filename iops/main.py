@@ -5,7 +5,7 @@ from pathlib import Path
 from iops.utils.file_utils import FileUtils
 from iops.utils.logger import setup_logger
 from iops.controller.runner import IOPSRunner
-from iops.utils.config_loader import ConfigValidationError, to_dictionary, IOPSConfig
+from iops.utils.config_loader import ConfigValidationError, IOPSConfig
 
 
 def load_version():
@@ -68,7 +68,7 @@ def log_execution_context(config: IOPSConfig, args, logger):
 
     logger.info("==== Setup Configuration ====")
 
-    config_dict = to_dictionary(config)
+    config_dict = config.to_dictionary()
 
     for section, params in config_dict.items():
         logger.info(f"{section.capitalize()} settings:")
