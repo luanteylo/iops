@@ -58,18 +58,8 @@ class FileUtils(HasLogger):
         storage.yaml_add_eol_comment("Step size (MB) to increase volume per test", "volume_step")
         storage["default_stripe"] = 0
         storage.yaml_add_eol_comment("Default stripe count to apply", "default_stripe")
-
-        stripe_folders = CommentedSeq()
-        for folder_name  in ["folder1", "folder2", "folder3"]:
-            folder = CommentedMap()
-            folder["name"] = folder_name
-            folder.yaml_add_eol_comment("Folder under filesystem_dir", "name")
-            stripe_folders.append(folder)
-        storage["stripe_folders"] = stripe_folders
-        storage.yaml_set_comment_before_after_key(
-            "stripe_folders",
-            before="Folders under filesystem_dir to apply striping"
-        )
+        storage["stripe_folders"] = ["folder1", "folder2", "folder3"]
+        storage.yaml_set_comment_before_after_key("stripe_folders",before="Folders under filesystem_dir to apply striping")
 
         # --- Execution ---
         execution = data["execution"] = CommentedMap()
@@ -93,12 +83,16 @@ class FileUtils(HasLogger):
         execution.yaml_add_eol_comment("Test dimensions (matrix axes)", "tests")
         execution["io_pattern"] = "sequential:shared"
         execution.yaml_add_eol_comment("I/O access patterns (e.g., sequential:shared or random:shared)", "io_pattern")
-        
 
-        # --- Template ---
-        template = data["template"] = CommentedMap()
-        template["bash_template"] = "$IOPS_HOME/iops/config/templates/slurm_template.sh.j2"
-        template.yaml_add_eol_comment("Path to job submission script template", "bash_template")
+
+        # --- Environment ---
+        environment = data["environment"] = CommentedMap()
+
+        environment["bash_template"] = "$IOPS_HOME/iops/templates/slurm_template.sh.j2"
+        environment.yaml_add_eol_comment("Path to job submission script template", "bash_template")
+        environment["sqlite_db"] = "$IOPS_HOME/iops.db"
+        environment.yaml_add_eol_comment("Path to SQLite database for storing results", "sqlite_db")
+
 
         # --- Dump to file ---
         file_name = file_name.with_suffix('.yaml')
@@ -106,6 +100,7 @@ class FileUtils(HasLogger):
             yaml.dump(data, f)
 
         self.logger.info(f"Default IOPS config written to {file_name}")
+        
 
     def load_iops_config(self, file_path: Path) -> IOPSConfig:
         """
@@ -139,9 +134,9 @@ class FileUtils(HasLogger):
         # Ensure the base work directory exists
         if not base_workdir.exists():
             base_workdir.mkdir(parents=True, exist_ok=True)
-            self.logger.info(f"Created base work directory: {base_workdir}")
+            self.logger.debug(f"Created base work directory: {base_workdir}")
         else:
-            self.logger.info(f"Base work directory already exists: {base_workdir}")
+            self.logger.debug(f"Base work directory already exists: {base_workdir}")
 
         # Find all existing execution directories
         execution_dirs = [
@@ -158,9 +153,9 @@ class FileUtils(HasLogger):
         # Create the new execution directory
         new_execution_dir = base_workdir / f"execution_{next_id}"
         new_execution_dir.mkdir(parents=True, exist_ok=True)
-        self.logger.info(f"Created new execution directory: {new_execution_dir}")
+        self.logger.debug(f"Created new execution directory: {new_execution_dir}")
 
         # Update the config to point to the new execution directory
         config.execution.workdir = new_execution_dir
 
-        
+    

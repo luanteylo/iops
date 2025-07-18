@@ -126,7 +126,7 @@ class LocalExecutor(BaseExecutor, HasLogger):
                 text=True,
                 cwd=script.parent  # Ensures relative files are created in the right place
             )
-            self.logger.info(f"Process completed with return code {result.returncode}")
+            self.logger.debug(f"Process completed with return code {result.returncode}")
             self.logger.debug(f"stdout:\n{result.stdout}")
             self.logger.debug(f"stderr:\n{result.stderr}")
 
@@ -232,7 +232,6 @@ class SlurmExecutor(BaseExecutor, HasLogger):
             raise RuntimeError("SLURM job status check failed") from e
         
 
- 
     def _wait_and_collect(self, job_id: str, execution_dir: Path) -> dict:
         """
         Wait for the SLURM job to complete and collect metrics.

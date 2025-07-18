@@ -27,7 +27,7 @@ def setup_logger(
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    log_format = "[%(asctime)s] [%(class_tag)-16s] %(levelname)8s: %(message)s"
+    log_format = "[%(asctime)s] [%(class_tag)s] %(levelname)s: %(message)s"
     date_format = "%Y-%m-%d %H:%M:%S"
 
     class ClassTagFormatter(logging.Formatter):

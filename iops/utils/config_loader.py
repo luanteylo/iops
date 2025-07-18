@@ -35,12 +35,13 @@ class ExecutionConfig:
     status_check_delay: int
     wall_time: str
     tests: List[str]
-    io_pattern: str    
-
+    io_pattern: str 
 
 @dataclass
-class TemplateConfig:
+class EnvironmentConfig:
     bash_template: Path
+    sqlite_db: Optional[Path] 
+    machine_name: Optional[str] 
 
 
 @dataclass
@@ -48,15 +49,29 @@ class IOPSConfig:
     nodes: NodesConfig
     storage: StorageConfig
     execution: ExecutionConfig
-    template: TemplateConfig
-
+    environment: EnvironmentConfig
+    
+    def to_dictionary(self) -> dict:
+        """
+        Convert the IOPSConfig dataclass to a dictionary.
+        """
+        return {
+            "nodes": self.nodes.__dict__,
+            "storage": {
+                **self.storage.__dict__,
+                "filesystem_dir": str(self.storage.filesystem_dir),
+                "stripe_folders": [str(sf) for sf in self.storage.stripe_folders]
+            },
+            "execution": {
+                **self.execution.__dict__,
+                "workdir": str(self.execution.workdir),
+                "bash_template": str(self.environment.bash_template),
+                "sqlite_db": str(self.environment.sqlite_db) if self.environment.sqlite_db else None
+            }
+        }
 
 class ConfigValidationError(Exception):
     pass
-
-
-def _is_power_of_two(n: int) -> bool:
-    return (n > 0) and (n & (n - 1) == 0)
 
 
 def _expand(p: str) -> Path:
@@ -68,6 +83,9 @@ def load_config(config_path: Path) -> IOPSConfig:
         data = yaml.safe_load(f)
 
     fs_dir = _expand(data["storage"]["filesystem_dir"])
+    # get machine name from OS
+
+    machine_name = os.uname().nodename if hasattr(os, 'uname') else os.environ.get('HOSTNAME', 'unknown')
 
     return IOPSConfig(
         nodes=NodesConfig(**data["nodes"]),
@@ -77,7 +95,7 @@ def load_config(config_path: Path) -> IOPSConfig:
             max_volume=data["storage"]["max_volume"],            
             volume_step=data["storage"]["volume_step"],
             default_stripe=data["storage"]["default_stripe"],
-            stripe_folders=[fs_dir/ Path(entry["name"]) for entry in data["storage"]["stripe_folders"]],
+            stripe_folders=[fs_dir/ Path(entry) for entry in data["storage"]["stripe_folders"]],
         ),
         execution=ExecutionConfig(
             test_type=data["execution"]["test_type"],            
@@ -91,8 +109,10 @@ def load_config(config_path: Path) -> IOPSConfig:
             tests=data["execution"]["tests"],
             io_pattern=data["execution"]["io_pattern"],            
         ),
-        template=TemplateConfig(
-            bash_template=_expand(data["template"]["bash_template"]),
+        environment=EnvironmentConfig(
+            bash_template=_expand(data["environment"]["bash_template"]),
+            sqlite_db=_expand(data["environment"].get("sqlite_db", "iops.db")),
+            machine_name=machine_name,
         ),
     )
 
@@ -158,10 +178,10 @@ def validate_config(config: IOPSConfig):
         if not ior_path:
             raise ConfigValidationError("IOR benchmark tool is not installed or not found in PATH")
         
-    if not config.template.bash_template.exists():
-        raise ConfigValidationError(f"bash_template file does not exist: {config.template.bash_template}")
-    if not config.template.bash_template.is_file():
-        raise ConfigValidationError(f"bash_template path is not a file: {config.template.bash_template}")
+    if not config.environment.bash_template.exists():
+        raise ConfigValidationError(f"bash_template file does not exist: {config.environment.bash_template}")
+    if not config.environment.bash_template.is_file():
+        raise ConfigValidationError(f"bash_template path is not a file: {config.environment.bash_template}")
     
 
                 

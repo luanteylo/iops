@@ -43,7 +43,7 @@ class BenchmarkRunner(ABC, HasLogger):
         try:            
             script_path.write_text(script_content)
             script_path.chmod(0o755)
-            self.logger.info(f"Script saved successfully at {script_path}")
+            self.logger.debug(f"Script saved successfully at {script_path}")
             return True
         except Exception as e:
             self.logger.error(f"Failed to save script: {e}")
@@ -125,7 +125,7 @@ class IORBenchmark(BenchmarkRunner):
         Returns the IOR command based on the configuration.
         """
 
-        commands: str = "ior"
+        commands: str = 'ior'
 
         summary_file = params.get("__test_output")
         output_file = Path(params.get("ost_count")) / "test_output.ior"
@@ -153,7 +153,7 @@ class IORBenchmark(BenchmarkRunner):
             Path: Path to the generated script file.
         """
         
-        template_path: Path = self.config.template.bash_template
+        template_path: Path = self.config.environment.bash_template
         script_path = Path(params.get("__test_script"))
         
 

@@ -74,7 +74,7 @@ def test_load_config_parses_yaml_correctly(valid_config_file):
     assert config.execution.test_type == "write_only"
     assert config.execution.io_pattern == "sequential:shared"
     assert len(config.storage.stripe_folders) == 2
-    assert config.template.bash_template.exists()
+    assert config.environment.bash_template.exists()
 
 
 def test_validate_config_accepts_valid_config(valid_config_file):
