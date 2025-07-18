@@ -184,15 +184,15 @@ class SlurmExecutor(BaseExecutor, HasLogger):
     SLURM_PENDING = "PENDING"
     SLURM_RUNNING = "RUNNING"
 
-    def submit(self, test: Path) -> str:
+    def submit(self, script: Path) -> str:
         """
         Simulates SLURM job submission.
         In practice, would use `sbatch` and capture the job ID.
         """
-        self.logger.debug(f"Submitting SLURM job script: {test}")
+        self.logger.debug(f"Submitting SLURM job script: {script}")
         try:
             result = subprocess.run(
-                ["sbatch", f"--time={self.config.execution.wall_time}",  str(test)],
+                ["sbatch", f"--time={self.config.execution.wall_time}",  str(script)],
                 capture_output=True,
                 text=True,
                 check=True
