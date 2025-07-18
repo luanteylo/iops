@@ -148,7 +148,7 @@ def validate_config(config: IOPSConfig):
             raise ConfigValidationError("At least one test must be specified for IOR benchmark")
         if not config.execution.io_pattern:
             raise ConfigValidationError("An IO pattern must be specified for the IOR benchmark")
-        if config.execution.io_pattern not in {"sequential:shared", "random:shared"}:
+        if config.execution.io_pattern not in {"sequential:shared", "random:shared", "sequential:single", "random:single"}:
             raise ConfigValidationError(f"Invalid IO pattern for IOR: {config.execution.io_pattern}")
         for test in config.execution.tests:
             if test not in {"nodes", "volume", "ost_count"}:
