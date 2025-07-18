@@ -20,7 +20,6 @@ if not db_path.exists():
 # Create engine
 engine = create_engine(f"sqlite:///{db_path}")
 
-@st.cache_data(ttl=600)
 def load_tests_df():
     df =  pd.read_sql("SELECT * FROM Tests WHERE status = 'SUCCESS'", con=engine)
     # breakup the json columns into separate columns adding prefix
@@ -77,13 +76,16 @@ for tab, pattern in zip(tabs, io_patterns):
                 #    continue  # skip if sweep param didn't vary
 
                 st.markdown(f"#### Group {i+1} — Fixed Params: `{dict(zip(fixed_params, key))}`")
+                
 
                 fig = px.scatter(
                     group_df,
                     x=f"param_{sweep_param}",
                     y="result_bandwidth",
                     hover_data=param_cols,
-                    title=f"Bandwidth vs {sweep_param} (Group {i+1})"
+                    title=f"Bandwidth vs {sweep_param} (Group {i+1})",
+                    trendline="lowess",
+                    
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
