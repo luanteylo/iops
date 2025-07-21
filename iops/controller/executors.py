@@ -222,7 +222,7 @@ class SlurmExecutor(BaseExecutor, HasLogger):
                 check=True,
             )
             output = result.stdout.strip()
-            self.logger.info(f"SLURM job {job_id}: {output}")
+            #self.logger.info(f"SLURM job {job_id}: {output}")
 
             if output == "":
                 output = self.SLURM_FINISHED
@@ -249,8 +249,27 @@ class SlurmExecutor(BaseExecutor, HasLogger):
         execution_summary["__jobid"] = job_id
 
         try:
-            while self.__check_job_status(job_id) in [self.SLURM_PENDING, self.SLURM_RUNNING]:
+            last_status = None
+            last_log_time = 0
+            log_interval = 3600  # 60 minutes in seconds
+
+            while True:
+                status = self.__check_job_status(job_id)
+
+                now = time.time()
+                status_changed = status != last_status
+                time_exceeded = (now - last_log_time) >= log_interval
+
+                if status_changed or time_exceeded:
+                    self.logger.info(f"SLURM job {job_id} status: {status}")
+                    last_log_time = now
+                    last_status = status
+
+                if status not in [self.SLURM_PENDING, self.SLURM_RUNNING]:
+                    break
+
                 time.sleep(poll_interval)
+                
 
             self.logger.info(f"SLURM job {job_id} completed with status: {self.last_status}")
 
