@@ -103,6 +103,22 @@ class IORBenchmark(BenchmarkRunner):
   
     def __init__(self, config : IOPSConfig): 
         super().__init__(config)
+    
+    def __get_access_pattern_flag(self, io_pattern: str) -> str:
+        """
+        Returns the appropriate access pattern flag for IOR based on the IO pattern.
+        """
+        if io_pattern == "sequential:shared":
+            # sequential shared is the default, no additional flags needed    
+            return ""
+        elif io_pattern == "random:shared":
+            return " -z"
+        elif io_pattern == "sequential:single":
+            return " -F"
+        elif io_pattern == "random:single":
+            return " -F -z"
+        else:
+            raise ValueError(f"Invalid IO pattern: {io_pattern}. Check the configuration file.")
         
     def get_commands(self, params) -> str: 
         """
@@ -116,12 +132,13 @@ class IORBenchmark(BenchmarkRunner):
         
 
         block_size: int = params.get("volume") / (params.get("processes_per_node") * params.get("nodes"))
-
-        commands += f' -w'
-        commands += f' -b {int(block_size)}m'
-        commands += f' -t 1m'  
-        commands += f' -O summaryFile="{summary_file}" -O summaryFormat=JSON'
-        commands += f' -o "{output_file}"'
+        
+        commands += f"{self.__get_access_pattern_flag(params.get('io_pattern'))}"
+        commands += f" -w"
+        commands += f" -b {int(block_size)}m"
+        commands += f" -t 1m"  
+        commands += f" -O summaryFile={summary_file} -O summaryFormat=JSON"
+        commands += f" -o {output_file}"
         
         return commands
         

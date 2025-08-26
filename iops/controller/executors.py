@@ -99,11 +99,6 @@ class BaseExecutor(ABC):
    
 
 
-
-
-
-
-
 @BaseExecutor.register("local")
 class LocalExecutor(BaseExecutor, HasLogger):
     """
@@ -174,6 +169,9 @@ class LocalExecutor(BaseExecutor, HasLogger):
             self.logger.error(f"Error while collecting status for job {job_id}: {e}")
             execution_summary["__status"] = "ERROR"
             execution_summary["__error"] = str(e)
+
+        if execution_summary["__error"] is None:
+            execution_summary.pop("__error", None)
         
         return execution_summary
 
@@ -288,5 +286,8 @@ class SlurmExecutor(BaseExecutor, HasLogger):
             self.logger.error(f"Error while waiting for SLURM job {job_id}: {e}")
             execution_summary["__status"] = "ERROR"
             execution_summary["__error"] = str(e)
+        
+        if execution_summary["__error"] is None:
+            execution_summary.pop("__error", None)
         
         return execution_summary
