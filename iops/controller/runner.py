@@ -106,7 +106,7 @@ class IOPSRunner(HasLogger):
                 test_index = params.get("__test_index")
                 test_repetition = params.get("__test_repetition")
 
-                # each parameter + repeition we check if 
+                # for each parameters of a test + repetion index we check if there is a cached result
                 cached_test = self.storage.get_test(
                     param=params,
                     repetition=test_repetition
