@@ -3,7 +3,7 @@ from iops.analytics.analyzer import MetricsAnalyzer
 from iops.analytics.storage import MetricsStorage, Tests
 from iops.benchmarks.ior import  BenchmarkRunner
 from iops.utils.logger import HasLogger
-from iops.controller.planner import BruteForce
+from iops.controller.planner import BasePlanner
 from iops.utils.config_loader import IOPSConfig
 
 from typing import Dict, Any
@@ -31,7 +31,7 @@ class IOPSRunner(HasLogger):
         return BaseExecutor.build(name=self.config.execution.job_manager, config=self.config)
 
     def _build_planner(self):
-        return BruteForce(self.config, self.benchmark)
+        return BasePlanner.build(name=self.config.execution.search_method, config=self.config, benchmark=self.benchmark)
 
     def _build_analyzer(self):
         return MetricsAnalyzer(
@@ -40,7 +40,6 @@ class IOPSRunner(HasLogger):
         )
     
     def _build_storage(self):
-
         return MetricsStorage(
             db_path=self.config.environment.sqlite_db,
             read_only=False
@@ -78,7 +77,8 @@ class IOPSRunner(HasLogger):
         for k, v in params.items():
             if not k.startswith("__"):
                 self.logger.info(f"{k}: {v}")
-                
+    
+               
         
     
     def run(self):
@@ -91,8 +91,6 @@ class IOPSRunner(HasLogger):
         ## Start couters
         cache_hits = 0
         total_tests = 0
-        
-
         
         while self.planner.has_next_phase():
             phase = self.planner.next_phase()
@@ -119,6 +117,9 @@ class IOPSRunner(HasLogger):
                     result = json.loads(cached_test.result_json)
                     self.analyzer.record(result=result,
                                          params=params)
+                    
+                    self.planner.record_result(param=params, result=result.get(self.benchmark.get_criterion()))
+                                                           
                                                            
                     self.logger.info(f"Result (CACHED): {criterion_key}: {result.get(criterion_key)}")                    
                     cache_hits += 1 
@@ -142,6 +143,7 @@ class IOPSRunner(HasLogger):
                 if job_status == "SUCCESS" and (result := self.benchmark.parse_output(params=params)):
                     self.logger.info(f"Result (EXECUTED): {self.benchmark.get_criterion()}: {result.get(self.benchmark.get_criterion())}")
                     self.analyzer.record(result, params)
+                    self.planner.record_result(param=params, result=result.get(self.benchmark.get_criterion()))
                 else:
                     self.logger.error(
                         "Job succeeded, but output could not be parsed."
@@ -172,4 +174,6 @@ class IOPSRunner(HasLogger):
         self.analyzer.save_history_yaml(self.config.execution.workdir / "history.yaml")
         self.logger.info(f"Execution completed in {datetime.now() - start_time}. Results saved to {self.config.execution.workdir}")
         self.logger.info(f"Total tests: {total_tests}. Cache hit ratio: {cache_hits / total_tests if total_tests > 0 else 0:.2%} ({cache_hits})")
+
+        
 

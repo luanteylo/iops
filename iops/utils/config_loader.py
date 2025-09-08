@@ -190,5 +190,8 @@ def validate_config(config: IOPSConfig):
     if config.execution.job_manager not in valid_job_managers:
         raise ConfigValidationError(f"Invalid job manager: {config.execution.job_manager}. Must be one of {valid_job_managers}")
     # check if search method is valid
+    valid_search_methods = {"greedy", "bayesian"}
+    if config.execution.search_method not in valid_search_methods:
+        raise ConfigValidationError(f"Invalid search method: {config.execution.search_method}. Must be one of {valid_search_methods}")
 
 

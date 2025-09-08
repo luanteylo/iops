@@ -272,24 +272,6 @@ class IORBenchmark(BenchmarkRunner):
         """
         self.logger.debug(f"Building phase for: {sweep_param} with fixed_params: {params}")
 
-        # Choose sweep values based on parameter
-        if sweep_param == "volume":
-            values = list(range(
-                self.config.storage.min_volume,
-                self.config.storage.max_volume + 1,
-                self.config.storage.volume_step
-            ))
-        elif sweep_param == "nodes":
-            values = list(range(
-                self.config.nodes.min_nodes,
-                self.config.nodes.max_nodes + 1,
-                self.config.nodes.node_step
-            ))
-        elif sweep_param == "ost_count":
-            values = [str(stf) for stf in self.config.storage.stripe_folders]
-        else:
-            raise ValueError(f"Unknown test parameter: {sweep_param}")
-
         # Fill in standard fixed parameters
         all_parameters = {
             "processes_per_node": self.config.nodes.processes_per_node,
@@ -300,6 +282,36 @@ class IORBenchmark(BenchmarkRunner):
             "volume": self.config.storage.min_volume, # always start with the default values
             "nodes": self.config.nodes.min_nodes, # always start with the default values
         }
+
+        # Choose sweep values based on parameter
+        all_values = {
+            "volume": list(range(
+                self.config.storage.min_volume,
+                self.config.storage.max_volume + 1,
+                self.config.storage.volume_step
+            )),
+            "nodes": list(range(
+                self.config.nodes.min_nodes,
+                self.config.nodes.max_nodes + 1,
+                self.config.nodes.node_step
+            )),
+            "ost_count": [str(stf) for stf in self.config.storage.stripe_folders],            
+        }
+
+        values = {}
+
+        if isinstance(sweep_param, list):            
+            for sp in sweep_param:
+                if sp not in all_values:
+                    raise ValueError(f"Unknown test parameter in list: {sp}")
+                values[sp] = all_values[sp]
+                sweep_param = "all"  # Indicate multiple parameters are being swept
+        elif sweep_param in ["volume", "nodes", "ost_count"]:
+            values = all_values[sweep_param]
+        else:
+            raise ValueError(f"Unknown test parameter: {sweep_param}")
+
+       
         # Update the phase parameters with the previous sweep parameter values
         all_parameters.update(params)        
         all_parameters.update({sweep_param: None})  # Placeholder for the sweep parameter
