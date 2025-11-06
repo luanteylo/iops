@@ -262,7 +262,6 @@ class IORBenchmark(BenchmarkRunner):
         Returns the operation applied on the criterion value for IOR benchmark.
         """
         return self.operation
-  
     def build_phase(self, sweep_param: str, params: dict) -> Phase:
         """
         Builds a single Phase based on the sweep_param and current best params.
@@ -285,17 +284,11 @@ class IORBenchmark(BenchmarkRunner):
 
         # Choose sweep values based on parameter
         all_values = {
-            "volume": list(range(
-                self.config.storage.min_volume,
-                self.config.storage.max_volume + 1,
-                self.config.storage.volume_step
-            )),
-            "nodes": list(range(
-                self.config.nodes.min_nodes,
-                self.config.nodes.max_nodes + 1,
-                self.config.nodes.node_step
-            )),
-            "ost_count": [str(stf) for stf in self.config.storage.stripe_folders],            
+            "volume": list(self.config.storage.volume_range),
+            "nodes": list(self.config.nodes.nodes_range),
+            "ost_count": [str(stf) for stf in self.config.storage.stripe_folders],
+            "processes_per_node": list(self.config.nodes.processes_per_node),
+            
         }
 
         values = {}
@@ -306,12 +299,11 @@ class IORBenchmark(BenchmarkRunner):
                     raise ValueError(f"Unknown test parameter in list: {sp}")
                 values[sp] = all_values[sp]
                 sweep_param = "all"  # Indicate multiple parameters are being swept
-        elif sweep_param in ["volume", "nodes", "ost_count"]:
+        elif sweep_param in ["volume", "nodes", "ost_count", "processes_per_node"]:
             values = all_values[sweep_param]
         else:
             raise ValueError(f"Unknown test parameter: {sweep_param}")
 
-       
         # Update the phase parameters with the previous sweep parameter values
         all_parameters.update(params)        
         all_parameters.update({sweep_param: None})  # Placeholder for the sweep parameter

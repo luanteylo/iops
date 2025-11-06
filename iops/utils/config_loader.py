@@ -10,6 +10,7 @@ class NodesConfig:
     min_nodes: int
     max_nodes: int
     node_step: int
+    nodes_range: Optional[List[int]]
     processes_per_node: int
     cores_per_node: int
 
@@ -20,6 +21,7 @@ class StorageConfig:
     min_volume: int
     max_volume: int
     volume_step: int
+    volume_range: Optional[List[int]]
     default_stripe: int
     stripe_folders: List[Path]
 
@@ -87,15 +89,20 @@ def load_config(config_path: Path) -> IOPSConfig:
 
     machine_name = os.uname().nodename if hasattr(os, 'uname') else os.environ.get('HOSTNAME', 'unknown')
 
+    
+    nodes_dict = dict(data["nodes"])
+    volumes = data["storage"]["volume_range"]
+
     return IOPSConfig(
-        nodes=NodesConfig(**data["nodes"]),
+        nodes=NodesConfig(**nodes_dict),
         storage=StorageConfig(
             filesystem_dir=fs_dir,
             min_volume=data["storage"]["min_volume"],
             max_volume=data["storage"]["max_volume"],            
             volume_step=data["storage"]["volume_step"],
+            volume_range=volumes,
             default_stripe=data["storage"]["default_stripe"],
-            stripe_folders=[fs_dir/ Path(entry) for entry in data["storage"]["stripe_folders"]],
+            stripe_folders=[fs_dir / Path(entry) for entry in data["storage"]["stripe_folders"]],
         ),
         execution=ExecutionConfig(
             test_type=data["execution"]["test_type"],            
@@ -171,7 +178,7 @@ def validate_config(config: IOPSConfig):
         if config.execution.io_pattern not in {"sequential:shared", "random:shared", "sequential:single", "random:single"}:
             raise ConfigValidationError(f"Invalid IO pattern for IOR: {config.execution.io_pattern}")
         for test in config.execution.tests:
-            if test not in {"nodes", "volume", "ost_count"}:
+            if test not in {"nodes", "volume", "ost_count", "processes_per_node"}:
                 raise ConfigValidationError(f"Invalid test type for IOR: {test}")
             
         ior_path = shutil.which("ior")
@@ -190,7 +197,7 @@ def validate_config(config: IOPSConfig):
     if config.execution.job_manager not in valid_job_managers:
         raise ConfigValidationError(f"Invalid job manager: {config.execution.job_manager}. Must be one of {valid_job_managers}")
     # check if search method is valid
-    valid_search_methods = {"greedy", "bayesian"}
+    valid_search_methods = {"greedy", "exhaustive", "bayesian"}
     if config.execution.search_method not in valid_search_methods:
         raise ConfigValidationError(f"Invalid search method: {config.execution.search_method}. Must be one of {valid_search_methods}")
 
