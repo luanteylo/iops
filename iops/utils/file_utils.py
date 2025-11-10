@@ -41,8 +41,12 @@ class FileUtils(HasLogger):
         nodes.yaml_add_eol_comment("Maximum number of nodes to use", "max_nodes")
         nodes["node_step"] = 1
         nodes.yaml_add_eol_comment("Step size to increase nodes per test", "node_step")
+        nodes["nodes_range"] = [1, 4, 8, 16]
+        nodes.yaml_add_eol_comment("List of node counts to test", "nodes_range")
         nodes["processes_per_node"] = 8
         nodes.yaml_add_eol_comment("Number of processes per node", "processes_per_node")
+        nodes["processes_per_node_range"] = [1, 2, 4, 8]
+        nodes.yaml_add_eol_comment("List of processes per node to test", "processes_per_node_range")
         nodes["cores_per_node"] = 32
         nodes.yaml_add_eol_comment("Number of physical cores per node", "cores_per_node")
 
@@ -56,6 +60,8 @@ class FileUtils(HasLogger):
         storage.yaml_add_eol_comment("Maximum data volume in MB", "max_volume")
         storage["volume_step"] = 1024
         storage.yaml_add_eol_comment("Step size (MB) to increase volume per test", "volume_step")
+        storage["volume_range"] = [1024, 2048, 4096, 8192]
+        storage.yaml_add_eol_comment("List of data volumes (MB) to test", "volume_range")
         storage["default_stripe"] = 0
         storage.yaml_add_eol_comment("Default stripe count to apply", "default_stripe")
         storage["stripe_folders"] = ["folder1", "folder2", "folder3"]
@@ -79,7 +85,7 @@ class FileUtils(HasLogger):
         execution.yaml_add_eol_comment("Delay (s) between job status checks", "status_check_delay")
         execution["wall_time"] = "00:30:00"
         execution.yaml_add_eol_comment("Max walltime for each job (hh:mm:ss)", "wall_time")
-        execution["tests"] = ["volume", "nodes", "ost_count"]
+        execution["tests"] = ["volume", "nodes", "processes_per_node", "ost_count", ]
         execution.yaml_add_eol_comment("Test dimensions (matrix axes)", "tests")
         execution["io_pattern"] = "sequential:shared"
         execution.yaml_add_eol_comment("I/O access patterns (e.g., sequential:shared or random:shared)", "io_pattern")

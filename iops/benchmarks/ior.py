@@ -273,13 +273,13 @@ class IORBenchmark(BenchmarkRunner):
 
         # Fill in standard fixed parameters
         all_parameters = {
-            "processes_per_node": self.config.nodes.processes_per_node,
+            "processes_per_node": self.config.nodes.processes_per_node_range[0],  # always start with the minimum values
             "cores_per_node": self.config.nodes.cores_per_node,
             "io_pattern": self.config.execution.io_pattern, 
             "operation": self.config.execution.test_type,
             "ost_count": str(self.config.storage.stripe_folders[0]), # always start with the default values
-            "volume": self.config.storage.min_volume, # always start with the default values
-            "nodes": self.config.nodes.min_nodes, # always start with the default values
+            "volume": self.config.storage.min_volume or self.config.storage.volume_range[0], # always start with the default values
+            "nodes": self.config.nodes.min_nodes  or self.config.nodes.nodes_range[0], # always start with the minimum values
         }
 
         # Choose sweep values based on parameter
@@ -287,8 +287,7 @@ class IORBenchmark(BenchmarkRunner):
             "volume": list(self.config.storage.volume_range),
             "nodes": list(self.config.nodes.nodes_range),
             "ost_count": [str(stf) for stf in self.config.storage.stripe_folders],
-            "processes_per_node": list(self.config.nodes.processes_per_node),
-            
+            "processes_per_node": list(self.config.nodes.processes_per_node_range),
         }
 
         values = {}
@@ -305,7 +304,7 @@ class IORBenchmark(BenchmarkRunner):
             raise ValueError(f"Unknown test parameter: {sweep_param}")
 
         # Update the phase parameters with the previous sweep parameter values
-        all_parameters.update(params)        
+        all_parameters.update(params)
         all_parameters.update({sweep_param: None})  # Placeholder for the sweep parameter
         return Phase(sweep_param = sweep_param,
                      values = values,

@@ -12,6 +12,7 @@ class NodesConfig:
     node_step: int
     nodes_range: Optional[List[int]]
     processes_per_node: int
+    processes_per_node_range: Optional[List[int]]
     cores_per_node: int
 
 
@@ -91,7 +92,51 @@ def load_config(config_path: Path) -> IOPSConfig:
 
     
     nodes_dict = dict(data["nodes"])
-    volumes = data["storage"]["volume_range"]
+    volumes_dict = dict(data["storage"])
+    # handle where nodes min, max, step are given or nodes_range is given
+    if "nodes_range" in data["nodes"]:
+        nodes_dict["nodes_range"] = data["nodes"]["nodes_range"]
+        # nodes_dict.pop("min_nodes", None)
+        # nodes_dict.pop("max_nodes", None)
+        # nodes_dict.pop("node_step", None)
+    elif "min_nodes" in data["nodes"]:
+        nodes_dict["min_nodes"] = data["nodes"]["min_nodes"]
+    elif "max_nodes" in data["nodes"]:
+        nodes_dict["max_nodes"] = data["nodes"]["max_nodes"]
+    elif "node_step" in data["nodes"]:
+        nodes_dict["node_step"] = data["nodes"]["node_step"]
+    if nodes_dict.get("nodes_range") is None:
+        nodes_dict["nodes_range"] = list(range(
+            data["nodes"]["min_nodes"],
+            data["nodes"]["max_nodes"] + 1,
+            data["nodes"]["node_step"]
+        ))
+    # handle processes_per_node similarly
+    if "processes_per_node_range" in data["nodes"]:
+        nodes_dict["processes_per_node_range"] = data["nodes"]["processes_per_node_range"]
+    elif "processes_per_node" in data["nodes"]:
+        nodes_dict["processes_per_node"] = data["nodes"]["processes_per_node"]
+    if nodes_dict.get("processes_per_node_range") is None:
+        nodes_dict["processes_per_node_range"] = [data["nodes"]["processes_per_node"]]
+    
+    # handle volume_range similarly
+    if "volume_range" in data["storage"]:
+        volumes_dict["volume_range"] = data["storage"]["volume_range"]
+        # data["storage"].pop("min_volume", None)
+        # data["storage"].pop("max_volume", None)
+        # data["storage"].pop("volume_step", None)
+    elif "min_volume" in data["storage"]:
+        volumes_dict["min_volume"] = data["storage"]["min_volume"]
+    elif "max_volume" in data["storage"]:
+        volumes_dict["max_volume"] = data["storage"]["max_volume"]
+    elif "volume_step" in data["storage"]:
+        volumes_dict["volume_step"] = data["storage"]["volume_step"]
+    if volumes_dict.get("volume_range") is None:
+        volumes_dict["volume_range"] = list(range(
+            data["storage"]["min_volume"],
+            data["storage"]["max_volume"] + 1,
+            data["storage"]["volume_step"]
+        ))
 
     return IOPSConfig(
         nodes=NodesConfig(**nodes_dict),
@@ -100,7 +145,7 @@ def load_config(config_path: Path) -> IOPSConfig:
             min_volume=data["storage"]["min_volume"],
             max_volume=data["storage"]["max_volume"],            
             volume_step=data["storage"]["volume_step"],
-            volume_range=volumes,
+            volume_range=volumes_dict["volume_range"],
             default_stripe=data["storage"]["default_stripe"],
             stripe_folders=[fs_dir / Path(entry) for entry in data["storage"]["stripe_folders"]],
         ),
@@ -125,27 +170,40 @@ def load_config(config_path: Path) -> IOPSConfig:
 
 
 def validate_config(config: IOPSConfig):
-    if config.nodes.min_nodes <= 0:
-        raise ConfigValidationError("min_nodes must be greater than 0")
-    if config.nodes.max_nodes < config.nodes.min_nodes:
-        raise ConfigValidationError("max_nodes must be >= min_nodes")
+    if not config.nodes:
+        raise ConfigValidationError("Nodes configuration is missing")
+    if not config.nodes.nodes_range:
+        if config.nodes.min_nodes <= 0:
+            raise ConfigValidationError("min_nodes must be greater than 0")
+        if config.nodes.max_nodes < config.nodes.min_nodes:
+            raise ConfigValidationError("max_nodes must be >= min_nodes")
 
-    if config.nodes.node_step <= 0:
-        raise ConfigValidationError("node_step must be greater than 0")
-    #if not _is_power_of_two(config.nodes.min_nodes):
-    #    raise ConfigValidationError("min_nodes must be a power of 2")
-    #if not _is_power_of_two(config.nodes.max_nodes):
-    #    raise ConfigValidationError("max_nodes must be a power of 2")
-
-    if config.storage.min_volume <= 0:
-        raise ConfigValidationError("min_volume must be greater than 0")
-    if config.storage.max_volume < config.storage.min_volume:
-        raise ConfigValidationError("max_volume must be >= min_volume")
-    #if not _is_power_of_two(config.storage.min_volume):
-    #    raise ConfigValidationError("min_volume must be a power of 2")
-    #if not _is_power_of_two(config.storage.max_volume):
-    #    raise ConfigValidationError("max_volume must be a power of 2")
-
+        if config.nodes.node_step <= 0:
+            raise ConfigValidationError("node_step must be greater than 0")
+        #if not _is_power_of_two(config.nodes.min_nodes):
+        #    raise ConfigValidationError("min_nodes must be a power of 2")
+        #if not _is_power_of_two(config.nodes.max_nodes):
+        #    raise ConfigValidationError("max_nodes must be a power of 2")
+    if not config.nodes.processes_per_node_range:
+        if config.nodes.processes_per_node <= 0:
+            raise ConfigValidationError("processes_per_node must be greater than 0")
+        if config.nodes.processes_per_node > config.nodes.cores_per_node:
+            raise ConfigValidationError("processes_per_node cannot exceed cores_per_node")
+    if not config.storage:
+        raise ConfigValidationError("Storage configuration is missing")
+    if not config.storage.volume_range:
+        if config.storage.min_volume <= 0:
+            raise ConfigValidationError("min_volume must be greater than 0")
+        if config.storage.max_volume < config.storage.min_volume:
+            raise ConfigValidationError("max_volume must be >= min_volume")
+        #if not _is_power_of_two(config.storage.min_volume):
+        #    raise ConfigValidationError("min_volume must be a power of 2")
+        #if not _is_power_of_two(config.storage.max_volume):
+        #    raise ConfigValidationError("max_volume must be a power of 2")
+    # else:
+    #     if len(config.storage.volume_range) != 2:
+    #         raise ConfigValidationError("volume_range must have exactly two elements: [min_volume, max_volume]")
+        
     if config.execution.test_type not in {"write_only", "write_read"}:
         raise ConfigValidationError(f"Invalid test_type: {config.execution.test_type}")
     if config.execution.repetitions <= 0:
