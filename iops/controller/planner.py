@@ -252,6 +252,7 @@ class BayesianOptimization(BasePlanner, HasLogger):
         self.n_evals = 0
         self.best_y: Optional[float] = None
         self.no_improve_streak = 0
+        self.random_engine = random.Random(42)  # reproducible
 
     # ------------------ Phase generation ------------------
 
@@ -290,13 +291,15 @@ class BayesianOptimization(BasePlanner, HasLogger):
         sample_size = min(sample_size, n)   # never exceed n
 
         all_idx = list(range(n))
-        sample_idx = set(random.sample(all_idx, sample_size))
+        sample_idx = set(self.random_engine.sample(all_idx, sample_size))
         initial_sample = [self.current_combinations[i] for i in sorted(sample_idx)]
         remaining = [self.current_combinations[i] for i in all_idx if i not in sample_idx]
 
         self.logger.info(f"Initial sample size: {len(initial_sample)}")
         self.logger.info(f"Remaining combinations size: {len(remaining)}")
         self.logger.info(f"Total combinations size: {n}")
+
+        self.logger.debug(f"Initial sample index: {sample_idx}"   )
 
         self.initial_queue = deque(initial_sample)
         self.remaining_pool = remaining
