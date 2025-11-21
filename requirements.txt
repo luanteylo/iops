@@ -2,3 +2,4 @@ pyyaml
 ruamel.yaml
 psutil
 sqlmodel
+smt
