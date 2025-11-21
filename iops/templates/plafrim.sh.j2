@@ -8,10 +8,13 @@
 #SBATCH -o batch%j.out
 #SBATCH -e batch%j.err
 #SBATCH --exclusive 
-
+#SBATCH --constraint=bora
 
 # Record job start time
 date "+%Y-%m-%d %H:%M:%S" > job.start
+
+module purge
+module load mpi/openmpi/4.0.1
 
 # Execute the command
 mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \
@@ -22,6 +25,8 @@ exit_code=$?
 
 # Record job end time
 date "+%Y-%m-%d %H:%M:%S" > job.end
+
+echo $exit_code > job.status
 
 # Write status based on exit code
 if [ $exit_code -eq 0 ]; then

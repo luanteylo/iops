@@ -1,12 +1,5 @@
-matplotlib
-numpy
-pandas
-scipy
-seaborn
-python-dotenv
-paramiko
-rich
-jinja2
-plotly
-nbformat
-pexpect
+pyyaml
+ruamel.yaml
+psutil
+sqlmodel
+smt

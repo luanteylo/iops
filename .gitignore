@@ -5,12 +5,15 @@ tools/.env
 build/
 dist/
 default_config.ini
+iops_config.yaml
 test/
 __pycache__/
 .vscode/
 *.ini
-traces.md
 doc/
 showcases/
 todo/
-
+*.logs
+iops.log
+iops.db
+iops_config.yaml
