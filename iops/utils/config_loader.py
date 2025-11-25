@@ -78,7 +78,7 @@ class IOPSConfig:
             }
         }
 
-    def build_range(self):
+    def build_ranges(self):
         """ Build a range of values based on min, max, and step.
         for volume, nodes, etc.
         """

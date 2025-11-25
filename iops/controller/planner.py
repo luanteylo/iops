@@ -221,8 +221,9 @@ class BayesianOptimization(BasePlanner, HasLogger):
 
     # Adjust these if your parameter names differ
     _VOLUME_KEY = "volume"
-    _NODES_KEY = "nodes"
+    _NODES_KEY = "node"
     _OST_KEY = "ost_count"  # path like ".../folder<idx>"
+    _PP_NODE_KEY = "processes_per_node"
 
     def __init__(self, config: "IOPSConfig", benchmark):
         super().__init__(config, benchmark)
@@ -482,8 +483,9 @@ class BayesianOptimization(BasePlanner, HasLogger):
         try:
             vol = int(params[self._VOLUME_KEY])
             nodes = int(params[self._NODES_KEY])
+            pp_node = int(params[self._PP_NODE_KEY])
             ost_idx = self._get_folder_index(params[self._OST_KEY])
-            return np.array([vol, nodes, ost_idx], dtype=int)
+            return np.array([vol, nodes, pp_node, ost_idx], dtype=int)
         except Exception as e:
             self.logger.error(f"Vectorization error for params {params}: {e}")
             raise

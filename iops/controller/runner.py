@@ -91,6 +91,8 @@ class IOPSRunner(HasLogger):
         ## Start couters
         cache_hits = 0
         total_tests = 0
+        # build range 
+        self.config.build_ranges()
         
         while self.planner.has_next_phase():
             phase = self.planner.next_phase()

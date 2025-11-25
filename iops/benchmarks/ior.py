@@ -266,7 +266,7 @@ class IORBenchmark(BenchmarkRunner):
         """
         Builds a single Phase based on the sweep_param and current best params.
         inputs:
-        - sweep_param: The parameter to sweep over (e.g., 'volume', 'node', 'ost_count').
+        - sweep_param: The parameter to sweep over (e.g., 'volume', 'node', 'processes_per_node', 'ost_count').
         - params: A dictionary of parameters that will be used to fill the parameters of the phase.
         """
         self.logger.debug(f"Building phase for: {sweep_param} with fixed_params: {params}")
@@ -279,7 +279,7 @@ class IORBenchmark(BenchmarkRunner):
             "operation": self.config.execution.test_type,
             "ost_count": str(self.config.storage.stripe_folders[0]), # always start with the default values
             "volume": self.config.storage.min_volume or self.config.storage.volume_range[0], # always start with the default values
-            "node": self.config.nodes.min_node  or self.config.nodes.node_range[0], # always start with the minimum values
+            "node": self.config.nodes.min_node or self.config.nodes.node_range[0], # always start with the minimum values
         }
 
         # Choose sweep values based on parameter
@@ -298,7 +298,7 @@ class IORBenchmark(BenchmarkRunner):
                     raise ValueError(f"Unknown test parameter in list: {sp}")
                 values[sp] = all_values[sp]
                 sweep_param = "all"  # Indicate multiple parameters are being swept
-        elif sweep_param in ["volume", "node", "ost_count", "processes_per_node"]:
+        elif sweep_param in ["volume", "node", "processes_per_node", "ost_count"]:
             values = all_values[sweep_param]
         else:
             raise ValueError(f"Unknown test parameter: {sweep_param}")
