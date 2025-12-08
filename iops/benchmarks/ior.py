@@ -164,7 +164,7 @@ class IORBenchmark(BenchmarkRunner):
 
         # Render the template
         full_params = {
-            "node": params.get("node"),
+            "nodes": params.get("node"),
             "ntasks": params.get("processes_per_node") * params.get("node"),
             "ntasks_per_node": params.get("processes_per_node"),
             "chdir": params.get("__test_folder"),
