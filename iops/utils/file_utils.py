@@ -1,5 +1,6 @@
 from pathlib import Path
 from ruamel.yaml import YAML
+from sqlalchemy import values
 from iops.utils.config_loader import load_config, validate_config, IOPSConfig
 from iops.utils.logger import HasLogger
 from ruamel.yaml.parser import ParserError
@@ -22,7 +23,13 @@ class FileUtils(HasLogger):
     """
     Utility class to handle configuration file generation, loading, and validation for IOPS.
     """
-
+    def _flow_list(self, values):
+        """
+        Helper to create a YAML inline list from given values."""
+        seq = CommentedSeq(values)
+        seq.fa.set_flow_style()  # force inline list
+        return seq
+    
     def generate_iops_config(self, file_name: Path) -> None:
         """
         Generates a default IOPS configuration YAML file with comments.
@@ -35,14 +42,22 @@ class FileUtils(HasLogger):
 
         # --- Nodes ---
         nodes = data["nodes"] = CommentedMap()
-        nodes["min_nodes"] = 1
-        nodes.yaml_add_eol_comment("Minimum number of nodes to use", "min_nodes")
-        nodes["max_nodes"] = 32        
-        nodes.yaml_add_eol_comment("Maximum number of nodes to use", "max_nodes")
-        nodes["node_step"] = 1
-        nodes.yaml_add_eol_comment("Step size to increase nodes per test", "node_step")
-        nodes["processes_per_node"] = 8
-        nodes.yaml_add_eol_comment("Number of processes per node", "processes_per_node")
+        nodes["min_node"] = 1
+        nodes.yaml_add_eol_comment("Minimum number of nodes to use", "min_node")
+        nodes["max_node"] = 32        
+        nodes.yaml_add_eol_comment("Maximum number of nodes to use", "max_node")
+        nodes["step_node"] = 1
+        nodes.yaml_add_eol_comment("Step size to increase nodes per test", "step_node")
+        nodes["node_range"] = self._flow_list([1, 4, 8, 16])
+        nodes.yaml_add_eol_comment("List of node counts to test", "node_range")
+        nodes["min_pp_node"] = 1
+        nodes.yaml_add_eol_comment("Minimum number of processes per node", "min_pp_node")
+        nodes["max_pp_node"] = 8
+        nodes.yaml_add_eol_comment("Maximum number of processes per node", "max_pp_node")
+        nodes["step_pp_node"] = 1
+        nodes.yaml_add_eol_comment("Step size to increase processes per node", "step_pp_node")
+        nodes["pp_node_range"] = self._flow_list([1, 2, 4, 8])
+        nodes.yaml_add_eol_comment("List of processes per node to test", "pp_node_range")
         nodes["cores_per_node"] = 32
         nodes.yaml_add_eol_comment("Number of physical cores per node", "cores_per_node")
 
@@ -54,8 +69,10 @@ class FileUtils(HasLogger):
         storage.yaml_add_eol_comment("Minimum data volume in MB", "min_volume")
         storage["max_volume"] = 8192
         storage.yaml_add_eol_comment("Maximum data volume in MB", "max_volume")
-        storage["volume_step"] = 1024
-        storage.yaml_add_eol_comment("Step size (MB) to increase volume per test", "volume_step")
+        storage["step_volume"] = 1024
+        storage.yaml_add_eol_comment("Step size (MB) to increase volume per test", "step_volume")
+        storage["volume_range"] = self._flow_list([1024, 2048, 4096, 8192])
+        storage.yaml_add_eol_comment("List of data volumes (MB) to test", "volume_range")
         storage["default_stripe"] = 0
         storage.yaml_add_eol_comment("Default stripe count to apply", "default_stripe")
         storage["stripe_folders"] = ["folder1", "folder2", "folder3"]
@@ -79,7 +96,7 @@ class FileUtils(HasLogger):
         execution.yaml_add_eol_comment("Delay (s) between job status checks", "status_check_delay")
         execution["wall_time"] = "00:30:00"
         execution.yaml_add_eol_comment("Max walltime for each job (hh:mm:ss)", "wall_time")
-        execution["tests"] = ["volume", "nodes", "ost_count"]
+        execution["tests"] = ["volume", "node", "processes_per_node", "ost_count", ]
         execution.yaml_add_eol_comment("Test dimensions (matrix axes)", "tests")
         execution["io_pattern"] = "sequential:shared"
         execution.yaml_add_eol_comment("I/O access patterns (e.g., sequential:shared or random:shared)", "io_pattern")

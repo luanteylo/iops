@@ -1,16 +1,23 @@
 from dataclasses import dataclass
 from typing import List, Optional
 from pathlib import Path
+
 import yaml
 import os
 import shutil
 
+from iops.utils.logger import HasLogger
+
 @dataclass
 class NodesConfig:
-    min_nodes: int
-    max_nodes: int
-    node_step: int
-    processes_per_node: int
+    min_node: int
+    max_node: int
+    step_node: int
+    node_range: Optional[List[int]]
+    min_pp_node: int
+    max_pp_node: int
+    step_pp_node: int
+    pp_node_range: Optional[List[int]]
     cores_per_node: int
 
 
@@ -19,7 +26,8 @@ class StorageConfig:
     filesystem_dir: Path
     min_volume: int
     max_volume: int
-    volume_step: int
+    step_volume: int
+    volume_range: Optional[List[int]]
     default_stripe: int
     stripe_folders: List[Path]
 
@@ -70,6 +78,20 @@ class IOPSConfig:
             }
         }
 
+    def build_ranges(self):
+        """ Build a range of values based on min, max, and step.
+        for volume, nodes, etc.
+        """
+        try:
+            if self.nodes.node_range is None:
+                self.nodes.node_range = list(range(self.nodes.min_node, self.nodes.max_node + 1, self.nodes.step_node))
+            if self.storage.volume_range is None:
+                self.storage.volume_range = list(range(self.storage.min_volume, self.storage.max_volume + 1, self.storage.step_volume))
+            if self.nodes.pp_node_range is None:
+                self.nodes.pp_node_range = list(range(self.nodes.min_pp_node, self.nodes.max_pp_node + 1, self.nodes.step_pp_node))
+        except Exception as e:
+            raise ConfigValidationError(f"Error building ranges in configuration: {e}")    
+
 class ConfigValidationError(Exception):
     pass
 
@@ -87,15 +109,18 @@ def load_config(config_path: Path) -> IOPSConfig:
 
     machine_name = os.uname().nodename if hasattr(os, 'uname') else os.environ.get('HOSTNAME', 'unknown')
 
+    
+
     return IOPSConfig(
         nodes=NodesConfig(**data["nodes"]),
         storage=StorageConfig(
             filesystem_dir=fs_dir,
             min_volume=data["storage"]["min_volume"],
             max_volume=data["storage"]["max_volume"],            
-            volume_step=data["storage"]["volume_step"],
+            step_volume=data["storage"]["step_volume"],
+            volume_range=data["storage"]["volume_range"],
             default_stripe=data["storage"]["default_stripe"],
-            stripe_folders=[fs_dir/ Path(entry) for entry in data["storage"]["stripe_folders"]],
+            stripe_folders=[fs_dir / Path(entry) for entry in data["storage"]["stripe_folders"]],
         ),
         execution=ExecutionConfig(
             test_type=data["execution"]["test_type"],            
@@ -118,27 +143,73 @@ def load_config(config_path: Path) -> IOPSConfig:
 
 
 def validate_config(config: IOPSConfig):
-    if config.nodes.min_nodes <= 0:
-        raise ConfigValidationError("min_nodes must be greater than 0")
-    if config.nodes.max_nodes < config.nodes.min_nodes:
-        raise ConfigValidationError("max_nodes must be >= min_nodes")
+    def _is_positive_int(value) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
-    if config.nodes.node_step <= 0:
-        raise ConfigValidationError("node_step must be greater than 0")
-    #if not _is_power_of_two(config.nodes.min_nodes):
-    #    raise ConfigValidationError("min_nodes must be a power of 2")
-    #if not _is_power_of_two(config.nodes.max_nodes):
-    #    raise ConfigValidationError("max_nodes must be a power of 2")
+    def _ensure_positive_int(name: str, value):
+        if value is None or not _is_positive_int(value):
+            raise ConfigValidationError(f"{name} must be an integer greater than 0")
 
-    if config.storage.min_volume <= 0:
-        raise ConfigValidationError("min_volume must be greater than 0")
-    if config.storage.max_volume < config.storage.min_volume:
-        raise ConfigValidationError("max_volume must be >= min_volume")
-    #if not _is_power_of_two(config.storage.min_volume):
-    #    raise ConfigValidationError("min_volume must be a power of 2")
-    #if not _is_power_of_two(config.storage.max_volume):
-    #    raise ConfigValidationError("max_volume must be a power of 2")
+    def _ensure_int_list(name: str, seq):
+        if not isinstance(seq, list) or not seq:
+            raise ConfigValidationError(f"{name} must be a non-empty list of integers")
+        for i, v in enumerate(seq):
+            if not _is_positive_int(v):
+                raise ConfigValidationError(f"{name}[{i}] must be an integer greater than 0")
 
+    # Nodes block
+    if config.nodes is None:
+        raise ConfigValidationError("Nodes configuration is missing")
+
+    if config.nodes.node_range is None:
+        _ensure_positive_int("min_node", config.nodes.min_node)
+        _ensure_positive_int("max_node", config.nodes.max_node)
+        _ensure_positive_int("step_node", config.nodes.step_node)
+        if config.nodes.max_node < config.nodes.min_node:
+            raise ConfigValidationError("max_node must be >= min_node")
+        # if not _is_power_of_two(config.nodes.min_node):
+        #     raise ConfigValidationError("min_node must be a power of 2")
+        # if not _is_power_of_two(config.nodes.max_node):
+        #     raise ConfigValidationError("max_node must be a power of 2")
+    else:
+        _ensure_int_list("node_range", config.nodes.node_range)
+
+    # Per-process-per-node (pp_node) block
+    if config.nodes.pp_node_range is None:
+        _ensure_positive_int("min_pp_node", config.nodes.min_pp_node)
+        _ensure_positive_int("max_pp_node", config.nodes.max_pp_node)
+        _ensure_positive_int("step_pp_node", config.nodes.step_pp_node)
+        # cores = getattr(config.nodes, "cores_per_node", None)
+        # if cores is None:
+        #     raise ConfigValidationError("cores_per_node must be set when validating pp_node counts")
+        # if config.nodes.max_pp_node > cores:
+        #     raise ConfigValidationError("max_pp_node cannot exceed cores_per_node")
+    else:
+        _ensure_int_list("pp_node_range", config.nodes.pp_node_range)
+        # cores = getattr(config.nodes, "cores_per_node", None)
+        # if cores is not None:
+        #     if any(pp > cores for pp in config.nodes.pp_node_range):
+        #         raise ConfigValidationError("All values in pp_node_range cannot exceed cores_per_node")
+
+    # Storage block
+    if config.storage is None:
+        raise ConfigValidationError("Storage configuration is missing")
+
+    if config.storage.volume_range is None:
+        _ensure_positive_int("min_volume", config.storage.min_volume)
+        _ensure_positive_int("max_volume", config.storage.max_volume)
+        _ensure_positive_int("step_volume", config.storage.step_volume)
+        if config.storage.max_volume < config.storage.min_volume:
+            raise ConfigValidationError("max_volume must be >= min_volume")
+        #if not _is_power_of_two(config.storage.min_volume):
+        #    raise ConfigValidationError("min_volume must be a power of 2")
+        #if not _is_power_of_two(config.storage.max_volume):
+        #    raise ConfigValidationError("max_volume must be a power of 2")
+    else:
+        _ensure_int_list("volume_range", config.storage.volume_range) 
+    
+
+    # Execution block
     if config.execution.test_type not in {"write_only", "write_read"}:
         raise ConfigValidationError(f"Invalid test_type: {config.execution.test_type}")
     if config.execution.repetitions <= 0:
@@ -171,7 +242,7 @@ def validate_config(config: IOPSConfig):
         if config.execution.io_pattern not in {"sequential:shared", "random:shared", "sequential:single", "random:single"}:
             raise ConfigValidationError(f"Invalid IO pattern for IOR: {config.execution.io_pattern}")
         for test in config.execution.tests:
-            if test not in {"nodes", "volume", "ost_count"}:
+            if test not in {"node", "volume", "ost_count", "processes_per_node"}:
                 raise ConfigValidationError(f"Invalid test type for IOR: {test}")
             
         ior_path = shutil.which("ior")
@@ -190,5 +261,8 @@ def validate_config(config: IOPSConfig):
     if config.execution.job_manager not in valid_job_managers:
         raise ConfigValidationError(f"Invalid job manager: {config.execution.job_manager}. Must be one of {valid_job_managers}")
     # check if search method is valid
+    valid_search_methods = {"greedy", "exhaustive", "bayesian"}
+    if config.execution.search_method not in valid_search_methods:
+        raise ConfigValidationError(f"Invalid search method: {config.execution.search_method}. Must be one of {valid_search_methods}")
 
 

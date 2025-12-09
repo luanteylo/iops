@@ -42,10 +42,23 @@ class MetricsStorage(HasLogger):
         if not read_only:
             SQLModel.metadata.create_all(self.engine)
 
-    def hash_params(self, params: dict[str, Any]) -> str:
-        norm = {k: v for k, v in sorted(params.items()) if not k.startswith("__")}
+    def _normalize_value(self, v):
+            if isinstance(v, str):
+                # Check if it's an integer
+                if v.isdigit():
+                    return int(v)
+                # Check if it's a float
+                try:
+                    return float(v)
+                except ValueError:
+                    return v  # leave as string if not numeric
+            return v  # leave as-is if already int/float/None/etc.
+    
+    def hash_params(self, params: dict[str, any]) -> str:
+        # Filter out __keys and normalize
+        norm = {k: self._normalize_value(v) for k, v in sorted(params.items())
+                if not k.startswith("__") and k != "all"}
         return hashlib.md5(json.dumps(norm, sort_keys=True).encode()).hexdigest()
-
     
     def save_test(self, params: dict[str, Any], status: str, result: dict[str, Any] = None) -> Tests:
         phase_index = params.get("__phase_index")
