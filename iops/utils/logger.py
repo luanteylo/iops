@@ -1,11 +1,9 @@
 import logging
+import textwrap
 from pathlib import Path
 
 
 class HasLogger:
-    """
-    Mixin to inject a class-specific logger named as 'iops.ClassName'.
-    """
     @property
     def logger(self) -> logging.Logger:
         return logging.getLogger(f"iops.{self.__class__.__name__}")
@@ -17,34 +15,64 @@ def setup_logger(
     to_stdout: bool = True,
     to_file: bool = True,
     level: int = logging.INFO,
+    max_width: int = 100,   # <-- CONTROL LINE WIDTH HERE
 ) -> logging.Logger:
-    """
-    Configure and return a logger that can log to stdout and/or a file.
-    """
+
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    log_format = "[%(asctime)s] [%(class_tag)s] %(levelname)s: %(message)s"
-    date_format = "%Y-%m-%d %H:%M:%S"
+    fmt = "%(asctime)s | %(class_tag)-10s | %(levelname)-5s | %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
 
-    class ClassTagFormatter(logging.Formatter):
+    class WrappedMultilineFormatter(logging.Formatter):
         def format(self, record: logging.LogRecord) -> str:
-            record.class_tag = record.name.split(".")[-1] if record.name.startswith("iops.") else record.name
-            return super().format(record)
+            # Resolve class tag
+            if record.name == "iops":
+                record.class_tag = "IOPS"
+            elif record.name.startswith("iops."):
+                record.class_tag = record.name.split(".", 1)[1]
+            else:
+                record.class_tag = record.name
 
-    formatter = ClassTagFormatter(log_format, datefmt=date_format)
+            # Format normally first
+            raw = super().format(record)
+
+            # Split prefix from message
+            try:
+                prefix, message = raw.rsplit(" | ", 1)
+                prefix += " | "
+            except ValueError:
+                return raw  # fallback, should not happen
+
+            wrapped_lines = []
+
+            for line in message.splitlines() or [""]:
+                wrapped = textwrap.wrap(
+                    line,
+                    width=max_width,
+                    replace_whitespace=False,
+                    drop_whitespace=False,
+                    break_long_words=False,
+                ) or [""]
+
+                wrapped_lines.extend(wrapped)
+
+            # Re-apply prefix to every wrapped line
+            return "\n".join(prefix + line for line in wrapped_lines)
+
+    formatter = WrappedMultilineFormatter(fmt, datefmt=datefmt)
 
     if to_stdout:
-        stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(formatter)
-        logger.addHandler(stream_handler)
+        sh = logging.StreamHandler()
+        sh.setFormatter(formatter)
+        logger.addHandler(sh)
 
     if to_file and log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+        fh = logging.FileHandler(log_file)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
 
     return logger

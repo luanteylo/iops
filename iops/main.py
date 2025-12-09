@@ -5,8 +5,9 @@ from pathlib import Path
 from iops.utils.file_utils import FileUtils
 from iops.utils.logger import setup_logger
 from iops.controller.runner import IOPSRunner
-from iops.utils.config_loader import ConfigValidationError, IOPSConfig
-
+#from iops.utils.config_loader import ConfigValidationError, IOPSConfig
+from iops.utils.generic_config import load_generic_config, validate_generic_config, ConfigValidationError, GenericBenchmarkConfig
+from iops.utils.execution_matrix import build_execution_matrix
 
 def load_version():
     """
@@ -56,60 +57,169 @@ def handle_generate_setup(args, logger):
     return False
 
 
-def log_execution_context(config: IOPSConfig, args, logger):
+def log_execution_context(cfg: GenericBenchmarkConfig, args, logger):
     """
-    Logs the initial parameters before execution, including command-line arguments and the setup configuration.
+    Log the execution context in a human-readable way.
+    Called once at startup.
     """
-    logger.info("==== Execution Arguments ====")
-    logger.info(f"Setup file: {args.setup_file}")
-    logger.info(f"Log file: {args.log_file}")
-    logger.info(f"Use cache: {args.use_cache}")
-    
 
-    logger.info("==== Setup Configuration ====")
+    sep = "=" * 80
+    sub = "-" * 60
 
-    config_dict = config.to_dictionary()
+    IOPS_VERSION = load_version()  # ideally import from iops.__version__
 
-    for section, params in config_dict.items():
-        logger.info(f"{section.capitalize()} settings:")
-        if isinstance(params, dict):
-            for key, value in params.items():
-                logger.info(f"  {key}: {value}")
-        else:
-            logger.info(f"  {section}: {params}")
+    banner = r"""
+        ██╗ ██████╗ ██████╗ ███████╗
+        ██║██╔═══██╗██╔══██╗██╔════╝
+        ██║██║   ██║██████╔╝███████╗
+        ██║██║   ██║██╔═══╝ ╚════██║
+        ██║╚██████╔╝██║     ███████║
+        ╚═╝ ╚═════╝ ╚═╝     ╚══════╝
+        """
+
+    sep = "=" * 80
+
+    logger.info("")
+    for line in banner.strip("\n").splitlines():
+        logger.info(line)
+
+    logger.info("")
+    logger.info("  IOPS — I/O Performance Search")
+    logger.info(f"  Version: {IOPS_VERSION}")
+    logger.info(f"  Setup File: {args.setup_file}")    
+    logger.info("")
+    logger.info(sep)
+    logger.debug("Execution Context")
+    logger.debug(sep)
+
+    # ------------------------------------------------------------------
+    logger.debug("Command-line arguments:")
+    logger.debug(f"  {args}")
+
+    # ------------------------------------------------------------------
+    logger.debug(sub)
+    logger.debug("Benchmark")
+    logger.debug(sub)
+    logger.debug(f"  Name       : {cfg.benchmark.name}")
+    if cfg.benchmark.description:
+        logger.debug(f"  Description: {cfg.benchmark.description}")
+    logger.debug(f"  Workdir    : {cfg.benchmark.workdir}")
+    logger.debug(f"  Repetitions: {cfg.benchmark.repetitions}")
+    if cfg.benchmark.sqlite_db:
+        logger.debug(f"  SQLite DB  : {cfg.benchmark.sqlite_db}")
+        
+
+    # ------------------------------------------------------------------
+    logger.debug(sub)
+    logger.debug("Variables (vars)")
+    logger.debug(sub)
+
+    for name, var in cfg.vars.items():
+        logger.debug(f"  - {name}")
+        logger.debug(f"      type : {var.type}")
+
+        if var.sweep:
+            logger.debug("      sweep:")
+            logger.debug(f"        mode : {var.sweep.mode}")
+            if var.sweep.mode == "range":
+                logger.debug(f"        start: {var.sweep.start}")
+                logger.debug(f"        end  : {var.sweep.end}")
+                logger.debug(f"        step : {var.sweep.step}")
+            elif var.sweep.mode == "list":
+                logger.debug(f"        values: {var.sweep.values}")
+
+        if var.expr:
+            logger.debug(f"      expr : {var.expr}")
+
+    # ------------------------------------------------------------------
+    logger.debug(sub)
+    logger.debug("Command")
+    logger.debug(sub)
+    logger.debug("  Template:")
+    logger.debug("  " + cfg.command.template.replace("\n", "\n  "))
+
+    if cfg.command.env:
+        logger.debug("  Environment:")
+        for k, v in cfg.command.env.items():
+            logger.debug(f"    {k}={v}")
+
+    if cfg.command.metadata:
+        logger.debug("  Metadata:")
+        for k, v in cfg.command.metadata.items():
+            logger.debug(f"    {k}: {v}")
+
+    # ------------------------------------------------------------------
+    logger.debug(sub)
+    logger.debug("Execution Scripts")
+    logger.debug(sub)
+
+    for i, script in enumerate(cfg.scripts, start=1):
+        logger.debug(f"  Script #{i}: {script.name}")
+        logger.debug(f"    Mode   : {script.mode}")
+        logger.debug(f"    Submit : {script.submit}")
+
+        logger.debug("    Script template:")
+        logger.debug("    " + script.script_template.replace("\n", "\n    "))
+
+        if script.post:
+            logger.debug("    Post-processing script:")
+            logger.debug("    " + script.post.script.replace("\n", "\n    "))
+
+        if script.parser:
+            logger.debug("    Parser:")
+            logger.debug(f"      Type : {script.parser.type}")
+            logger.debug(f"      File : {script.parser.file}")
+
+            if script.parser.metrics:
+                logger.debug("      Metrics:")
+                for m in script.parser.metrics:
+                    logger.debug(f"        - {m.name}")
+                    if m.path:
+                        logger.debug(f"            path: {m.path}")
+
+            if script.parser.parser_script:
+                logger.debug("      Custom parser script:")
+                logger.debug(
+                    "      "
+                    + script.parser.parser_script.replace("\n", "\n      ")
+                )
+
+    # ------------------------------------------------------------------
+    logger.debug(sub)
+    logger.debug("Output")
+    logger.debug(sub)
+    logger.debug(f"  CSV path : {cfg.output.csv.path}")
+    logger.debug("  CSV fields:")
+    for field in cfg.output.csv.include:
+        logger.debug(f"    - {field}")
+
+    logger.debug(sep)
+
 
 
 def main():
     args = parse_arguments()
     logger = initialize_logger(args)
 
-    if handle_generate_setup(args, logger):
-        return
-
+   
     if not args.setup_file:
         logger.error("No setup file provided for validation or execution.")
         return
 
-    fu = FileUtils()
-    config = fu.load_iops_config(args.setup_file)
-    logger.debug(f"Configuration loaded: {config}")
+    cfg = load_generic_config(Path(args.setup_file))
+    log_execution_context(cfg, args, logger)    
 
-    try:
-        fu.validate_iops_config(config)
-        if args.check_setup:
-            logger.info("Setup file validation successful.")
-            return
-        fu.create_workdir(config)
-    except ConfigValidationError as e:
-        logger.exception(f"Configuration validation failed: {e}" if args.verbose else f"Configuration validation failed:\n  → {e}")
-        return
-    except Exception as e:
-        logger.exception("Unexpected error during setup.") if args.verbose else logger.error(f"Unexpected error: {e}")
-        return
-
-    log_execution_context(config, args, logger)
-    IOPSRunner(config, args).run()
-
+    logger.info("Building execution matrix...")
+    executions = build_execution_matrix(cfg)
+    logger.info(f"Total executions: {len(executions)}")
+    for ex in executions:
+        # add a line    
+       logger.debug(ex.describe())
+        
+    
+   
+    
+    
 
 
 if __name__ == "__main__":

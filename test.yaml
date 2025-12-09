@@ -1,0 +1,140 @@
+benchmark:
+  name: "IOR Benchmark"
+  description: "A benchmark to measure I/O performance using the IOR tool."
+  workdir: "/home/luan/workdir/"
+  sqlite_db: "/home/luan/iops.db"
+
+vars:
+  # Swept variables (global definition)
+  nodes:
+    type: int
+    sweep:
+      mode: range           # range | list
+      start: 1
+      end: 16
+      step: 1
+
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [16]
+
+  block_size_mb:
+    type: int
+    sweep:
+      mode: list
+      values: [16, 32, 64]
+
+  ost_path:
+    type: str
+    sweep:
+      mode: list
+      values: ["/beegfs/lgouveia/ior_1", "/beegfs/lgouveia/ior_2"]
+
+  # Derived variables (computed from other vars / benchmark fields)
+  summary_file:
+    type: str
+    expr: "{{ workdir }}/summary_{{ execution_id }}.json"
+
+  total_data_size:
+    type: float
+    expr: "nodes * processes_per_node * block_size_mb"
+
+command:
+  template: >
+    mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1
+    ior -w -b {{ block_size_mb }}mb -t 1m
+    -O summaryFile={{ summary_file }} -O summaryFormat=JSON
+    -o {{ ost_path }}/output.ior
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+    transfer_size: "{{ block_size_mb }}"
+    total_data_size: "{{ total_data_size }}"
+
+  env:
+    ENV_EXAMPLE: "example_value"
+
+scripts:
+  - name: "slurm_mpi"
+    mode: "slurm"
+    submit: "sbatch"
+
+    script_template: |
+      #!/bin/bash
+      #SBATCH --job-name=ior_benchmark
+      #SBATCH --output=ior_benchmark_%j.out
+      #SBATCH --error=ior_benchmark_%j.err
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=01:00:00
+
+      module load mpi
+      module load ior
+
+      {{ command.template }}
+
+    post:
+      script: |
+        #!/bin/bash
+        echo "Job completed. Summary file located at {{ summary_file }}"
+
+    parser:
+      type: "json"
+      file: "{{ summary_file }}"
+      metrics:
+        - name: "write_bandwidth"
+          path: "results[0].bw_MiB"
+      parser_script: |
+        import json, sys
+        with open(sys.argv[1], "r") as f:
+            data = json.load(f)
+        print(data["results"][0]["bw_MiB"])
+
+output:
+  csv:
+    path: "{{ workdir }}/results.csv"
+    include:
+      - "benchmark.name"
+      - "nodes"
+      - "processes_per_node"
+      - "block_size_mb"
+      - "ost_path"
+      - "total_data_size"
+      - "write_bandwidth"
+
+rounds:
+  # Round 1: sweep only `nodes`, keep others fixed.
+  - name: "nodes_sweep"
+    description: "Find best nodes by write bandwidth."
+    sweep_vars: ["nodes"]           # which vars from `vars` are swept in this round
+    fixed_overrides:                # optional: override defaults for some vars
+      block_size_mb: 16
+      processes_per_node: 16
+    repetitions: 3                  # per config
+
+    search:
+      metric: "write_bandwidth"     # name in parser metrics
+      objective: "max"              # max | min
+
+    propagate:
+      vars: ["nodes"]               # export best `nodes` to become default for next rounds
+
+  # Round 2: sweep `block_size_mb` using best `nodes` found in round 1
+  - name: "blocksize_sweep"
+    description: "Use best nodes from round 1; sweep block_size_mb."
+    sweep_vars: ["block_size_mb"]
+    # if nodes is not fixed_overrides, it uses value propagated from previous round
+    fixed_overrides:
+      processes_per_node: 16
+    repetitions: 3
+
+    search:
+      metric: "write_bandwidth"
+      objective: "max"
+
+    propagate:
+      vars: ["block_size_mb"]
