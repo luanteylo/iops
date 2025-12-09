@@ -107,7 +107,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args, logger):
     logger.debug(f"  Repetitions: {cfg.benchmark.repetitions}")
     if cfg.benchmark.sqlite_db:
         logger.debug(f"  SQLite DB  : {cfg.benchmark.sqlite_db}")
-        
+
 
     # ------------------------------------------------------------------
     logger.debug(sub)
@@ -209,14 +209,34 @@ def main():
     cfg = load_generic_config(Path(args.setup_file))
     log_execution_context(cfg, args, logger)    
 
-    logger.info("Building execution matrix...")
-    executions = build_execution_matrix(cfg)
-    logger.info(f"Total executions: {len(executions)}")
-    for ex in executions:
-        # add a line    
-       logger.debug(ex.describe())
+    # for each round we create a matrix of executions
+    if cfg.rounds is not None:
+        default = {}
+        for round in  cfg.rounds:
+            
+            logger.info(f"Building execution matrix for round: {round.name}...")
+            execution_matrix = build_execution_matrix(cfg, round_name=round.name, defaults=default)
+            logger.info(f"Total executions to run in this round: {len(execution_matrix)}")
+            for exec in execution_matrix:
+                if args.log_level.upper() == 'DEBUG':
+                    logger.debug(exec.describe())
+
+            # get best execution from this round
+            # and update default vars for next round
+            # we only propagate the sweeped variables
+            best_exec = execution_matrix[-1]  # placeholder for best execution selection logic
+            logger.info(f"Best execution in round '{round.name}': {best_exec}")
+            
+
+            default = {
+                k: v for k, v in best_exec.vars.items() 
+            }
         
-    
+            
+            # mimic the propagation 
+            
+            
+            
    
     
     

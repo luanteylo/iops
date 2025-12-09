@@ -9,22 +9,20 @@ vars:
   nodes:
     type: int
     sweep:
-      mode: range           # range | list
-      start: 1
-      end: 16
-      step: 1
+      mode: list           # range | list
+      values: [1, 2, 4]
 
   processes_per_node:
     type: int
     sweep:
       mode: list
       values: [16]
-
-  block_size_mb:
+  
+  volume_size_gb:
     type: int
     sweep:
       mode: list
-      values: [16, 32, 64]
+      values: [2, 4, 8]
 
   ost_path:
     type: str
@@ -36,10 +34,10 @@ vars:
   summary_file:
     type: str
     expr: "{{ workdir }}/summary_{{ execution_id }}.json"
-
-  total_data_size:
-    type: float
-    expr: "nodes * processes_per_node * block_size_mb"
+  
+  block_size_mb:
+    type: int
+    expr: "(volume_size_gb * 1024) / (nodes * processes_per_node)"
 
 command:
   template: >
@@ -53,7 +51,7 @@ command:
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
     transfer_size: "{{ block_size_mb }}"
-    total_data_size: "{{ total_data_size }}"
+    total_data_size: "{{ volume_size_gb }}"
 
   env:
     ENV_EXAMPLE: "example_value"
@@ -114,27 +112,13 @@ rounds:
     fixed_overrides:                # optional: override defaults for some vars
       block_size_mb: 16
       processes_per_node: 16
-    repetitions: 3                  # per config
-
+    repetitions: 3       
     search:
       metric: "write_bandwidth"     # name in parser metrics
       objective: "max"              # max | min
-
     propagate:
       vars: ["nodes"]               # export best `nodes` to become default for next rounds
-
-  # Round 2: sweep `block_size_mb` using best `nodes` found in round 1
-  - name: "blocksize_sweep"
-    description: "Use best nodes from round 1; sweep block_size_mb."
-    sweep_vars: ["block_size_mb"]
-    # if nodes is not fixed_overrides, it uses value propagated from previous round
-    fixed_overrides:
-      processes_per_node: 16
-    repetitions: 3
-
-    search:
-      metric: "write_bandwidth"
-      objective: "max"
-
-    propagate:
-      vars: ["block_size_mb"]
+  # Round 2: sweep `volume_size_gb` to find optimal size with best nodes from Round 1.
+  - name: "volume_size_sweep"
+    description: "Find best volume size by write bandwidth."
+    sweep_vars: ["volume_size_gb"]

@@ -1,7 +1,9 @@
+# iops/utils/generic_config.py
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import yaml
 import os
@@ -10,6 +12,7 @@ import os
 class ConfigValidationError(Exception):
     pass
 
+
 # ----------------- Core blocks ----------------- #
 
 @dataclass
@@ -17,7 +20,7 @@ class BenchmarkConfig:
     name: str
     description: Optional[str]
     workdir: Path
-    repetitions: Optional[int] = 1
+    repetitions: Optional[int] = 1        # global default (can be ignored if rounds have their own)
     sqlite_db: Optional[Path] = None
 
 
@@ -74,8 +77,8 @@ class ScriptConfig:
     mode: str
     submit: str
     script_template: str
-    post: Optional[PostConfig] = None      # <--- optional
-    parser: Optional[ParserConfig] = None  # still usually required, but can be Optional
+    post: Optional[PostConfig] = None      # optional
+    parser: Optional[ParserConfig] = None  # optional
 
 
 @dataclass
@@ -89,6 +92,66 @@ class OutputConfig:
     csv: OutputCSVConfig
 
 
+# ----------------- Rounds blocks ----------------- #
+
+@dataclass
+class RoundSearchConfig:
+    """
+    Search definition inside a round.
+
+    Example in YAML:
+
+      search:
+        metric: "write_bandwidth"
+        objective: "max"   # max | min
+        # select: "best"   # optional, future extension
+    """
+    metric: str
+    objective: Literal["max", "min"]
+    select: Optional[str] = None  # e.g., "best", "top_k", etc. (optional / future use)
+
+
+@dataclass
+class RoundPropagateConfig:
+    """
+    Variables whose best values from this round will be propagated to
+    defaults for the next rounds.
+
+      propagate:
+        vars: ["nodes", "block_size_mb"]
+    """
+    vars: List[str]
+
+
+@dataclass
+class RoundConfig:
+    """
+    One optimization / search round.
+
+    YAML example:
+
+      - name: "nodes_sweep"
+        description: "Find best nodes by write bandwidth."
+        sweep_vars: ["nodes"]
+        fixed_overrides:
+          block_size_mb: 16
+          processes_per_node: 16
+        repetitions: 3
+        search:
+          metric: "write_bandwidth"
+          objective: "max"
+        propagate:
+          vars: ["nodes"]
+    """
+    name: str
+    description: Optional[str]
+    sweep_vars: List[str] = field(default_factory=list)
+    fixed_overrides: Dict[str, Any] = field(default_factory=dict)
+    repetitions: Optional[int] = None
+    search: RoundSearchConfig | None = None
+    propagate: Optional[RoundPropagateConfig] = None
+
+
 @dataclass
 class GenericBenchmarkConfig:
     benchmark: BenchmarkConfig
@@ -96,6 +159,10 @@ class GenericBenchmarkConfig:
     command: CommandConfig
     scripts: List[ScriptConfig]
     output: OutputConfig
+    rounds: List[RoundConfig] = field(default_factory=list)  # <-- NEW
+
+
+# ----------------- helpers ----------------- #
 
 def _expand_path(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
@@ -167,7 +234,7 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
                 type=parser_block["type"],
                 file=parser_block["file"],
                 metrics=metrics_cfg,
-                parser_script=parser_block.get("parser_script"),  # <--- optional
+                parser_script=parser_block.get("parser_script"),
             )
 
         scripts.append(
@@ -190,12 +257,46 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
         )
     )
 
+    # ---- rounds (optional) ----
+    rounds_cfg: List[RoundConfig] = []
+    for r in data.get("rounds", []):
+        # search block (required for each round)
+        search_block = r.get("search")
+        search_cfg: RoundSearchConfig | None = None
+        if search_block is not None:
+            search_cfg = RoundSearchConfig(
+                metric=search_block["metric"],
+                objective=search_block["objective"],
+                select=search_block.get("select"),
+            )
+
+        # propagate block (optional)
+        propagate_block = r.get("propagate")
+        propagate_cfg: RoundPropagateConfig | None = None
+        if propagate_block is not None:
+            propagate_cfg = RoundPropagateConfig(
+                vars=propagate_block.get("vars", []),
+            )
+
+        rounds_cfg.append(
+            RoundConfig(
+                name=r["name"],
+                description=r.get("description"),
+                sweep_vars=r.get("sweep_vars", []),
+                fixed_overrides=r.get("fixed_overrides", {}),
+                repetitions=r.get("repetitions"),
+                search=search_cfg,
+                propagate=propagate_cfg,
+            )
+        )
+
     cfg = GenericBenchmarkConfig(
         benchmark=benchmark,
         vars=vars_cfg,
         command=command,
         scripts=scripts,
         output=output,
+        rounds=rounds_cfg,
     )
 
     validate_generic_config(cfg)
@@ -211,8 +312,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if not cfg.benchmark.workdir.is_dir():
         raise ConfigValidationError("benchmark.workdir must be a directory")
     if cfg.benchmark.repetitions is not None and cfg.benchmark.repetitions < 1:
-        raise ConfigValidationError("benchmark.repetitions must be >= 1")       
-    
+        raise ConfigValidationError("benchmark.repetitions must be >= 1")
 
     # ---- vars ----
     if not cfg.vars:
@@ -230,7 +330,11 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
 
         if v.sweep:
             if v.sweep.mode == "range":
-                if v.sweep.start is None or v.sweep.end is None or v.sweep.step is None:
+                if (
+                    v.sweep.start is None
+                    or v.sweep.end is None
+                    or v.sweep.step is None
+                ):
                     raise ConfigValidationError(
                         f"var '{name}' with mode 'range' must have start, end, and step"
                     )
@@ -264,7 +368,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
 
         # post is OPTIONAL – only validate if present
         if s.post is not None:
-            # your choice: allow empty script or not
             if not s.post.script or not s.post.script.strip():
                 raise ConfigValidationError(
                     f"script '{s.name}' has a 'post' block but empty 'script'"
@@ -281,14 +384,9 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"script '{s.name}' parser.file must not be empty"
                 )
             if not s.parser.metrics and s.parser.parser_script is None:
-                # if you have no metrics, you *should* have a custom script;
-                # if you don't have custom script, you *should* define metrics
                 raise ConfigValidationError(
                     f"script '{s.name}' parser must define either metrics or parser_script"
                 )
-
-            # parser_script is OPTIONAL: no error if None
-            # if present, you might want to check it's not empty:
             if s.parser.parser_script is not None and not s.parser.parser_script.strip():
                 raise ConfigValidationError(
                     f"script '{s.name}' parser.parser_script is empty"
@@ -299,3 +397,63 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError("output.csv.path must not be empty")
     if not cfg.output.csv.include:
         raise ConfigValidationError("output.csv.include must not be empty")
+
+    # ---- rounds (optional) ----
+    # If no rounds: that's fine, you can keep current “single global matrix” behaviour.
+    for rnd in cfg.rounds:
+        if not rnd.name:
+            raise ConfigValidationError("Each round must have a non-empty 'name'")
+
+        # sweep_vars: at least one var if you define the round
+        if not rnd.sweep_vars:
+            raise ConfigValidationError(
+                f"round '{rnd.name}' must define a non-empty 'sweep_vars' list"
+            )
+
+        # sweep_vars must all exist in cfg.vars
+        for vname in rnd.sweep_vars:
+            if vname not in cfg.vars:
+                raise ConfigValidationError(
+                    f"round '{rnd.name}' references unknown sweep var '{vname}'"
+                )
+
+        # fixed_overrides vars must exist in cfg.vars as well
+        for vname in rnd.fixed_overrides.keys():
+            if vname not in cfg.vars:
+                raise ConfigValidationError(
+                    f"round '{rnd.name}' fixed_overrides references unknown var '{vname}'"
+                )
+
+        # repetitions per round (optional, but if present must be >=1)
+        if rnd.repetitions is not None and rnd.repetitions < 1:
+            raise ConfigValidationError(
+                f"round '{rnd.name}' repetitions must be >= 1"
+            )
+
+        # search block is strongly recommended / basically required
+        if rnd.search is None:
+            raise ConfigValidationError(
+                f"round '{rnd.name}' must define a 'search' block"
+            )
+
+        if not rnd.search.metric:
+            raise ConfigValidationError(
+                f"round '{rnd.name}' search.metric must not be empty"
+            )
+
+        if rnd.search.objective not in ("max", "min"):
+            raise ConfigValidationError(
+                f"round '{rnd.name}' search.objective must be 'max' or 'min'"
+            )
+
+        # propagate vars (if defined) must also exist in cfg.vars
+        if rnd.propagate is not None:
+            if not rnd.propagate.vars:
+                raise ConfigValidationError(
+                    f"round '{rnd.name}' propagate.vars must not be empty if propagate is defined"
+                )
+            for vname in rnd.propagate.vars:
+                if vname not in cfg.vars:
+                    raise ConfigValidationError(
+                        f"round '{rnd.name}' propagate references unknown var '{vname}'"
+                    )
