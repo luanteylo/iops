@@ -1,0 +1,107 @@
+benchmark:
+  name: "IOR Benchmark"
+  description: "A benchmark to measure I/O performance using the IOR tool."
+  workdir: "/home/luan/workdir/"
+  sqlite_db: "/home/luan/iops.db"
+  repetitions: 4 # global repetitions for each test case. It is ignored when rounds has its own value
+  search_method: "exhaustive" # used to define the policy for test execution selection
+
+
+vars:
+  # Swept variables (global definition)
+  nodes:
+    type: int
+    sweep:
+      mode: range           # range | list
+      start: 1
+      end: 4
+      step: 1
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [8]
+
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [8]
+
+  block_size_mb:
+    type: int
+    expr: "(volume_size_gb * 1024) / (nodes * processes_per_node)"
+  
+  summary_file:
+    type: str
+    expr: "{{ workdir }}/summary_{{ execution_id }}.json"
+
+
+command:
+  template: >
+    mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1
+    ior -w -b {{ block_size_mb }}mb -t 1m
+    -O summaryFile={{summary_file}} -O summaryFormat=JSON
+    -o /beegfs/output.ior
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+    volume_size_gb: "{{ volume_size_gb }}"
+    block_size_mb: "{{ block_size_mb }}"
+    total_data_size: "{{ volume_size_gb }}"
+
+scripts:
+  - name: "slurm_mpi"
+    mode: "slurm"
+    submit: "sbatch"
+
+    script_template: |
+      #!/bin/bash
+      #SBATCH --job-name=ior_benchmark
+      #SBATCH --output=ior_benchmark_%j.out
+      #SBATCH --error=ior_benchmark_%j.err
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=01:00:00
+      #SBATCH --account=default
+
+      module load mpi
+      module load ior
+
+      {{ command.template }}      
+     
+
+    post:
+      script: |
+        #!/bin/bash
+        echo "Job completed. Summary file located at {{ summary_file }}"
+
+    parser:
+      type: "json"
+      file: "{{ summary_file }}"
+      metrics:
+        - name: "write_bandwidth"
+          path: "results[0].bw_MiB"
+      parser_script: |
+        import json, sys
+        with open(sys.argv[1], "r") as f:
+            data = json.load(f)
+        print(data["results"][0]["bw_MiB"])
+
+output:
+  csv:
+    path: "{{ workdir }}/results.csv"
+    include:
+      - "benchmark.name"
+      - "nodes"
+      - "processes_per_node"
+      - "block_size_mb"
+      - "ost_path"
+      - "total_data_size"
+      - "write_bandwidth"
+
+
+    
+

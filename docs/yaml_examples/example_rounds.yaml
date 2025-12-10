@@ -108,7 +108,7 @@ rounds:
   # Round 1: sweep only `nodes`, keep others fixed.
   - name: "nodes_sweep"
     description: "Find best nodes by write bandwidth."
-    sweep_vars: ["nodes"]           # which vars from `vars` are swept in this round
+    sweep_vars: ["nodes", "processes_per_node"]           # which vars from `vars` are swept in this round
     fixed_overrides:                # optional: override defaults for some vars
       block_size_mb: 16
       processes_per_node: 16
@@ -122,3 +122,9 @@ rounds:
   - name: "volume_size_sweep"
     description: "Find best volume size by write bandwidth."
     sweep_vars: ["volume_size_gb"]
+    repetitions: 3
+    search:
+      metric: "write_bandwidth"
+      objective: "max"
+    
+

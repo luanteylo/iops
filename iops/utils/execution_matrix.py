@@ -1,5 +1,3 @@
-# iops/utils/execution_matrix.py
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -188,52 +186,307 @@ def _choose_default_value(name: str, vcfg: VarConfig) -> Any:
 class ExecutionInstance:
     """
     Fully materialized instance of a benchmark execution.
-    Contains everything needed to submit/run one test.
+
+    IMPORTANT:
+    - All Jinja rendering is done lazily via @property.
+    - The planner is allowed to modify at runtime:
+        * self.base_vars (for swept/fixed vars)
+        * self.workdir
+        * self.metadata (e.g., metadata["repetition"], metrics, etc.)
+      and all properties (command, env, script_text, derived vars, etc.)
+      will re-render using the current state.
     """
+
     execution_id: int
+
+    # Optional: per-instance default repetition index (0- or 1-based, as you prefer)
+    # The planner can still override via metadata["repetition"].
+    repetition: int = 0
 
     # Round-level metadata
     round_name: Optional[str] = None
     round_index: Optional[int] = None
     repetitions: int = 1
+
     search_metric: Optional[str] = None
     search_objective: Optional[str] = None
 
     # Benchmark-level
     benchmark_name: str = ""
-    benchmark_description: str | None = None
+    benchmark_description: Optional[str] = None
     workdir: Path = Path(".")
 
-    # Variables (swept + derived)
-    vars: Dict[str, Any] = field(default_factory=dict)
+    # Variables:
+    #   - base_vars: swept and fixed scalar vars (no expr).
+    #   - derived_var_cfgs: name -> (expr, vartype) for derived vars.
+    base_vars: Dict[str, Any] = field(default_factory=dict)
+    derived_var_cfgs: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
-    # Command (already rendered)
-    command: str = ""
-
-    # Environment for this command (already rendered)
-    env: Dict[str, str] = field(default_factory=dict)
-
-    # Script metadata
-    script_name: str = ""
-    script_mode: str = ""
-    submit_cmd: str = ""
-    script_text: str = ""
-
-    # Optional post-processing
-    post_script: str | None = None
-
-    # Parser information (per execution)
-    parser: ParserConfig | None = None
-
-    # Command metadata (already rendered)
+    # Runtime metadata (for planner / execution use, e.g. "repetition", "result", etc.)
+    # This is NOT templated; it is just data that can be used in the Jinja context.
     metadata: Dict[str, Any] = field(default_factory=dict)
-
-    # Output configuration (per execution)
-    output_csv_path: Path | None = None
-    output_csv_fields: List[str] = field(default_factory=list)
 
     # Optional: DB path (if you want it here)
     sqlite_db: Path | None = None
+
+    # ---------- Template fields (stored from cfg, rendered lazily) ---------- #
+
+    # Command template and env/metadata templates
+    command_template: str = ""
+    env_templates: Dict[str, Any] = field(default_factory=dict)
+    metadata_templates: Dict[str, Any] = field(default_factory=dict)
+
+    # Script metadata
+    script_name: str = ""
+    script_template: str = ""
+    submit_cmd_template: str = ""
+
+    # Optional post-processing script template
+    post_script_template: str | None = None
+
+    # Parser template (with possibly templated .file)
+    parser_template: ParserConfig | None = None
+
+    # Output configuration (template)
+    csv_path_template: str | None = None
+    output_csv_fields: List[str] = field(default_factory=list)
+
+    # ---------- Internal helpers for vars & context ---------- #
+
+    def _base_context_for_vars(self) -> Dict[str, Any]:
+        """
+        Context used when computing derived vars.
+        Does NOT include the final 'vars' mapping yet.
+        """
+        ctx: Dict[str, Any] = {
+            "benchmark": {
+                "name": self.benchmark_name,
+                "description": self.benchmark_description,
+                "workdir": str(self.workdir),
+            },
+            "workdir": str(self.workdir),
+            "execution_id": self.execution_id,
+            "repetitions": self.repetitions,
+            "round_name": self.round_name,
+            "round_index": self.round_index,
+        }
+
+        # metadata (dynamic, including repetition, results, etc.)
+        ctx["metadata"] = self.metadata
+
+        # convenience: expose repetition
+        # metadata["repetition"] overrides the instance-level repetition field
+        if "repetition" in self.metadata:
+            ctx["repetition"] = self.metadata["repetition"]
+        else:
+            ctx["repetition"] = self.repetition
+
+        return ctx
+
+    def _compute_all_vars(self) -> Dict[str, Any]:
+        """
+        Compute full vars dict = base_vars + derived vars, lazily.
+
+        Derived vars can depend on:
+        - benchmark/workdir/execution_id
+        - base_vars
+        - previously computed derived vars (in definition order)
+        - metadata (including repetition)
+        """
+        ctx0 = self._base_context_for_vars()
+        all_vars: Dict[str, Any] = dict(self.base_vars)
+
+        # derived_var_cfgs preserves insertion order (from build_execution_matrix)
+        for name, (expr, vartype) in self.derived_var_cfgs.items():
+            if not expr:
+                raise ConfigValidationError(
+                    f"Derived variable '{name}' must define 'expr'."
+                )
+            val = _eval_expr(expr, vartype, {**ctx0, **all_vars})
+            all_vars[name] = val
+
+        return all_vars
+
+    def _render_context(self) -> Dict[str, Any]:
+        """
+        Build the full context used for all Jinja rendering.
+
+        This context includes:
+        - benchmark.* information
+        - workdir
+        - execution_id
+        - repetitions
+        - round_name / round_index
+        - flattened vars ({{ my_var }})
+        - vars mapping ({{ vars.my_var }})
+        - metadata
+        - repetition (from metadata or instance field)
+        """
+        ctx0 = self._base_context_for_vars()
+        all_vars = self._compute_all_vars()
+
+        ctx: Dict[str, Any] = {
+            **ctx0,
+            **all_vars,
+        }
+        ctx["vars"] = all_vars
+
+        return ctx
+
+    # ---------- Exposed vars property (read-only union) ---------- #
+
+    @property
+    def vars(self) -> Dict[str, Any]:
+        """
+        Public view of all variables (base + derived), evaluated lazily.
+        """
+        return self._compute_all_vars()
+
+    # ---------- Lazy-rendered properties ---------- #
+
+    @property
+    def command(self) -> str:
+        """
+        Render the command from command_template and the current context.
+        """
+        if not self.command_template:
+            return ""
+        ctx = self._render_context()
+        return _render_template(self.command_template, ctx)
+
+    @property
+    def env(self) -> Dict[str, str]:
+        """
+        Render the environment variables from env_templates and the current context.
+        """
+        ctx = self._render_context()
+        rendered: Dict[str, str] = {}
+        for k, v in self.env_templates.items():
+            if isinstance(v, str):
+                rendered[k] = _render_template(v, ctx)
+            else:
+                rendered[k] = str(v)
+        return rendered
+
+    @property
+    def command_metadata(self) -> Dict[str, Any]:
+        """
+        Render metadata from metadata_templates and merge with runtime metadata.
+        Runtime metadata overwrites template-based keys.
+        """
+        ctx = self._render_context()
+        rendered: Dict[str, Any] = {}
+        for k, v in self.metadata_templates.items():
+            if isinstance(v, str):
+                rendered[k] = _render_template(v, ctx)
+            else:
+                rendered[k] = v
+        # runtime metadata has priority
+        rendered.update(self.metadata)
+        return rendered
+
+    @property
+    def output_csv_path(self) -> Optional[Path]:
+        """
+        Render the CSV output path from csv_path_template.
+        """
+        if not self.csv_path_template:
+            return None
+        ctx = self._render_context()
+        csv_str = _render_template(self.csv_path_template, ctx)
+        return Path(csv_str)
+
+    @property
+    def submit_cmd(self) -> str:
+        """
+        Render the submit command (e.g., sbatch ...) if templated.
+        """
+        if not self.submit_cmd_template:
+            return ""
+        ctx = self._render_context()
+        return _render_template(self.submit_cmd_template, ctx)
+
+    @property
+    def script_text(self) -> str:
+        """
+        Render the main script text from script_template, using:
+        - {{ vars.* }}
+        - {{ command }}
+        - {{ command_env }}
+        - {{ command_metadata }}
+        - plus the standard context.
+        """
+        if not self.script_template:
+            return ""
+
+        base_ctx = self._render_context()
+
+        # Provide command object with "template" attribute = rendered command
+        command_obj = type("CmdObj", (), {})()
+        setattr(command_obj, "template", self.command)
+
+        script_ctx = {
+            **base_ctx,
+            "vars": self.vars,
+            "command": command_obj,
+            "command_env": self.env,
+            "command_metadata": self.command_metadata,
+        }
+
+        return _render_template(self.script_template, script_ctx)
+
+    @property
+    def post_script(self) -> Optional[str]:
+        """
+        Render the optional post-processing script (if any).
+        """
+        if not self.post_script_template:
+            return None
+
+        base_ctx = self._render_context()
+
+        command_obj = type("CmdObj", (), {})()
+        setattr(command_obj, "template", self.command)
+
+        script_ctx = {
+            **base_ctx,
+            "vars": self.vars,
+            "command": command_obj,
+            "command_env": self.env,
+            "command_metadata": self.command_metadata,
+        }
+
+        return _render_template(self.post_script_template, script_ctx)
+
+    @property
+    def parser(self) -> Optional[ParserConfig]:
+        """
+        Build (and render) a ParserConfig from parser_template.
+        Only 'file' is treated as templated; metrics paths are taken as-is.
+        """
+        if self.parser_template is None:
+            return None
+
+        ctx = self._render_context()
+
+        file_template = self.parser_template.file
+        if isinstance(file_template, str):
+            file_rendered = _render_template(file_template, ctx)
+        else:
+            file_rendered = str(file_template)
+
+        metrics: List[MetricConfig] = []
+        for m in self.parser_template.metrics:
+            metrics.append(MetricConfig(name=m.name, path=m.path))
+
+        return ParserConfig(
+            type=self.parser_template.type,
+            file=file_rendered,
+            metrics=metrics,
+            parser_script=self.parser_template.parser_script,
+        )
+
+    # ---------- Human-readable representations ---------- #
 
     def short_label(self) -> str:
         """
@@ -250,62 +503,73 @@ class ExecutionInstance:
         """
         lines: list[str] = []
 
+        lines.append(70 * "-")
+
         # Header
         if self.round_name is not None:
             lines.append(
                 f"Execution #{self.execution_id} — {self.benchmark_name} "
                 f"(round={self.round_name})"
+                f"(repetition={self.repetition})"
             )
         else:
-            lines.append(f"Execution #{self.execution_id} — {self.benchmark_name}")
+            lines.append(f"Execution #{self.execution_id}/{self.repetition} — {self.benchmark_name}")
 
         # Vars (sorted for stability)
-        if self.vars:
+        vars_map = self.vars
+        if vars_map:
             vars_str = ", ".join(
-                f"{k}={self.vars[k]!r}"
-                for k in sorted(self.vars)
+                f"{k}={vars_map[k]!r}"
+                for k in sorted(vars_map)
             )
-            lines.append(f"  Vars     : {vars_str}")
+            lines.append(f"Vars: {vars_str}")
 
-        # Command (compact)
-        if self.command:
-            cmd = self.command.replace("\n", " ").strip()
-            if len(cmd) > 120:
-                cmd = cmd[:117] + "..."
-            lines.append(f"  Command  : {cmd}")
+        # Command (compact, rendered lazily)
+        cmd = self.command.replace("\n", " ").strip()
+        if cmd:
+            lines.append(f"Command: {cmd}")
 
         # Script info
         lines.append(
-            f"  Script   : {self.script_name} "
-            f"(mode={self.script_mode}, submit={self.submit_cmd})"
+            f"Script   : {self.script_name} "
+            f"(submit={self.submit_cmd})"
         )
 
         # Repetitions / search
-        lines.append(f"  Repeats  : {self.repetitions}")
+        lines.append(f"Repeats: {self.repetitions}")
         if self.search_metric and self.search_objective:
-            lines.append(
-                f"  Search   : {self.search_objective} {self.search_metric}"
-            )
+            lines.append(f"Search: {self.search_objective} {self.search_metric}")
+
+        # Metadata (rendered)
+        effective_metadata = self.command_metadata
+        if effective_metadata:
+            meta_items = ", ".join(f"{k}={v!r}" for k, v in effective_metadata.items())
+            lines.append(f"Metadata: {meta_items}")
 
         # Output
         if self.output_csv_path:
-            lines.append(f"  Output   : {self.output_csv_path}")
+            lines.append(f"Output: {self.output_csv_path}")
 
         # Parser
-        if self.parser:
-            metric_names = [m.name for m in self.parser.metrics]
+        parser_obj = self.parser
+        if parser_obj:
+            metric_names = [m.name for m in parser_obj.metrics]
             metrics_str = ", ".join(metric_names) if metric_names else "custom"
             lines.append(
-                f"  Parser   : type={self.parser.type}, metrics={metrics_str}"
+                f"Parser: type={parser_obj.type}, file={parser_obj.file}, "
+                f"metrics={metrics_str}"
             )
+
+        lines.append(70 * "-")
 
         return "\n".join(lines)
 
     def describe(self) -> str:
         """
         Verbose, multi-section representation for DEBUG logs.
+        Everything rendered lazily with current state.
         """
-        sep_start = "#" * 80
+        sep_start = sep_end = "#" * 80
         sep = "-" * 80
         lines: list[str] = [
             sep_start,
@@ -313,35 +577,38 @@ class ExecutionInstance:
             f"Benchmark : {self.benchmark_name}",
             f"Round     : {self.round_name} (idx={self.round_index})",
             f"Workdir   : {self.workdir}",
-            f"Repetitions: {self.repetitions}",
+            f"Repetitions: {self.repetition}/{self.repetitions}",            
             f"SQLite DB : {self.sqlite_db}",
             sep,
             "Variables:",
         ]
 
-        for k in sorted(self.vars):
-            lines.append(f"  {k} = {self.vars[k]!r}")
+        vars_map = self.vars
+        for k in sorted(vars_map):
+            lines.append(f"  {k} = {vars_map[k]!r}")
 
         lines.extend([
             sep,
             "Command:",
             self.command,
             sep,
-            f"Script ({self.script_name}, mode={self.script_mode}):",
+            f"Script ({self.script_name}):",
             self.script_text,
         ])
 
         if self.post_script:
             lines.extend([sep, "Post-script:", self.post_script])
 
-        if self.env:
+        env_rendered = self.env
+        if env_rendered:
             lines.extend([sep, "Environment:"])
-            for k, v in self.env.items():
+            for k, v in env_rendered.items():
                 lines.append(f"  {k}={v}")
 
-        if self.metadata:
+        effective_metadata = self.command_metadata
+        if effective_metadata:
             lines.extend([sep, "Metadata:"])
-            for k, v in self.metadata.items():
+            for k, v in effective_metadata.items():
                 lines.append(f"  {k}: {v}")
 
         if self.output_csv_path:
@@ -350,6 +617,22 @@ class ExecutionInstance:
                 f"Output CSV : {self.output_csv_path}",
                 f"Fields     : {', '.join(self.output_csv_fields)}",
             ])
+
+        parser_obj = self.parser
+        if parser_obj:
+            lines.extend([
+                sep,
+                "Parser:",
+                f"  type        : {parser_obj.type}",
+                f"  file        : {parser_obj.file}",
+                "  metrics     :",
+            ])
+            for m in parser_obj.metrics:
+                lines.append(f"    - {m.name} @ {m.path}")
+            if parser_obj.parser_script:
+                lines.append(f"  parser_script: {parser_obj.parser_script}")
+
+        lines.append(sep_end)
 
         return "\n".join(lines)
 
@@ -393,9 +676,14 @@ def build_execution_matrix(
     start_execution_id: int = 0,
 ) -> List[ExecutionInstance]:
     """
-    Build the Cartesian product of swept variables for a given round,
-    evaluate derived vars, render command/script/post/parser/output
-    for each combination, and return a list of ExecutionInstance objects.
+    Build the Cartesian product of swept variables for a given round
+    and return a list of ExecutionInstance objects.
+
+    IMPORTANT:
+    - No Jinja rendering is done here.
+      All templates (command, env, metadata, scripts, parser, CSV path,
+      and derived variable expressions) are stored in the ExecutionInstance
+      and rendered lazily via @property.
 
     Behaviour:
 
@@ -502,6 +790,23 @@ def build_execution_matrix(
         search_metric = round_cfg.search.metric
         search_objective = round_cfg.search.objective
 
+    # Pre-pack derived var cfgs as name -> (expr, type)
+    derived_var_cfgs: Dict[str, Tuple[str, str]] = {}
+    for name, vcfg in derived_vars:
+        if not vcfg.expr:
+            raise ConfigValidationError(
+                f"Derived variable '{name}' must define 'expr'."
+            )
+        derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
+
+    # Command/env/metadata templates from cfg
+    command_template = cfg.command.template
+    env_templates = dict(cfg.command.env) if cfg.command.env else {}
+    metadata_templates = dict(cfg.command.metadata) if cfg.command.metadata else {}
+
+    # CSV path template
+    csv_path_template = cfg.output.csv.path
+
     for combo in sweep_values_product:
         exec_id += 1
 
@@ -509,103 +814,36 @@ def build_execution_matrix(
         swept_assignment = dict(zip(sweep_names, combo))
 
         # Combine with fixed scalar vars
-        all_scalar_base = {**fixed_scalars, **swept_assignment}
+        base_vars = {**fixed_scalars, **swept_assignment}
 
-        # Base context: benchmark + execution_id + scalar vars
-        base_ctx: Dict[str, Any] = {
-            "benchmark": {
-                "name": cfg.benchmark.name,
-                "description": cfg.benchmark.description,
-                "workdir": str(cfg.benchmark.workdir),
-            },
-            "workdir": str(cfg.benchmark.workdir),
-            "execution_id": exec_id,
-            **all_scalar_base,
-        }
-
-        # 1) Compute derived vars
-        derived_values: Dict[str, Any] = {}
-        for name, vcfg in derived_vars:
-            if not vcfg.expr:
-                raise ConfigValidationError(
-                    f"Derived variable '{name}' must define 'expr'."
-                )
-            value = _eval_expr(vcfg.expr, vcfg.type, {**base_ctx, **derived_values})
-            derived_values[name] = value
-
-        # Merge all vars into one mapping
-        all_vars = {**all_scalar_base, **derived_values}
-
-        # Updated context including derived vars
-        full_ctx = {**base_ctx, **derived_values}
-
-        # 2) Render command template
-        command_str = _render_template(cfg.command.template, full_ctx)
-
-        # 3) Render command env
-        env_rendered: Dict[str, str] = {}
-        for k, v in cfg.command.env.items():
-            if isinstance(v, str):
-                env_rendered[k] = _render_template(v, full_ctx)
-            else:
-                env_rendered[k] = str(v)
-
-        # 4) Render metadata
-        metadata_rendered: Dict[str, Any] = {}
-        for k, v in cfg.command.metadata.items():
-            if isinstance(v, str):
-                metadata_rendered[k] = _render_template(v, full_ctx)
-            else:
-                metadata_rendered[k] = v
-
-        # 5) Render output CSV path
-        csv_path_str = _render_template(cfg.output.csv.path, full_ctx)
-        csv_path = Path(csv_path_str)
-
-        # 6) For each script, build an ExecutionInstance
+        # For each script, build an ExecutionInstance with templates and var configs
         for script_cfg in cfg.scripts:
-            # provide 'command.template' to the script
-            command_obj = type("CmdObj", (), {})()
-            setattr(command_obj, "template", command_str)
+            # Script templates
+            script_template = script_cfg.script_template
+            submit_cmd_template = script_cfg.submit
 
-            script_ctx = {
-                **full_ctx,
-                "vars": all_vars,
-                "command": command_obj,
-                "command_env": env_rendered,
-                "command_metadata": metadata_rendered,
-            }
-
-            # Script text
-            script_text = _render_template(script_cfg.script_template, script_ctx)
-
-            # Optional post script
-            post_script_rendered = None
+            # Optional post script template
+            post_script_template = None
             if script_cfg.post and script_cfg.post.script:
-                post_script_rendered = _render_template(
-                    script_cfg.post.script, script_ctx
-                )
+                post_script_template = script_cfg.post.script
 
-            # Optional parser
-            parser_instance: ParserConfig | None = None
+            # Parser template (store as-is; we'll render .file lazily)
+            parser_template: ParserConfig | None = None
             if script_cfg.parser is not None:
-                parser_file_rendered = _render_template(
-                    script_cfg.parser.file, script_ctx
-                )
-
                 metrics: List[MetricConfig] = []
                 for m in script_cfg.parser.metrics:
                     metrics.append(MetricConfig(name=m.name, path=m.path))
 
-                parser_instance = ParserConfig(
+                parser_template = ParserConfig(
                     type=script_cfg.parser.type,
-                    file=parser_file_rendered,
+                    file=script_cfg.parser.file,
                     metrics=metrics,
                     parser_script=script_cfg.parser.parser_script,
                 )
 
             exec_instance = ExecutionInstance(
                 execution_id=exec_id,
+                repetition=0,  # planner will set metadata["repetition"] per run
                 round_name=getattr(round_cfg, "name", None) if round_cfg else None,
                 round_index=round_idx,
                 repetitions=repetitions,
@@ -615,17 +853,19 @@ def build_execution_matrix(
                 benchmark_description=cfg.benchmark.description,
                 workdir=cfg.benchmark.workdir,
                 sqlite_db=getattr(cfg.benchmark, "sqlite_db", None),
-                vars=all_vars,
-                command=command_str,
-                env=env_rendered,
+                base_vars=base_vars,
+                derived_var_cfgs=derived_var_cfgs,
+                # runtime metadata starts empty; planner may fill it (e.g., repetition, metrics)
+                metadata={},
+                command_template=command_template,
+                env_templates=env_templates,
+                metadata_templates=metadata_templates,
                 script_name=script_cfg.name,
-                script_mode=script_cfg.mode,
-                submit_cmd=script_cfg.submit,
-                script_text=script_text,
-                post_script=post_script_rendered,
-                parser=parser_instance,
-                metadata=metadata_rendered,
-                output_csv_path=csv_path,
+                script_template=script_template,
+                submit_cmd_template=submit_cmd_template,
+                post_script_template=post_script_template,
+                parser_template=parser_template,
+                csv_path_template=csv_path_template,
                 output_csv_fields=list(cfg.output.csv.include),
             )
 

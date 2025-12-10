@@ -1,5 +1,8 @@
-from pathlib import Path
+
 from iops.utils.logger import HasLogger
+from iops.utils.generic_config import GenericBenchmarkConfig
+
+
 from abc import ABC, abstractmethod
 import subprocess
 import psutil
@@ -11,7 +14,7 @@ from enum import Enum
 
 
 
-class BaseExecutor(ABC):
+class BaseExecutor(ABC, HasLogger):
     """
     Abstract base class for all execution environments (e.g., SLURM, local).
     """
@@ -29,17 +32,17 @@ class BaseExecutor(ABC):
         return decorator
 
     @classmethod
-    def build(cls, name: str, config) -> "BaseExecutor":
-        executor_cls = cls._registry.get(name.lower())
+    def build(cls, cfg: GenericBenchmarkConfig) -> "BaseExecutor":
+        executor_cls = cls._registry.get(cfg.benchmark.executor.lower())
         if executor_cls is None:
-            raise ValueError(f"Executor '{name}' is not registered.")
-        return executor_cls(config)
+            raise ValueError(f"Executor '{cfg.benchmark.executor.lower()}' is not registered.")
+        return executor_cls(cfg)
 
-    def __init__(self, config):
+    def __init__(self, cfg: GenericBenchmarkConfig):
         """
         Initialize executor with configuration.
         """
-        self.config = config
+        self.cfg = cfg
         self.last_status = None
 
     @abstractmethod
@@ -95,12 +98,9 @@ class BaseExecutor(ABC):
             "__end": None,
             "__error": None
         }
-    
-   
-
 
 @BaseExecutor.register("local")
-class LocalExecutor(BaseExecutor, HasLogger):
+class LocalExecutor(BaseExecutor):
     """
     Executor for simulating local benchmark jobs.
     """

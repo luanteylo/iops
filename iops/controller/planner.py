@@ -1,80 +1,17 @@
-from typing import Dict, Any
-from iops.utils.config_loader import IOPSConfig
+
 from iops.utils.logger import HasLogger
-
-
-from abc import ABC
-from dataclasses import dataclass
-from typing import Dict, Any, List, Iterator, List, Optional
-import random
+from iops.utils.generic_config import GenericBenchmarkConfig
+from iops.utils.execution_matrix import ExecutionInstance, build_execution_matrix
+from typing import List, Any
+from abc import ABC, abstractmethod
 from pathlib import Path
-from itertools import product
-from collections import deque
-import numpy as np
-import os
-import re
-
-from smt.surrogate_models import KRG
-from scipy.stats import norm
-
-
-
-
-
-@dataclass
-class Phase:
-    """
-    Represents a phase of the sweep with a single parameter being optimized.
-    """    
-    sweep_param: str # The parameter being swept (e.g., "volume", "nodes", "all")
-    values: List[Any] # Possible values for the sweep parameter
-    params: Dict[str, Any]  # Fixed parameters (or default values) for the phase
-    meta_params: Dict[str, Any] = None  # Metadata parameters used by the IOPS framework
-  
-    phase_best_param: Dict[str, Any] = None  # Best parameters found in this phase
-    phase_best_result: Dict[str, Any] = None  # Best result found in this phase
-
-
-
-    
 
 class BasePlanner(ABC):
     _registry = {}
 
-    def __init__(self, config: IOPSConfig, benchmark):
-        self.config = config
-        self.benchmark = benchmark
-        self.tests = list(config.execution.tests)  # List of parameter names to sweep
-        self.phase_index = 0  # Phase index
-        self.test_index = 0  # Index for the current combination within the phase
-
-        self.current_phase: Phase | None = None  # Current phase being processed
-        self.all_phases: List[Phase] = []  # All phases created during the sweep
-        self.current_best: Dict[str, Any] = {}  # Best parameter found so far
-
-        self.current_combinations: Iterator[Dict[str, Any]] = iter([])
-        self._next_combo: Dict[str, Any] | None = None
-
-
-    def next_phase(self) -> Phase:
-        raise NotImplementedError("This method should be implemented in subclasses.")
+    def __init__(self, cfg: GenericBenchmarkConfig):
+        self.cfg = cfg        
     
-    def update_phase(self, param: Dict[str, Any], result) -> None:
-        """
-        Updates the current phase with the best parameters and result found.
-        """
-        self.current_phase.phase_best_param = param
-        self.current_phase.phase_best_result = result
-        self.current_best = param
-    
-    def record_result(self, param: Dict[str, Any], result: Any) -> None:
-        """
-        Records the result of a test.
-        This method can be overridden in subclasses to implement custom behavior.
-        """
-        pass
-
-
     @classmethod
     def register(cls, name):
         def decorator(subclass):
@@ -83,431 +20,205 @@ class BasePlanner(ABC):
         return decorator
     
     @classmethod
-    def build(cls, name: str, config, benchmark) -> "BasePlanner":
+    def build(cls, cfg) -> "BasePlanner":
+        name = cfg.benchmark.search_method
         executor_cls = cls._registry.get(name.lower())
         if executor_cls is None:
             raise ValueError(f"Executor '{name}' is not registered.")
-        return executor_cls(config, benchmark)
-
-    @classmethod   
-    def generate_combinations(cls, phase: Phase) -> Iterator[Dict[str, Any]]:
-        """
-        Generates all test parameter combinations for a phase,
-        assigning a test ID.
-        This method should be overridden in subclasses.
-        """
-        raise NotImplementedError("This method should be implemented in subclasses.")
-    
-    @classmethod
-    def next_combination(cls) -> Dict[str, Any]:
-        """
-        Returns a dictionary with the next parameter combination to test.
-        This method should be overridden in subclasses.
-        """
-        raise NotImplementedError("This method should be implemented in subclasses.")
-   
-
-
-@BasePlanner.register("greedy")
-class Greedy(BasePlanner, HasLogger):
-    """
-    A brute-force planner that exhaustively searches the parameter space    
-    """
-
-    def __init__(self, config: IOPSConfig, benchmark):
-        super().__init__(config, benchmark)
-
-
-    def has_next_phase(self) -> bool:
-        return self.phase_index < len(self.tests)
-
-    def next_phase(self):
-        """
-        Creates the next phase of the sweep based on the current index.
-        # 
-        """
-
-        if self.current_phase is not None:
-            self.all_phases.append(self.current_phase)
-        
-
-        sweep_param = self.tests[self.phase_index]
-
-        self.current_phase = self.benchmark.build_phase(sweep_param=sweep_param, 
-                                           params=self.current_best)
-        
-        self.logger.debug(f"Current phase: {self.current_phase}")   
-
-        # update meta parameters for the phase
-        self.current_phase.meta_params = {
-            "__phase_index": self.phase_index,
-            "__phase_folder": str(self.config.execution.workdir / f"{self.current_phase.sweep_param}_{self.phase_index}"),
-            "__phase_repetitions": self.config.execution.repetitions,
-            "__phase_sweep_param": sweep_param,   
-            "__test_output": None, 
-            "__test_script": None,
-            "__test_index": None,       
-            "__test_folder": None,  
-            "__test_repetition": None, 
-        }
-
-        # call the generate_combinations method to generate all combinations for the current phase
-        self.current_combinations = self.generate_combinations(self.current_phase)
-        self._next_combo = next(self.current_combinations, None)
-        
-        self.phase_index += 1
-        return self.current_phase
-
-    def generate_combinations(self, phase: Phase) -> Iterator[Dict[str, Any]]:
-        """
-        Generates all test parameter combinations for a phase,
-        assigning a test UID and repetition count.
-        """
-        all_combinations = []
-        sweep_param = phase.sweep_param
-
-        for value in phase.values:
-            meta_params = phase.meta_params.copy()            
-            meta_params["__test_index"] = self.test_index
-            #all_params = {**params, **phase.meta_params}  # Merge with meta parameters            
-            test_folder = Path(meta_params["__phase_folder"]) / f"test_{self.test_index}"
-            meta_params["__test_folder"] = str(test_folder)
-            for rep_index in range(meta_params.get("__phase_repetitions")):
-                parameters = phase.params.copy()  # Start with fixed parameters
-                parameters[sweep_param] = value
-                meta_params["__test_output"] = str(test_folder / f"output_{rep_index}.out")
-                meta_params["__test_script"] = str(test_folder / f"run_{rep_index}.sh")
-                meta_params["__test_repetition"] = rep_index
-
-                all_combinations.append({**parameters, **meta_params})
-            
-            self.test_index += 1
-
-        random.shuffle(all_combinations)
-        return iter(all_combinations)
-    
-    def __iter__(self):
-        while self.has_next_combination():            
-            yield self.next_combination()
-            
-    def next_combination(self) -> Dict[str, Any]:
-        """"
-        Returns the next parameter combination to test.
-        """
-        if self._next_combo is None:
-            raise StopIteration("No more combinations available.")
-        
-        next_combo = self._next_combo
-        self._next_combo = next(self.current_combinations, None)
-        return next_combo
-    
-    def has_next_combination(self) -> bool:
-        """
-        Returns True if there are more combinations to test.
-        """
-        return self._next_combo is not None
-
-
+        return executor_cls(cfg)
     
 
-@BasePlanner.register("bayesian")
-class BayesianOptimization(BasePlanner, HasLogger):
+    # get next test to run
+    @abstractmethod
+    def next_test(self) -> Any:
+        pass
+    
+
+@BasePlanner.register("exhaustive")
+class Exhaustive(BasePlanner, HasLogger):
     """
-    Planner that seeds with a 30% random initial sample (>=2 points),
-    then uses Bayesian Optimization (KRG + EI) to pick the next candidate.
-    Includes early-stopping to minimize the number of tests.
-    No fallbacks: BO must be available and trainable.
+    A brute-force planner that exhaustively searches the parameter space,
+    supports multiple rounds and repetitions.
     """
 
-    # Adjust these if your parameter names differ
-    _VOLUME_KEY = "volume"
-    _NODES_KEY = "node"
-    _OST_KEY = "ost_count"  # path like ".../folder<idx>"
-    _PP_NODE_KEY = "processes_per_node"
+    def __init__(self, cfg: GenericBenchmarkConfig):
+        super().__init__(cfg)
 
-    def __init__(self, config: "IOPSConfig", benchmark):
-        super().__init__(config, benchmark)
+        # Queue of round names (empty list if no rounds were defined)
+        self.round_queue: list[str] = [r.name for r in cfg.rounds] if cfg.rounds else []
+        self.multiple_rounds: bool = len(self.round_queue) > 0
 
-        # Queues/pools
-        self.initial_queue: deque[Dict[str, Any]] = deque()
-        self.remaining_pool: List[Dict[str, Any]] = []
-        self._buffer: Optional[Dict[str, Any]] = None
+        self.current_round: str | None = None
+        self.execution_matrix: list[Any] | None = None
+        self.current_index: int = 0
+        self.total_tests: int = 0
 
-        # Phase & combinations
-        self.current_phase = None
-        self.current_combinations: List[Dict[str, Any]] = []
+        # Single-round control flag
+        self._single_round_built: bool = False
 
-        # BO state
-        self.X: Optional[np.ndarray] = None  # (n, d)
-        self.y: Optional[np.ndarray] = None  # (n, 1)
-        self.model: Optional[KRG] = None
-        self._trained = False
+        # Repetitions per test (planner-level)       
+        self.current_rep: int = 0  # 0-based repetition index for current test
 
-        # ---- stopping params (tune or read from config) ----
-        self.max_evals = getattr(self.config.execution, "max_iterations", 150)  # hard budget
-        self.ei_tol = 1e-3           # EI threshold (absolute)
-        self.min_improve = 1e-3      # absolute improvement to reset patience
-        self.patience = 5            # no-improve patience
+        # Defaults to be used for the *next* round
+        self._defaults_for_next_round: dict[str, Any] = {}
 
-        # ---- tracking ----
-        self.n_evals = 0
-        self.best_y: Optional[float] = None
-        self.no_improve_streak = 0
-        self.random_engine = random.Random(42)  # reproducible
-
-    # ------------------ Phase generation ------------------
-
-    def has_next_phase(self) -> bool:
-        return self.phase_index == 0  # One phase only for BO
-
-    def next_phase(self):
-        sweep_param = "all"
-        self.current_phase = self.benchmark.build_phase(
-            sweep_param=self.tests,
-            params={}
+        self.logger.info(
+            "Exhaustive planner initialized. "
+            "Multiple rounds: %s; rounds=%s",
+            self.multiple_rounds,
+            self.round_queue if self.round_queue else "single round",            
         )
 
-        self.current_phase.meta_params = {
-            "__phase_index": self.phase_index,
-            "__phase_folder": str(self.config.execution.workdir / f"{sweep_param}_{self.phase_index}"),
-            "__phase_repetitions": self.config.execution.repetitions,
-            "__phase_sweep_param": sweep_param,
-            "__test_output": None,
-            "__test_script": None,
-            "__test_index": None,
-            "__test_folder": None,
-            "__test_repetition": None,
-        }
-
-        # Generate the full space of tests for this phase
-        self.current_combinations = self.generate_combinations(self.current_phase)
-        n = len(self.current_combinations)
-        if n < 2:
-            raise ValueError("BayesianOptimization requires at least 2 total candidates.")
-
-        self.phase_index = None  # only one phase
-
-        # ---- Seed split (>=2 initial points to allow model training) ----
-        sample_size = max(2, int(0.2 * n))  # ensure >= 2
-        sample_size = min(sample_size, n)   # never exceed n
-
-        all_idx = list(range(n))
-        sample_idx = set(self.random_engine.sample(all_idx, sample_size))
-        initial_sample = [self.current_combinations[i] for i in sorted(sample_idx)]
-        remaining = [self.current_combinations[i] for i in all_idx if i not in sample_idx]
-
-        self.logger.info(f"Initial sample size: {len(initial_sample)}")
-        self.logger.info(f"Remaining combinations size: {len(remaining)}")
-        self.logger.info(f"Total combinations size: {n}")
-
-        self.logger.debug(f"Initial sample index: {sample_idx}"   )
-
-        self.initial_queue = deque(initial_sample)
-        self.remaining_pool = remaining
-
-        # Prime buffer with the first seed item
-        self._buffer = self._pop_next()
-
-        return self.current_phase
-
-    def generate_combinations(self, phase) -> List[Dict[str, Any]]:
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+    def _build_next_execution_matrix(self) -> bool:
         """
-        Build all test combinations (with repetitions), assigning folders/indexes.
-        For each unique parameter combo, __test_index is constant across its repetitions.
+        Build the next execution_matrix.
+
+        Returns:
+            True if a new matrix with at least one test was built.
+            False if there are no more matrices (no more rounds / tests).
         """
-        all_combinations: List[Dict[str, Any]] = []
 
-        value_space: Dict[str, list] = phase.values or {}
-        sweep_keys = list(value_space.keys())
-        sweep_products = product(*(value_space[k] for k in sweep_keys)) if sweep_keys else [()]
+        # Case 1: multiple rounds
+        if self.multiple_rounds:
+            # reset per-matrix state
+            self.current_index = 0
+            self.current_rep = 0
+            self.execution_matrix = None
+            self.total_tests = 0
 
-        for combo in sweep_products:
-            # map sweep values to their keys
-            sweep_assignment = dict(zip(sweep_keys, combo))
-            parameters = {**phase.params, **sweep_assignment}
+            if not self.round_queue:
+                self.logger.info("All rounds have been exhausted. No more tests.")
+                return False
 
-            # meta shared across reps
-            base_meta = dict(phase.meta_params)
-            base_meta["__test_index"] = self.test_index
+            # Take next round from the queue
+            self.current_round = self.round_queue.pop(0)
+            self.logger.info("Building execution matrix for round: %s", self.current_round)
 
-            test_folder = Path(base_meta["__phase_folder"]) / f"test_{self.test_index}"
-            base_meta["__test_folder"] = str(test_folder)
+            # Assumes build_execution_matrix supports a `defaults=` kwarg
+            self.execution_matrix = build_execution_matrix(
+                self.cfg,
+                round_name=self.current_round,
+                defaults=self._defaults_for_next_round or None,
+            )
 
-            reps = int(base_meta.get("__phase_repetitions", 1))
-            for rep_index in range(reps):
-                meta = dict(base_meta)
-                meta["__test_repetition"] = rep_index
-                meta["__test_output"] = str(test_folder / f"output_{rep_index}.out")
-                meta["__test_script"] = str(test_folder / f"run_{rep_index}.sh")
-                self.logger.debug(f"Combination: {parameters}, Meta: {meta}")
-                all_combinations.append({**parameters, **meta})
+            self.total_tests = len(self.execution_matrix)
+            self.logger.info(
+                "Total tests in execution matrix for round '%s': %d",
+                self.current_round,
+                self.total_tests,
+            )
+            return self.total_tests > 0
 
-            # increment once per unique param combo
-            self.test_index += 1
-
-        return all_combinations
-
-    # ------------------ Iteration API ------------------
-
-    def __iter__(self):
-        while self.has_next_combination():
-            yield self.next_combination()
-
-    def has_next_combination(self) -> bool:
-        if self._buffer is not None:
-            return True
-        if self._should_stop():
+        # Case 2: single round (no cfg.rounds)
+        if self._single_round_built:
+            # We already built the single-round matrix once and fully consumed it.
+            self.logger.info("Single-round execution matrix already built. No more tests.")
             return False
-        self._buffer = self._pop_next()
-        return self._buffer is not None
 
-    def next_combination(self) -> Dict[str, Any]:
-        if not self.has_next_combination():
-            raise StopIteration("No more combinations available.")
-        next_combo = self._buffer
-        self._buffer = None
-        return next_combo
+        self.logger.info("Building execution matrix for single round...")
 
-    # ------------------ Selection mechanics ------------------
+        # reset per-matrix state
+        self.current_index = 0
+        self.current_rep = 0
+        self.current_round = None
 
-    def _pop_next(self) -> Optional[Dict[str, Any]]:
-        """Serve from initial queue first; then let BO choose from the remaining pool."""
-        if self.initial_queue:
-            return self.initial_queue.popleft()
-        if not self.remaining_pool:
-            return None
-        idx = self._bo_pick_index(self.remaining_pool)  # must be trained already
-        if 0 <= idx < len(self.remaining_pool):
-            return self.remaining_pool.pop(idx)
-        return None
+        self.execution_matrix = build_execution_matrix(self.cfg)
+        self.total_tests = len(self.execution_matrix)
+        self._single_round_built = True  # mark as built
 
-    # ------------------ BO glue ------------------
+        self.logger.info("Total tests in execution matrix: %d", self.total_tests)
+        return self.total_tests > 0
 
-    def record_result(self, param: Dict[str, Any], result: float) -> None:
+    def _select_best_execution(self) -> Any:
         """
-        Call this right after executing a test to add the observation.
-        `score` should be the objective to maximize (e.g., bandwidth).
-        """
-        x = self._params_to_vector(param)
-        x = np.asarray(x, dtype=int)[None, :]   # (1, d)
-        y = np.asarray([[result]], dtype=float)  # (1, 1)
+        Select the best execution from the *previous* round.
 
-        if self.X is None:
-            self.X, self.y = x, y
-            self.best_y = float(result)
-            self.no_improve_streak = 0
-        else:
-            self.X = np.vstack((self.X, x))
-            self.y = np.vstack((self.y, y))
-            if self.best_y is None or float(result) > self.best_y + self.min_improve:
-                self.best_y = float(result)
-                self.no_improve_streak = 0
+        For now, as requested, this simply returns the last test.
+        Later, you can upgrade this to use a metric stored in the test.
+        """
+        assert self.execution_matrix, "No executions to select from."
+        best_exec = self.execution_matrix[-1]
+        self.logger.info("Selected best execution (placeholder = last in round): %s", best_exec)
+        return best_exec
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+    def next_test(self) -> Any:
+        """
+        Returns the next test to run (including repetitions),
+        or None when all tests in all rounds are done.
+        """
+
+        while True:
+            # Need a matrix (first time) OR we finished the current one -> build next
+            if self.execution_matrix is None or self.current_index >= self.total_tests:
+                # If we just finished a round in a multi-round setup,
+                # pick best_exec and prepare defaults for the next round.
+                if (
+                    self.multiple_rounds
+                    and self.execution_matrix is not None
+                    and self.total_tests > 0
+                    and self.current_index >= self.total_tests
+                ):
+                    best_exec = self._select_best_execution()
+                    # propagate all vars as defaults for the next round
+                    self._defaults_for_next_round = dict(getattr(best_exec, "vars", {}))
+                    self.logger.info(
+                        "Using vars from best execution as defaults for the next round."
+                    )
+
+                # Attempt to build the next matrix (round or single)
+                if not self._build_next_execution_matrix():
+                    # No more rounds / tests available
+                    return None
+
+                # The new matrix might be empty (weird config), so loop again if so
+                if self.total_tests == 0:
+                    continue
+
+            # At this point we have a valid matrix with remaining tests
+            test = self.execution_matrix[self.current_index]
+
+            # Handle repetitions: same test object, multiple times
+            rep_idx = self.current_rep
+            self.current_rep += 1
+
+            if self.current_rep >= test.repetitions:
+                # Move to next test after the last repetition
+                self.current_rep = 0
+                self.current_index += 1
+
+            # Logging (1-based indices for readability)
+            test_idx_for_log = self.current_index + (0 if self.current_rep == 0 else 1)
+
+            if self.current_round:
+                self.logger.debug(
+                    "Providing test %d/%d, repetition %d/%d from round '%s'",
+                    test_idx_for_log,
+                    self.total_tests,
+                    rep_idx + 1,
+                    test.repetitions,
+                    self.current_round
+                )
             else:
-                self.no_improve_streak += 1
+                self.logger.debug(
+                    "Providing test %d/%d, repetition %d/%d (single round)",
+                    test_idx_for_log,
+                    self.total_tests,
+                    rep_idx + 1,
+                    test.repetitions                    
+                )
 
-        self.n_evals += 1
-        self._trained = False  # mark dirty; train lazily on next pick
+            # Optional: annotate repetition in test metadata if available
+            test.repetition = rep_idx + 1  # 1-based repetition number
 
-    def _ensure_model_trained(self) -> None:
-        """Train KRG when we have at least 2 points; raise if not trainable."""
-        if self._trained:
-            return
-        if self.X is None or self.y is None or len(self.X) < 2:
-            raise RuntimeError("Not enough observations to train the BO model (need >= 2).")
-
-        if self.model is None:
-            self.model = KRG(print_global=False)
-
-        self.logger.info("Training KRG model...")
-        self.model.set_training_values(self.X, self.y)
-        self.model.train()
-        self._trained = True
-        self.logger.info(f"KRG trained on {len(self.X)} points.")
-
-    def _bo_pick_index(self, pool: List[Dict[str, Any]]) -> int:
-        """
-        Compute EI over the remaining pool and return the argmax index.
-        Requires a trained model; raises if model isn't trainable.
-        """
-        self._ensure_model_trained()
-
-        Xc = np.vstack([self._params_to_vector(c) for c in pool]).astype(int)
-        mean = self.model.predict_values(Xc)       # (n,1)
-        var = self.model.predict_variances(Xc)     # (n,1)
-
-        std = np.sqrt(np.maximum(var, 1e-12))
-        y_best = float(np.max(self.y))
-        ei = self._expected_improvement(mean, std, y_best, xi=0.01).reshape(-1)
-    
-
-        if ei.size == 0:
-            raise RuntimeError("EI computation returned empty array.")
-        return int(np.argmax(ei))
-
-    @staticmethod
-    def _expected_improvement(mean: np.ndarray, std: np.ndarray, y_best: float, xi: float = 0.01) -> np.ndarray:
-        """
-        EI = (μ - y_best - xi) * Φ(Z) + σ * φ(Z),  Z = (μ - y_best - xi) / σ
-        """
-        mu = mean.reshape(-1)
-        s = std.reshape(-1)
-        imp = mu - y_best - xi
-        z = imp / (s + 1e-12)
-        cdf = np.vectorize(norm.cdf)(z)
-        pdf = np.vectorize(norm.pdf)(z)
-        ei = imp * cdf + s * pdf
-        return np.maximum(ei, 0.0)
-
-    # ------------------ Stopping logic ------------------
-
-    def _should_stop(self) -> bool:
-        # 1) Budget
-        if self.n_evals >= self.max_evals:
-            self.logger.info(f"Stopping: reached budget ({self.n_evals}/{self.max_evals}).")
-            return True
-
-        # 2) Exhausted everything
-        if not self.initial_queue and not self.remaining_pool:
-            self.logger.info("Stopping: no candidates left.")
-            return True
-
-
-        return False
-
-    # ------------------ Vectorization helpers ------------------
-
-    def _params_to_vector(self, params: Dict[str, Any]) -> np.ndarray:
-        """
-        Map a param dict -> numeric vector [volume, nodes, ost_idx].
-        """
-        try:
-            vol = int(params[self._VOLUME_KEY])
-            nodes = int(params[self._NODES_KEY])
-            pp_node = int(params[self._PP_NODE_KEY])
-            ost_idx = self._get_folder_index(params[self._OST_KEY])
-            return np.array([vol, nodes, pp_node, ost_idx], dtype=int)
-        except Exception as e:
-            self.logger.error(f"Vectorization error for params {params}: {e}")
-            raise
-
-    @staticmethod
-    def _get_folder_index(path: str) -> int:
-        """
-        Extract the numeric suffix from a folder name like ".../folder7" -> 7.
-        """
-        folder_name = os.path.basename(path)
-        m = re.search(r'(\d+)$', folder_name)
-        if not m:
-            raise ValueError(f"No numeric index found in {path}")
-        return int(m.group(1))
+            return test
 
 
 
-    
-
-    
-    
-
-    
-
-
+        
+ 

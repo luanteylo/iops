@@ -22,6 +22,8 @@ class BenchmarkConfig:
     workdir: Path
     repetitions: Optional[int] = 1        # global default (can be ignored if rounds have their own)
     sqlite_db: Optional[Path] = None
+    search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
+    executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
 
 
 @dataclass
@@ -73,8 +75,7 @@ class ParserConfig:
 
 @dataclass
 class ScriptConfig:
-    name: str
-    mode: str
+    name: str    
     submit: str
     script_template: str
     post: Optional[PostConfig] = None      # optional
@@ -111,16 +112,6 @@ class RoundSearchConfig:
     select: Optional[str] = None  # e.g., "best", "top_k", etc. (optional / future use)
 
 
-@dataclass
-class RoundPropagateConfig:
-    """
-    Variables whose best values from this round will be propagated to
-    defaults for the next rounds.
-
-      propagate:
-        vars: ["nodes", "block_size_mb"]
-    """
-    vars: List[str]
 
 
 @dataclass
@@ -149,7 +140,6 @@ class RoundConfig:
     fixed_overrides: Dict[str, Any] = field(default_factory=dict)
     repetitions: Optional[int] = None
     search: RoundSearchConfig | None = None
-    propagate: Optional[RoundPropagateConfig] = None
 
 
 @dataclass
@@ -174,12 +164,16 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
 
     # ---- benchmark ----
     b = data["benchmark"]
+    # if search method is not define, we will execute all test cases (exhaustive)
+
     benchmark = BenchmarkConfig(
         name=b["name"],
         description=b.get("description"),
         workdir=_expand_path(b["workdir"]),
         repetitions=b.get("repetitions", 1),
         sqlite_db=_expand_path(b["sqlite_db"]) if "sqlite_db" in b else None,
+        search_method=b.get("search_method", "exhaustive"),
+        executor=b.get("executor", "slurm")
     )
 
     # ---- vars ----
@@ -239,8 +233,7 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
 
         scripts.append(
             ScriptConfig(
-                name=s["name"],
-                mode=s["mode"],
+                name=s["name"],             
                 submit=s["submit"],
                 script_template=s["script_template"],
                 post=post_cfg,
@@ -270,14 +263,6 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
                 select=search_block.get("select"),
             )
 
-        # propagate block (optional)
-        propagate_block = r.get("propagate")
-        propagate_cfg: RoundPropagateConfig | None = None
-        if propagate_block is not None:
-            propagate_cfg = RoundPropagateConfig(
-                vars=propagate_block.get("vars", []),
-            )
-
         rounds_cfg.append(
             RoundConfig(
                 name=r["name"],
@@ -286,7 +271,6 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
                 fixed_overrides=r.get("fixed_overrides", {}),
                 repetitions=r.get("repetitions"),
                 search=search_cfg,
-                propagate=propagate_cfg,
             )
         )
 
@@ -313,6 +297,14 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError("benchmark.workdir must be a directory")
     if cfg.benchmark.repetitions is not None and cfg.benchmark.repetitions < 1:
         raise ConfigValidationError("benchmark.repetitions must be >= 1")
+    # search_method: greedy or bayesian or exhaustive (optional)
+    if cfg.benchmark.search_method is not None:
+        if cfg.benchmark.search_method not in ("greedy", "bayesian", "exhaustive"):
+            raise ConfigValidationError(
+                "benchmark.search_method must be one of: greedy, bayesian, exhaustive"
+            )
+
+
 
     # ---- vars ----
     if not cfg.vars:
@@ -444,16 +436,4 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if rnd.search.objective not in ("max", "min"):
             raise ConfigValidationError(
                 f"round '{rnd.name}' search.objective must be 'max' or 'min'"
-            )
-
-        # propagate vars (if defined) must also exist in cfg.vars
-        if rnd.propagate is not None:
-            if not rnd.propagate.vars:
-                raise ConfigValidationError(
-                    f"round '{rnd.name}' propagate.vars must not be empty if propagate is defined"
-                )
-            for vname in rnd.propagate.vars:
-                if vname not in cfg.vars:
-                    raise ConfigValidationError(
-                        f"round '{rnd.name}' propagate references unknown var '{vname}'"
-                    )
+            )   

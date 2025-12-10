@@ -1,35 +1,35 @@
 benchmark:
-  name: "IOR Benchmark"
-  description: "A benchmark to measure I/O performance using the IOR tool."
-  workdir: "/path/to/benchmark/workdir"
+  name: "Interference Tests"
+  description: "A test to measure interference effects when multiple IOR instances write concurrently to different OSTs."
+  workdir: "/home/luan/workdir/"
+  
 
 vars:
   # Swept variables (cartesian product over all sweeps)
   nodes:
     type: int
     sweep:
-      mode: range       # range | list
-      start: 1
-      end: 16
-      step: 1
+      mode: list       # range | list
+      values: [1]
+      
 
   processes_per_node:
     type: int
     sweep:
       mode: list
-      values: [1, 2, 4, 8, 16]
+      values: [16]
 
-  block_size:
-    type: str
+  block_size_mb:
+    type: int
     sweep:
       mode: list
-      values: ["1m", "4m", "16m"]
+      values: [16]
 
   ost_path:
     type: str
     sweep:
       mode: list
-      values: ["/beegfs/lgouveia/ior_1"]
+      values: ["/beegfs/lgouveia/ior_1", "/beegfs/lgouveia/ior_2"]
 
   # Derived variables (computed from other vars / benchmark fields)
   summary_file:
@@ -38,23 +38,40 @@ vars:
 
   total_data_size:
     type: float
-    expr: "nodes * processes_per_node * 1024 * 1024 * 1024"
+    expr: "nodes * processes_per_node * block_size_mb"
     # ^ you can evaluate this with Jinja2 or your own expression engine
 
 command:
   # Generic command template – not tied to IOR in the schema, only in this example
   template: >
+    
     mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1
-    ior -w -b {{ block_size }} -t 1m
+    ior -w -b {{ block_size_mb }}mb -t 1m
     -O summaryFile={{ summary_file }} -O summaryFormat=JSON
-    -o {{ ost_path }}/output.ior
+    -o {{ ost_path }}/output.ior  &
+    
+    ior_a = $!
+
+    mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1
+    ior -w -F -b {{ block_size_mb }}mb -t 1m
+    -O summaryFile={{ summary_file }} -O summaryFormat=JSON
+    -o {{ ost_path }}/output.ior  &
+    
+    ior_b = $!
+    
+    wait $ior_a
+    
+    wait $ior_b
+
+    
+
 
   # Optional metadata you keep in the DB / CSV for free
   metadata:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
-    transfer_size: "{{ block_size }}"
+    transfer_size: "{{ block_size_mb }}"
     total_data_size: "{{ total_data_size }}"
 
   # Default environment for *this* command

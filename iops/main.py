@@ -84,7 +84,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args, logger):
         logger.info(line)
 
     logger.info("")
-    logger.info("  IOPS — I/O Performance Search")
+    logger.info("  IOPS — I/O Performance Suite")
     logger.info(f"  Version: {IOPS_VERSION}")
     logger.info(f"  Setup File: {args.setup_file}")    
     logger.info("")
@@ -105,6 +105,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args, logger):
         logger.debug(f"  Description: {cfg.benchmark.description}")
     logger.debug(f"  Workdir    : {cfg.benchmark.workdir}")
     logger.debug(f"  Repetitions: {cfg.benchmark.repetitions}")
+    logger.debug(f"  Executor   : {cfg.benchmark.executor}")
     if cfg.benchmark.sqlite_db:
         logger.debug(f"  SQLite DB  : {cfg.benchmark.sqlite_db}")
 
@@ -155,7 +156,6 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args, logger):
 
     for i, script in enumerate(cfg.scripts, start=1):
         logger.debug(f"  Script #{i}: {script.name}")
-        logger.debug(f"    Mode   : {script.mode}")
         logger.debug(f"    Submit : {script.submit}")
 
         logger.debug("    Script template:")
@@ -200,46 +200,17 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args, logger):
 def main():
     args = parse_arguments()
     logger = initialize_logger(args)
-
-   
+  
     if not args.setup_file:
         logger.error("No setup file provided for validation or execution.")
         return
 
     cfg = load_generic_config(Path(args.setup_file))
     log_execution_context(cfg, args, logger)    
-
-    # for each round we create a matrix of executions
-    if cfg.rounds is not None:
-        default = {}
-        for round in  cfg.rounds:
-            
-            logger.info(f"Building execution matrix for round: {round.name}...")
-            execution_matrix = build_execution_matrix(cfg, round_name=round.name, defaults=default)
-            logger.info(f"Total executions to run in this round: {len(execution_matrix)}")
-            for exec in execution_matrix:
-                if args.log_level.upper() == 'DEBUG':
-                    logger.debug(exec.describe())
-
-            # get best execution from this round
-            # and update default vars for next round
-            # we only propagate the sweeped variables
-            best_exec = execution_matrix[-1]  # placeholder for best execution selection logic
-            logger.info(f"Best execution in round '{round.name}': {best_exec}")
-            
-
-            default = {
-                k: v for k, v in best_exec.vars.items() 
-            }
-        
-            
-            # mimic the propagation 
-            
-            
-            
-   
     
-    
+    runner = IOPSRunner(cfg=cfg, args=args)
+    runner.run()
+
 
 
 if __name__ == "__main__":
