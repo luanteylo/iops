@@ -5,12 +5,17 @@ from iops.utils.execution_matrix import ExecutionInstance, build_execution_matri
 from typing import List, Any
 from abc import ABC, abstractmethod
 from pathlib import Path
+import random
 
-class BasePlanner(ABC):
+class BasePlanner(ABC, HasLogger):
     _registry = {}
 
     def __init__(self, cfg: GenericBenchmarkConfig):
         self.cfg = cfg        
+        # create a random generator with a fixed seed for reproducibility
+        self.random = random.Random(cfg.benchmark.random_seed)
+        self.logger.info("Planner initialized with benchmark config: %s", cfg.benchmark)
+        self.logger.info("Using random seed: %s", cfg.benchmark.random_seed)
     
     @classmethod
     def register(cls, name):
@@ -27,6 +32,17 @@ class BasePlanner(ABC):
             raise ValueError(f"Executor '{name}' is not registered.")
         return executor_cls(cfg)
     
+    def random_sample(self, items: List[ExecutionInstance]) -> List[ExecutionInstance]:
+        # randomdly sample all items of the list
+        sample_size = len(items)
+        if sample_size > 0:
+            self.logger.debug("Randomly sampling %d items from %d total items.", sample_size, len(items))
+            items =  self.random.sample(items, sample_size)
+        else:
+            self.logger.debug("No items to sample from.")
+
+        return items
+        
 
     # get next test to run
     @abstractmethod
@@ -56,7 +72,7 @@ class Exhaustive(BasePlanner, HasLogger):
         # Single-round control flag
         self._single_round_built: bool = False
 
-        # Repetitions per test (planner-level)       
+        # Repetitions per test (planner-level)
         self.current_rep: int = 0  # 0-based repetition index for current test
 
         # Defaults to be used for the *next* round
@@ -66,7 +82,7 @@ class Exhaustive(BasePlanner, HasLogger):
             "Exhaustive planner initialized. "
             "Multiple rounds: %s; rounds=%s",
             self.multiple_rounds,
-            self.round_queue if self.round_queue else "single round",            
+            self.round_queue if self.round_queue else "single round",
         )
 
     # ------------------------------------------------------------------ #
@@ -98,13 +114,16 @@ class Exhaustive(BasePlanner, HasLogger):
             self.logger.info("Building execution matrix for round: %s", self.current_round)
 
             # Assumes build_execution_matrix supports a `defaults=` kwarg
-            self.execution_matrix = build_execution_matrix(
-                self.cfg,
-                round_name=self.current_round,
-                defaults=self._defaults_for_next_round or None,
+            self.execution_matrix = self.random_sample(
+                build_execution_matrix(
+                    self.cfg,
+                    round_name=self.current_round,
+                    defaults=self._defaults_for_next_round or None,
+                )
             )
 
             self.total_tests = len(self.execution_matrix)
+
             self.logger.info(
                 "Total tests in execution matrix for round '%s': %d",
                 self.current_round,
@@ -125,8 +144,9 @@ class Exhaustive(BasePlanner, HasLogger):
         self.current_rep = 0
         self.current_round = None
 
-        self.execution_matrix = build_execution_matrix(self.cfg)
+        self.execution_matrix = self.random_sample(build_execution_matrix(self.cfg))
         self.total_tests = len(self.execution_matrix)
+
         self._single_round_built = True  # mark as built
 
         self.logger.info("Total tests in execution matrix: %d", self.total_tests)
@@ -143,6 +163,70 @@ class Exhaustive(BasePlanner, HasLogger):
         best_exec = self.execution_matrix[-1]
         self.logger.info("Selected best execution (placeholder = last in round): %s", best_exec)
         return best_exec
+
+    def _prepare_execution_artifacts(
+        self,
+        test: Any,
+        rep_idx: int,
+        test_idx_for_log: int,
+    ) -> None:
+        """
+        Create folders, script files, and post-script files for a given test
+        and repetition.
+
+        Directory layout:
+
+        - Multi-round:
+            <workdir>/round_<round_name>/execution_<execution_id>/
+        - Single-round:
+            <workdir>/execution_<execution_id>/
+        """
+
+        # 1-based repetition number
+        test.repetition = rep_idx + 1
+        # Also expose via metadata so {{ repetition }} works in templates
+        if not hasattr(test, "metadata") or test.metadata is None:
+            test.metadata = {}
+        test.metadata["repetition"] = test.repetition
+
+        # Base directory depends on whether we are in a round
+        if self.current_round:
+            base_dir = Path(self.cfg.benchmark.workdir) / f"round_{self.current_round}"
+        else:
+            base_dir = Path(self.cfg.benchmark.workdir)
+
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        # Execution directory
+        test.execution_dir = base_dir / f"execution_{test.execution_id}"
+        test.execution_dir.mkdir(parents=True, exist_ok=True)
+
+        # Script file
+        test.script_file = (
+            test.execution_dir
+            / f"run_{test.script_name}_{test.execution_id}_{test.repetition}.sh"
+        )
+        with open(test.script_file, "w") as f:
+            f.write(test.script_text)
+        self.logger.debug(
+            "Written script file for test %d: %s",
+            test_idx_for_log,
+            test.script_file,
+        )
+
+        # Post-processing script (if any)
+        if getattr(test, "post_script", None):
+            test.post_script_file = (
+                test.execution_dir
+                / f"post_{test.script_name}_{test.execution_id}_{test.repetition}.sh"
+            )
+            with open(test.post_script_file, "w") as f:
+                f.write(test.post_script)
+            self.logger.debug(
+                "Written post-processing script file for test %d: %s",
+                test_idx_for_log,
+                test.post_script_file,
+            )
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -202,7 +286,7 @@ class Exhaustive(BasePlanner, HasLogger):
                     self.total_tests,
                     rep_idx + 1,
                     test.repetitions,
-                    self.current_round
+                    self.current_round,
                 )
             else:
                 self.logger.debug(
@@ -210,13 +294,14 @@ class Exhaustive(BasePlanner, HasLogger):
                     test_idx_for_log,
                     self.total_tests,
                     rep_idx + 1,
-                    test.repetitions                    
+                    test.repetitions,
                 )
 
-            # Optional: annotate repetition in test metadata if available
-            test.repetition = rep_idx + 1  # 1-based repetition number
+            # Prepare filesystem artifacts (dirs + scripts) for this test+repetition
+            self._prepare_execution_artifacts(test, rep_idx, test_idx_for_log)
 
             return test
+
 
 
 

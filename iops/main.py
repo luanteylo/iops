@@ -48,16 +48,7 @@ def initialize_logger(args):
     )
 
 
-def handle_generate_setup(args, logger):
-    if args.generate_setup:
-        logger.info(f"Generating default YAML setup file at: {args.generate_setup}")
-        FileUtils().generate_iops_config(args.generate_setup)
-        logger.info("Setup file generated successfully.")
-        return True
-    return False
-
-
-def log_execution_context(cfg: GenericBenchmarkConfig, args, logger):
+def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace, logger: logging.Logger):
     """
     Log the execution context in a human-readable way.
     Called once at startup.
@@ -205,7 +196,7 @@ def main():
         logger.error("No setup file provided for validation or execution.")
         return
 
-    cfg = load_generic_config(Path(args.setup_file))
+    cfg = load_generic_config(Path(args.setup_file), logger=logger)
     log_execution_context(cfg, args, logger)    
     
     runner = IOPSRunner(cfg=cfg, args=args)

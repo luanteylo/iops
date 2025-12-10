@@ -24,6 +24,7 @@ class BenchmarkConfig:
     sqlite_db: Optional[Path] = None
     search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
+    random_seed: Optional[int] = None  # seed for any random operations
 
 
 @dataclass
@@ -158,7 +159,7 @@ def _expand_path(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
 
 
-def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
+def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
     with open(config_path, "r") as f:
         data = yaml.safe_load(f)
 
@@ -173,7 +174,8 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
         repetitions=b.get("repetitions", 1),
         sqlite_db=_expand_path(b["sqlite_db"]) if "sqlite_db" in b else None,
         search_method=b.get("search_method", "exhaustive"),
-        executor=b.get("executor", "slurm")
+        executor=b.get("executor", "slurm"),
+        random_seed=b.get("random_seed", 42)
     )
 
     # ---- vars ----
@@ -284,8 +286,44 @@ def load_generic_config(config_path: Path) -> GenericBenchmarkConfig:
     )
 
     validate_generic_config(cfg)
+    create_workdir(cfg, logger)  # logger can be None here
     return cfg
 
+
+def create_workdir(cfg: GenericBenchmarkConfig, logger) -> None:
+        """
+        Creates a new execution directory inside the configured work directory.
+        If the base work directory does not exist, it will be created.
+        Then, a subdirectory named 'execution_<id>' is created, where <id> is the next available integer.
+        """
+        base_workdir = cfg.benchmark.workdir
+
+        # Ensure the base work directory exists
+        if not base_workdir.exists():
+            base_workdir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Created base work directory: {base_workdir}")
+        else:
+            logger.debug(f"Base work directory already exists: {base_workdir}")
+
+        # Find all existing execution directories
+        execution_dirs = [
+            d for d in base_workdir.iterdir()
+            if d.is_dir() and d.name.startswith("execution_") and d.name.split('_')[1].isdigit()
+        ]
+
+        # Determine the next execution ID
+        next_id = (
+            max(int(d.name.split('_')[1]) for d in execution_dirs) + 1
+            if execution_dirs else 1
+        )
+
+        # Create the new execution directory
+        new_execution_dir = base_workdir / f"execution_{next_id}"
+        new_execution_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Created new execution directory: {new_execution_dir}")
+
+        # Update the config to point to the new execution directory
+        cfg.benchmark.workdir = new_execution_dir
 
 def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     # ---- benchmark ----

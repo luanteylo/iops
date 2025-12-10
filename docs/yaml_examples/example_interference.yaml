@@ -2,6 +2,7 @@ benchmark:
   name: "Interference Tests"
   description: "A test to measure interference effects when multiple IOR instances write concurrently to different OSTs."
   workdir: "/home/luan/workdir/"
+  random_seed: 42
   
 
 vars:

@@ -36,6 +36,10 @@ class IOPSRunner(HasLogger):
             else:
                 self.logger.info(test)
             
+            job_id = self.executor.submit(test)
+            self.executor.wait_and_collect(test)
+
+
 
         self.logger.info("All tests have been planned. Total tests: %d", test_count)
         self.logger.info("IOPS Runner finished.")

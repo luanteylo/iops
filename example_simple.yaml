@@ -3,9 +3,10 @@ benchmark:
   description: "A benchmark to measure I/O performance using the IOR tool."
   workdir: "/home/luan/workdir/"
   sqlite_db: "/home/luan/iops.db"
-  repetitions: 3 # global repetitions for each test case. It is ignored when rounds has its own value
+  repetitions: 2 # global repetitions for each test case. It is ignored when rounds has its own value
   search_method: "exhaustive" # used to define the policy for test execution selection
-  executor : "slurm" # specify the executor to use : local | slurm 
+  executor : "local" # specify the executor to use : local | slurm 
+  random_seed: 43  # seed for any random operations in the benchmark
 
 
 vars:
@@ -27,7 +28,7 @@ vars:
     type: int
     sweep:
       mode: list
-      values: [8]
+      values: [8, 16, 32]
 
   block_size_mb:
     type: int
@@ -35,7 +36,7 @@ vars:
   
   summary_file:
     type: str
-    expr: "{{ workdir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
 
 
 command:
@@ -53,7 +54,7 @@ command:
     total_data_size: "{{ volume_size_gb }}"
 
 scripts:
-  - name: "slurm_mpi" 
+  - name: "ior" 
     submit: "sbatch"
     script_template: |
       #!/bin/bash
@@ -68,7 +69,8 @@ scripts:
       module load mpi
       module load ior
 
-      mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 {{ command.template }}      
+      mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \
+      {{ command.template }}      
      
       echo "repetition {{ repetition }} completed."
 
@@ -101,6 +103,10 @@ output:
       - "total_data_size"
       - "write_bandwidth"
 
+
+    
+
+
 rounds:
   # Round 1: sweep only `nodes`, keep others fixed.
   - name: "nodes_sweep"
@@ -124,5 +130,3 @@ rounds:
       metric: "write_bandwidth"
       objective: "max"
     
-
-

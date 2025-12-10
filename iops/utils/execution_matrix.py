@@ -207,6 +207,9 @@ class ExecutionInstance:
     round_name: Optional[str] = None
     round_index: Optional[int] = None
     repetitions: int = 1
+    execution_dir : Optional[Path] = None
+    
+    
 
     search_metric: Optional[str] = None
     search_objective: Optional[str] = None
@@ -214,7 +217,7 @@ class ExecutionInstance:
     # Benchmark-level
     benchmark_name: str = ""
     benchmark_description: Optional[str] = None
-    workdir: Path = Path(".")
+    workdir: Optional[Path] = None
 
     # Variables:
     #   - base_vars: swept and fixed scalar vars (no expr).
@@ -240,9 +243,11 @@ class ExecutionInstance:
     script_name: str = ""
     script_template: str = ""
     submit_cmd_template: str = ""
+    script_file : Optional[Path] = None
 
     # Optional post-processing script template
     post_script_template: str | None = None
+    post_script_file : Optional[Path] = None
 
     # Parser template (with possibly templated .file)
     parser_template: ParserConfig | None = None
@@ -263,8 +268,11 @@ class ExecutionInstance:
                 "name": self.benchmark_name,
                 "description": self.benchmark_description,
                 "workdir": str(self.workdir),
+                "execution_dir": str(self.execution_dir) 
+                
             },
             "workdir": str(self.workdir),
+            "execution_dir": str(self.execution_dir),
             "execution_id": self.execution_id,
             "repetitions": self.repetitions,
             "round_name": self.round_name,
@@ -514,6 +522,9 @@ class ExecutionInstance:
             )
         else:
             lines.append(f"Execution #{self.execution_id}/{self.repetition} — {self.benchmark_name}")
+        
+        lines.append(f"Workdir  : {self.workdir}")
+        lines.append(f"Execution Dir : {self.execution_dir}")
 
         # Vars (sorted for stability)
         vars_map = self.vars
@@ -533,7 +544,12 @@ class ExecutionInstance:
         lines.append(
             f"Script   : {self.script_name} "
             f"(submit={self.submit_cmd})"
+            f"(file={self.script_file})"
         )
+        # post script
+        if self.post_script_template:
+            lines.append(f"Post-script: {self.post_script_file}")
+            
 
         # Repetitions / search
         lines.append(f"Repeats: {self.repetitions}")
@@ -577,6 +593,7 @@ class ExecutionInstance:
             f"Benchmark : {self.benchmark_name}",
             f"Round     : {self.round_name} (idx={self.round_index})",
             f"Workdir   : {self.workdir}",
+            f"Exeucution Dir: {self.execution_dir}",
             f"Repetitions: {self.repetition}/{self.repetitions}",            
             f"SQLite DB : {self.sqlite_db}",
             sep,
