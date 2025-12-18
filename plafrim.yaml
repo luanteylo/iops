@@ -1,0 +1,150 @@
+benchmark:
+  name: "IOR Benchmark"
+  description: "A benchmark to measure I/O performance using the IOR tool."
+  workdir: "/home/lgouveia/workdir/"
+  sqlite_db: "/home/lgouveia/iops.db"
+  repetitions: 1 # global repetitions for each test case. It is ignored when rounds has its own value
+  search_method: "exhaustive" # used to define the policy for test execution selection
+  executor : "slurm" # specify the executor to use : local | slurm 
+  random_seed: 43  # seed for any random operations in the benchmark
+
+
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [4]
+
+  # Swept variables (global definition) 
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [8]
+
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [32]
+    
+  ost_count:
+    type: str
+    sweep:
+      mode: list
+      values: ["/beegfs/lgouveia/ior_1", "/beegfs/lgouveia/ior_2", "/beegfs/lgouveia/ior_4", "/beegfs/lgouveia/ior_8"]
+
+  block_size_mb:
+    type: int
+    expr: "((volume_size_gb * 1024) / (processes_per_node) )"
+
+  ntasks:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+    
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+
+  
+    
+command:
+  template: >    
+    ior -w -b {{ block_size_mb }}mb -t 1mb
+    -O summaryFile={{summary_file}} -O summaryFormat=JSON
+    -o {{ost_count}}/output.ior 
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+
+scripts:
+  - name: "ior" 
+    submit: "sbatch"
+    script_template: |
+     #!/bin/bash
+
+      #SBATCH --job-name={{ benchmark.name }}_{{ execution_id }}_{{ repetition }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH -o batch%j.out
+      #SBATCH -e batch%j.err
+      #SBATCH --exclusive 
+      #SBATCH --constraint=bora
+
+      
+      module purge
+      module load mpi/openmpi/4.0.1
+
+      # Execute the command
+      mpirun  --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \
+      {{ command.template }}
+      
+
+    post:
+      script: |
+        #!/bin/bash
+        echo "Job completed. Summary file located at {{ summary_file }}"
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+        - name: iops
+        - name: latency
+      parser_script: |
+        import json
+
+        def parse(file_path: str):
+            """
+            IOR JSON parser.
+
+            Returns a dict with ALL fields from the first write Results entry:
+              - bwMiB
+              - blockKiB
+              - xferKiB
+              - iops
+              - latency
+              - openTime
+              - wrRdTime
+              - closeTime
+              - totalTime
+              - access
+            """
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            # Prefer tests[].Results (per-execution detailed metrics)
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError("No tests found in IOR JSON")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError("No Results found in IOR JSON")
+
+            # Pick the write result (or the first one if only one exists)
+            write_res = next(
+                (r for r in results if str(r.get("access", "")).lower() == "write"),
+                results[0],
+            )
+
+            # Return everything as-is
+            return write_res
+
+     
+output:
+  sink:
+    type: csv          # parquet | csv | sqlite
+    path: "{{ workdir }}/results.csv"
+    mode: append           # append | overwrite
+    include: []            # optional, mutually exclusive with exclude
+    exclude: ["benchmark.name", "benchmark.description"]            # optional, mutually exclusive with include
+    table: results         # only for sqlite
+
+

@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import Optional, Dict, Any
 
 import subprocess
 import time
@@ -218,16 +219,37 @@ class LocalExecutor(BaseExecutor):
 # ====================================================================== #
 # SLURM executor
 # ====================================================================== #
+# ====================================================================== #
+# SLURM executor (NO sacct, NO sbatch --wait, NO sentinel requirements)
+# Strategy:
+#   1) Submit using YAML-driven test.submit_cmd (+ append script if missing)
+#   2) Poll status via squeue while present
+#   3) When job leaves squeue:
+#        - try scontrol show job <jobid> to get JobState/ExitCode
+#        - if scontrol has no record (aged out), finalize by parser outcome:
+#             * if parser output exists and parsing succeeds -> SUCCEEDED
+#             * else -> FAILED
+# ====================================================================== #
+
+
 @BaseExecutor.register("slurm")
 class SlurmExecutor(BaseExecutor):
     """
     YAML-driven SLURM executor.
 
-    - Uses test.submit_cmd (rendered from YAML scripts[].submit)
-    - Uses test.script_file (rendered script already written on disk)
-    - Does NOT inject sbatch flags; everything SLURM-specific should be in:
-        * the script itself (#SBATCH ...)
-        * and/or the submit command string in YAML
+    Uses:
+      - test.submit_cmd (rendered from YAML scripts[].submit)
+      - test.script_file (rendered script already written)
+      - test.execution_dir (work dir for the execution)
+
+    Constraints honored:
+      - does NOT use sacct
+      - does NOT use sbatch --wait
+      - does NOT require users to add sentinel files
+
+    Finalization logic when job leaves squeue:
+      - Prefer scontrol show job <jobid> (JobState/ExitCode)
+      - If scontrol has no record, fall back to parser success.
     """
 
     SLURM_ACTIVE_STATES = {
@@ -235,7 +257,12 @@ class SlurmExecutor(BaseExecutor):
         "SUSPENDED", "REQUEUED", "RESIZING", "SIGNALING", "STAGE_OUT",
     }
 
-    def submit(self, test: "ExecutionInstance") -> None:
+    SLURM_FAIL_STATES = {
+        "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
+        "PREEMPTED", "BOOT_FAIL",
+    }
+
+    def submit(self, test) -> None:
         self._init_execution_metadata(test)
 
         # Validate script_file
@@ -263,9 +290,9 @@ class SlurmExecutor(BaseExecutor):
             return
 
         cmd = shlex.split(submit_cmd)
-        script_str = str(test.script_file)
 
-        # If YAML command doesn't mention the script file, append it.
+        # Ensure the script path is included (unless user already put it in submit)
+        script_str = str(test.script_file)
         if script_str not in cmd:
             cmd.append(script_str)
 
@@ -274,21 +301,30 @@ class SlurmExecutor(BaseExecutor):
         try:
             test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
+            # NOTE: check=True would raise on non-zero exit,
+            # but sbatch typically returns 0 on successful submission.
             r = subprocess.run(
                 cmd,
                 cwd=test.execution_dir,
                 capture_output=True,
                 text=True,
-                check=True,
             )
 
             stdout = (r.stdout or "").strip()
             stderr = (r.stderr or "").strip()
+
             test.metadata["__slurm_submit_stdout"] = stdout
             test.metadata["__slurm_submit_stderr"] = stderr
+            test.metadata["__submit_returncode"] = r.returncode
+
+            if r.returncode != 0:
+                msg = f"SLURM submission failed (rc={r.returncode}): stderr='{stderr}' stdout='{stdout}'"
+                self.logger.error(msg)
+                test.metadata["__executor_status"] = self.STATUS_ERROR
+                test.metadata["__error"] = msg
+                return
 
             job_id = self._parse_jobid(stdout)
-
             if not job_id:
                 msg = f"Could not parse SLURM jobid from submission output: stdout='{stdout}' stderr='{stderr}'"
                 self.logger.error(msg)
@@ -300,13 +336,6 @@ class SlurmExecutor(BaseExecutor):
             test.metadata["__executor_status"] = self.STATUS_PENDING
             self.logger.info("SLURM job submitted: %s", job_id)
 
-        except subprocess.CalledProcessError as e:
-            msg = f"SLURM submission failed: {(e.stderr or '').strip() or str(e)}"
-            self.logger.error(msg)
-            test.metadata["__executor_status"] = self.STATUS_ERROR
-            test.metadata["__error"] = msg
-            return
-
         except Exception as e:
             msg = f"Unexpected SLURM submission error: {e}"
             self.logger.error(msg)
@@ -314,8 +343,14 @@ class SlurmExecutor(BaseExecutor):
             test.metadata["__error"] = msg
             return
 
-    def wait_and_collect(self, test: "ExecutionInstance") -> None:
-        # Always create metrics dict (even if parser is None)
+    def wait_and_collect(self, test) -> None:
+        """
+        Poll squeue until the job disappears, then finalize with:
+          1) scontrol show job (JobState/ExitCode)
+          2) fallback to parser outcome (file exists + parse ok)
+        Always initializes test.metadata["metrics"] first.
+        """
+        # Always create metrics dict early (handle parser=None safely)
         parser = test.parser
         metric_names = [m.name for m in (parser.metrics if parser else [])]
         metrics = {name: None for name in metric_names}
@@ -331,60 +366,74 @@ class SlurmExecutor(BaseExecutor):
 
         poll_interval = getattr(getattr(self.cfg, "execution", None), "status_check_delay", 30)
 
-        last = None
+        self.logger.debug("Waiting for SLURM job %s (poll=%ss)", job_id, poll_interval)
+
+        last_state = None
         while True:
             state = self._squeue_state(job_id)
             if state is None:
                 break
 
             test.metadata["__slurm_state_live"] = state
-            # coarse mapping while active
-            test.metadata["__executor_status"] = self.STATUS_RUNNING if state != "PENDING" else self.STATUS_PENDING
+            if state == "PENDING":
+                test.metadata["__executor_status"] = self.STATUS_PENDING
+            else:
+                test.metadata["__executor_status"] = self.STATUS_RUNNING
 
-            if state != last:
+            if state != last_state:
                 self.logger.info("SLURM job %s state: %s", job_id, state)
-                last = state
+                last_state = state
 
             time.sleep(poll_interval)
 
-        # job left queue -> query accounting for final state
-        info = self._sacct_info(job_id)
+        # Job left squeue
+        test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+        # 1) Prefer scontrol (best SLURM-native final status without accounting)
+        info = self._scontrol_info(job_id)
         slurm_state = info.get("state")
         exitcode = info.get("exitcode")
 
         test.metadata["__slurm_state"] = slurm_state
         test.metadata["__slurm_exitcode"] = exitcode
-        if info.get("start"):
-            test.metadata["__slurm_start"] = info.get("start")
-        if info.get("end"):
-            test.metadata["__slurm_end"] = info.get("end")
 
-        final_status = self._final_status(slurm_state, exitcode)
-        test.metadata["__executor_status"] = final_status
-        test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        final = self._map_final_status(slurm_state, exitcode)
 
-        if final_status != self.STATUS_SUCCEEDED:
-            msg = f"SLURM job {job_id} finished with state={slurm_state} exitcode={exitcode}"
-            self.logger.error(msg)
-            test.metadata["__error"] = msg
+        # 2) If scontrol cannot provide final outcome (aged out), fall back to parser
+        if final == self.STATUS_UNKNOWN:
+            if parser is None:
+                test.metadata.setdefault(
+                    "__error",
+                    "Job left squeue; scontrol has no record; no parser configured to validate completion."
+                )
+                test.metadata["__executor_status"] = self.STATUS_UNKNOWN
+                return
+
+            ok = self._try_parse_metrics(test, metrics)
+            final = self.STATUS_SUCCEEDED if ok else self.STATUS_FAILED
+            if not ok:
+                test.metadata.setdefault(
+                    "__error",
+                    "Job left squeue; scontrol has no record; parsing failed or output missing."
+                )
+
+        test.metadata["__executor_status"] = final
+
+        if final != self.STATUS_SUCCEEDED:
             return
 
-        # Only parse metrics on success and only if a parser exists
-        if parser is None:
-            return
-
-        results = parse_metrics_from_execution(test) or {}
-        parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
-
-        for name, value in parsed.items():
-            if name in metrics:
-                metrics[name] = value
+        # On success, ensure parsing filled the metrics (if we haven't parsed yet)
+        if parser is not None:
+            # If we already parsed during fallback, this will be a no-op (still safe)
+            self._try_parse_metrics(test, metrics)
 
         self.logger.debug("Collected metrics: %s", test.metadata["metrics"])
 
-    # -------------------- helpers -------------------- #
+    # ------------------------------------------------------------------ #
+    # Helpers
+    # ------------------------------------------------------------------ #
 
-    def _parse_jobid(self, stdout: str) -> str | None:
+    def _parse_jobid(self, stdout: str) -> Optional[str]:
         """
         Supports:
           - sbatch --parsable  -> "12345" or "12345;something"
@@ -392,18 +441,25 @@ class SlurmExecutor(BaseExecutor):
         """
         if not stdout:
             return None
+
         token = stdout.splitlines()[-1].strip()
-        # parsable case
-        cand = token.split(";")[0].strip()
+
+        # parsable form: "<jobid>[;...]"
+        cand = token.split(";", 1)[0].strip()
         if cand.isdigit():
             return cand
-        # classic case
+
+        # classic form: "... 12345"
         parts = token.split()
         if parts and parts[-1].isdigit():
             return parts[-1]
+
         return None
 
-    def _squeue_state(self, job_id: str) -> str | None:
+    def _squeue_state(self, job_id: str) -> Optional[str]:
+        """
+        Returns job state string (e.g., PENDING/RUNNING/...) or None if not in queue.
+        """
         try:
             r = subprocess.run(
                 ["squeue", "-j", job_id, "--noheader", "--format=%T"],
@@ -416,41 +472,50 @@ class SlurmExecutor(BaseExecutor):
                 return None
             return out.splitlines()[0].strip()
         except subprocess.CalledProcessError as e:
+            # treat failure as "not visible in queue" (best effort)
             self.logger.debug("squeue failed for %s: %s", job_id, (e.stderr or str(e)).strip())
             return None
 
-    def _sacct_info(self, job_id: str) -> dict[str, str | None]:
+    def _scontrol_info(self, job_id: str) -> Dict[str, Optional[str]]:
         """
-        Uses sacct (requires SLURM accounting). Falls back to None values if unavailable.
+        Best-effort final status without sacct.
+
+        Returns:
+          {"state": "...", "exitcode": "..."} when available,
+          otherwise None values.
         """
-        cmd = ["sacct", "-j", job_id, "--parsable2", "--noheader", "--format=JobID,State,ExitCode,Start,End"]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            lines = [(ln or "").strip() for ln in (r.stdout or "").splitlines() if (ln or "").strip()]
-            if not lines:
-                return {"state": None, "exitcode": None, "start": None, "end": None}
+            r = subprocess.run(
+                ["scontrol", "show", "job", job_id],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            txt = (r.stdout or "").strip()
+            if not txt:
+                return {"state": None, "exitcode": None}
 
-            # Prefer the .batch step when present
-            chosen = None
-            for ln in lines:
-                parts = ln.split("|")
-                if parts and parts[0].endswith(".batch"):
-                    chosen = parts
-                    break
-            if chosen is None:
-                chosen = lines[0].split("|")
+            state = None
+            exitcode = None
 
-            return {
-                "state": chosen[1].strip() if len(chosen) > 1 else None,
-                "exitcode": chosen[2].strip() if len(chosen) > 2 else None,
-                "start": chosen[3].strip() if len(chosen) > 3 else None,
-                "end": chosen[4].strip() if len(chosen) > 4 else None,
-            }
+            # Key=Value tokens separated by spaces/newlines
+            for tok in txt.replace("\n", " ").split():
+                if tok.startswith("JobState="):
+                    state = tok.split("=", 1)[1].strip()
+                elif tok.startswith("ExitCode="):
+                    exitcode = tok.split("=", 1)[1].strip()
+
+            return {"state": state, "exitcode": exitcode}
+
         except subprocess.CalledProcessError as e:
-            self.logger.debug("sacct failed for %s: %s", job_id, (e.stderr or str(e)).strip())
-            return {"state": None, "exitcode": None, "start": None, "end": None}
+            # common if job aged out: "Invalid job id specified"
+            self.logger.debug("scontrol show job %s failed: %s", job_id, (e.stderr or str(e)).strip())
+            return {"state": None, "exitcode": None}
 
-    def _final_status(self, state: str | None, exitcode: str | None) -> str:
+    def _map_final_status(self, state: Optional[str], exitcode: Optional[str]) -> str:
+        """
+        Map SLURM controller state + exit code into BaseExecutor status.
+        """
         if state is None:
             return self.STATUS_UNKNOWN
 
@@ -463,11 +528,44 @@ class SlurmExecutor(BaseExecutor):
             return self.STATUS_RUNNING
 
         if base == "COMPLETED":
+            # ExitCode is usually "0:0" for success
             if exitcode is None or exitcode.strip() in {"", "0:0"}:
                 return self.STATUS_SUCCEEDED
             return self.STATUS_FAILED
 
-        if base in {"FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL"}:
+        if base in self.SLURM_FAIL_STATES:
             return self.STATUS_FAILED
 
         return self.STATUS_UNKNOWN
+
+    def _try_parse_metrics(self, test, metrics: Dict[str, Any]) -> bool:
+        """
+        Parser-based success heuristic:
+          - if parser.file exists AND parse_metrics_from_execution succeeds => True
+          - else => False, and sets test.metadata["__error"].
+        """
+        parser = test.parser
+        if parser is None:
+            return False
+
+        try:
+            fpath = Path(parser.file)
+        except Exception:
+            fpath = None
+
+        if fpath is None or not fpath.exists():
+            test.metadata["__error"] = f"Parser file does not exist: {parser.file}"
+            return False
+
+        try:
+            results = parse_metrics_from_execution(test) or {}
+            parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
+
+            for name, value in parsed.items():
+                if name in metrics:
+                    metrics[name] = value
+            return True
+
+        except Exception as e:
+            test.metadata["__error"] = f"Parsing failed: {e}"
+            return False
