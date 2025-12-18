@@ -158,8 +158,9 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
 
         if script.parser:
             logger.debug("    Parser:")
-            logger.debug(f"      Type : {script.parser.type}")
             logger.debug(f"      File : {script.parser.file}")
+            logger.debug(f"      metrics: {[m.name for m in script.parser.metrics]}")
+            logger.debug(f"      script: {script.parser.parser_script}")
 
             if script.parser.metrics:
                 logger.debug("      Metrics:")
@@ -175,16 +176,33 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
                     + script.parser.parser_script.replace("\n", "\n      ")
                 )
 
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------    
     logger.debug(sub)
     logger.debug("Output")
     logger.debug(sub)
-    logger.debug(f"  CSV path : {cfg.output.csv.path}")
-    logger.debug("  CSV fields:")
-    for field in cfg.output.csv.include:
-        logger.debug(f"    - {field}")
 
-    logger.debug(sep)
+    sink = cfg.output.sink
+    logger.debug(f"  Type : {sink.type}")
+    logger.debug(f"  Path : {sink.path}")
+    logger.debug(f"  Mode : {sink.mode}")
+
+    if sink.type == "sqlite":
+        logger.debug(f"  Table: {sink.table}")
+
+    # Field selection policy
+    if sink.include:
+        logger.debug("  Selection: include-only (only these fields will be saved)")
+        logger.debug("  Include:")
+        for field in sink.include:
+            logger.debug(f"    - {field}")
+    elif sink.exclude:
+        logger.debug("  Selection: exclude (all fields will be saved except these)")
+        logger.debug("  Exclude:")
+        for field in sink.exclude:
+            logger.debug(f"    - {field}")
+    else:
+        logger.debug("  Selection: default (all vars, metadata, metrics, and benchmark/round/execution fields will be saved)")
+
 
 
 

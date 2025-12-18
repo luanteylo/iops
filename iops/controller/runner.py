@@ -3,7 +3,7 @@ from iops.utils.logger import HasLogger
 from iops.controller.planner import BasePlanner
 from iops.controller.executors import BaseExecutor
 from iops.utils.generic_config import GenericBenchmarkConfig
-from iops.utils.execution_matrix import build_execution_matrix
+from iops.utils.output_writer import save_test_execution
 
 from typing import Dict, Any
 from datetime import datetime
@@ -29,6 +29,9 @@ class IOPSRunner(HasLogger):
                 break
 
             test_count += 1
+            
+            self.executor.submit(test)
+            self.executor.wait_and_collect(test)
             # run test
             # placeholder for actual test execution logic            
             if self.args.log_level.upper() == 'DEBUG':
@@ -36,12 +39,17 @@ class IOPSRunner(HasLogger):
             else:
                 self.logger.info(test)
             
-            job_id = self.executor.submit(test)
-            self.executor.wait_and_collect(test)
+            # check the status on the metadata
+            self.logger.info("Test %s status: %s", test.execution_id, test.metadata["__executor_status"])
+                
+            # add test to output file even if it failed
+            save_test_execution(test)
+
 
 
 
         self.logger.info("All tests have been planned. Total tests: %d", test_count)
+        self.logger.info(f"Results saved to: {self.cfg.output.sink.path}")
         self.logger.info("IOPS Runner finished.")
             
 

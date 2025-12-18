@@ -1,29 +1,30 @@
-
 from iops.utils.logger import HasLogger
 from iops.utils.generic_config import GenericBenchmarkConfig
 from iops.utils.execution_matrix import ExecutionInstance, build_execution_matrix
+
 from typing import List, Any
 from abc import ABC, abstractmethod
 from pathlib import Path
 import random
 
+
 class BasePlanner(ABC, HasLogger):
     _registry = {}
 
     def __init__(self, cfg: GenericBenchmarkConfig):
-        self.cfg = cfg        
+        self.cfg = cfg
         # create a random generator with a fixed seed for reproducibility
         self.random = random.Random(cfg.benchmark.random_seed)
         self.logger.info("Planner initialized with benchmark config: %s", cfg.benchmark)
         self.logger.info("Using random seed: %s", cfg.benchmark.random_seed)
-    
+
     @classmethod
     def register(cls, name):
         def decorator(subclass):
             cls._registry[name.lower()] = subclass
             return subclass
         return decorator
-    
+
     @classmethod
     def build(cls, cfg) -> "BasePlanner":
         name = cfg.benchmark.search_method
@@ -31,30 +32,33 @@ class BasePlanner(ABC, HasLogger):
         if executor_cls is None:
             raise ValueError(f"Executor '{name}' is not registered.")
         return executor_cls(cfg)
-    
+
     def random_sample(self, items: List[ExecutionInstance]) -> List[ExecutionInstance]:
-        # randomdly sample all items of the list
+        # randomly sample all items of the list
         sample_size = len(items)
         if sample_size > 0:
-            self.logger.debug("Randomly sampling %d items from %d total items.", sample_size, len(items))
-            items =  self.random.sample(items, sample_size)
+            self.logger.debug(
+                "Randomly sampling %d items from %d total items.",
+                sample_size,
+                len(items),
+            )
+            items = self.random.sample(items, sample_size)
         else:
             self.logger.debug("No items to sample from.")
-
         return items
-        
 
-    # get next test to run
     @abstractmethod
     def next_test(self) -> Any:
         pass
-    
+
 
 @BasePlanner.register("exhaustive")
 class Exhaustive(BasePlanner, HasLogger):
     """
     A brute-force planner that exhaustively searches the parameter space,
     supports multiple rounds and repetitions.
+
+    Idea B (implemented): random interleaving of repetitions within each execution_matrix.
     """
 
     def __init__(self, cfg: GenericBenchmarkConfig):
@@ -72,11 +76,17 @@ class Exhaustive(BasePlanner, HasLogger):
         # Single-round control flag
         self._single_round_built: bool = False
 
-        # Repetitions per test (planner-level)
-        self.current_rep: int = 0  # 0-based repetition index for current test
-
         # Defaults to be used for the *next* round
         self._defaults_for_next_round: dict[str, Any] = {}
+
+        # ------------------------------------------------------------------
+        # Idea B state (per execution_matrix): random interleaving of reps
+        # ------------------------------------------------------------------
+        self._active_indices: list[int] = []          # tests with reps remaining
+        self._next_rep_by_idx: dict[int, int] = {}    # next rep (0-based) per test index
+        self._total_reps_by_idx: dict[int, int] = {}  # total reps per test index
+        self._attempt_count: int = 0                  # attempts emitted in current matrix
+        self._attempt_total: int = 0                  # sum(repetitions) in current matrix
 
         self.logger.info(
             "Exhaustive planner initialized. "
@@ -88,6 +98,33 @@ class Exhaustive(BasePlanner, HasLogger):
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
+    def _init_interleaving_state(self) -> None:
+        """
+        Initialize the Idea B bookkeeping for the current execution_matrix.
+        """
+        assert self.execution_matrix is not None
+
+        self._active_indices = []
+        self._next_rep_by_idx = {}
+        self._total_reps_by_idx = {}
+        self._attempt_count = 0
+        self._attempt_total = 0
+
+        for i, t in enumerate(self.execution_matrix):
+            reps = int(getattr(t, "repetitions", 1) or 1)
+            if reps < 1:
+                reps = 1
+            self._next_rep_by_idx[i] = 0
+            self._total_reps_by_idx[i] = reps
+            self._attempt_total += reps
+            self._active_indices.append(i)
+
+        self.logger.info(
+            "Built matrix: %d tests, %d total attempts (random interleaving enabled).",
+            self.total_tests,
+            self._attempt_total,
+        )
+
     def _build_next_execution_matrix(self) -> bool:
         """
         Build the next execution_matrix.
@@ -101,7 +138,6 @@ class Exhaustive(BasePlanner, HasLogger):
         if self.multiple_rounds:
             # reset per-matrix state
             self.current_index = 0
-            self.current_rep = 0
             self.execution_matrix = None
             self.total_tests = 0
 
@@ -129,11 +165,14 @@ class Exhaustive(BasePlanner, HasLogger):
                 self.current_round,
                 self.total_tests,
             )
+
+            if self.total_tests > 0:
+                self._init_interleaving_state()
+
             return self.total_tests > 0
 
         # Case 2: single round (no cfg.rounds)
         if self._single_round_built:
-            # We already built the single-round matrix once and fully consumed it.
             self.logger.info("Single-round execution matrix already built. No more tests.")
             return False
 
@@ -141,7 +180,6 @@ class Exhaustive(BasePlanner, HasLogger):
 
         # reset per-matrix state
         self.current_index = 0
-        self.current_rep = 0
         self.current_round = None
 
         self.execution_matrix = self.random_sample(build_execution_matrix(self.cfg))
@@ -150,6 +188,10 @@ class Exhaustive(BasePlanner, HasLogger):
         self._single_round_built = True  # mark as built
 
         self.logger.info("Total tests in execution matrix: %d", self.total_tests)
+
+        if self.total_tests > 0:
+            self._init_interleaving_state()
+
         return self.total_tests > 0
 
     def _select_best_execution(self) -> Any:
@@ -171,41 +213,55 @@ class Exhaustive(BasePlanner, HasLogger):
         test_idx_for_log: int,
     ) -> None:
         """
-        Create folders, script files, and post-script files for a given test
-        and repetition.
+        Create folders + scripts for one test execution and one repetition.
 
-        Directory layout:
-
-        - Multi-round:
-            <workdir>/round_<round_name>/execution_<execution_id>/
-        - Single-round:
-            <workdir>/execution_<execution_id>/
+        Layout:
+        <workdir>/runs/
+            ├── round_01_<round_name>/           (if rounds)
+            │   └── exec_0001/
+            │       └── repetition_001/
+            │           ├── run_<script>.sh
+            │           └── post_<script>.sh (optional)
+            └── exec_0001/                       (if no rounds)
+                └── repetition_001/
         """
-
         # 1-based repetition number
         test.repetition = rep_idx + 1
-        # Also expose via metadata so {{ repetition }} works in templates
         if not hasattr(test, "metadata") or test.metadata is None:
             test.metadata = {}
         test.metadata["repetition"] = test.repetition
 
-        # Base directory depends on whether we are in a round
+        run_root = Path(self.cfg.benchmark.workdir)
+        runs_root = run_root / "runs"
+        runs_root.mkdir(parents=True, exist_ok=True)
+
+        # ---- round dir ----
         if self.current_round:
-            base_dir = Path(self.cfg.benchmark.workdir) / f"round_{self.current_round}"
+            round_idx = getattr(test, "round_index", None)
+            if round_idx is None:
+                round_idx = next(
+                    (i for i, r in enumerate(self.cfg.rounds) if r.name == self.current_round),
+                    0,
+                )
+            round_dir = runs_root / f"round_{round_idx + 1:02d}_{self.current_round}"
         else:
-            base_dir = Path(self.cfg.benchmark.workdir)
+            round_dir = runs_root
 
-        base_dir.mkdir(parents=True, exist_ok=True)
+        round_dir.mkdir(parents=True, exist_ok=True)
 
-        # Execution directory
-        test.execution_dir = base_dir / f"execution_{test.execution_id}"
-        test.execution_dir.mkdir(parents=True, exist_ok=True)
-
-        # Script file
-        test.script_file = (
-            test.execution_dir
-            / f"run_{test.script_name}_{test.execution_id}_{test.repetition}.sh"
+        # ---- execution dir ----
+        exec_dir = (
+            round_dir
+            / f"exec_{test.execution_id:04d}"
+            / f"repetition_{test.repetition:03d}"
         )
+        exec_dir.mkdir(parents=True, exist_ok=True)
+
+        # Point to repetition dir (useful for templates like {{ execution_dir }})
+        test.execution_dir = exec_dir
+
+        # ---- script files live inside repetition dir ----
+        test.script_file = exec_dir / f"run_{test.script_name}.sh"
         with open(test.script_file, "w") as f:
             f.write(test.script_text)
         self.logger.debug(
@@ -214,12 +270,8 @@ class Exhaustive(BasePlanner, HasLogger):
             test.script_file,
         )
 
-        # Post-processing script (if any)
         if getattr(test, "post_script", None):
-            test.post_script_file = (
-                test.execution_dir
-                / f"post_{test.script_name}_{test.execution_id}_{test.repetition}.sh"
-            )
+            test.post_script_file = exec_dir / f"post_{test.script_name}.sh"
             with open(test.post_script_file, "w") as f:
                 f.write(test.post_script)
             self.logger.debug(
@@ -235,21 +287,22 @@ class Exhaustive(BasePlanner, HasLogger):
         """
         Returns the next test to run (including repetitions),
         or None when all tests in all rounds are done.
-        """
 
+        Idea B: random interleaving of repetitions.
+        """
         while True:
+            matrix_finished = (
+                self.execution_matrix is not None
+                and self.total_tests > 0
+                and len(self._active_indices) == 0
+            )
+
             # Need a matrix (first time) OR we finished the current one -> build next
-            if self.execution_matrix is None or self.current_index >= self.total_tests:
+            if self.execution_matrix is None or matrix_finished:
                 # If we just finished a round in a multi-round setup,
                 # pick best_exec and prepare defaults for the next round.
-                if (
-                    self.multiple_rounds
-                    and self.execution_matrix is not None
-                    and self.total_tests > 0
-                    and self.current_index >= self.total_tests
-                ):
+                if self.multiple_rounds and matrix_finished:
                     best_exec = self._select_best_execution()
-                    # propagate all vars as defaults for the next round
                     self._defaults_for_next_round = dict(getattr(best_exec, "vars", {}))
                     self.logger.info(
                         "Using vars from best execution as defaults for the next round."
@@ -257,53 +310,49 @@ class Exhaustive(BasePlanner, HasLogger):
 
                 # Attempt to build the next matrix (round or single)
                 if not self._build_next_execution_matrix():
-                    # No more rounds / tests available
                     return None
 
                 # The new matrix might be empty (weird config), so loop again if so
                 if self.total_tests == 0:
                     continue
 
-            # At this point we have a valid matrix with remaining tests
-            test = self.execution_matrix[self.current_index]
+            # At this point we have a valid matrix with remaining attempts
+            idx = self.random.choice(self._active_indices)
+            test = self.execution_matrix[idx]
 
-            # Handle repetitions: same test object, multiple times
-            rep_idx = self.current_rep
-            self.current_rep += 1
+            rep_idx = self._next_rep_by_idx[idx]
+            self._next_rep_by_idx[idx] += 1
+            self._attempt_count += 1
 
-            if self.current_rep >= test.repetitions:
-                # Move to next test after the last repetition
-                self.current_rep = 0
-                self.current_index += 1
+            # If this test is done, remove it from the active pool
+            if self._next_rep_by_idx[idx] >= self._total_reps_by_idx[idx]:
+                # remove by value (list is small; fine)
+                self._active_indices.remove(idx)
 
-            # Logging (1-based indices for readability)
-            test_idx_for_log = self.current_index + (0 if self.current_rep == 0 else 1)
-
+            # Logging: attempt-oriented (more meaningful now)
             if self.current_round:
                 self.logger.debug(
-                    "Providing test %d/%d, repetition %d/%d from round '%s'",
-                    test_idx_for_log,
-                    self.total_tests,
+                    "Providing attempt %d/%d: exec_id=%s (matrix idx=%d), repetition %d/%d from round '%s'",
+                    self._attempt_count,
+                    self._attempt_total,
+                    getattr(test, "execution_id", "?"),
+                    idx,
                     rep_idx + 1,
-                    test.repetitions,
+                    getattr(test, "repetitions", 1),
                     self.current_round,
                 )
             else:
                 self.logger.debug(
-                    "Providing test %d/%d, repetition %d/%d (single round)",
-                    test_idx_for_log,
-                    self.total_tests,
+                    "Providing attempt %d/%d: exec_id=%s (matrix idx=%d), repetition %d/%d (single round)",
+                    self._attempt_count,
+                    self._attempt_total,
+                    getattr(test, "execution_id", "?"),
+                    idx,
                     rep_idx + 1,
-                    test.repetitions,
+                    getattr(test, "repetitions", 1),
                 )
 
             # Prepare filesystem artifacts (dirs + scripts) for this test+repetition
-            self._prepare_execution_artifacts(test, rep_idx, test_idx_for_log)
-
+            # test_idx_for_log is informational; we keep idx+1 as "matrix position"
+            self._prepare_execution_artifacts(test, rep_idx, test_idx_for_log=idx + 1)
             return test
-
-
-
-
-        
- 

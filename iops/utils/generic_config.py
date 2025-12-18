@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from iops.utils.script_validation import validate_parser_script
+
+
 from typing import Any, Dict, List, Optional, Literal
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,8 +69,7 @@ class MetricConfig:
 
 
 @dataclass
-class ParserConfig:
-    type: str
+class ParserConfig:    
     file: str
     metrics: List[MetricConfig]
     # parser_script is optional
@@ -84,14 +86,20 @@ class ScriptConfig:
 
 
 @dataclass
-class OutputCSVConfig:
+class OutputSinkConfig:
+    type: Literal["csv", "parquet", "sqlite"]
     path: str
-    include: List[str]
+    mode: Literal["append", "overwrite"] = "append"
+    include: List[str] = field(default_factory=list)
+    exclude: List[str] = field(default_factory=list)
+    table: str = "results"  # sqlite only
+
+    resolved_path: Optional[Path] = None
 
 
 @dataclass
 class OutputConfig:
-    csv: OutputCSVConfig
+    sink: OutputSinkConfig
 
 
 # ----------------- Rounds blocks ----------------- #
@@ -154,6 +162,99 @@ class GenericBenchmarkConfig:
 
 
 # ----------------- helpers ----------------- #
+
+from typing import Set, Tuple
+
+
+def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
+    allowed: Set[str] = set()
+
+    # --- benchmark.* ---
+    allowed.update({
+        "benchmark.name",
+        "benchmark.description",
+        "benchmark.workdir",
+        "benchmark.repetitions",
+        "benchmark.sqlite_db",
+        "benchmark.search_method",
+        "benchmark.executor",
+        "benchmark.random_seed",
+    })
+
+    # --- execution.* (decide the contract) ---
+    allowed.update({
+        "execution.execution_id",
+        "execution.repetition",
+        "execution.repetitions",
+        "execution.workdir",
+        "execution.execution_dir",
+        "execution.round_name",
+        "execution.round_index",
+    })
+
+    # --- round.* ---
+    allowed.update({
+        "round.name",
+        "round.index",
+        "round.repetitions",
+    })
+
+    # --- vars.<name> ---
+    for vname in cfg.vars.keys():
+        allowed.add(f"vars.{vname}")
+        # optional shorthand support
+        allowed.add(vname)
+
+    # --- metadata.<key> from command.metadata ---
+    for k in (cfg.command.metadata or {}).keys():
+        allowed.add(f"metadata.{k}")
+        # optional shorthand support
+        allowed.add(k)
+
+    # --- metrics.<name> from script parser metrics ---
+    # If you have multiple scripts, union them all
+    for s in cfg.scripts:
+        if s.parser is None:
+            continue
+        for m in (s.parser.metrics or []):
+            allowed.add(f"metrics.{m.name}")
+            # optional shorthand support
+            allowed.add(m.name)
+
+    return allowed
+
+
+def _validate_output_field_list(
+    cfg: GenericBenchmarkConfig,
+    fields: list[str],
+    where: str,
+) -> None:
+    allowed = _collect_allowed_output_fields(cfg)
+
+    bad: list[str] = []
+    for f in fields:
+        if not isinstance(f, str) or not f.strip():
+            bad.append(str(f))
+            continue
+        if f not in allowed:
+            bad.append(f)
+
+    if bad:
+        # helpful suggestions (simple prefix match)
+        suggestions = []
+        for b in bad[:10]:
+            pref = b.split(".")[0]
+            close = sorted([a for a in allowed if a.startswith(pref + ".")])[:10]
+            if close:
+                suggestions.append(f"- '{b}': did you mean one of {close}?")
+
+        hint = "\n".join(suggestions)
+        raise ConfigValidationError(
+            f"{where} contains unknown field(s): {bad}\n"
+            f"Allowed examples: {sorted(list(allowed))[:25]}...\n"
+            f"{hint}"
+        )
+
 
 def _expand_path(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
@@ -227,7 +328,6 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
                 for m in parser_block.get("metrics", [])
             ]
             parser_cfg = ParserConfig(
-                type=parser_block["type"],
                 file=parser_block["file"],
                 metrics=metrics_cfg,
                 parser_script=parser_block.get("parser_script"),
@@ -244,11 +344,15 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         )
 
     # ---- output ----
-    out = data["output"]["csv"]
+    out = data["output"]["sink"]
     output = OutputConfig(
-        csv=OutputCSVConfig(
+        sink=OutputSinkConfig(
+            type=out["type"],
             path=out["path"],
-            include=out["include"],
+            mode=out.get("mode", "append"),
+            include=out.get("include", []) or [],
+            exclude=out.get("exclude", []) or [],
+            table=out.get("table", "results"),
         )
     )
 
@@ -291,39 +395,40 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
 
 
 def create_workdir(cfg: GenericBenchmarkConfig, logger) -> None:
-        """
-        Creates a new execution directory inside the configured work directory.
-        If the base work directory does not exist, it will be created.
-        Then, a subdirectory named 'execution_<id>' is created, where <id> is the next available integer.
-        """
-        base_workdir = cfg.benchmark.workdir
+    """
+    Creates a new RUN directory under the configured base workdir.
 
-        # Ensure the base work directory exists
-        if not base_workdir.exists():
-            base_workdir.mkdir(parents=True, exist_ok=True)
-            logger.debug(f"Created base work directory: {base_workdir}")
-        else:
-            logger.debug(f"Base work directory already exists: {base_workdir}")
+    Layout:
+      <base_workdir>/run_<id>/
+        ├── logs/
+        └── runs/
+    """
+    base_workdir = cfg.benchmark.workdir
 
-        # Find all existing execution directories
-        execution_dirs = [
-            d for d in base_workdir.iterdir()
-            if d.is_dir() and d.name.startswith("execution_") and d.name.split('_')[1].isdigit()
-        ]
+    base_workdir.mkdir(parents=True, exist_ok=True)
+    logger.debug(f"Base work directory: {base_workdir}")
 
-        # Determine the next execution ID
-        next_id = (
-            max(int(d.name.split('_')[1]) for d in execution_dirs) + 1
-            if execution_dirs else 1
-        )
+    # Find existing run directories
+    run_dirs = [
+        d for d in base_workdir.iterdir()
+        if d.is_dir()
+        and d.name.startswith("run_")
+        and d.name.split("_", 1)[1].isdigit()
+    ]
 
-        # Create the new execution directory
-        new_execution_dir = base_workdir / f"execution_{next_id}"
-        new_execution_dir.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Created new execution directory: {new_execution_dir}")
+    next_id = max((int(d.name.split("_", 1)[1]) for d in run_dirs), default=0) + 1
 
-        # Update the config to point to the new execution directory
-        cfg.benchmark.workdir = new_execution_dir
+    run_root = base_workdir / f"run_{next_id:03d}"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    # Standard subfolders
+    (run_root / "runs").mkdir(parents=True, exist_ok=True)
+    (run_root / "logs").mkdir(parents=True, exist_ok=True)
+
+    logger.debug(f"Created run root: {run_root}")
+
+    # Update cfg.workdir to this run root (stable during execution)
+    cfg.benchmark.workdir = run_root
 
 def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     # ---- benchmark ----
@@ -402,31 +507,58 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 raise ConfigValidationError(
                     f"script '{s.name}' has a 'post' block but empty 'script'"
                 )
-
         # parser is OPTIONAL – only validate if present
         if s.parser is not None:
-            if not s.parser.type:
-                raise ConfigValidationError(
-                    f"script '{s.name}' parser.type must not be empty"
-                )
-            if not s.parser.file:
+            if not s.parser.file or not str(s.parser.file).strip():
                 raise ConfigValidationError(
                     f"script '{s.name}' parser.file must not be empty"
                 )
-            if not s.parser.metrics and s.parser.parser_script is None:
+
+            if s.parser.parser_script is None or not s.parser.parser_script.strip():
                 raise ConfigValidationError(
-                    f"script '{s.name}' parser must define either metrics or parser_script"
+                    f"script '{s.name}' parser.parser_script must not be empty"
                 )
-            if s.parser.parser_script is not None and not s.parser.parser_script.strip():
+
+            ok, err = validate_parser_script(s.parser.parser_script)
+            if not ok:
                 raise ConfigValidationError(
-                    f"script '{s.name}' parser.parser_script is empty"
+                    f"script '{s.name}' has invalid parser_script:\n{err}"
+                )
+
+            if not s.parser.metrics:
+                raise ConfigValidationError(
+                    f"script '{s.name}' parser.metrics must be non-empty "
+                    f"(positional mapping requires metric names)"
                 )
 
     # ---- output ----
-    if not cfg.output.csv.path:
-        raise ConfigValidationError("output.csv.path must not be empty")
-    if not cfg.output.csv.include:
-        raise ConfigValidationError("output.csv.include must not be empty")
+    # ---- output ----
+    sink = cfg.output.sink
+
+    if sink.type not in ("csv", "parquet", "sqlite"):
+        raise ConfigValidationError("output.sink.type must be one of: csv, parquet, sqlite")
+
+    if not sink.path or not str(sink.path).strip():
+        raise ConfigValidationError("output.sink.path must not be empty")
+
+    if sink.mode not in ("append", "overwrite"):
+        raise ConfigValidationError("output.sink.mode must be append or overwrite")
+
+    if sink.include and sink.exclude:
+        raise ConfigValidationError("output.sink cannot define both 'include' and 'exclude'")
+
+    # Validate that requested fields exist in config (static check)
+    if sink.include:
+        _validate_output_field_list(cfg, sink.include, "output.sink.include")
+    if sink.exclude:
+        _validate_output_field_list(cfg, sink.exclude, "output.sink.exclude")
+
+    if sink.type == "sqlite":
+        if not sink.table or not str(sink.table).strip():
+            raise ConfigValidationError("output.sink.table must not be empty when type=sqlite")
+
+
+
 
     # ---- rounds (optional) ----
     # If no rounds: that's fine, you can keep current “single global matrix” behaviour.

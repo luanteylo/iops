@@ -10,67 +10,57 @@ benchmark:
 
 
 vars:
-  # Swept variables (global definition)
-  nodes:
-    type: int
-    sweep:
-      mode: range           # range | list
-      start: 1
-      end: 4
-      step: 1
+  # Swept variables (global definition) 
   processes_per_node:
-    type: int
-    sweep:
-      mode: list
-      values: [8]
-
-  volume_size_gb:
     type: int
     sweep:
       mode: list
       values: [8, 16, 32]
 
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [4]
+
   block_size_mb:
     type: int
-    expr: "(volume_size_gb * 1024) / (nodes * processes_per_node)"
-  
+    expr: "((volume_size_gb * 1024) / (processes_per_node) ) * error_var"
+
+    
   summary_file:
     type: str
     expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
 
+  error_var:
+    type: float
+    sweep:
+      mode: list
+      values: [1, 0.00001]
 
+
+  
+    
 command:
   template: >    
-    ior -w -b {{ block_size_mb }}mb -t 1m
+    ior -w -b {{ block_size_mb }}mb -t 1mb
     -O summaryFile={{summary_file}} -O summaryFormat=JSON
-    -o /beegfs/output.ior
+    -o /home/luan/filesystem/output.ior 
 
   metadata:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
-    volume_size_gb: "{{ volume_size_gb }}"
-    block_size_mb: "{{ block_size_mb }}"
-    total_data_size: "{{ volume_size_gb }}"
 
 scripts:
   - name: "ior" 
-    submit: "sbatch"
+    submit: "bash"
     script_template: |
-      #!/bin/bash
-      #SBATCH --job-name=ior_benchmark_{{ repetition }}_{{ round_name }}
-      #SBATCH --output=ior_benchmark_%j.out
-      #SBATCH --error=ior_benchmark_%j.err
-      #SBATCH --nodes={{ nodes }}
-      #SBATCH --ntasks-per-node={{ processes_per_node }}
-      #SBATCH --time=01:00:00
-      #SBATCH --account=default
+      #!/bin/bash     
+      
+      set -euo pipefail # exit on error, undefined var, or failed pipe
 
-      module load mpi
-      module load ior
-
-      mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \
-      {{ command.template }}      
+      mpirun --oversubscribe  -np {{processes_per_node}} {{ command.template }}      
      
       echo "repetition {{ repetition }} completed."
 
@@ -80,53 +70,60 @@ scripts:
         echo "Job completed. Summary file located at {{ summary_file }}"
 
     parser:
-      type: "json"
       file: "{{ summary_file }}"
       metrics:
-        - name: "write_bandwidth"
-          path: "results[0].bw_MiB"
+        - name: bwMiB
+        - name: iops
+        - name: latency
       parser_script: |
-        import json, sys
-        with open(sys.argv[1], "r") as f:
-            data = json.load(f)
-        print(data["results"][0]["bw_MiB"])
+        import json
+
+        def parse(file_path: str):
+            """
+            IOR JSON parser.
+
+            Returns a dict with ALL fields from the first write Results entry:
+              - bwMiB
+              - blockKiB
+              - xferKiB
+              - iops
+              - latency
+              - openTime
+              - wrRdTime
+              - closeTime
+              - totalTime
+              - access
+            """
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            # Prefer tests[].Results (per-execution detailed metrics)
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError("No tests found in IOR JSON")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError("No Results found in IOR JSON")
+
+            # Pick the write result (or the first one if only one exists)
+            write_res = next(
+                (r for r in results if str(r.get("access", "")).lower() == "write"),
+                results[0],
+            )
+
+            # Return everything as-is
+            return write_res
+
+        
 
 output:
-  csv:
+  sink:
+    type: csv          # parquet | csv | sqlite
     path: "{{ workdir }}/results.csv"
-    include:
-      - "benchmark.name"
-      - "nodes"
-      - "processes_per_node"
-      - "block_size_mb"
-      - "ost_path"
-      - "total_data_size"
-      - "write_bandwidth"
+    mode: append           # append | overwrite
+    include: []            # optional, mutually exclusive with exclude
+    exclude: ["benchmark.name", "benchmark.description"]            # optional, mutually exclusive with include
+    table: results         # only for sqlite
 
 
-    
-
-
-rounds:
-  # Round 1: sweep only `nodes`, keep others fixed.
-  - name: "nodes_sweep"
-    description: "Find best nodes by write bandwidth."
-    sweep_vars: ["nodes", "processes_per_node"]           # which vars from `vars` are swept in this round
-    fixed_overrides:                # optional: override defaults for some vars
-      block_size_mb: 16
-      processes_per_node: 16
-    repetitions: 3       
-    search:
-      metric: "write_bandwidth"     # name in parser metrics
-      objective: "max"              # max | min
-    propagate:
-      vars: ["nodes"]               # export best `nodes` to become default for next rounds
-  # Round 2: sweep `volume_size_gb` to find optimal size with best nodes from Round 1.
-  - name: "volume_size_sweep"
-    description: "Find best volume size by write bandwidth."
-    sweep_vars: ["volume_size_gb"]
-    repetitions: 3
-    search:
-      metric: "write_bandwidth"
-      objective: "max"
-    

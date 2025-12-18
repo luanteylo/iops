@@ -17,6 +17,8 @@ from iops.utils.generic_config import (
     ConfigValidationError,
 )
 
+
+
 # ----------------- Jinja helpers ----------------- #
 
 _jinja_env = Environment(
@@ -252,9 +254,16 @@ class ExecutionInstance:
     # Parser template (with possibly templated .file)
     parser_template: ParserConfig | None = None
 
-    # Output configuration (template)
-    csv_path_template: str | None = None
-    output_csv_fields: List[str] = field(default_factory=list)
+    # Output configuration (template + selection)
+    output_path_template: str | None = None
+    output_type: str = "parquet"   # csv | parquet | sqlite
+    output_mode: str = "append"    # append | overwrite
+    output_table: str = "results"  # sqlite only
+
+    output_include: List[str] = field(default_factory=list)
+    output_exclude: List[str] = field(default_factory=list)
+
+   
 
     # ---------- Internal helpers for vars & context ---------- #
 
@@ -394,15 +403,17 @@ class ExecutionInstance:
         return rendered
 
     @property
-    def output_csv_path(self) -> Optional[Path]:
+    def output_path(self) -> Optional[Path]:
         """
-        Render the CSV output path from csv_path_template.
+        Render the output sink path from output_path_template.
+        For sqlite, this is the DB file path.
         """
-        if not self.csv_path_template:
+        if not self.output_path_template:
             return None
         ctx = self._render_context()
-        csv_str = _render_template(self.csv_path_template, ctx)
-        return Path(csv_str)
+        path_str = _render_template(self.output_path_template, ctx)
+        return Path(path_str)
+
 
     @property
     def submit_cmd(self) -> str:
@@ -487,8 +498,7 @@ class ExecutionInstance:
         for m in self.parser_template.metrics:
             metrics.append(MetricConfig(name=m.name, path=m.path))
 
-        return ParserConfig(
-            type=self.parser_template.type,
+        return ParserConfig(           
             file=file_rendered,
             metrics=metrics,
             parser_script=self.parser_template.parser_script,
@@ -563,17 +573,26 @@ class ExecutionInstance:
             lines.append(f"Metadata: {meta_items}")
 
         # Output
-        if self.output_csv_path:
-            lines.append(f"Output: {self.output_csv_path}")
+        if self.output_path:
+            extra = f", table={self.output_table}" if self.output_type == "sqlite" else ""
+            lines.append(
+                f"Output: type={self.output_type}, mode={self.output_mode}, path={self.output_path}{extra}"
+            )
+            if self.output_include:
+                lines.append(f"Output fields (include): {', '.join(self.output_include)}")
+            elif self.output_exclude:
+                lines.append(f"Output fields (exclude): {', '.join(self.output_exclude)}")
+            else:
+                lines.append("Output fields: default (everything)")
+
 
         # Parser
         parser_obj = self.parser
         if parser_obj:
             metric_names = [m.name for m in parser_obj.metrics]
-            metrics_str = ", ".join(metric_names) if metric_names else "custom"
+            metrics_str = ", ".join(metric_names) 
             lines.append(
-                f"Parser: type={parser_obj.type}, file={parser_obj.file}, "
-                f"metrics={metrics_str}"
+                f"Parser: file={parser_obj.file}, metrics={metrics_str}"
             )
 
         lines.append(70 * "-")
@@ -628,19 +647,29 @@ class ExecutionInstance:
             for k, v in effective_metadata.items():
                 lines.append(f"  {k}: {v}")
 
-        if self.output_csv_path:
+        if self.output_path:
             lines.extend([
                 sep,
-                f"Output CSV : {self.output_csv_path}",
-                f"Fields     : {', '.join(self.output_csv_fields)}",
+                f"Output type : {self.output_type}",
+                f"Output mode : {self.output_mode}",
+                f"Output path : {self.output_path}",
             ])
+            if self.output_type == "sqlite":
+                lines.append(f"Output table: {self.output_table}")
+
+            if self.output_include:
+                lines.append(f"Fields (include): {', '.join(self.output_include)}")
+            elif self.output_exclude:
+                lines.append(f"Fields (exclude): {', '.join(self.output_exclude)}")
+            else:
+                lines.append("Fields: default (everything)")
+
 
         parser_obj = self.parser
         if parser_obj:
             lines.extend([
                 sep,
                 "Parser:",
-                f"  type        : {parser_obj.type}",
                 f"  file        : {parser_obj.file}",
                 "  metrics     :",
             ])
@@ -821,8 +850,15 @@ def build_execution_matrix(
     env_templates = dict(cfg.command.env) if cfg.command.env else {}
     metadata_templates = dict(cfg.command.metadata) if cfg.command.metadata else {}
 
-    # CSV path template
-    csv_path_template = cfg.output.csv.path
+    
+    # Output sink templates
+    output_path_template = cfg.output.sink.path
+    output_type = cfg.output.sink.type
+    output_mode = cfg.output.sink.mode
+    output_table = cfg.output.sink.table
+    output_include = list(cfg.output.sink.include)
+    output_exclude = list(cfg.output.sink.exclude)
+
 
     for combo in sweep_values_product:
         exec_id += 1
@@ -852,7 +888,6 @@ def build_execution_matrix(
                     metrics.append(MetricConfig(name=m.name, path=m.path))
 
                 parser_template = ParserConfig(
-                    type=script_cfg.parser.type,
                     file=script_cfg.parser.file,
                     metrics=metrics,
                     parser_script=script_cfg.parser.parser_script,
@@ -882,8 +917,13 @@ def build_execution_matrix(
                 submit_cmd_template=submit_cmd_template,
                 post_script_template=post_script_template,
                 parser_template=parser_template,
-                csv_path_template=csv_path_template,
-                output_csv_fields=list(cfg.output.csv.include),
+                output_path_template=output_path_template,
+                output_type=output_type,
+                output_mode=output_mode,
+                output_table=output_table,
+                output_include=output_include,
+                output_exclude=output_exclude,
+
             )
 
             executions.append(exec_instance)

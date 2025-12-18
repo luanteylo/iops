@@ -24,7 +24,10 @@ def setup_logger(
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    fmt = "%(asctime)s | %(class_tag)-10s | %(levelname)-5s | %(message)s"
+    fmt = "%(asctime)s | %(levelname)-5s | %(message)s"
+    if level <= logging.DEBUG:
+        fmt = "%(asctime)s | %(levelname)-5s | %(class_tag)-15s | %(message)s"
+    
     datefmt = "%Y-%m-%d %H:%M:%S"
 
     class WrappedMultilineFormatter(logging.Formatter):
