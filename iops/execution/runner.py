@@ -84,6 +84,50 @@ class IOPSRunner(HasLogger):
         # Keep single value for backward compatibility
         self.estimated_time_seconds: Optional[float] = self.estimated_time_scenarios[0] if self.estimated_time_scenarios else None
 
+        # Get expected metrics from configuration
+        self.expected_metrics = self._get_expected_metrics()
+
+        if self.cache and self.expected_metrics:
+            self.logger.debug(
+                f"Cache validation: Expecting {len(self.expected_metrics)} metrics: "
+                f"{sorted(self.expected_metrics)}"
+            )
+
+    def _get_expected_metrics(self) -> set:
+        """Get set of expected metric names from configuration."""
+        expected = set()
+        for script in self.cfg.scripts:
+            if script.parser and script.parser.metrics:
+                for metric in script.parser.metrics:
+                    expected.add(metric.name)
+        return expected
+
+    def _validate_cached_metrics(self, cached_metrics: dict) -> bool:
+        """
+        Validate that cached metrics contain all expected metrics.
+
+        Args:
+            cached_metrics: Metrics from cache
+
+        Returns:
+            True if all expected metrics are present, False otherwise
+        """
+        if not self.expected_metrics:
+            # No expected metrics defined, accept cache
+            return True
+
+        cached_metric_names = set(cached_metrics.keys())
+        missing_metrics = self.expected_metrics - cached_metric_names
+
+        if missing_metrics:
+            self.logger.warning(
+                f"  [Cache] INVALID: Cached result missing metrics: {sorted(missing_metrics)}. "
+                f"Will re-execute to collect all metrics."
+            )
+            return False
+
+        return True
+
     def _compute_cores(self, test) -> int:
         """Compute the number of cores for a test using cores_expr."""
         try:
@@ -486,24 +530,31 @@ class IOPSRunner(HasLogger):
                 )
 
                 if cached_result:
-                    # Use cached result
-                    self.cache_hits += 1
-                    used_cache = True
+                    # Validate that cached metrics contain all expected metrics
+                    if not self._validate_cached_metrics(cached_result['metrics']):
+                        # Cached result is incomplete, treat as cache miss
+                        self.cache_misses += 1
+                        self.logger.debug(f"  [Cache] MISS: Cached result missing required metrics")
+                        cached_result = None  # Will trigger execution below
+                    else:
+                        # Use cached result
+                        self.cache_hits += 1
+                        used_cache = True
 
-                    # Populate test with cached data
-                    test.metadata.update(cached_result['metadata'])
-                    test.metadata['metrics'] = cached_result['metrics']
-                    test.metadata['__cached'] = True
-                    test.metadata['__cached_at'] = cached_result['cached_at']
+                        # Populate test with cached data
+                        test.metadata.update(cached_result['metadata'])
+                        test.metadata['metrics'] = cached_result['metrics']
+                        test.metadata['__cached'] = True
+                        test.metadata['__cached_at'] = cached_result['cached_at']
 
-                    metrics_preview = ", ".join(list(cached_result['metrics'].keys())[:3])
-                    if len(cached_result['metrics']) > 3:
-                        metrics_preview += f" (+{len(cached_result['metrics'])-3} more)"
+                        metrics_preview = ", ".join(list(cached_result['metrics'].keys())[:3])
+                        if len(cached_result['metrics']) > 3:
+                            metrics_preview += f" (+{len(cached_result['metrics'])-3} more)"
 
-                    self.logger.debug(
-                        f"  [Cache] HIT: Loaded from cache (cached_at={cached_result['cached_at']}) "
-                        f"metrics=[{metrics_preview}]"
-                    )
+                        self.logger.debug(
+                            f"  [Cache] HIT: Loaded from cache (cached_at={cached_result['cached_at']}) "
+                            f"metrics=[{metrics_preview}]"
+                        )
                 else:
                     self.cache_misses += 1
                     self.logger.debug(f"  [Cache] MISS: Will execute and cache result")

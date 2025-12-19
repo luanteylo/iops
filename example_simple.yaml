@@ -19,7 +19,7 @@ benchmark:
   description: "A benchmark to measure I/O performance using the IOR tool."
   workdir: "/home/luan/workdir/"
   sqlite_db: "/home/luan/iops.db"
-  repetitions: 1 # global repetitions for each test case. It is ignored when rounds has its own value
+  repetitions: 3 # global repetitions for each test case. It is ignored when rounds has its own value
   search_method: "exhaustive" # used to define the policy for test execution selection
   executor : "local" # specify the executor to use : local | slurm
   random_seed: 43  # seed for any random operations in the benchmark
