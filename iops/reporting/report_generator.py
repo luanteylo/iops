@@ -3,6 +3,7 @@ IOPS Report Generator - Creates HTML reports with interactive plots.
 """
 
 import json
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -358,6 +359,9 @@ class ReportGenerator:
         search_method = self.metadata['benchmark'].get('search_method', '').lower()
         if search_method == 'bayesian':
             html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
+
+        # Add comprehensive variable analysis section
+        html_parts.append(self._generate_variable_analysis_section(metrics, report_vars))
 
         # All detailed plots at the end
         for metric in metrics:
@@ -745,30 +749,29 @@ class ReportGenerator:
             html += "</div>\n"
             return html
 
-        # 1. Bar plot of mean values by first swept variable
-        if len(swept_vars) >= 1:
-            fig = self._create_bar_plot(metric, swept_vars[0])
+        # 1. Bar plots - one for each variable
+        html += "<h3>Bar Plots by Variable</h3>\n"
+        for var in swept_vars:
+            fig = self._create_bar_plot(metric, var)
             html += '<div class="plot-container">\n'
             html += fig.to_html(full_html=False, include_plotlyjs=False)
             html += '</div>\n'
 
-        # 2. Line plot if we have 2+ swept variables
+        # 2. Line plots - one for each variable, grouped by others
         if len(swept_vars) >= 2:
-            fig = self._create_line_plot(metric, swept_vars[0], swept_vars[1])
-            html += '<div class="plot-container">\n'
-            html += fig.to_html(full_html=False, include_plotlyjs=False)
-            html += '</div>\n'
+            html += "<h3>Line Plots with Grouping</h3>\n"
+            for i, var in enumerate(swept_vars):
+                # For each variable, create line plot grouped by the next variable (cyclically)
+                group_var = swept_vars[(i + 1) % len(swept_vars)]
+                fig = self._create_line_plot(metric, var, group_var)
+                html += '<div class="plot-container">\n'
+                html += fig.to_html(full_html=False, include_plotlyjs=False)
+                html += '</div>\n'
 
         # 3. Heatmap if we have exactly 2 swept variables
         if len(swept_vars) == 2:
+            html += "<h3>Heatmap</h3>\n"
             fig = self._create_heatmap(metric, swept_vars[0], swept_vars[1])
-            html += '<div class="plot-container">\n'
-            html += fig.to_html(full_html=False, include_plotlyjs=False)
-            html += '</div>\n'
-
-        # 4. 3D scatter if we have 3 swept variables
-        if len(swept_vars) >= 3:
-            fig = self._create_3d_scatter(metric, swept_vars[0], swept_vars[1], swept_vars[2])
             html += '<div class="plot-container">\n'
             html += fig.to_html(full_html=False, include_plotlyjs=False)
             html += '</div>\n'
@@ -1312,6 +1315,289 @@ class ReportGenerator:
         )
 
         return fig
+
+    def _generate_variable_analysis_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """
+        Generate variable analysis section with key visualizations.
+
+        This section provides:
+        1. Parallel coordinates plot for multidimensional patterns
+        2. Variable importance/contribution analysis
+        """
+        html = '<div class="metric-section">\n'
+        html += "<h2>Variable Analysis & Relationships</h2>\n"
+        html += "<p>Analysis of how variables relate to performance metrics.</p>\n"
+
+        # 1. Parallel coordinates plot
+        html += "<h3>Parallel Coordinates Plot</h3>\n"
+        html += "<p>Visualizes all variables simultaneously. Each line represents one configuration, "
+        html += "colored by performance. Patterns and clusters reveal optimal parameter combinations.</p>\n"
+
+        for metric in metrics:
+            fig_parallel = self._create_parallel_coordinates(metric, report_vars)
+            if fig_parallel is not None:
+                html += '<div class="plot-container">\n'
+                html += fig_parallel.to_html(full_html=False, include_plotlyjs=False)
+                html += '</div>\n'
+
+        # 2. Variable impact analysis
+        html += "<h3>Variable Impact on Performance</h3>\n"
+        html += "<p>Shows how much each variable affects the performance metric based on variance analysis.</p>\n"
+
+        for metric in metrics:
+            fig_impact = self._create_variable_impact_plot(metric, report_vars)
+            if fig_impact is not None:
+                html += '<div class="plot-container">\n'
+                html += fig_impact.to_html(full_html=False, include_plotlyjs=False)
+                html += '</div>\n'
+
+        html += '</div>\n'
+        return html
+
+    def _create_correlation_matrix(self, metric: str, report_vars: List[str]) -> Optional[go.Figure]:
+        """Create correlation matrix heatmap for variables and metric."""
+        try:
+            metric_col = self._get_metric_column(metric)
+            var_cols = [self._get_var_column(v) for v in report_vars]
+
+            # Get relevant columns
+            cols_to_analyze = var_cols + [metric_col]
+            df_corr = self.df[cols_to_analyze].copy()
+
+            # Group by variables and compute mean metric
+            df_grouped = df_corr.groupby(var_cols)[metric_col].mean().reset_index()
+
+            # Compute correlation matrix
+            corr_matrix = df_grouped.corr()
+
+            # Create labels
+            labels = report_vars + [metric]
+
+            # Create heatmap
+            fig = go.Figure(data=go.Heatmap(
+                z=corr_matrix.values,
+                x=labels,
+                y=labels,
+                colorscale='RdBu',
+                zmid=0,
+                zmin=-1,
+                zmax=1,
+                text=corr_matrix.values,
+                texttemplate='%{text:.3f}',
+                textfont={"size": 10},
+                colorbar=dict(title='Correlation'),
+                hovertemplate='%{x} vs %{y}<br>Correlation: %{z:.3f}<extra></extra>'
+            ))
+
+            fig.update_layout(
+                title=f'Correlation Matrix - {metric}',
+                xaxis_title='Variables',
+                yaxis_title='Variables',
+                template='plotly_white',
+                height=500,
+                width=600
+            )
+
+            return fig
+        except Exception as e:
+            return None
+
+    def _create_parallel_coordinates(self, metric: str, report_vars: List[str]) -> Optional[go.Figure]:
+        """Create parallel coordinates plot."""
+        try:
+            metric_col = self._get_metric_column(metric)
+            var_cols = [self._get_var_column(v) for v in report_vars]
+
+            # Group by variables and compute mean metric
+            df_grouped = self.df.groupby(var_cols)[metric_col].mean().reset_index()
+
+            # Prepare dimensions for parallel coordinates
+            dimensions = []
+
+            for var in report_vars:
+                var_col = self._get_var_column(var)
+                dimensions.append(dict(
+                    label=var,
+                    values=df_grouped[var_col]
+                ))
+
+            # Add metric as the last dimension and for coloring
+            dimensions.append(dict(
+                label=metric,
+                values=df_grouped[metric_col]
+            ))
+
+            fig = go.Figure(data=go.Parcoords(
+                line=dict(
+                    color=df_grouped[metric_col],
+                    colorscale='Viridis',
+                    showscale=True,
+                    cmin=df_grouped[metric_col].min(),
+                    cmax=df_grouped[metric_col].max(),
+                    colorbar=dict(title=metric)
+                ),
+                dimensions=dimensions
+            ))
+
+            fig.update_layout(
+                title=f'Parallel Coordinates - All Variables vs {metric}',
+                template='plotly_white',
+                height=600
+            )
+
+            return fig
+        except Exception as e:
+            return None
+
+    def _create_variable_impact_plot(self, metric: str, report_vars: List[str]) -> Optional[go.Figure]:
+        """
+        Create bar plot showing impact of each variable on metric.
+
+        Impact is measured as the ratio of between-group variance to total variance
+        for each variable (similar to ANOVA F-statistic concept).
+        """
+        try:
+            metric_col = self._get_metric_column(metric)
+
+            impacts = []
+            for var in report_vars:
+                var_col = self._get_var_column(var)
+
+                # Group by this variable
+                groups = self.df.groupby(var_col)[metric_col].apply(list)
+
+                # Calculate between-group and within-group variance
+                overall_mean = self.df[metric_col].mean()
+
+                # Between-group variance
+                between_var = sum(
+                    len(group) * (np.mean(group) - overall_mean) ** 2
+                    for group in groups
+                ) / len(self.df)
+
+                # Total variance
+                total_var = self.df[metric_col].var()
+
+                # Impact score (R-squared like measure)
+                impact = between_var / total_var if total_var > 0 else 0
+                impacts.append(impact)
+
+            # Sort by impact
+            sorted_indices = sorted(range(len(impacts)), key=lambda i: impacts[i], reverse=True)
+            sorted_vars = [report_vars[i] for i in sorted_indices]
+            sorted_impacts = [impacts[i] for i in sorted_indices]
+
+            # Create bar plot
+            fig = go.Figure(data=go.Bar(
+                x=sorted_vars,
+                y=sorted_impacts,
+                marker=dict(
+                    color=sorted_impacts,
+                    colorscale='Viridis',
+                    showscale=True,
+                    colorbar=dict(title='Impact Score')
+                ),
+                text=[f'{v:.3f}' for v in sorted_impacts],
+                textposition='outside'
+            ))
+
+            fig.update_layout(
+                title=f'Variable Impact on {metric}<br><sub>Higher values indicate stronger influence on performance</sub>',
+                xaxis_title='Variable',
+                yaxis_title='Impact Score (Variance Explained)',
+                yaxis=dict(range=[0, max(sorted_impacts) * 1.2]),
+                template='plotly_white',
+                height=500
+            )
+
+            return fig
+        except Exception as e:
+            return None
+
+    def _create_scatter_matrix(self, metric: str, report_vars: List[str]) -> Optional[go.Figure]:
+        """Create scatter matrix showing pairwise variable relationships."""
+        try:
+            import numpy as np
+
+            metric_col = self._get_metric_column(metric)
+            var_cols = [self._get_var_column(v) for v in report_vars]
+
+            # Group by variables and compute mean metric
+            df_grouped = self.df.groupby(var_cols)[metric_col].mean().reset_index()
+
+            # Limit to first 4 variables if more exist (to keep plot manageable)
+            display_vars = report_vars[:4] if len(report_vars) > 4 else report_vars
+            display_var_cols = [self._get_var_column(v) for v in display_vars]
+
+            n_vars = len(display_vars)
+
+            # Create subplots
+            fig = make_subplots(
+                rows=n_vars, cols=n_vars,
+                subplot_titles=[f'{v1} vs {v2}' if i != j else f'{v1} distribution'
+                               for i, v1 in enumerate(display_vars)
+                               for j, v2 in enumerate(display_vars)],
+                vertical_spacing=0.05,
+                horizontal_spacing=0.05
+            )
+
+            # Add scatter plots
+            for i, var1 in enumerate(display_vars, 1):
+                var1_col = self._get_var_column(var1)
+                for j, var2 in enumerate(display_vars, 1):
+                    var2_col = self._get_var_column(var2)
+
+                    if i == j:
+                        # Diagonal: histogram
+                        fig.add_trace(
+                            go.Histogram(
+                                x=df_grouped[var1_col],
+                                name=var1,
+                                showlegend=False,
+                                marker=dict(color='lightblue')
+                            ),
+                            row=i, col=j
+                        )
+                    else:
+                        # Off-diagonal: scatter plot
+                        fig.add_trace(
+                            go.Scatter(
+                                x=df_grouped[var2_col],
+                                y=df_grouped[var1_col],
+                                mode='markers',
+                                marker=dict(
+                                    size=10,
+                                    color=df_grouped[metric_col],
+                                    colorscale='Viridis',
+                                    showscale=(i == 1 and j == n_vars),  # Show colorbar once
+                                    colorbar=dict(
+                                        title=metric,
+                                        x=1.1
+                                    ) if (i == 1 and j == n_vars) else None,
+                                    line=dict(width=0.5, color='white')
+                                ),
+                                showlegend=False,
+                                hovertemplate=f'{var2}: %{{x}}<br>{var1}: %{{y}}<br>{metric}: %{{marker.color:.2f}}<extra></extra>'
+                            ),
+                            row=i, col=j
+                        )
+
+                    # Update axes labels
+                    if j == 1:
+                        fig.update_yaxes(title_text=var1, row=i, col=j)
+                    if i == n_vars:
+                        fig.update_xaxes(title_text=var2, row=i, col=j)
+
+            fig.update_layout(
+                title=f'Pairwise Variable Relationships - Colored by {metric}',
+                template='plotly_white',
+                height=250 * n_vars,
+                showlegend=False
+            )
+
+            return fig
+        except Exception as e:
+            return None
 
     def _generate_footer(self) -> str:
         """Generate HTML footer."""
