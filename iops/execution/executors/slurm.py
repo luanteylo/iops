@@ -93,7 +93,7 @@ class SlurmExecutor(BaseExecutor):
         self.logger.debug(f"  [SlurmExec] Submit command: {' '.join(cmd)}")
 
         # Show key SLURM variables if available
-        if hasattr(test, 'vars') and test.vars:
+        if hasattr(test, 'vars') and test.vars and isinstance(test.vars, dict):
             slurm_vars = {k: v for k, v in test.vars.items() if k in ['nodes', 'ntasks', 'processes_per_node', 'ntasks_per_node']}
             if slurm_vars:
                 vars_str = ", ".join(f"{k}={v}" for k, v in slurm_vars.items())
