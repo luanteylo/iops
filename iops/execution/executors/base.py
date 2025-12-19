@@ -54,6 +54,11 @@ class BaseExecutor(ABC, HasLogger):
         super().__init__()
         self.cfg = cfg
         self.last_status: str | None = None
+        self.runner = None  # Will be set by runner for job tracking
+
+    def set_runner(self, runner):
+        """Set reference to the runner for job tracking (used by SLURM for Ctrl+C cleanup)."""
+        self.runner = runner
 
     # ------------------------------------------------------------------ #
     # Abstract API

@@ -151,6 +151,10 @@ class SlurmExecutor(BaseExecutor):
             test.metadata["__executor_status"] = self.STATUS_PENDING
             self.logger.info("SLURM job submitted: %s", job_id)
 
+            # Register job ID with runner for cleanup on interrupt (Ctrl+C)
+            if self.runner and hasattr(self.runner, 'register_slurm_job'):
+                self.runner.register_slurm_job(job_id)
+
         except Exception as e:
             msg = f"Unexpected SLURM submission error: {e}"
             self.logger.error(msg)
@@ -201,8 +205,13 @@ class SlurmExecutor(BaseExecutor):
 
             time.sleep(poll_interval)
 
-        # Job left squeue
+        # Job left squeue - unregister from tracking (no longer needs cleanup)
         test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+        # Unregister job from runner tracking (job completed, no need to cancel)
+        if self.runner and hasattr(self.runner, 'submitted_job_ids') and job_id in self.runner.submitted_job_ids:
+            self.runner.submitted_job_ids.discard(job_id)
+            self.logger.debug(f"  [JobTracker] Unregistered completed job {job_id} (remaining tracked: {len(self.runner.submitted_job_ids)})")
 
         # 1) Prefer scontrol (best SLURM-native final status without accounting)
         info = self._scontrol_info(job_id)

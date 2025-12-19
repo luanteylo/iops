@@ -6,11 +6,14 @@ from iops.execution.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
 
-from typing import Optional, List
+from typing import Optional, List, Set
 from pathlib import Path
 from jinja2 import Template
 from datetime import datetime
 import json
+import signal
+import sys
+import subprocess
 
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
@@ -19,6 +22,9 @@ class IOPSRunner(HasLogger):
         self.args = args
         self.planner = BasePlanner.build(cfg=self.cfg)
         self.executor = BaseExecutor.build(cfg=self.cfg)
+
+        # Pass runner reference to executor for job tracking (used by SLURM)
+        self.executor.set_runner(self)
 
         # Initialize cache if sqlite_db is configured (always populate, use only with --use_cache)
         self.cache: Optional[ExecutionCache] = None
@@ -93,6 +99,14 @@ class IOPSRunner(HasLogger):
                 f"{sorted(self.expected_metrics)}"
             )
 
+        # Track submitted SLURM jobs for cleanup on interrupt
+        self.submitted_job_ids: Set[str] = set()
+        self.interrupted = False
+
+        # Register signal handler for Ctrl+C (SIGINT) if using SLURM executor
+        if cfg.benchmark.executor == "slurm":
+            signal.signal(signal.SIGINT, self._signal_handler)
+
     def _get_expected_metrics(self) -> set:
         """Get set of expected metric names from configuration."""
         expected = set()
@@ -101,6 +115,71 @@ class IOPSRunner(HasLogger):
                 for metric in script.parser.metrics:
                     expected.add(metric.name)
         return expected
+
+    def _signal_handler(self, signum, frame):
+        """Handle Ctrl+C (SIGINT) to cancel all submitted SLURM jobs."""
+        if self.interrupted:
+            # Second Ctrl+C - force exit
+            self.logger.warning("\nForce exit - some jobs may still be running")
+            sys.exit(1)
+
+        self.interrupted = True
+        self.logger.info("\n" + "=" * 70)
+        self.logger.info("INTERRUPT RECEIVED (Ctrl+C)")
+        self.logger.info("=" * 70)
+
+        if not self.submitted_job_ids:
+            self.logger.info("No SLURM jobs to cancel")
+            self.logger.info("Exiting...")
+            sys.exit(0)
+
+        self.logger.info(f"Canceling {len(self.submitted_job_ids)} submitted SLURM job(s)...")
+
+        # Cancel all submitted jobs
+        failed_cancellations = []
+        for job_id in self.submitted_job_ids:
+            try:
+                self.logger.info(f"  Canceling job {job_id}...")
+                result = subprocess.run(
+                    ['scancel', job_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if result.returncode == 0:
+                    self.logger.info(f"  ✓ Job {job_id} canceled")
+                else:
+                    # Job may have already completed, which is fine
+                    if "Invalid job id specified" in result.stderr:
+                        self.logger.debug(f"  Job {job_id} already completed or not found")
+                    else:
+                        self.logger.warning(f"  Failed to cancel job {job_id}: {result.stderr.strip()}")
+                        failed_cancellations.append(job_id)
+
+            except subprocess.TimeoutExpired:
+                self.logger.warning(f"  Timeout canceling job {job_id}")
+                failed_cancellations.append(job_id)
+            except Exception as e:
+                self.logger.warning(f"  Error canceling job {job_id}: {e}")
+                failed_cancellations.append(job_id)
+
+        if failed_cancellations:
+            self.logger.warning(
+                f"\nFailed to cancel {len(failed_cancellations)} job(s): {', '.join(failed_cancellations)}"
+            )
+            self.logger.warning("You may need to cancel them manually with: scancel <job_id>")
+        else:
+            self.logger.info(f"\n✓ All {len(self.submitted_job_ids)} job(s) canceled successfully")
+
+        self.logger.info("=" * 70)
+        self.logger.info("Cleanup complete - Exiting")
+        sys.exit(0)
+
+    def register_slurm_job(self, job_id: str):
+        """Register a submitted SLURM job ID for cleanup on interrupt."""
+        self.submitted_job_ids.add(job_id)
+        self.logger.debug(f"  [JobTracker] Registered SLURM job {job_id} (total tracked: {len(self.submitted_job_ids)})")
 
     def _validate_cached_metrics(self, cached_metrics: dict) -> bool:
         """
