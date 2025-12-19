@@ -184,6 +184,8 @@ class IOPSRunner(HasLogger):
                     "timestamp": datetime.now().isoformat(),
                     "test_count": test_count,
                     "report_vars": self.cfg.benchmark.report_vars,
+                    "search_method": self.cfg.benchmark.search_method,
+                    "bayesian_config": self.cfg.benchmark.bayesian_config,
                 },
                 "variables": {},
                 "metrics": [],
@@ -228,15 +230,39 @@ class IOPSRunner(HasLogger):
                             "script": script.name,
                         })
 
-            # Save to file
+            # Save to file with custom encoder for numpy types
             metadata_path = self.cfg.benchmark.workdir / "run_metadata.json"
             with open(metadata_path, "w") as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
 
             self.logger.debug(f"Saved runtime metadata to: {metadata_path}")
 
         except Exception as e:
             self.logger.warning(f"Failed to save runtime metadata: {e}")
+
+    @staticmethod
+    def _json_serialize_helper(obj):
+        """Helper to serialize numpy/pandas types to JSON."""
+        import numpy as np
+        import pandas as pd
+
+        # Handle numpy types
+        if isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        # Handle pandas types
+        elif isinstance(obj, (pd.Int64Dtype, pd.Int32Dtype)):
+            return int(obj)
+        elif hasattr(obj, 'item'):  # numpy scalar
+            return obj.item()
+        elif hasattr(obj, 'tolist'):  # numpy array-like
+            return obj.tolist()
+
+        # Fall back to string representation
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
     def run_dry(self):
         """
