@@ -228,6 +228,27 @@ def main():
     args = parse_arguments()
     logger = initialize_logger(args)
 
+    # Handle --generate_setup mode (interactive wizard)
+    if args.generate_setup:
+        from iops.setup import BenchmarkWizard
+
+        try:
+            wizard = BenchmarkWizard()
+            output_file = wizard.run()
+
+            if output_file:
+                logger.info(f"Configuration wizard completed successfully")
+            else:
+                logger.info("Configuration wizard cancelled")
+
+        except KeyboardInterrupt:
+            logger.info("\n\nWizard cancelled by user")
+        except Exception as e:
+            logger.error(f"Wizard failed: {e}")
+            if args.verbose:
+                raise
+        return
+
     # Handle --analyze mode (generate report from existing results)
     if args.analyze:
         from iops.reporting.report_generator import generate_report_from_workdir
