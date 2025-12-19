@@ -30,6 +30,7 @@ class BenchmarkConfig:
     max_core_hours: Optional[float] = None  # Budget limit in core-hours
     cores_expr: Optional[str] = None  # Jinja expression to compute cores (e.g., "{{ nodes * ppn }}")
     estimated_time_seconds: Optional[float] = None  # Estimated execution time per test (for dry-run)
+    report_vars: Optional[List[str]] = None  # Variables to include in analysis reports (default: all numeric swept vars)
 
 
 @dataclass

@@ -37,9 +37,11 @@ def parse_arguments():
     parser.add_argument('--max-core-hours', type=float, default=None,
                         help="Maximum CPU core-hours budget for execution. Stops scheduling new tests when exceeded.")
     parser.add_argument('--dry-run', action='store_true',
-                        help="Preview execution plan without running tests. Shows estimated core-hours and budget usage.")
-    parser.add_argument('--estimated-time', type=float, default=None,
-                        help="Estimated execution time per test in seconds (for dry-run core-hours estimation)")
+                        help="Preview execution plan without running tests. Generates scripts and creates analysis report.")
+    parser.add_argument('--estimated-time', type=str, default=None,
+                        help="Estimated execution time per test in seconds. Supports single value or comma-separated scenarios: '120' or '60,120,300'")
+    parser.add_argument('--analyze', type=Path, default=None,
+                        help="Generate HTML analysis report from a completed benchmark run. Provide path to workdir (e.g., /path/to/run_001)")
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
     return parser.parse_args()
@@ -225,7 +227,26 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
 def main():
     args = parse_arguments()
     logger = initialize_logger(args)
-  
+
+    # Handle --analyze mode (generate report from existing results)
+    if args.analyze:
+        from iops.reporting.report_generator import generate_report_from_workdir
+
+        logger.info("=" * 70)
+        logger.info("ANALYSIS MODE: Generating HTML report")
+        logger.info("=" * 70)
+        logger.info(f"Reading results from: {args.analyze}")
+
+        try:
+            report_path = generate_report_from_workdir(args.analyze)
+            logger.info(f"✓ Report generated: {report_path}")
+            logger.info("=" * 70)
+        except Exception as e:
+            logger.error(f"Failed to generate report: {e}")
+            if args.verbose:
+                raise
+        return
+
     if not args.setup_file:
         logger.error("No setup file provided for validation or execution.")
         return

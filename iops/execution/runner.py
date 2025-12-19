@@ -6,10 +6,11 @@ from iops.execution.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
 
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
 from jinja2 import Template
 from datetime import datetime
+import json
 
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
@@ -69,12 +70,19 @@ class IOPSRunner(HasLogger):
         if self.max_core_hours is not None:
             self.logger.info(f"Budget: {self.max_core_hours} core-hours (cores expr: {self.cores_expr})")
 
-        # Determine estimated time (CLI overrides config)
-        self.estimated_time_seconds: Optional[float] = None
+        # Determine estimated time scenarios (CLI overrides config)
+        self.estimated_time_scenarios: List[float] = []
         if hasattr(args, 'estimated_time') and args.estimated_time is not None:
-            self.estimated_time_seconds = args.estimated_time
+            # Parse comma-separated values: "120" or "60,120,300"
+            try:
+                self.estimated_time_scenarios = [float(x.strip()) for x in args.estimated_time.split(',')]
+            except ValueError:
+                self.logger.warning(f"Invalid --estimated-time format: {args.estimated_time}. Expected number or comma-separated numbers.")
         elif cfg.benchmark.estimated_time_seconds is not None:
-            self.estimated_time_seconds = cfg.benchmark.estimated_time_seconds
+            self.estimated_time_scenarios = [cfg.benchmark.estimated_time_seconds]
+
+        # Keep single value for backward compatibility
+        self.estimated_time_seconds: Optional[float] = self.estimated_time_scenarios[0] if self.estimated_time_scenarios else None
 
     def _compute_cores(self, test) -> int:
         """Compute the number of cores for a test using cores_expr."""
@@ -119,29 +127,104 @@ class IOPSRunner(HasLogger):
             self.logger.warning(f"Failed to compute core-hours for test {test.execution_id}: {e}")
             return 0.0
 
+    def _save_run_metadata(self, test_count: int = 0):
+        """Save runtime metadata for report generation."""
+        try:
+            metadata = {
+                "benchmark": {
+                    "name": self.cfg.benchmark.name,
+                    "description": self.cfg.benchmark.description or "",
+                    "workdir": str(self.cfg.benchmark.workdir),
+                    "executor": self.cfg.benchmark.executor,
+                    "repetitions": self.cfg.benchmark.repetitions,
+                    "timestamp": datetime.now().isoformat(),
+                    "test_count": test_count,
+                    "report_vars": self.cfg.benchmark.report_vars,
+                },
+                "variables": {},
+                "metrics": [],
+                "output": {
+                    "type": self.cfg.output.sink.type,
+                    "path": str(self.actual_output_path or self.cfg.output.sink.path),
+                    "table": self.cfg.output.sink.table if self.cfg.output.sink.type == "sqlite" else None,
+                },
+                "command": {
+                    "template": self.cfg.command.template,
+                    "metadata": self.cfg.command.metadata or {},
+                }
+            }
+
+            # Add variable definitions
+            for var_name, var_config in self.cfg.vars.items():
+                var_info = {
+                    "type": var_config.type,
+                    "swept": var_config.sweep is not None,
+                }
+                if var_config.sweep:
+                    var_info["sweep"] = {
+                        "mode": var_config.sweep.mode,
+                    }
+                    if var_config.sweep.mode == "range":
+                        var_info["sweep"]["start"] = var_config.sweep.start
+                        var_info["sweep"]["end"] = var_config.sweep.end
+                        var_info["sweep"]["step"] = var_config.sweep.step
+                    elif var_config.sweep.mode == "list":
+                        var_info["sweep"]["values"] = var_config.sweep.values
+                if var_config.expr:
+                    var_info["expr"] = var_config.expr
+
+                metadata["variables"][var_name] = var_info
+
+            # Add metric definitions from scripts
+            for script in self.cfg.scripts:
+                if script.parser and script.parser.metrics:
+                    for metric in script.parser.metrics:
+                        metadata["metrics"].append({
+                            "name": metric.name,
+                            "script": script.name,
+                        })
+
+            # Save to file
+            metadata_path = self.cfg.benchmark.workdir / "run_metadata.json"
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            self.logger.debug(f"Saved runtime metadata to: {metadata_path}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to save runtime metadata: {e}")
+
     def run_dry(self):
         """
         Dry-run mode: Preview execution plan without running tests.
-        Shows test matrix, core counts, and estimated core-hours.
+        Generates all scripts and creates detailed analysis report.
         """
         self.logger.info("=" * 70)
         self.logger.info(f"DRY-RUN MODE: {self.cfg.benchmark.name}")
         self.logger.info("=" * 70)
+        self.logger.info("")
+        self.logger.info("This mode will:")
+        self.logger.info("  ✓ Generate all execution scripts")
+        self.logger.info("  ✓ Calculate core-hours estimates")
+        self.logger.info("  ✓ Create analysis report")
+        self.logger.info("  ✗ NOT execute any tests")
+        self.logger.info("")
 
-        # Build complete execution matrix
-        from iops.execution.matrix import build_execution_matrix
-
-        # Get all tests for all rounds or single round
+        # Generate all test scripts using the planner
+        self.logger.info("Generating execution scripts...")
+        test_count = 0
         all_tests = []
-        if self.cfg.rounds:
-            for round_cfg in self.cfg.rounds:
-                round_tests = build_execution_matrix(self.cfg, round_name=round_cfg.name)
-                all_tests.extend(round_tests)
-        else:
-            all_tests = build_execution_matrix(self.cfg, round_name=None)
+
+        while True:
+            test = self.planner.next_test()
+            if test is None:
+                break
+            test_count += 1
+            all_tests.append(test)
 
         total_tests = len(all_tests)
-        self.logger.info(f"\nTotal tests to execute: {total_tests}")
+        self.logger.info(f"✓ Generated {total_tests} test scripts in: {self.cfg.benchmark.workdir}")
+        self.logger.info("")
 
         # Compute cores and core-hours for each test
         cores_list = []
@@ -248,8 +331,119 @@ class IOPSRunner(HasLogger):
         if total_tests > 10:
             self.logger.info(f"  ... ({total_tests - 10} more tests)")
 
+        # Multiple scenario analysis
+        if len(self.estimated_time_scenarios) > 1:
+            self.logger.info(f"\n" + "=" * 70)
+            self.logger.info(f"SCENARIO ANALYSIS ({len(self.estimated_time_scenarios)} time estimates)")
+            self.logger.info("=" * 70)
+
+            scenario_results = []
+            for time_est in self.estimated_time_scenarios:
+                time_hours = time_est / 3600.0
+                total_ch = sum([cores * time_hours for cores in cores_list])
+                total_time_hrs = (total_tests * time_est) / 3600.0
+
+                scenario_results.append({
+                    'time_seconds': time_est,
+                    'total_core_hours': total_ch,
+                    'total_time_hours': total_time_hrs,
+                    'budget_ratio': (total_ch / self.max_core_hours * 100) if self.max_core_hours else None,
+                    'tests_that_fit': int((self.max_core_hours / (total_ch/total_tests))) if self.max_core_hours else total_tests
+                })
+
+            self.logger.info(f"\n{'Time/Test':<15} {'Core-Hours':<15} {'Wall-Clock':<15} {'Budget %':<12} {'Tests Fit':<12}")
+            self.logger.info("-" * 70)
+            for sc in scenario_results:
+                time_str = f"{sc['time_seconds']:.0f}s ({sc['time_seconds']/60:.1f}m)"
+                ch_str = f"{sc['total_core_hours']:.2f}"
+                wall_str = f"{sc['total_time_hours']:.2f}h"
+                budget_str = f"{sc['budget_ratio']:.1f}%" if sc['budget_ratio'] else "N/A"
+                fit_str = f"{sc['tests_that_fit']}/{total_tests}"
+
+                self.logger.info(f"{time_str:<15} {ch_str:<15} {wall_str:<15} {budget_str:<12} {fit_str:<12}")
+
+        # Generate detailed report file
+        report_path = self.cfg.benchmark.workdir / "dry-run-report.txt"
+        self.logger.info(f"\n" + "=" * 70)
+        self.logger.info("GENERATING REPORT")
+        self.logger.info("=" * 70)
+
+        with open(report_path, "w") as f:
+            f.write("=" * 70 + "\n")
+            f.write(f"IOPS DRY-RUN ANALYSIS REPORT\n")
+            f.write(f"Benchmark: {self.cfg.benchmark.name}\n")
+            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 70 + "\n\n")
+
+            # Execution Summary
+            f.write("EXECUTION SUMMARY\n")
+            f.write("-" * 70 + "\n")
+            f.write(f"Total tests: {total_tests}\n")
+            f.write(f"Scripts location: {self.cfg.benchmark.workdir}\n")
+            f.write(f"Executor: {self.cfg.benchmark.executor}\n")
+            f.write(f"Repetitions: {self.cfg.benchmark.repetitions}\n")
+            if self.cfg.rounds:
+                f.write(f"Rounds: {len(self.cfg.rounds)} ({', '.join([r.name for r in self.cfg.rounds])})\n")
+            f.write("\n")
+
+            # Core Configuration
+            f.write("CORE CONFIGURATION\n")
+            f.write("-" * 70 + "\n")
+            f.write(f"Cores expression: {self.cores_expr}\n")
+            f.write(f"Min cores per test: {min_cores}\n")
+            f.write(f"Max cores per test: {max_cores}\n")
+            f.write(f"Avg cores per test: {avg_cores:.1f}\n")
+            f.write(f"Total core-count: {total_cores}\n")
+            f.write("\n")
+
+            # Scenario Analysis
+            if self.estimated_time_scenarios:
+                f.write("SCENARIO ANALYSIS\n")
+                f.write("-" * 70 + "\n")
+                for i, time_est in enumerate(self.estimated_time_scenarios, 1):
+                    time_hours = time_est / 3600.0
+                    total_ch = sum([cores * time_hours for cores in cores_list])
+                    total_time_hrs = (total_tests * time_est) / 3600.0
+
+                    f.write(f"\nScenario {i}: {time_est:.0f} seconds ({time_est/60:.1f} minutes) per test\n")
+                    f.write(f"  Total core-hours: {total_ch:.2f}\n")
+                    f.write(f"  Wall-clock time: {total_time_hrs:.2f} hours ({total_time_hrs/24:.2f} days)\n")
+
+                    if self.max_core_hours:
+                        budget_ratio = (total_ch / self.max_core_hours) * 100
+                        f.write(f"  Budget usage: {budget_ratio:.1f}%\n")
+                        if total_ch > self.max_core_hours:
+                            excess = total_ch - self.max_core_hours
+                            tests_fit = int((self.max_core_hours / (total_ch/total_tests)))
+                            f.write(f"  ⚠️  EXCEEDS BUDGET by {excess:.2f} core-hours\n")
+                            f.write(f"  ⚠️  Only ~{tests_fit} tests will complete\n")
+                        else:
+                            remaining = self.max_core_hours - total_ch
+                            f.write(f"  ✓ Within budget (remaining: {remaining:.2f} core-hours)\n")
+                f.write("\n")
+
+            # Test Details
+            f.write("TEST DETAILS (all tests)\n")
+            f.write("-" * 70 + "\n")
+            for i, detail in enumerate(test_details, 1):
+                vars_str = ", ".join([f"{k}={v}" for k, v in list(detail['vars'].items())[:5]])
+                if len(detail['vars']) > 5:
+                    vars_str += f", ... ({len(detail['vars'])} vars)"
+
+                f.write(f"\n[{i:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} ")
+                f.write(f"round={detail['round']} cores={detail['cores']}\n")
+                f.write(f"      {vars_str}\n")
+
+        self.logger.info(f"✓ Report saved to: {report_path}")
+
+        # Save runtime metadata for report generation
+        self._save_run_metadata(test_count=total_tests)
+
         self.logger.info("\n" + "=" * 70)
         self.logger.info("DRY-RUN COMPLETE - No tests were executed")
+        self.logger.info(f"  • {total_tests} scripts generated")
+        self.logger.info(f"  • Report: {report_path}")
+        self.logger.info(f"  • Metadata: {self.cfg.benchmark.workdir / 'run_metadata.json'}")
         self.logger.info("=" * 70)
 
     def run(self):
@@ -426,6 +620,9 @@ class IOPSRunner(HasLogger):
 
         self.logger.info(f"Results saved to: {output_path_display}")
         self.logger.info("=" * 70)
+
+        # Save runtime metadata for report generation
+        self._save_run_metadata(test_count=test_count)
             
 
      
