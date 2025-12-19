@@ -69,6 +69,13 @@ class IOPSRunner(HasLogger):
         if self.max_core_hours is not None:
             self.logger.info(f"Budget: {self.max_core_hours} core-hours (cores expr: {self.cores_expr})")
 
+        # Determine estimated time (CLI overrides config)
+        self.estimated_time_seconds: Optional[float] = None
+        if hasattr(args, 'estimated_time') and args.estimated_time is not None:
+            self.estimated_time_seconds = args.estimated_time
+        elif cfg.benchmark.estimated_time_seconds is not None:
+            self.estimated_time_seconds = cfg.benchmark.estimated_time_seconds
+
     def _compute_cores(self, test) -> int:
         """Compute the number of cores for a test using cores_expr."""
         try:
@@ -111,6 +118,139 @@ class IOPSRunner(HasLogger):
         except Exception as e:
             self.logger.warning(f"Failed to compute core-hours for test {test.execution_id}: {e}")
             return 0.0
+
+    def run_dry(self):
+        """
+        Dry-run mode: Preview execution plan without running tests.
+        Shows test matrix, core counts, and estimated core-hours.
+        """
+        self.logger.info("=" * 70)
+        self.logger.info(f"DRY-RUN MODE: {self.cfg.benchmark.name}")
+        self.logger.info("=" * 70)
+
+        # Build complete execution matrix
+        from iops.execution.matrix import build_execution_matrix
+
+        # Get all tests for all rounds or single round
+        all_tests = []
+        if self.cfg.rounds:
+            for round_cfg in self.cfg.rounds:
+                round_tests = build_execution_matrix(self.cfg, round_name=round_cfg.name)
+                all_tests.extend(round_tests)
+        else:
+            all_tests = build_execution_matrix(self.cfg, round_name=None)
+
+        total_tests = len(all_tests)
+        self.logger.info(f"\nTotal tests to execute: {total_tests}")
+
+        # Compute cores and core-hours for each test
+        cores_list = []
+        core_hours_list = []
+        test_details = []
+
+        for test in all_tests:
+            cores = self._compute_cores(test)
+            cores_list.append(cores)
+
+            if self.estimated_time_seconds:
+                time_hours = self.estimated_time_seconds / 3600.0
+                core_hours = cores * time_hours
+                core_hours_list.append(core_hours)
+
+            test_details.append({
+                'execution_id': test.execution_id,
+                'repetition': test.repetition,
+                'round': test.round_name or 'single',
+                'cores': cores,
+                'vars': test.vars
+            })
+
+        # Statistics
+        self.logger.info("\n" + "=" * 70)
+        self.logger.info("EXECUTION PLAN SUMMARY")
+        self.logger.info("=" * 70)
+
+        # Cores statistics
+        min_cores = min(cores_list)
+        max_cores = max(cores_list)
+        avg_cores = sum(cores_list) / len(cores_list)
+        total_cores = sum(cores_list)
+
+        self.logger.info(f"\nCore Configuration:")
+        self.logger.info(f"  Cores expression: {self.cores_expr}")
+        self.logger.info(f"  Min cores per test: {min_cores}")
+        self.logger.info(f"  Max cores per test: {max_cores}")
+        self.logger.info(f"  Avg cores per test: {avg_cores:.1f}")
+        self.logger.info(f"  Total core-count: {total_cores} (sum across all tests)")
+
+        # Core-hours estimation
+        if self.estimated_time_seconds:
+            total_core_hours = sum(core_hours_list)
+            min_core_hours = min(core_hours_list)
+            max_core_hours = max(core_hours_list)
+            avg_core_hours = total_core_hours / len(core_hours_list)
+
+            self.logger.info(f"\nEstimated Core-Hours:")
+            self.logger.info(f"  Estimated time per test: {self.estimated_time_seconds:.1f} seconds ({self.estimated_time_seconds/60:.1f} minutes)")
+            self.logger.info(f"  Min core-hours per test: {min_core_hours:.4f}")
+            self.logger.info(f"  Max core-hours per test: {max_core_hours:.4f}")
+            self.logger.info(f"  Avg core-hours per test: {avg_core_hours:.4f}")
+            self.logger.info(f"  Total core-hours: {total_core_hours:.2f}")
+
+            # Estimated wall-clock time (assuming sequential execution)
+            total_time_seconds = total_tests * self.estimated_time_seconds
+            total_time_hours = total_time_seconds / 3600.0
+            self.logger.info(f"\nEstimated Wall-Clock Time (sequential):")
+            self.logger.info(f"  Total: {total_time_hours:.2f} hours ({total_time_hours/24:.2f} days)")
+
+            # Budget comparison
+            if self.max_core_hours:
+                budget_ratio = (total_core_hours / self.max_core_hours) * 100
+                remaining = self.max_core_hours - total_core_hours
+
+                self.logger.info(f"\nBudget Analysis:")
+                self.logger.info(f"  Budget limit: {self.max_core_hours:.2f} core-hours")
+                self.logger.info(f"  Estimated usage: {total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
+
+                if total_core_hours > self.max_core_hours:
+                    excess = total_core_hours - self.max_core_hours
+                    tests_that_fit = int((self.max_core_hours / avg_core_hours))
+                    self.logger.warning(f"  ⚠️  BUDGET EXCEEDED by {excess:.2f} core-hours!")
+                    self.logger.warning(f"  ⚠️  Only ~{tests_that_fit} tests will complete before budget limit")
+                else:
+                    self.logger.info(f"  ✓ Remaining budget: {remaining:.2f} core-hours")
+        else:
+            self.logger.info(f"\nCore-Hours Estimation:")
+            self.logger.info(f"  ℹ️  No time estimate provided. Use --estimated-time <seconds> or set")
+            self.logger.info(f"     benchmark.estimated_time_seconds in config for core-hours estimation.")
+
+        # Show sample tests
+        self.logger.info(f"\n" + "=" * 70)
+        self.logger.info("SAMPLE TESTS (first 10)")
+        self.logger.info("=" * 70)
+
+        for i, detail in enumerate(test_details[:10]):
+            vars_str = ", ".join([f"{k}={v}" for k, v in list(detail['vars'].items())[:5]])
+            if len(detail['vars']) > 5:
+                vars_str += f", ... ({len(detail['vars'])} total)"
+
+            core_hours_str = ""
+            if self.estimated_time_seconds:
+                ch = detail['cores'] * (self.estimated_time_seconds / 3600.0)
+                core_hours_str = f" | {ch:.4f} core-hrs"
+
+            self.logger.info(
+                f"  [{i+1:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} "
+                f"round={detail['round']} | {detail['cores']} cores{core_hours_str}"
+            )
+            self.logger.info(f"        {vars_str}")
+
+        if total_tests > 10:
+            self.logger.info(f"  ... ({total_tests - 10} more tests)")
+
+        self.logger.info("\n" + "=" * 70)
+        self.logger.info("DRY-RUN COMPLETE - No tests were executed")
+        self.logger.info("=" * 70)
 
     def run(self):
         self.logger.info("=" * 70)

@@ -29,6 +29,7 @@ class BenchmarkConfig:
     cache_exclude_vars: Optional[List[str]] = None  # variables to exclude from cache hash
     max_core_hours: Optional[float] = None  # Budget limit in core-hours
     cores_expr: Optional[str] = None  # Jinja expression to compute cores (e.g., "{{ nodes * ppn }}")
+    estimated_time_seconds: Optional[float] = None  # Estimated execution time per test (for dry-run)
 
 
 @dataclass

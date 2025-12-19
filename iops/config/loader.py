@@ -252,7 +252,8 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         random_seed=b.get("random_seed", 42),
         cache_exclude_vars=b.get("cache_exclude_vars", []),
         max_core_hours=b.get("max_core_hours"),
-        cores_expr=b.get("cores_expr")
+        cores_expr=b.get("cores_expr"),
+        estimated_time_seconds=b.get("estimated_time_seconds")
     )
 
     # ---- vars ----

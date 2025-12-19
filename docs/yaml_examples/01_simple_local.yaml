@@ -120,8 +120,8 @@ scripts:
 
 output:
   sink:
-    type: parquet
-    path: "{{ workdir }}/results.parquet"
+    type: csv
+    path: "{{ workdir }}/results.csv"
     mode: append
     exclude:
       - "benchmark.description"

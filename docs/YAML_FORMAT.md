@@ -87,6 +87,7 @@ benchmark:
   cache_exclude_vars: list        # Optional: variables to exclude from cache hash
   max_core_hours: float           # Optional: CPU core-hours budget limit
   cores_expr: string              # Optional: Jinja expression to compute cores (default: "1")
+  estimated_time_seconds: float   # Optional: Estimated test duration for dry-run (seconds)
 ```
 
 ### Field Details
@@ -262,6 +263,33 @@ benchmark:
 - Must evaluate to an integer
 - Used only when `max_core_hours` is set (via config or CLI)
 - If evaluation fails, defaults to 1 core with a warning
+
+#### `estimated_time_seconds` (optional)
+Estimated execution time per test in seconds. Used for core-hours estimation in dry-run mode. **Can be overridden by the `--estimated-time` CLI argument.**
+
+```yaml
+estimated_time_seconds: 300.0  # Estimate 5 minutes per test
+```
+
+**Use cases**:
+- Preview total core-hours before execution with `--dry-run`
+- Validate budget constraints
+- Plan experiment timelines
+- Compare different parameter sweep configurations
+
+**Dry-run example**:
+```bash
+# Preview execution plan
+iops config.yaml --dry-run --estimated-time 120
+
+# Output shows:
+# - Total tests to execute
+# - Core-hours estimates per test
+# - Total estimated core-hours
+# - Budget comparison (if budget set)
+# - Wall-clock time estimate
+# - Sample test configurations
+```
 
 ### Complete Example
 
@@ -1277,19 +1305,3 @@ output:
       - "metadata.*"
       - "metrics.*"
 ```
-
----
-
-## Summary
-
-The IOPS YAML format provides a powerful, declarative way to define parametric benchmarks:
-
-- ✅ **Parametric**: Define parameter spaces with swept variables
-- ✅ **Flexible**: Derived variables and Jinja2 templating
-- ✅ **Scalable**: Cartesian product generates all combinations
-- ✅ **Reproducible**: Cache and random seed for consistency
-- ✅ **Optimizable**: Multi-round workflows with adaptive search
-- ✅ **Portable**: Local or SLURM execution
-- ✅ **Analyzable**: Structured output (CSV, Parquet, SQLite)
-
-For more examples, see `docs/yaml_examples/`.

@@ -9,7 +9,7 @@ benchmark:
   random_seed: 43  # seed for any random operations in the benchmark
   cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars
   # Budget configuration (optional)
-  max_core_hours: 0.8  # Maximum CPU core-hours budget (can be overridden by --max-core-hours CLI argument)
+  max_core_hours: 100.0  # Maximum CPU core-hours budget (can be overridden by --max-core-hours CLI argument)
   cores_expr: "{{ processes_per_node }}"  # Jinja expression to compute cores (defaults to 1 if not specified)
 
 
@@ -85,3 +85,22 @@ output:
     exclude: ["benchmark.name", "benchmark.description"]            # optional, mutually exclusive with include
     table: results         # only for sqlite
 
+
+# Multi-round optimization workflow
+rounds:
+
+  # Round 1: With best nodes, optimize processes per node
+  - name: "optimize_processes"
+    description: "Find best process count using optimal nodes from round 1"
+    sweep_vars: ["processes_per_node"]
+    search:
+      metric: "bwMiB"
+      objective: "max"
+
+  # Round 3: Optimize volume size with best nodes and processes
+  - name: "optimize_volume"
+    description: "Find optimal data volume size"
+    sweep_vars: ["volume_size_gb"]
+    search:
+      metric: "bwMiB"
+      objective: "max"

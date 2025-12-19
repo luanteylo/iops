@@ -36,6 +36,10 @@ def parse_arguments():
                         help="Reuse cached results if available, skipping already executed parameter sets")
     parser.add_argument('--max-core-hours', type=float, default=None,
                         help="Maximum CPU core-hours budget for execution. Stops scheduling new tests when exceeded.")
+    parser.add_argument('--dry-run', action='store_true',
+                        help="Preview execution plan without running tests. Shows estimated core-hours and budget usage.")
+    parser.add_argument('--estimated-time', type=float, default=None,
+                        help="Estimated execution time per test in seconds (for dry-run core-hours estimation)")
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
     return parser.parse_args()
@@ -227,10 +231,15 @@ def main():
         return
 
     cfg = load_generic_config(Path(args.setup_file), logger=logger)
-    log_execution_context(cfg, args, logger)    
-    
+    log_execution_context(cfg, args, logger)
+
     runner = IOPSRunner(cfg=cfg, args=args)
-    runner.run()
+
+    # Run in dry-run mode or normal mode
+    if args.dry_run:
+        runner.run_dry()
+    else:
+        runner.run()
 
 
 
