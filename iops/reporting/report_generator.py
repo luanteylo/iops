@@ -10,6 +10,7 @@ from plotly.subplots import make_subplots
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from jinja2 import Template
 
 
 class ReportGenerator:
@@ -113,6 +114,24 @@ class ReportGenerator:
     def _get_metric_column(self, metric_name: str) -> str:
         """Get the column name for a metric in the dataframe."""
         return f'metrics.{metric_name}'
+
+    def _render_command(self, var_values: Dict[str, Any]) -> str:
+        """
+        Render the command template with given variable values.
+
+        Args:
+            var_values: Dictionary mapping variable names to their values
+
+        Returns:
+            Rendered command string
+        """
+        try:
+            command_template = self.metadata['command']['template']
+            template = Template(command_template)
+            rendered = template.render(**var_values)
+            return rendered.strip()
+        except Exception as e:
+            return f"[Error rendering command: {e}]"
 
     def _compute_pareto_frontier(self, metrics: List[str], objectives: Dict[str, str], report_vars: List[str]) -> pd.DataFrame:
         """
@@ -384,12 +403,33 @@ class ReportGenerator:
             html += f"<th>{metric} (mean)</th><th>Std Dev</th><th>Samples</th></tr>\n"
 
             for idx, (i, row) in enumerate(df_top.iterrows(), 1):
-                html += f"<tr><td>{idx}</td>"
+                # Get all variable values from the results dataframe
+                var_values = {}
+                for var_name in self.metadata['variables'].keys():
+                    var_col = self._get_var_column(var_name)
+                    if var_col in self.df.columns:
+                        # Find a matching row in the original dataframe
+                        mask = True
+                        for report_var in report_vars:
+                            col = self._get_var_column(report_var)
+                            mask = mask & (self.df[col] == row[report_var])
+                        matching_rows = self.df[mask]
+                        if len(matching_rows) > 0:
+                            var_values[var_name] = matching_rows.iloc[0][var_col]
+
+                # Render command with all variables
+                rendered_command = self._render_command(var_values)
+
+                html += f"<tr><td rowspan='2'>{idx}</td>"
                 for var in report_vars:
                     html += f"<td>{row[var]}</td>"
                 html += f"<td><strong>{row['mean']:.4f}</strong></td>"
                 html += f"<td>{row['std']:.4f}</td>"
                 html += f"<td>{int(row['count'])}</td></tr>\n"
+
+                # Add command row
+                html += f"<tr><td colspan='{len(report_vars) + 3}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
+                html += f"<strong>Command:</strong> {rendered_command}</td></tr>\n"
 
             html += "</table>\n"
 
@@ -438,12 +478,33 @@ class ReportGenerator:
         html += "</tr>\n"
 
         for idx, (i, row) in enumerate(pareto_df.iterrows(), 1):
-            html += f"<tr><td>{idx}</td>"
+            # Get all variable values for command rendering
+            var_values = {}
+            for var_name in self.metadata['variables'].keys():
+                var_col = self._get_var_column(var_name)
+                if var_col in self.df.columns:
+                    # Find matching row
+                    mask = True
+                    for report_var in report_vars:
+                        col = self._get_var_column(report_var)
+                        mask = mask & (self.df[col] == row[col])
+                    matching_rows = self.df[mask]
+                    if len(matching_rows) > 0:
+                        var_values[var_name] = matching_rows.iloc[0][var_col]
+
+            rendered_command = self._render_command(var_values)
+
+            html += f"<tr><td rowspan='2'>{idx}</td>"
             for var_col in var_cols:
                 html += f"<td>{row[var_col]}</td>"
             for metric_col in metric_cols:
                 html += f"<td><strong>{row[metric_col]:.4f}</strong></td>"
             html += "</tr>\n"
+
+            # Add command row
+            num_cols = len(report_vars) + len(metrics)
+            html += f"<tr><td colspan='{num_cols}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
+            html += f"<strong>Command:</strong> {rendered_command}</td></tr>\n"
 
         html += "</table>\n"
 
