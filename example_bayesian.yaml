@@ -32,7 +32,7 @@ benchmark:
     target_metric: "bwMiB"            # Metric to optimize (must exist in parser metrics)
     objective: "maximize"             # "maximize" or "minimize"
     n_initial_points: 5               # Number of random explorations before optimization
-    n_iterations: 30                 # Total number of parameter evaluations
+    n_iterations: 15                 # Total number of parameter evaluations
     acquisition_func: "PI"            # Acquisition function: "EI", "PI", or "LCB"
                                       #   EI = Expected Improvement (balanced)
                                       #   PI = Probability of Improvement (exploitative)
