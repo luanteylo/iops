@@ -16,6 +16,7 @@ benchmark:
   repetitions: 3
   search_method: "exhaustive"
   random_seed: 42
+  cache_exclude_vars: ["summary_file", "output_file"]  # Exclude path-based derived vars
 
 vars:
   # Swept variables

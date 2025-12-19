@@ -5,14 +5,17 @@
 # - 2 swept variables (processes, block_size)
 # - 2 repetitions per test
 # - CSV output
+# - Caching with cache_exclude_vars
 
 benchmark:
   name: "IOR Simple Local Test"
   description: "Basic I/O performance test with local execution"
   workdir: "/tmp/ior_simple"
+  sqlite_db: "/tmp/ior_simple_cache.db"  # Enable caching
   executor: "local"
   repetitions: 2
   random_seed: 42
+  cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars
 
 vars:
   # Swept variables
@@ -20,7 +23,7 @@ vars:
     type: int
     sweep:
       mode: list
-      values: [4, 8, 16]
+      values: [4, 8, 16, 32]
 
   block_size_mb:
     type: int
@@ -76,33 +79,49 @@ scripts:
         - name: bwMiB
         - name: iops
       parser_script: |
-        import json
+          import json
 
-        def parse(file_path: str):
-            """Parse IOR JSON output."""
-            with open(file_path, "r") as f:
-                data = json.load(f)
+          def parse(file_path: str):
+              """
+              IOR JSON parser.
 
-            tests = data.get("tests", [])
-            if not tests:
-                raise ValueError("No tests found in IOR JSON")
+              Returns a dict with ALL fields from the first write Results entry:
+                - bwMiB
+                - blockKiB
+                - xferKiB
+                - iops
+                - latency
+                - openTime
+                - wrRdTime
+                - closeTime
+                - totalTime
+                - access
+              """
+              with open(file_path, "r") as f:
+                  data = json.load(f)
 
-            results = tests[0].get("Results", [])
-            if not results:
-                raise ValueError("No Results found in IOR JSON")
+              # Prefer tests[].Results (per-execution detailed metrics)
+              tests = data.get("tests", [])
+              if not tests:
+                  raise ValueError("No tests found in IOR JSON")
 
-            # Get write results
-            result = results[0]
+              results = tests[0].get("Results", [])
+              if not results:
+                  raise ValueError("No Results found in IOR JSON")
 
-            return {
-                "bwMiB": float(result["bwMiB"]),
-                "iops": float(result["OPs"])
-            }
+              # Pick the write result (or the first one if only one exists)
+              write_res = next(
+                  (r for r in results if str(r.get("access", "")).lower() == "write"),
+                  results[0],
+              )
+
+              # Return everything as-is
+              return write_res
 
 output:
   sink:
-    type: csv
-    path: "{{ workdir }}/results.csv"
+    type: parquet
+    path: "{{ workdir }}/results.parquet"
     mode: append
     exclude:
       - "benchmark.description"

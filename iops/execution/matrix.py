@@ -760,19 +760,16 @@ def build_execution_matrix(
     derived_vars: List[Tuple[str, VarConfig]] = []
     fixed_scalars: Dict[str, Any] = {}
 
+    # Always use global repetitions (not per-round)
+    repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
+
     # Round-specific parameters
     if round_cfg is not None:
         sweep_names_round = set(round_cfg.sweep_vars or [])
         fixed_overrides = getattr(round_cfg, "fixed_overrides", {}) or {}
-        repetitions = max(1, getattr(round_cfg, "repetitions", 1))
     else:
         sweep_names_round = None
         fixed_overrides = {}
-        # legacy: try benchmark.repetitions if it exists
-        repetitions = max(
-            1,
-            int(getattr(cfg.benchmark, "repetitions", 1) or 1),
-        )
 
     # Classify variables:
     for name, v in cfg.vars.items():

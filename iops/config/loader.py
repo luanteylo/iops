@@ -35,6 +35,47 @@ def _expand_path(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
 
 
+def _load_script_content(content: str, config_dir: Path) -> str:
+    """
+    Load script content from inline text or file path.
+
+    If content looks like a file path and the file exists, reads and returns file contents.
+    Otherwise, returns the content as-is (inline script).
+
+    Args:
+        content: Either inline script text or a file path
+        config_dir: Directory containing the YAML config (for relative paths)
+
+    Returns:
+        Script content (either from file or inline)
+    """
+    if not content or not isinstance(content, str):
+        return content
+
+    content = content.strip()
+
+    # Heuristic: if it's a single line without newlines and looks like a path
+    if "\n" not in content and ("{" not in content or content.count("{") < 3):
+        # Try to interpret as file path
+        try:
+            # Try relative to config directory first
+            script_path = config_dir / content
+            if script_path.is_file():
+                with open(script_path, "r", encoding="utf-8") as f:
+                    return f.read()
+
+            # Try absolute path
+            abs_path = Path(content).expanduser()
+            if abs_path.is_file():
+                with open(abs_path, "r", encoding="utf-8") as f:
+                    return f.read()
+        except Exception:
+            pass  # Not a valid file path, treat as inline content
+
+    # Return as inline content
+    return content
+
+
 def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
     """
     Collect all valid field names that can be used in output include/exclude lists.
@@ -193,6 +234,9 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
     with open(config_path, "r") as f:
         data = yaml.safe_load(f)
 
+    # Get config directory for resolving relative script paths
+    config_dir = config_path.parent
+
     # ---- benchmark ----
     b = data["benchmark"]
     # if search method is not defined, we will execute all test cases (exhaustive)
@@ -205,7 +249,8 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         sqlite_db=_expand_path(b["sqlite_db"]) if "sqlite_db" in b else None,
         search_method=b.get("search_method", "exhaustive"),
         executor=b.get("executor", "slurm"),
-        random_seed=b.get("random_seed", 42)
+        random_seed=b.get("random_seed", 42),
+        cache_exclude_vars=b.get("cache_exclude_vars", [])
     )
 
     # ---- vars ----
@@ -238,12 +283,18 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
     # ---- scripts ----
     scripts: List[ScriptConfig] = []
     for s in data.get("scripts", []):
+        # Load script_template (inline or from file)
+        script_template = _load_script_content(s["script_template"], config_dir)
+
         # optional post
         post_block = s.get("post")
         post_cfg = None
         if post_block is not None:
             # YAML: post: { script: "..." }  OR post: \n  script: |
-            post_cfg = PostConfig(script=post_block.get("script"))
+            post_script = post_block.get("script")
+            if post_script:
+                post_script = _load_script_content(post_script, config_dir)
+            post_cfg = PostConfig(script=post_script)
 
         # optional parser
         parser_block = s.get("parser")
@@ -256,17 +307,22 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
                 )
                 for m in parser_block.get("metrics", [])
             ]
+            # Load parser_script (inline or from file)
+            parser_script = parser_block.get("parser_script")
+            if parser_script:
+                parser_script = _load_script_content(parser_script, config_dir)
+
             parser_cfg = ParserConfig(
                 file=parser_block["file"],
                 metrics=metrics_cfg,
-                parser_script=parser_block.get("parser_script"),
+                parser_script=parser_script,
             )
 
         scripts.append(
             ScriptConfig(
                 name=s["name"],
                 submit=s["submit"],
-                script_template=s["script_template"],
+                script_template=script_template,
                 post=post_cfg,
                 parser=parser_cfg,
             )
@@ -304,7 +360,6 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
                 description=r.get("description"),
                 sweep_vars=r.get("sweep_vars", []),
                 fixed_overrides=r.get("fixed_overrides", {}),
-                repetitions=r.get("repetitions"),
                 search=search_cfg,
             )
         )
@@ -480,13 +535,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"round '{rnd.name}' fixed_overrides references unknown var '{vname}'"
                 )
 
-        # repetitions per round (optional, but if present must be >=1)
-        if rnd.repetitions is not None and rnd.repetitions < 1:
-            raise ConfigValidationError(
-                f"round '{rnd.name}' repetitions must be >= 1"
-            )
-
-        # search block is strongly recommended / basically required
+        # search block is required for multi-round optimization
         if rnd.search is None:
             raise ConfigValidationError(
                 f"round '{rnd.name}' must define a 'search' block"

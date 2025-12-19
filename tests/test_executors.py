@@ -1,282 +1,224 @@
-import sys
-import tempfile
+"""Tests for executor implementations."""
+
 import pytest
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import Mock, patch, MagicMock
+import subprocess
 
-from iops.execution.executors import SlurmExecutor, LocalExecutor
-from iops.execution.executors import BaseExecutor
+from iops.execution.executors import BaseExecutor, LocalExecutor, SlurmExecutor
+from iops.execution.matrix import ExecutionInstance
+from conftest import load_config
+
 
 @pytest.fixture
-def config_setup_local(tmp_path):
-    from iops.config.legacy.config_loader import IOPSConfig, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
-    
-    # Create a minimal config for testing
-    config = IOPSConfig(
-        nodes=NodesConfig(min_nodes=1, max_nodes=2, node_step=2, processes_per_node=4, cores_per_node=32),
-        storage=StorageConfig(
-            filesystem_dir=tmp_path / "fs",
-            min_volume=1,
-            max_volume=10,
-            volume_step=1,
-            default_stripe=1,
-            stripe_folders=[
-                {"name": str(tmp_path / "folder1")}
-            ]
-        ),
-        execution=ExecutionConfig(
-            test_type="write_only",
-            search_method="greedy",
-            job_manager="local",
-            benchmark_tool="ior",
-            workdir=tmp_path / "workdir",
-            repetitions=5,
-            status_check_delay=10,
-            wall_time="00:30:00",
-            tests=["nodes"],
-            io_pattern="sequential:shared"
-        ),
-        template=TemplateConfig(
-            bash_template=tmp_path / "slurm_template.sh",
+def mock_test_instance(tmp_path):
+    """Create a mock ExecutionInstance for testing."""
+    test = Mock(spec=ExecutionInstance)
+    test.execution_id = 1
+    test.repetition = 1
+    test.repetitions = 1
+    test.execution_dir = tmp_path / "exec_001"
+    test.execution_dir.mkdir(parents=True, exist_ok=True)
+    test.script_file = test.execution_dir / "test.sh"
+    test.script_file.write_text("#!/bin/bash\necho 'test'")
+    test.post_script_file = None
+    test.metadata = {}
+    test.parser = Mock()
+    test.parser.metrics = []
+    return test
+
+
+def test_executor_registry():
+    """Test that executors are properly registered."""
+    assert "local" in BaseExecutor._registry
+    assert "slurm" in BaseExecutor._registry
+    assert BaseExecutor._registry["local"] == LocalExecutor
+    assert BaseExecutor._registry["slurm"] == SlurmExecutor
+
+
+def test_executor_build(sample_config_file):
+    """Test building executor from config."""
+    config = load_config(sample_config_file)
+    executor = BaseExecutor.build(config)
+
+    assert isinstance(executor, LocalExecutor)
+
+
+def test_local_executor_submit_success(mock_test_instance):
+    """Test LocalExecutor successful submission."""
+    config = Mock()
+    executor = LocalExecutor(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="output",
+            stderr=""
         )
-    )
-    return config
+
+        executor.submit(mock_test_instance)
+
+        assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_SUCCEEDED
+        assert mock_test_instance.metadata["__jobid"] == "local"
+        mock_run.assert_called_once()
 
 
-def test_local_submit_success(config_setup_local):
-    """Test successful submission of a local job script."""
-    executor = LocalExecutor(config_setup_local)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script_path = Path(tmpdir) / "test.sh"
-        
-        script_path.write_text("#!/bin/bash\necho hello\n")
-        script_path.chmod(0o755)
-        result = executor.submit(script_path)
-        assert result == "local"
+def test_local_executor_submit_failure(mock_test_instance):
+    """Test LocalExecutor failed submission."""
+    config = Mock()
+    executor = LocalExecutor(config)
 
-def test_local_submit_missing_script(config_setup_local):
-    """Test submission failure when script does not exist."""
-    executor = LocalExecutor(config_setup_local)
-    with pytest.raises(ValueError):
-        executor.submit(Path("/nonexistent/script.sh"))
-
-
-def test_local_submit_script_failure(config_setup_local):
-    """Test submission failure when script execution fails."""
-    executor = LocalExecutor(config_setup_local)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script_path = Path(tmpdir) / "fail.sh"
-        script_path.write_text("#!/bin/bash\nexit 1\n")
-        script_path.chmod(0o755)
-        with pytest.raises(RuntimeError):
-            executor.submit(script_path)
-
-def test_local_wait_and_collect_success(tmp_path):
-    """Test successful collection of job metadata."""
-    executor = LocalExecutor(config_setup)
-    job_id = "12345"
-    
-    # Create fake files
-    (tmp_path / executor.JOB_START_FILE).write_text("start-time")
-    (tmp_path / executor.JOB_END_FILE).write_text("end-time")
-    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
-
-    result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
-
-    assert result["__jobid"] == job_id
-    assert result["__start"] == "start-time"
-    assert result["__end"] == "end-time"
-    assert result["__status"] == "COMPLETED"
-    assert "__error" not in result
-
-def test_local_wait_and_collect_missing_files(tmp_path):
-    """Test behavior when some expected files are missing."""
-    executor = LocalExecutor(config_setup)
-    job_id = "12345"
-
-    # Only one file exists
-    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
-
-    result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
-
-    assert result["__start"] is None
-    assert result["__end"] is None
-    assert result["__status"] == "COMPLETED"
-
-def test_local_wait_and_collect_file_error(config_setup, tmp_path):
-    """Test behavior when reading files raises an error."""
-    executor = LocalExecutor(config_setup)
-    job_id = "12345"
-
-    # Create a file that will raise exception on read
-    bad_file = tmp_path / executor.JOB_STATUS_FILE
-    bad_file.write_text("invalid")
-
-    # Simulate read_text() raising error using patch
-    with patch.object(Path, "read_text", side_effect=Exception("Read error")):
-        result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
-
-    assert result["__jobid"] == job_id
-    assert result["__status"] == "ERROR"
-    assert "Read error" in result["__error"]
-
-@pytest.fixture
-def config_setup(tmp_path):
-    from iops.config.legacy.config_loader import IOPSConfig, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
-    
-    # Create a minimal config for testing
-    config = IOPSConfig(
-        nodes=NodesConfig(
-            min_nodes=1, 
-            max_nodes=2, 
-            node_step=2, 
-            processes_per_node=4, 
-            cores_per_node=32
-        ),
-        storage=StorageConfig(
-            filesystem_dir=tmp_path / "fs",
-            min_volume=1,
-            max_volume=10,
-            volume_step=1,
-            default_stripe=1,
-            stripe_folders=[
-                {"name": str(tmp_path / "folder1")}
-            ]
-        ),
-        execution=ExecutionConfig(
-            test_type="write_only",
-            search_method="greedy",
-            job_manager="slurm",
-            benchmark_tool="ior",
-            workdir=tmp_path / "workdir",
-            repetitions=5,
-            status_check_delay=10,
-            wall_time="00:30:00",
-            tests=["nodes"],
-            io_pattern="sequential:shared"
-        ),
-        template=TemplateConfig(
-            bash_template=tmp_path / "slurm_template.sh",
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(
+            returncode=1,
+            stdout="",
+            stderr="error message"
         )
-    )
-    return config
 
-def test_slurm_submit(config_setup, tmp_path):
-    """Test submitting a job with a valid job script."""
-    executor = SlurmExecutor(config_setup)
+        executor.submit(mock_test_instance)
 
-    # Simulate a job script path
-    job_script = tmp_path / "job_script.sh"
-    with open(str(job_script), "w") as f:
-        f.write("#!/bin/bash\necho 'Running IOR benchmark'")
-
-    # Call the submit method & assert job_id is not None
-    job_id = executor.submit(job_script)
-    assert job_id is not None
-
-def test_slurm_submit_invalid_job_script(config_setup, tmp_path):
-    """Test submitting a job with an invalid job script."""
-    executor = SlurmExecutor(config_setup)
-
-    # Simulate an invalid job script path
-    job_script = tmp_path / "invalid_job_script.sh"
-    # Call the submit method and expect an exception
-    with pytest.raises(RuntimeError, match="SLURM job submission failed"):
-        executor.submit(job_script)
-
-    assert not job_script.exists()
+        assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_FAILED
+        assert "__error" in mock_test_instance.metadata
 
 
-def test_slurm_submit_running_job(config_setup, tmp_path):
-    """Test submitting a job that is already running."""
-    executor = SlurmExecutor(config_setup)
-    # Simulate a job script path
-    job_script = tmp_path / "job_script.sh"
-    with open(str(job_script), "w") as f:
-        f.write("#!/bin/bash\necho 'Running IOR benchmark'")
+def test_local_executor_post_script_success(mock_test_instance, tmp_path):
+    """Test LocalExecutor with successful post script."""
+    config = Mock()
+    executor = LocalExecutor(config)
 
-    # Mock the job submission to simulate a running job
-    with patch.object(executor, 'submit', return_value="12345"):
-        job_id = executor.submit(job_script)
-        assert job_id == "12345"
-    
-def test_slurm_submit_finished_job(config_setup, tmp_path):
-    """Test submitting a job that has already finished."""
-    executor = SlurmExecutor(config_setup)
-    job_script = tmp_path / "job_script.sh"
-    job_script.write_text("#!/bin/bash\necho 'Running IOR benchmark'")
+    # Create post script
+    mock_test_instance.post_script_file = tmp_path / "post.sh"
+    mock_test_instance.post_script_file.write_text("#!/bin/bash\necho 'post'")
 
-    # Patch both submit and check_job_status
-    with patch.object(executor, 'submit', return_value="12345") as mock_submit, \
-        patch.object(executor, '_SlurmExecutor__check_job_status', return_value="COMPLETED") as mock_status:
-        job_id = executor.submit(job_script)
-        assert job_id == "12345"
-        status = executor._SlurmExecutor__check_job_status("12345")
-        assert status == "COMPLETED"
-        # Optionally, check that the mocks were called as expected
-        mock_submit.assert_called_once_with(job_script)
-        mock_status.assert_called_once_with(job_id)
+    with patch("subprocess.run") as mock_run:
+        # Mock both main and post script calls
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="main output", stderr=""),  # Main script
+            Mock(returncode=0, stdout="post output", stderr=""),  # Post script
+        ]
 
-def test_slurm_check_job_status(config_setup):
-    """Test checking the status of a SLURM job."""
-    executor = SlurmExecutor(config_setup)  # Pass None or a mock config if needed
-    job_id = "12345"
+        executor.submit(mock_test_instance)
 
-    list_status = ["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]
-    for status in list_status:
-        with patch.object(executor, '_SlurmExecutor__check_job_status', return_value=status):
-            result = executor._SlurmExecutor__check_job_status(job_id)
-            assert result == status
+        assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_SUCCEEDED
+        assert "__post_returncode" in mock_test_instance.metadata
+        assert mock_test_instance.metadata["__post_returncode"] == 0
 
 
-def test_slurm_wait_and_collect_success(config_setup, tmp_path):
-    """Test successful collection of job metadata."""
-    executor = SlurmExecutor(config_setup)
-    job_id = "12345"
-    
-    # Create fake files
-    (tmp_path / executor.JOB_START_FILE).write_text("start-time")
-    (tmp_path / executor.JOB_END_FILE).write_text("end-time")
-    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
+def test_local_executor_post_script_failure(mock_test_instance, tmp_path):
+    """Test LocalExecutor with failed post script."""
+    config = Mock()
+    executor = LocalExecutor(config)
 
-    # Mock __check_job_status to return a valid status
-    with patch.object(executor, '_SlurmExecutor__check_job_status', side_effect=["RUNNING", "COMPLETED"]):
-        result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+    # Create post script
+    mock_test_instance.post_script_file = tmp_path / "post.sh"
+    mock_test_instance.post_script_file.write_text("#!/bin/bash\nexit 1")
 
-    assert result["__jobid"] == job_id
-    assert result["__start"] == "start-time"
-    assert result["__end"] == "end-time"
-    assert result["__status"] == "COMPLETED"
+    with patch("subprocess.run") as mock_run:
+        # Mock both main and post script calls
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="main output", stderr=""),  # Main script succeeds
+            Mock(returncode=1, stdout="", stderr="error"),  # Post script fails
+        ]
 
-def test_slurm_wait_and_collect_missing_files(config_setup, tmp_path):
-    """Test behavior when some expected files are missing."""
-    executor = SlurmExecutor(config_setup)
-    job_id = "12345"
+        executor.submit(mock_test_instance)
 
-    # Only one file exists
-    (tmp_path / executor.JOB_STATUS_FILE).write_text("COMPLETED")
+        # Should mark entire test as failed
+        assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_FAILED
+        assert "__error" in mock_test_instance.metadata
 
-    with patch.object(executor, '_SlurmExecutor__check_job_status', side_effect="COMPLETED"):
-        result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
 
-    assert result["__start"] is None
-    assert result["__end"] is None
-    assert result["__status"] == "COMPLETED"
+def test_local_executor_wait_and_collect(mock_test_instance):
+    """Test LocalExecutor wait_and_collect."""
+    config = Mock()
+    executor = LocalExecutor(config)
 
-def test_slurm_wait_and_collect_file_error(config_setup, tmp_path):
-    """Test behavior when reading files raises an error."""
-    executor = SlurmExecutor(config_setup)
-    job_id = "12345"
+    # Setup successful execution
+    mock_test_instance.metadata["__executor_status"] = executor.STATUS_SUCCEEDED
 
-    # Create a file that will raise exception on read
-    bad_file = tmp_path / executor.JOB_STATUS_FILE
-    bad_file.write_text("invalid")
+    # Create a proper mock metric object
+    mock_metric = Mock()
+    mock_metric.name = "metric1"
+    mock_test_instance.parser.metrics = [mock_metric]
 
-    # Simulate read_text() raising error using patch
-    with patch.object(Path, "read_text", side_effect=Exception("Read error")):
-        result = executor._wait_and_collect(job_id, execution_dir=tmp_path)
+    with patch("iops.execution.executors.local.parse_metrics_from_execution") as mock_parse:
+        mock_parse.return_value = {"metrics": {"metric1": 100.5}}
 
-    assert result["__jobid"] == job_id
-    assert result["__status"] == "ERROR"
+        executor.wait_and_collect(mock_test_instance)
 
-    
+        assert "metrics" in mock_test_instance.metadata
+        assert mock_test_instance.metadata["metrics"]["metric1"] == 100.5
+
+
+def test_slurm_executor_submit_success(mock_test_instance):
+    """Test SlurmExecutor successful submission."""
+    config = Mock()
+    config.execution = Mock()
+    config.execution.status_check_delay = 1
+
+    mock_test_instance.submit_cmd = "sbatch test.sh"
+
+    executor = SlurmExecutor(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="Submitted batch job 12345",
+            stderr=""
+        )
+
+        executor.submit(mock_test_instance)
+
+        assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_PENDING
+        assert mock_test_instance.metadata["__jobid"] == "12345"
+
+
+def test_slurm_executor_parse_jobid_standard():
+    """Test SLURM job ID parsing from standard sbatch output."""
+    config = Mock()
+    config.execution = Mock()
+    executor = SlurmExecutor(config)
+
+    jobid = executor._parse_jobid("Submitted batch job 12345")
+    assert jobid == "12345"
+
+
+def test_slurm_executor_parse_jobid_parsable():
+    """Test SLURM job ID parsing from parsable output."""
+    config = Mock()
+    config.execution = Mock()
+    executor = SlurmExecutor(config)
+
+    jobid = executor._parse_jobid("12345;cluster")
+    assert jobid == "12345"
+
+
+def test_executor_init_metadata(mock_test_instance):
+    """Test that _init_execution_metadata sets standard keys."""
+    config = Mock()
+    executor = LocalExecutor(config)
+
+    executor._init_execution_metadata(mock_test_instance)
+
+    assert "__jobid" in mock_test_instance.metadata
+    assert "__executor_status" in mock_test_instance.metadata
+    assert "__start" in mock_test_instance.metadata
+    assert "__end" in mock_test_instance.metadata
+    assert "__error" in mock_test_instance.metadata
+
+
+def test_executor_truncate_output():
+    """Test output truncation helper."""
+    config = Mock()
+    executor = LocalExecutor(config)
+
+    # Short output
+    short = "line1\nline2\nline3"
+    truncated = executor._truncate_output(short, max_lines=10)
+    assert truncated == short
+
+    # Long output
+    long = "\n".join([f"line{i}" for i in range(20)])
+    truncated = executor._truncate_output(long, max_lines=10)
+    assert "line0" in truncated  # First line
+    assert "line19" in truncated  # Last line
+    assert "omitted" in truncated  # Truncation marker

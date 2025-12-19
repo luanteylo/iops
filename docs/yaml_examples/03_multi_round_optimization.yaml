@@ -3,18 +3,23 @@
 # This example demonstrates:
 # - Multi-round optimization workflow
 # - Progressive parameter refinement
-# - Round-specific configurations
-# - Result propagation between rounds
+# - Automatic best-value propagation between rounds
+# - Round-specific configurations with fixed_overrides
+# - Search-based optimization (max/min metrics)
 # - SQLite output with full history
+#
+# Note: repetitions are global (benchmark.repetitions), not per-round
 
 benchmark:
   name: "IOR Multi-Round Optimization"
-  description: "Progressive optimization: nodes → processes → block size"
+  description: "Progressive optimization: nodes → processes → volume → stripe"
   workdir: "/scratch/$USER/ior_optimization"
   sqlite_db: "/scratch/$USER/ior_cache.db"
   executor: "slurm"
   search_method: "exhaustive"
+  repetitions: 3  # Global: all rounds use 3 repetitions per test
   random_seed: 42
+  cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars
 
 vars:
   # Swept variables (global definition)
@@ -159,7 +164,6 @@ rounds:
       processes_per_node: 16
       volume_size_gb: 8
       stripe_count: 4
-    repetitions: 3
     search:
       metric: "bwMiB"
       objective: "max"
@@ -171,7 +175,6 @@ rounds:
     fixed_overrides:
       volume_size_gb: 8
       stripe_count: 4
-    repetitions: 3
     search:
       metric: "bwMiB"
       objective: "max"
@@ -182,7 +185,6 @@ rounds:
     sweep_vars: ["volume_size_gb"]
     fixed_overrides:
       stripe_count: 4
-    repetitions: 3
     search:
       metric: "bwMiB"
       objective: "max"
@@ -191,7 +193,6 @@ rounds:
   - name: "optimize_stripe"
     description: "Find optimal Lustre stripe count"
     sweep_vars: ["stripe_count"]
-    repetitions: 5
     search:
       metric: "bwMiB"
       objective: "max"

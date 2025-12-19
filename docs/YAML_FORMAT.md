@@ -84,6 +84,7 @@ benchmark:
   search_method: string           # Optional: "exhaustive" | "greedy" | "bayesian"
   executor: string                # Optional: "local" | "slurm" (default: "slurm")
   random_seed: integer            # Optional: seed for randomization (default: 42)
+  cache_exclude_vars: list        # Optional: variables to exclude from cache hash
 ```
 
 ### Field Details
@@ -166,6 +167,38 @@ Seed for random operations (e.g., repetition interleaving).
 random_seed: 12345
 ```
 
+#### `cache_exclude_vars` (optional)
+List of variable names to exclude from cache hash calculation. **Use this when variables contain run-specific values that change between executions but shouldn't invalidate the cache.**
+
+**Common use case**: Derived variables that include the run directory path (e.g., `summary_file`, `output_path`) will differ between runs (`run_001` vs `run_002`), causing cache misses even for identical tests.
+
+```yaml
+cache_exclude_vars: ["summary_file", "output_dir"]
+```
+
+**Example scenario**:
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep: { mode: list, values: [2, 4, 8] }
+
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary.txt"  # Contains run_NNN path
+
+benchmark:
+  cache_exclude_vars: ["summary_file"]  # Exclude from cache matching
+```
+
+Without `cache_exclude_vars`, the same test would generate different cache keys:
+- Run 1: `summary_file=/workdir/run_001/summary.txt` → hash: `abc123`
+- Run 2: `summary_file=/workdir/run_002/summary.txt` → hash: `def456` (cache miss!)
+
+With `cache_exclude_vars: ["summary_file"]`, both runs match the same cache entry.
+
+**Note**: Only exclude variables that don't affect benchmark behavior. Excluding a variable like `block_size` would be incorrect since it directly impacts results.
+
 ### Complete Example
 
 ```yaml
@@ -177,6 +210,7 @@ benchmark:
   repetitions: 3
   search_method: "exhaustive"
   executor: "local"
+  cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars
   random_seed: 42
 ```
 

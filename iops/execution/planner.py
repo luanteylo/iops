@@ -37,14 +37,8 @@ class BasePlanner(ABC, HasLogger):
         # randomly sample all items of the list
         sample_size = len(items)
         if sample_size > 0:
-            self.logger.debug(
-                "Randomly sampling %d items from %d total items.",
-                sample_size,
-                len(items),
-            )
+            self.logger.debug(f"  [Planner] Shuffling execution order ({sample_size} tests)")
             items = self.random.sample(items, sample_size)
-        else:
-            self.logger.debug("No items to sample from.")
         return items
 
     @abstractmethod
@@ -78,6 +72,9 @@ class Exhaustive(BasePlanner, HasLogger):
 
         # Defaults to be used for the *next* round
         self._defaults_for_next_round: dict[str, Any] = {}
+
+        # Track completed tests for search (includes all repetitions)
+        self._completed_tests: list[Any] = []
 
         # ------------------------------------------------------------------
         # Idea B state (per execution_matrix): random interleaving of reps
@@ -119,10 +116,9 @@ class Exhaustive(BasePlanner, HasLogger):
             self._attempt_total += reps
             self._active_indices.append(i)
 
-        self.logger.info(
-            "Built matrix: %d tests, %d total attempts (random interleaving enabled).",
-            self.total_tests,
-            self._attempt_total,
+        self.logger.debug(
+            f"  [Matrix] Built: {self.total_tests} unique parameter combinations, "
+            f"{self._attempt_total} total attempts (with repetitions)"
         )
 
     def _build_next_execution_matrix(self) -> bool:
@@ -140,6 +136,7 @@ class Exhaustive(BasePlanner, HasLogger):
             self.current_index = 0
             self.execution_matrix = None
             self.total_tests = 0
+            self._completed_tests = []  # Clear completed tests for new round
 
             if not self.round_queue:
                 self.logger.info("All rounds have been exhausted. No more tests.")
@@ -194,17 +191,112 @@ class Exhaustive(BasePlanner, HasLogger):
 
         return self.total_tests > 0
 
+    def record_completed_test(self, test: Any) -> None:
+        """
+        Record a completed test for later search.
+
+        This captures the test state after execution, including all metrics.
+        We need to make a copy because the test object gets reused for different repetitions.
+        """
+        import copy
+        # Deep copy to preserve metrics and metadata from this specific execution
+        test_snapshot = copy.deepcopy(test)
+        self._completed_tests.append(test_snapshot)
+
     def _select_best_execution(self) -> Any:
         """
-        Select the best execution from the *previous* round.
+        Select the best execution from the *previous* round based on search metric.
 
-        For now, as requested, this simply returns the last test.
-        Later, you can upgrade this to use a metric stored in the test.
+        When repetitions > 1, groups tests by parameter combination and computes
+        average metric values across repetitions before selecting the best.
+
+        The search configuration is stored in each test:
+        - test.search_metric: metric name to optimize
+        - test.search_objective: "max" or "min"
+
+        Returns one test from the parameter group with the best average metric.
         """
-        assert self.execution_matrix, "No executions to select from."
-        best_exec = self.execution_matrix[-1]
-        self.logger.info("Selected best execution (placeholder = last in round): %s", best_exec)
-        return best_exec
+        if not self._completed_tests:
+            self.logger.warning("No completed tests to select from. Using last from matrix as fallback.")
+            assert self.execution_matrix, "No executions to select from."
+            return self.execution_matrix[-1]
+
+        # Get search config from first test (all tests in round share same config)
+        first_test = self._completed_tests[0]
+        metric_name = getattr(first_test, "search_metric", None)
+        objective = getattr(first_test, "search_objective", None)
+
+        if not metric_name or not objective:
+            self.logger.warning(
+                "No search configuration found for round. Using last completed test as default."
+            )
+            return self._completed_tests[-1]
+
+        self.logger.info(
+            f"Searching for best execution: {objective} {metric_name}"
+        )
+
+        # Group tests by parameter combination (base_vars = params without repetition)
+        # Map: param_signature -> [(test, metric_value), ...]
+        from collections import defaultdict
+        import json
+
+        param_groups = defaultdict(list)
+
+        for test in self._completed_tests:
+            metrics = test.metadata.get("metrics", {})
+            if metric_name in metrics:
+                try:
+                    metric_value = float(metrics[metric_name])
+
+                    # Create unique signature from base_vars (excludes repetition)
+                    base_vars = getattr(test, "base_vars", {})
+                    param_sig = json.dumps(base_vars, sort_keys=True, default=str)
+
+                    param_groups[param_sig].append((test, metric_value))
+                except (ValueError, TypeError):
+                    self.logger.warning(
+                        f"  [Search] Skipping test {test.execution_id}: "
+                        f"invalid metric '{metric_name}'={metrics[metric_name]}"
+                    )
+            else:
+                self.logger.debug(
+                    f"  [Search] Skipping test {test.execution_id}: metric '{metric_name}' not found"
+                )
+
+        if not param_groups:
+            self.logger.warning(
+                f"No tests with valid '{metric_name}' metric found. Using last completed test as fallback."
+            )
+            return self._completed_tests[-1]
+
+        # Compute average metric for each parameter combination
+        group_averages = []
+        for param_sig, tests_and_values in param_groups.items():
+            values = [v for _, v in tests_and_values]
+            avg_value = sum(values) / len(values)
+            representative_test = tests_and_values[0][0]  # Use first test as representative
+
+            group_averages.append((representative_test, avg_value, len(values)))
+
+        # Find best group based on objective
+        if objective == "max":
+            best_test, best_avg, num_reps = max(group_averages, key=lambda x: x[1])
+        elif objective == "min":
+            best_test, best_avg, num_reps = min(group_averages, key=lambda x: x[1])
+        else:
+            self.logger.warning(
+                f"Unknown objective '{objective}'. Using last completed test as fallback."
+            )
+            return self._completed_tests[-1]
+
+        self.logger.info(
+            f"Selected best parameter combination: execution_id={best_test.execution_id} "
+            f"with {metric_name}_avg={best_avg:.4f} (averaged over {num_reps} repetitions, "
+            f"from {len(group_averages)} unique parameter combinations)"
+        )
+
+        return best_test
 
     def _prepare_execution_artifacts(
         self,
@@ -264,21 +356,16 @@ class Exhaustive(BasePlanner, HasLogger):
         test.script_file = exec_dir / f"run_{test.script_name}.sh"
         with open(test.script_file, "w") as f:
             f.write(test.script_text)
-        self.logger.debug(
-            "Written script file for test %d: %s",
-            test_idx_for_log,
-            test.script_file,
-        )
+
+        script_info = f"main={test.script_file.name}"
 
         if getattr(test, "post_script", None):
             test.post_script_file = exec_dir / f"post_{test.script_name}.sh"
             with open(test.post_script_file, "w") as f:
                 f.write(test.post_script)
-            self.logger.debug(
-                "Written post-processing script file for test %d: %s",
-                test_idx_for_log,
-                test.post_script_file,
-            )
+            script_info += f", post={test.post_script_file.name}"
+
+        self.logger.debug(f"  [Prepare] Scripts written: {script_info}")
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -303,10 +390,20 @@ class Exhaustive(BasePlanner, HasLogger):
                 # pick best_exec and prepare defaults for the next round.
                 if self.multiple_rounds and matrix_finished:
                     best_exec = self._select_best_execution()
-                    self._defaults_for_next_round = dict(getattr(best_exec, "vars", {}))
-                    self.logger.info(
-                        "Using vars from best execution as defaults for the next round."
-                    )
+                    best_vars = getattr(best_exec, "vars", {}) or {}
+                    self._defaults_for_next_round = dict(best_vars)
+
+                    # Log propagated values for visibility
+                    if self._defaults_for_next_round:
+                        propagated_str = ", ".join(
+                            f"{k}={v}" for k, v in sorted(self._defaults_for_next_round.items())
+                        )
+                        self.logger.info(
+                            f"Round '{self.current_round}' completed. "
+                            f"Propagating {len(self._defaults_for_next_round)} values to next round: {propagated_str}"
+                        )
+                    else:
+                        self.logger.warning(f"Round '{self.current_round}' completed but no variables to propagate")
 
                 # Attempt to build the next matrix (round or single)
                 if not self._build_next_execution_matrix():
@@ -317,6 +414,7 @@ class Exhaustive(BasePlanner, HasLogger):
                     continue
 
             # At this point we have a valid matrix with remaining attempts
+            assert self.execution_matrix is not None, "Execution matrix should be populated"
             idx = self.random.choice(self._active_indices)
             test = self.execution_matrix[idx]
 
@@ -330,27 +428,12 @@ class Exhaustive(BasePlanner, HasLogger):
                 self._active_indices.remove(idx)
 
             # Logging: attempt-oriented (more meaningful now)
-            if self.current_round:
-                self.logger.debug(
-                    "Providing attempt %d/%d: exec_id=%s (matrix idx=%d), repetition %d/%d from round '%s'",
-                    self._attempt_count,
-                    self._attempt_total,
-                    getattr(test, "execution_id", "?"),
-                    idx,
-                    rep_idx + 1,
-                    getattr(test, "repetitions", 1),
-                    self.current_round,
-                )
-            else:
-                self.logger.debug(
-                    "Providing attempt %d/%d: exec_id=%s (matrix idx=%d), repetition %d/%d (single round)",
-                    self._attempt_count,
-                    self._attempt_total,
-                    getattr(test, "execution_id", "?"),
-                    idx,
-                    rep_idx + 1,
-                    getattr(test, "repetitions", 1),
-                )
+            round_tag = f" [{self.current_round}]" if self.current_round else ""
+            self.logger.debug(
+                f"  [Planner] Selected test (attempt {self._attempt_count}/{self._attempt_total}): "
+                f"exec_id={getattr(test, 'execution_id', '?')} "
+                f"rep={rep_idx + 1}/{getattr(test, 'repetitions', 1)}{round_tag}"
+            )
 
             # Prepare filesystem artifacts (dirs + scripts) for this test+repetition
             # test_idx_for_log is informational; we keep idx+1 as "matrix position"

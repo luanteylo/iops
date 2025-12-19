@@ -80,7 +80,54 @@ Each test is uniquely identified by:
 Parameters are normalized before hashing:
 - Type normalization: `"8"` and `8` are treated as identical
 - Internal keys removed: `__test_index`, `__phase_index`, etc. are ignored
+- Excluded variables removed: Variables in `cache_exclude_vars` are skipped
 - Sorted consistently: Order doesn't matter
+
+### Excluding Variables from Cache
+
+**Problem**: Some derived variables contain run-specific paths that change between executions, causing unnecessary cache misses.
+
+**Example**:
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep: { mode: list, values: [2, 4, 8] }
+
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary.txt"  # Contains run_001, run_002, etc.
+```
+
+Without exclusion:
+- Run 1: `summary_file=/workdir/run_001/summary.txt` → Cache key: `abc123`
+- Run 2: `summary_file=/workdir/run_002/summary.txt` → Cache key: `def456` ❌ **Cache miss!**
+
+**Solution**: Use `cache_exclude_vars` to exclude path-based variables:
+
+```yaml
+benchmark:
+  name: "IOR Benchmark"
+  workdir: "/home/user/workdir/"
+  sqlite_db: "/home/user/iops_cache.db"
+  cache_exclude_vars: ["summary_file"]  # Exclude from cache hash
+  repetitions: 3
+```
+
+Now both runs match the same cache entry:
+- Run 1: Cache key based on `nodes` only → `xyz789`
+- Run 2: Cache key based on `nodes` only → `xyz789` ✅ **Cache hit!**
+
+**When to use `cache_exclude_vars`**:
+- ✅ Variables containing `{{ execution_dir }}` (changes per run)
+- ✅ Variables containing `{{ workdir }}` if workdir changes
+- ✅ Timestamp-based variables
+- ✅ Any derived path that includes the run number
+
+**When NOT to use `cache_exclude_vars`**:
+- ❌ Core benchmark parameters (block_size, transfer_size, etc.)
+- ❌ Variables that affect benchmark behavior
+- ❌ Variables that affect output correctness
 
 ### Cache Schema
 
@@ -204,28 +251,45 @@ cache.clear_cache()
 
 **Problem**: Parameters seem the same but cache misses
 
-**Cause**: Likely due to parameter type differences
+**Possible causes**:
 
-**Example**:
-```yaml
-# Run 1
-vars:
-  nodes:
-    type: int
-    sweep:
-      mode: list
-      values: [2, 4, 8]
+1. **Derived variables with run-specific paths**:
+   ```bash
+   # Enable debug logging to see what's being hashed
+   iops config.yaml --use_cache --log_level DEBUG --log_terminal | grep "param_hash"
+   ```
 
-# Run 2 (won't match cache!)
-vars:
-  nodes:
-    type: str
-    sweep:
-      mode: list
-      values: ["2", "4", "8"]
-```
+   If you see different hashes for identical parameters, check for variables containing:
+   - `{{ execution_dir }}` (contains `run_001`, `run_002`, etc.)
+   - `{{ workdir }}` (if workdir changes between runs)
+   - Dynamic timestamps or paths
 
-**Solution**: Keep parameter types consistent, or rely on normalization (string "8" == int 8)
+   **Solution**: Add `cache_exclude_vars` to exclude these variables:
+   ```yaml
+   benchmark:
+     cache_exclude_vars: ["summary_file", "output_path", "log_file"]
+   ```
+
+2. **Parameter type differences**:
+   ```yaml
+   # Run 1
+   vars:
+     nodes:
+       type: int
+       sweep:
+         mode: list
+         values: [2, 4, 8]
+
+   # Run 2 (won't match cache!)
+   vars:
+     nodes:
+       type: str
+       sweep:
+         mode: list
+         values: ["2", "4", "8"]
+   ```
+
+   **Solution**: Keep parameter types consistent, or rely on normalization (string "8" == int 8)
 
 ### Cache Growing Too Large
 

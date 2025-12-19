@@ -34,19 +34,28 @@ class ExecutionCache(HasLogger):
             - created_at: TEXT (timestamp)
     """
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, exclude_vars: Optional[List[str]] = None):
         """
         Initialize the execution cache.
 
         Args:
             db_path: Path to SQLite database file
+            exclude_vars: List of variable names to exclude from cache hash
         """
         super().__init__()
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.exclude_vars = set(exclude_vars or [])
 
         self._init_db()
-        self.logger.info(f"Execution cache initialized at: {self.db_path}")
+
+        if self.exclude_vars:
+            self.logger.info(
+                f"Execution cache initialized at: {self.db_path} "
+                f"(excluding {len(self.exclude_vars)} vars from hash: {sorted(self.exclude_vars)})"
+            )
+        else:
+            self.logger.info(f"Execution cache initialized at: {self.db_path}")
 
     def _init_db(self):
         """Create the cache table if it doesn't exist."""
@@ -78,7 +87,7 @@ class ExecutionCache(HasLogger):
         """
         Normalize parameters for hashing.
 
-        Removes internal/metadata keys (starting with __) and sorts keys.
+        Removes internal/metadata keys (starting with __), excluded vars, and sorts keys.
         Converts Path objects to strings for JSON serialization.
 
         Args:
@@ -92,6 +101,10 @@ class ExecutionCache(HasLogger):
         for key, value in sorted(params.items()):
             # Skip internal keys (like __test_index, __phase_index, etc.)
             if key.startswith("__"):
+                continue
+
+            # Skip excluded variables (e.g., path-based derived vars)
+            if key in self.exclude_vars:
                 continue
 
             # Convert Path to string
@@ -170,8 +183,8 @@ class ExecutionCache(HasLogger):
 
             if row:
                 self.logger.debug(
-                    f"Cache HIT: param_hash={param_hash[:8]}... repetition={repetition} "
-                    f"round={round_name} (cached at {row['created_at']})"
+                    f"  [Cache] HIT: hash={param_hash[:8]} rep={repetition} "
+                    f"round={round_name or 'N/A'} (cached_at={row['created_at']})"
                 )
 
                 return {
@@ -181,7 +194,7 @@ class ExecutionCache(HasLogger):
                 }
 
             self.logger.debug(
-                f"Cache MISS: param_hash={param_hash[:8]}... repetition={repetition} round={round_name}"
+                f"  [Cache] MISS: hash={param_hash[:8]} rep={repetition} round={round_name or 'N/A'}"
             )
             return None
 
@@ -227,8 +240,8 @@ class ExecutionCache(HasLogger):
                 conn.commit()
 
                 self.logger.debug(
-                    f"Cache STORE: param_hash={param_hash[:8]}... repetition={repetition} "
-                    f"round={round_name}"
+                    f"  [Cache] STORE: hash={param_hash[:8]} rep={repetition} "
+                    f"round={round_name or 'N/A'} metrics={len(metrics)} keys"
                 )
 
             except sqlite3.IntegrityError:
@@ -246,8 +259,8 @@ class ExecutionCache(HasLogger):
                 conn.commit()
 
                 self.logger.debug(
-                    f"Cache UPDATE: param_hash={param_hash[:8]}... repetition={repetition} "
-                    f"round={round_name}"
+                    f"  [Cache] UPDATE: hash={param_hash[:8]} rep={repetition} "
+                    f"round={round_name or 'N/A'} metrics={len(metrics)} keys"
                 )
 
     def get_cached_repetitions_count(

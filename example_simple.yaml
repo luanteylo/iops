@@ -7,6 +7,8 @@ benchmark:
   search_method: "exhaustive" # used to define the policy for test execution selection
   executor : "local" # specify the executor to use : local | slurm 
   random_seed: 43  # seed for any random operations in the benchmark
+  cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars
+
 
 
 vars:
@@ -15,28 +17,22 @@ vars:
     type: int
     sweep:
       mode: list
-      values: [8, 16, 32]
+      values: [1, 4, 8]
 
   volume_size_gb:
     type: int
     sweep:
       mode: list
-      values: [4]
+      values: [1, 4, 16]
 
   block_size_mb:
     type: int
-    expr: "((volume_size_gb * 1024) / (processes_per_node) ) * error_var"
+    expr: "(volume_size_gb * 1024) / (processes_per_node) "
 
     
   summary_file:
     type: str
     expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
-
-  error_var:
-    type: float
-    sweep:
-      mode: list
-      values: [1, 0.00001]
 
 
   
@@ -75,6 +71,7 @@ scripts:
         - name: bwMiB
         - name: iops
         - name: latency
+        - name: totalTime
       parser_script: |
         import json
 
@@ -127,3 +124,21 @@ output:
     table: results         # only for sqlite
 
 
+# Multi-round optimization workflow
+rounds:
+
+  # Round 1: With best nodes, optimize processes per node
+  - name: "optimize_processes"
+    description: "Find best process count using optimal nodes from round 1"
+    sweep_vars: ["processes_per_node"]
+    search:
+      metric: "bwMiB"
+      objective: "max"
+
+  # Round 3: Optimize volume size with best nodes and processes
+  - name: "optimize_volume"
+    description: "Find optimal data volume size"
+    sweep_vars: ["volume_size_gb"]
+    search:
+      metric: "bwMiB"
+      objective: "max"

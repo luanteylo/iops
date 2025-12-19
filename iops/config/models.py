@@ -26,6 +26,7 @@ class BenchmarkConfig:
     search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
     random_seed: Optional[int] = None  # seed for any random operations
+    cache_exclude_vars: Optional[List[str]] = None  # variables to exclude from cache hash
 
 
 @dataclass
@@ -132,18 +133,16 @@ class RoundConfig:
         fixed_overrides:
           block_size_mb: 16
           processes_per_node: 16
-        repetitions: 3
         search:
           metric: "write_bandwidth"
           objective: "max"
-        propagate:
-          vars: ["nodes"]
+
+    Note: repetitions are global (benchmark.repetitions), not per-round.
     """
     name: str
     description: Optional[str]
     sweep_vars: List[str] = field(default_factory=list)
     fixed_overrides: Dict[str, Any] = field(default_factory=dict)
-    repetitions: Optional[int] = None
     search: RoundSearchConfig | None = None
 
 
