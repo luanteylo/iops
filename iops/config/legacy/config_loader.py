@@ -6,7 +6,7 @@ import yaml
 import os
 import shutil
 
-from iops.utils.logger import HasLogger
+from iops.logger import HasLogger
 
 @dataclass
 class NodesConfig:

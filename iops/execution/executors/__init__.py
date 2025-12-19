@@ -12,10 +12,10 @@ import subprocess
 import time
 
 
-from iops.utils.logger import HasLogger
-from iops.utils.generic_config import GenericBenchmarkConfig
-from iops.utils.execution_matrix import ExecutionInstance
-from iops.utils.generic_parser import parse_metrics_from_execution
+from iops.logger import HasLogger
+from iops.config.models import GenericBenchmarkConfig
+from iops.execution.matrix import ExecutionInstance
+from iops.results.parser import parse_metrics_from_execution
 
 if TYPE_CHECKING:
     from typing import Dict, Any

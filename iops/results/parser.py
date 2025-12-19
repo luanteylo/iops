@@ -5,7 +5,7 @@ from curses import raw
 from typing import Any, Dict, Callable
 import traceback
 import ast
-from iops.utils.execution_matrix import ExecutionInstance
+from iops.execution.matrix import ExecutionInstance
 
 
 class ParserError(Exception): ...

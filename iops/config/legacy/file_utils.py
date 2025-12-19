@@ -1,8 +1,8 @@
 from pathlib import Path
 from ruamel.yaml import YAML
 from sqlalchemy import values
-from iops.utils.config_loader import load_config, validate_config, IOPSConfig
-from iops.utils.logger import HasLogger
+from iops.config.legacy.config_loader import load_config, validate_config, IOPSConfig
+from iops.logger import HasLogger
 from ruamel.yaml.parser import ParserError
 
 class FileUtils(HasLogger):
@@ -14,8 +14,8 @@ class FileUtils(HasLogger):
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from iops.utils.config_loader import load_config, validate_config, IOPSConfig
-from iops.utils.logger import HasLogger
+from iops.config.legacy.config_loader import load_config, validate_config, IOPSConfig
+from iops.logger import HasLogger
 from ruamel.yaml.parser import ParserError
 
 

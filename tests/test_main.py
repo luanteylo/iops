@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import patch
 
 from iops.main import main
-from iops.utils.config_loader import ConfigValidationError
+from iops.config.legacy.config_loader import ConfigValidationError
 
 import yaml
 

@@ -1,172 +1,46 @@
-# iops/utils/generic_config.py
+# iops/config/loader.py
+
+"""Configuration loading and validation for IOPS benchmarks."""
 
 from __future__ import annotations
 
-from iops.utils.script_validation import validate_parser_script
-
-
-from typing import Any, Dict, List, Optional, Literal
-from dataclasses import dataclass, field
+from typing import Any, Dict, List, Set
 from pathlib import Path
 import yaml
 import os
 
-
-class ConfigValidationError(Exception):
-    pass
-
-
-# ----------------- Core blocks ----------------- #
-
-@dataclass
-class BenchmarkConfig:
-    name: str
-    description: Optional[str]
-    workdir: Path
-    repetitions: Optional[int] = 1        # global default (can be ignored if rounds have their own)
-    sqlite_db: Optional[Path] = None
-    search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
-    executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
-    random_seed: Optional[int] = None  # seed for any random operations
-
-
-@dataclass
-class SweepConfig:
-    mode: Literal["range", "list"]
-    # range
-    start: Optional[int] = None
-    end: Optional[int] = None
-    step: Optional[int] = None
-    # list
-    values: Optional[List[Any]] = None
+from iops.config.models import (
+    ConfigValidationError,
+    GenericBenchmarkConfig,
+    BenchmarkConfig,
+    VarConfig,
+    SweepConfig,
+    CommandConfig,
+    ScriptConfig,
+    PostConfig,
+    ParserConfig,
+    MetricConfig,
+    OutputConfig,
+    OutputSinkConfig,
+    RoundConfig,
+    RoundSearchConfig,
+)
+from iops.results.validation import validate_parser_script
 
 
-@dataclass
-class VarConfig:
-    type: str                 # "int", "float", "str", etc.
-    sweep: Optional[SweepConfig] = None
-    expr: Optional[str] = None  # for derived vars
+# ----------------- Helper functions ----------------- #
 
-
-@dataclass
-class CommandConfig:
-    template: str
-    metadata: Dict[str, Any]
-    env: Dict[str, str]
-
-
-@dataclass
-class PostConfig:
-    # whole `post` block is optional;
-    # if present, `script` can be empty (your choice)
-    script: Optional[str] = None
-
-
-@dataclass
-class MetricConfig:
-    name: str
-    path: Optional[str] = None  # e.g. JSON path, optional if parser_script handles it
-
-
-@dataclass
-class ParserConfig:    
-    file: str
-    metrics: List[MetricConfig]
-    # parser_script is optional
-    parser_script: Optional[str] = None
-
-
-@dataclass
-class ScriptConfig:
-    name: str    
-    submit: str
-    script_template: str
-    post: Optional[PostConfig] = None      # optional
-    parser: Optional[ParserConfig] = None  # optional
-
-
-@dataclass
-class OutputSinkConfig:
-    type: Literal["csv", "parquet", "sqlite"]
-    path: str
-    mode: Literal["append", "overwrite"] = "append"
-    include: List[str] = field(default_factory=list)
-    exclude: List[str] = field(default_factory=list)
-    table: str = "results"  # sqlite only
-
-    resolved_path: Optional[Path] = None
-
-
-@dataclass
-class OutputConfig:
-    sink: OutputSinkConfig
-
-
-# ----------------- Rounds blocks ----------------- #
-
-@dataclass
-class RoundSearchConfig:
-    """
-    Search definition inside a round.
-
-    Example in YAML:
-
-      search:
-        metric: "write_bandwidth"
-        objective: "max"   # max | min
-        # select: "best"   # optional, future extension
-    """
-    metric: str
-    objective: Literal["max", "min"]
-    select: Optional[str] = None  # e.g., "best", "top_k", etc. (optional / future use)
-
-
-
-
-@dataclass
-class RoundConfig:
-    """
-    One optimization / search round.
-
-    YAML example:
-
-      - name: "nodes_sweep"
-        description: "Find best nodes by write bandwidth."
-        sweep_vars: ["nodes"]
-        fixed_overrides:
-          block_size_mb: 16
-          processes_per_node: 16
-        repetitions: 3
-        search:
-          metric: "write_bandwidth"
-          objective: "max"
-        propagate:
-          vars: ["nodes"]
-    """
-    name: str
-    description: Optional[str]
-    sweep_vars: List[str] = field(default_factory=list)
-    fixed_overrides: Dict[str, Any] = field(default_factory=dict)
-    repetitions: Optional[int] = None
-    search: RoundSearchConfig | None = None
-
-
-@dataclass
-class GenericBenchmarkConfig:
-    benchmark: BenchmarkConfig
-    vars: Dict[str, VarConfig]
-    command: CommandConfig
-    scripts: List[ScriptConfig]
-    output: OutputConfig
-    rounds: List[RoundConfig] = field(default_factory=list)  # <-- NEW
-
-
-# ----------------- helpers ----------------- #
-
-from typing import Set, Tuple
+def _expand_path(p: str) -> Path:
+    """Expand environment variables and user paths, then resolve to absolute path."""
+    return Path(os.path.expandvars(p)).expanduser().resolve()
 
 
 def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
+    """
+    Collect all valid field names that can be used in output include/exclude lists.
+
+    Returns a set of allowed dotted field names like 'vars.nodes', 'metrics.bwMiB', etc.
+    """
     allowed: Set[str] = set()
 
     # --- benchmark.* ---
@@ -229,6 +103,11 @@ def _validate_output_field_list(
     fields: list[str],
     where: str,
 ) -> None:
+    """
+    Validate that all fields in the list are valid output field names.
+
+    Raises ConfigValidationError if any field is invalid.
+    """
     allowed = _collect_allowed_output_fields(cfg)
 
     bad: list[str] = []
@@ -256,17 +135,67 @@ def _validate_output_field_list(
         )
 
 
-def _expand_path(p: str) -> Path:
-    return Path(os.path.expandvars(p)).expanduser().resolve()
+def create_workdir(cfg: GenericBenchmarkConfig, logger) -> None:
+    """
+    Creates a new RUN directory under the configured base workdir.
 
+    Layout:
+      <base_workdir>/run_<id>/
+        ├── logs/
+        └── runs/
+
+    Updates cfg.benchmark.workdir to point to the new run directory.
+    """
+    base_workdir = cfg.benchmark.workdir
+
+    base_workdir.mkdir(parents=True, exist_ok=True)
+    logger.debug(f"Base work directory: {base_workdir}")
+
+    # Find existing run directories
+    run_dirs = [
+        d for d in base_workdir.iterdir()
+        if d.is_dir()
+        and d.name.startswith("run_")
+        and d.name.split("_", 1)[1].isdigit()
+    ]
+
+    next_id = max((int(d.name.split("_", 1)[1]) for d in run_dirs), default=0) + 1
+
+    run_root = base_workdir / f"run_{next_id:03d}"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    # Standard subfolders
+    (run_root / "runs").mkdir(parents=True, exist_ok=True)
+    (run_root / "logs").mkdir(parents=True, exist_ok=True)
+
+    logger.debug(f"Created run root: {run_root}")
+
+    # Update cfg.workdir to this run root (stable during execution)
+    cfg.benchmark.workdir = run_root
+
+
+# ----------------- Main loading function ----------------- #
 
 def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
+    """
+    Load and parse a YAML configuration file into a GenericBenchmarkConfig object.
+
+    Args:
+        config_path: Path to the YAML configuration file
+        logger: Logger instance for debug messages
+
+    Returns:
+        Validated GenericBenchmarkConfig object with workdir created
+
+    Raises:
+        ConfigValidationError: If configuration is invalid
+    """
     with open(config_path, "r") as f:
         data = yaml.safe_load(f)
 
     # ---- benchmark ----
     b = data["benchmark"]
-    # if search method is not define, we will execute all test cases (exhaustive)
+    # if search method is not defined, we will execute all test cases (exhaustive)
 
     benchmark = BenchmarkConfig(
         name=b["name"],
@@ -335,7 +264,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
 
         scripts.append(
             ScriptConfig(
-                name=s["name"],             
+                name=s["name"],
                 submit=s["submit"],
                 script_template=s["script_template"],
                 post=post_cfg,
@@ -394,43 +323,14 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
     return cfg
 
 
-def create_workdir(cfg: GenericBenchmarkConfig, logger) -> None:
-    """
-    Creates a new RUN directory under the configured base workdir.
-
-    Layout:
-      <base_workdir>/run_<id>/
-        ├── logs/
-        └── runs/
-    """
-    base_workdir = cfg.benchmark.workdir
-
-    base_workdir.mkdir(parents=True, exist_ok=True)
-    logger.debug(f"Base work directory: {base_workdir}")
-
-    # Find existing run directories
-    run_dirs = [
-        d for d in base_workdir.iterdir()
-        if d.is_dir()
-        and d.name.startswith("run_")
-        and d.name.split("_", 1)[1].isdigit()
-    ]
-
-    next_id = max((int(d.name.split("_", 1)[1]) for d in run_dirs), default=0) + 1
-
-    run_root = base_workdir / f"run_{next_id:03d}"
-    run_root.mkdir(parents=True, exist_ok=True)
-
-    # Standard subfolders
-    (run_root / "runs").mkdir(parents=True, exist_ok=True)
-    (run_root / "logs").mkdir(parents=True, exist_ok=True)
-
-    logger.debug(f"Created run root: {run_root}")
-
-    # Update cfg.workdir to this run root (stable during execution)
-    cfg.benchmark.workdir = run_root
+# ----------------- Validation function ----------------- #
 
 def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
+    """
+    Validate a GenericBenchmarkConfig object.
+
+    Raises ConfigValidationError if any validation check fails.
+    """
     # ---- benchmark ----
     if not cfg.benchmark.workdir.exists():
         raise ConfigValidationError(
@@ -446,8 +346,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             raise ConfigValidationError(
                 "benchmark.search_method must be one of: greedy, bayesian, exhaustive"
             )
-
-
 
     # ---- vars ----
     if not cfg.vars:
@@ -532,7 +430,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 )
 
     # ---- output ----
-    # ---- output ----
     sink = cfg.output.sink
 
     if sink.type not in ("csv", "parquet", "sqlite"):
@@ -557,11 +454,8 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if not sink.table or not str(sink.table).strip():
             raise ConfigValidationError("output.sink.table must not be empty when type=sqlite")
 
-
-
-
     # ---- rounds (optional) ----
-    # If no rounds: that's fine, you can keep current “single global matrix” behaviour.
+    # If no rounds: that's fine, you can keep current "single global matrix" behaviour.
     for rnd in cfg.rounds:
         if not rnd.name:
             raise ConfigValidationError("Each round must have a non-empty 'name'")
@@ -606,4 +500,4 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if rnd.search.objective not in ("max", "min"):
             raise ConfigValidationError(
                 f"round '{rnd.name}' search.objective must be 'max' or 'min'"
-            )   
+            )

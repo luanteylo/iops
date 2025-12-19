@@ -1,6 +1,6 @@
-from iops.utils.logger import HasLogger
-from iops.utils.generic_config import GenericBenchmarkConfig
-from iops.utils.execution_matrix import ExecutionInstance, build_execution_matrix
+from iops.logger import HasLogger
+from iops.config.models import GenericBenchmarkConfig
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix
 
 from typing import List, Any
 from abc import ABC, abstractmethod

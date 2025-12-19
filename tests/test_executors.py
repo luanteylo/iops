@@ -4,12 +4,12 @@ import pytest
 from unittest.mock import patch
 from pathlib import Path
 
-from iops.controller.executors import SlurmExecutor, LocalExecutor
-from iops.controller.executors import BaseExecutor
+from iops.execution.executors import SlurmExecutor, LocalExecutor
+from iops.execution.executors import BaseExecutor
 
 @pytest.fixture
 def config_setup_local(tmp_path):
-    from iops.utils.config_loader import IOPSConfig, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
+    from iops.config.legacy.config_loader import IOPSConfig, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
     
     # Create a minimal config for testing
     config = IOPSConfig(
@@ -122,7 +122,7 @@ def test_local_wait_and_collect_file_error(config_setup, tmp_path):
 
 @pytest.fixture
 def config_setup(tmp_path):
-    from iops.utils.config_loader import IOPSConfig, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
+    from iops.config.legacy.config_loader import IOPSConfig, StorageConfig, NodesConfig, ExecutionConfig, TemplateConfig
     
     # Create a minimal config for testing
     config = IOPSConfig(

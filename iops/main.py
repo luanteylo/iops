@@ -2,12 +2,13 @@ import argparse
 import logging
 from pathlib import Path
 
-from iops.utils.file_utils import FileUtils
-from iops.utils.logger import setup_logger
-from iops.controller.runner import IOPSRunner
-#from iops.utils.config_loader import ConfigValidationError, IOPSConfig
-from iops.utils.generic_config import load_generic_config, validate_generic_config, ConfigValidationError, GenericBenchmarkConfig
-from iops.utils.execution_matrix import build_execution_matrix
+from iops.config.legacy.file_utils import FileUtils
+from iops.logger import setup_logger
+from iops.execution.runner import IOPSRunner
+#from iops.config.legacy.config_loader import ConfigValidationError, IOPSConfig
+from iops.config.loader import load_generic_config, validate_generic_config
+from iops.config.models import ConfigValidationError, GenericBenchmarkConfig
+from iops.execution.matrix import build_execution_matrix
 
 def load_version():
     """

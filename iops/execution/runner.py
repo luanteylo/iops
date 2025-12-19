@@ -1,9 +1,9 @@
 
-from iops.utils.logger import HasLogger
-from iops.controller.planner import BasePlanner
-from iops.controller.executors import BaseExecutor
-from iops.utils.generic_config import GenericBenchmarkConfig
-from iops.utils.output_writer import save_test_execution
+from iops.logger import HasLogger
+from iops.execution.planner import BasePlanner
+from iops.execution.executors import BaseExecutor
+from iops.config.models import GenericBenchmarkConfig
+from iops.results.writer import save_test_execution
 
 from typing import Dict, Any
 from datetime import datetime

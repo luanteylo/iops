@@ -9,7 +9,7 @@ import math
 
 from jinja2 import Environment, StrictUndefined
 
-from iops.utils.generic_config import (
+from iops.config.models import (
     GenericBenchmarkConfig,
     VarConfig,
     ParserConfig,

@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from iops.utils.config_loader import load_config, validate_config, ConfigValidationError
+from iops.config.legacy.config_loader import load_config, validate_config, ConfigValidationError
 
 sample_yaml_content = """
 nodes:

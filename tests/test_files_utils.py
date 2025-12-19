@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
-from iops.utils.file_utils import FileUtils
-from iops.utils.config_loader import IOPSConfig, ConfigValidationError
+from iops.config.legacy.file_utils import FileUtils
+from iops.config.legacy.config_loader import IOPSConfig, ConfigValidationError
 import shutil
 import yaml
 
