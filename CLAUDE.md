@@ -39,6 +39,9 @@ iops --version
 
 # Enable verbose logging
 iops setup.yaml --log_level DEBUG --log_terminal
+
+# Use cache to skip already-executed tests
+iops setup.yaml --use_cache
 ```
 
 ### Testing
@@ -140,6 +143,7 @@ iops/
 │   ├── matrix.py               # ExecutionInstance and matrix generation
 │   ├── planner.py              # Test selection strategies (exhaustive, etc.)
 │   ├── runner.py               # Main orchestrator (IOPSRunner)
+│   ├── cache.py                # Execution result caching (SQLite)
 │   └── executors/              # Execution backends
 │       └── __init__.py         # BaseExecutor, LocalExecutor, SlurmExecutor
 │
@@ -214,6 +218,55 @@ Flattened output columns follow dot notation:
 - `metrics.<metricname>` (e.g., `metrics.bwMiB`)
 
 Use `include` or `exclude` in YAML to filter output fields.
+
+## Execution Caching
+
+IOPS supports caching execution results to avoid re-running tests with identical parameters:
+
+### Configuration
+
+Set `sqlite_db` in the benchmark config:
+
+```yaml
+benchmark:
+  name: "My Benchmark"
+  workdir: "/path/to/workdir"
+  sqlite_db: "/path/to/cache.db"  # Cache database location
+  repetitions: 3
+```
+
+### Usage
+
+```bash
+# First run: executes all tests, stores results in cache
+iops config.yaml
+
+# Second run with --use_cache: reuses cached results
+iops config.yaml --use_cache
+```
+
+### How it Works
+
+1. **Parameter Hashing**: Each test is identified by a hash of its parameters (excluding internal metadata)
+2. **Repetition-Aware**: Each repetition (1, 2, 3, ...) is cached separately
+3. **Round-Aware**: Multi-round workflows cache results per round
+4. **Normalization**: Parameter types are normalized (`"8"` and `8` are treated as identical)
+5. **Success Only**: Only successful executions (`STATUS_SUCCEEDED`) are cached
+
+### Cache Statistics
+
+The runner logs cache performance:
+```
+Cache enabled: 15 entries, 5 unique parameter sets
+...
+Cache statistics: 12 hits, 3 misses (80.0% hit rate)
+```
+
+### Implementation
+
+- **Cache class**: `execution/cache.py` - `ExecutionCache`
+- **Database**: SQLite with indexed `param_hash` for fast lookups
+- **Schema**: `cached_executions` table with params, metrics, metadata, timestamps
 
 ## Important Implementation Notes
 
