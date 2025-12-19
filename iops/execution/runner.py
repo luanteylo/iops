@@ -265,6 +265,8 @@ class IOPSRunner(HasLogger):
                     "report_vars": self.cfg.benchmark.report_vars,
                     "search_method": self.cfg.benchmark.search_method,
                     "bayesian_config": self.cfg.benchmark.bayesian_config,
+                    "cores_expr": self.cfg.benchmark.cores_expr,
+                    "max_core_hours": self.cfg.benchmark.max_core_hours,
                 },
                 "variables": {},
                 "metrics": [],

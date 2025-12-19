@@ -44,6 +44,10 @@ class BasePlanner(ABC, HasLogger):
     @abstractmethod
     def next_test(self) -> Any:
         pass
+    
+    @abstractmethod
+    def record_completed_test(self, test: Any)  -> None:
+        pass
 
 
 @BasePlanner.register("exhaustive")
