@@ -221,20 +221,23 @@ class ReportGenerator:
         # Build HTML report
         html_parts = []
         html_parts.append(self._generate_header())
+
+        # Summary statistics first
         html_parts.append(self._generate_summary_section(report_vars, metrics))
 
-        # Add Bayesian optimization section if applicable
-        search_method = self.metadata['benchmark'].get('search_method', '').lower()
-        if search_method == 'bayesian':
-            html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
-
+        # Best configurations immediately after summary
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
         # Add Pareto frontier section if we have multiple metrics
         if len(metrics) >= 2:
             html_parts.append(self._generate_pareto_section(metrics, report_vars))
 
-        # Generate plots for each metric
+        # Add Bayesian optimization section if applicable (before plots)
+        search_method = self.metadata['benchmark'].get('search_method', '').lower()
+        if search_method == 'bayesian':
+            html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
+
+        # All detailed plots at the end
         for metric in metrics:
             html_parts.append(self._generate_metric_section(metric, report_vars))
 
@@ -486,16 +489,6 @@ class ReportGenerator:
             report_vars, target_metric, objective, n_initial_points
         )
         html += f"<div>{fig_param_evolution.to_html(include_plotlyjs=False, div_id='bayesian_param_evolution')}</div>\n"
-
-        # 3. 2D parameter space exploration (if we have exactly 2 swept parameters)
-        if len(report_vars) == 2:
-            html += "<h3>2D Parameter Space Exploration</h3>\n"
-            html += "<p>Shows the sequence in which different parameter combinations were explored. "
-            html += "Numbers indicate iteration order; colors show metric values.</p>\n"
-            fig_2d_space = self._create_bayesian_2d_space_plot(
-                report_vars, target_metric, objective, n_initial_points
-            )
-            html += f"<div>{fig_2d_space.to_html(include_plotlyjs=False, div_id='bayesian_2d_space')}</div>\n"
 
         return html
 
