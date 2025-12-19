@@ -84,9 +84,34 @@ class SlurmExecutor(BaseExecutor):
         if script_str not in cmd:
             cmd.append(script_str)
 
-        self.logger.debug(
-            f"  [SlurmExec] Submitting job: exec_id={test.execution_id} cmd={submit_cmd}"
-        )
+        # Log detailed execution information at debug level
+        self.logger.debug(f"  [SlurmExec] ═══════════════════════════════════════════════════")
+        self.logger.debug(f"  [SlurmExec] Execution ID: {test.execution_id}")
+        self.logger.debug(f"  [SlurmExec] Repetition: {getattr(test, 'repetition', '?')}/{getattr(test, 'repetitions', '?')}")
+        self.logger.debug(f"  [SlurmExec] Working directory: {test.execution_dir}")
+        self.logger.debug(f"  [SlurmExec] Script file: {test.script_file}")
+        self.logger.debug(f"  [SlurmExec] Submit command: {' '.join(cmd)}")
+
+        # Show key SLURM variables if available
+        if hasattr(test, 'vars') and test.vars:
+            slurm_vars = {k: v for k, v in test.vars.items() if k in ['nodes', 'ntasks', 'processes_per_node', 'ntasks_per_node']}
+            if slurm_vars:
+                vars_str = ", ".join(f"{k}={v}" for k, v in slurm_vars.items())
+                self.logger.debug(f"  [SlurmExec] SLURM variables: {vars_str}")
+
+        # Show first few lines of script for verification
+        try:
+            with open(test.script_file, 'r') as f:
+                script_lines = f.readlines()[:10]  # First 10 lines
+                sbatch_directives = [line.strip() for line in script_lines if line.strip().startswith('#SBATCH')]
+                if sbatch_directives:
+                    self.logger.debug(f"  [SlurmExec] SBATCH directives:")
+                    for directive in sbatch_directives:
+                        self.logger.debug(f"  [SlurmExec]   {directive}")
+        except Exception as e:
+            self.logger.debug(f"  [SlurmExec] Could not read script preview: {e}")
+
+        self.logger.debug(f"  [SlurmExec] ═══════════════════════════════════════════════════")
 
         try:
             test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
