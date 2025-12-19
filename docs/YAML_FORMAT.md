@@ -85,6 +85,8 @@ benchmark:
   executor: string                # Optional: "local" | "slurm" (default: "slurm")
   random_seed: integer            # Optional: seed for randomization (default: 42)
   cache_exclude_vars: list        # Optional: variables to exclude from cache hash
+  max_core_hours: float           # Optional: CPU core-hours budget limit
+  cores_expr: string              # Optional: Jinja expression to compute cores (default: "1")
 ```
 
 ### Field Details
@@ -198,6 +200,68 @@ Without `cache_exclude_vars`, the same test would generate different cache keys:
 With `cache_exclude_vars: ["summary_file"]`, both runs match the same cache entry.
 
 **Note**: Only exclude variables that don't affect benchmark behavior. Excluding a variable like `block_size` would be incorrect since it directly impacts results.
+
+#### `max_core_hours` (optional)
+Maximum CPU core-hours budget for benchmark execution. When specified, IOPS will stop scheduling new tests once the accumulated core-hours exceeds this limit. **Can be overridden by the `--max-core-hours` CLI argument.**
+
+```yaml
+max_core_hours: 1000.0  # Stop after 1000 core-hours
+```
+
+**Core-hours calculation**: `cores × execution_time_hours`
+
+**Behavior**:
+- Tests already running will complete
+- No new tests will be scheduled once budget is exceeded
+- Budget status is logged after each test (DEBUG level)
+- Final summary shows total core-hours used and utilization percentage
+
+**Use cases**:
+- Limit costs on cloud/HPC systems with core-hour billing
+- Control resource usage for long-running parameter sweeps
+- Enforce time-bounded exploration in optimization workflows
+
+#### `cores_expr` (optional, default: "1")
+Jinja2 expression to compute the number of CPU cores used by each test. Used for budget tracking with `max_core_hours`. **Defaults to 1 core if not specified.**
+
+```yaml
+benchmark:
+  cores_expr: "{{ nodes * ppn }}"  # Total cores = nodes × processes-per-node
+  max_core_hours: 500.0
+```
+
+**Examples**:
+
+Simple core count:
+```yaml
+vars:
+  cores:
+    type: int
+    sweep: { mode: list, values: [4, 8, 16] }
+
+benchmark:
+  cores_expr: "{{ cores }}"
+```
+
+Computed from multiple variables:
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep: { mode: list, values: [2, 4, 8] }
+  ppn:  # processes per node
+    type: int
+    expr: "16"
+
+benchmark:
+  cores_expr: "{{ nodes * ppn }}"  # e.g., 4 nodes × 16 ppn = 64 cores
+```
+
+**Notes**:
+- Expression is evaluated for each test using its variable values
+- Must evaluate to an integer
+- Used only when `max_core_hours` is set (via config or CLI)
+- If evaluation fails, defaults to 1 core with a warning
 
 ### Complete Example
 

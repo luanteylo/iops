@@ -34,6 +34,8 @@ def parse_arguments():
     parser.add_argument('--verbose', action='store_true', help="Show full traceback for errors")
     parser.add_argument('--use_cache', action='store_true',
                         help="Reuse cached results if available, skipping already executed parameter sets")
+    parser.add_argument('--max-core-hours', type=float, default=None,
+                        help="Maximum CPU core-hours budget for execution. Stops scheduling new tests when exceeded.")
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
     return parser.parse_args()
@@ -100,6 +102,15 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(f"  Executor   : {cfg.benchmark.executor}")
     if cfg.benchmark.sqlite_db:
         logger.debug(f"  SQLite DB  : {cfg.benchmark.sqlite_db}")
+
+    # Budget configuration
+    if cfg.benchmark.max_core_hours or args.max_core_hours:
+        budget = args.max_core_hours if args.max_core_hours else cfg.benchmark.max_core_hours
+        logger.info(f"  Budget     : {budget} core-hours")
+        if cfg.benchmark.cores_expr:
+            logger.debug(f"  Cores expr : {cfg.benchmark.cores_expr}")
+        else:
+            logger.debug(f"  Cores expr : 1 (default)")
 
 
     # ------------------------------------------------------------------

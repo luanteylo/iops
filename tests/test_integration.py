@@ -91,6 +91,7 @@ def test_end_to_end_execution(simple_integration_config):
     args = Mock()
     args.use_cache = False
     args.log_level = "INFO"
+    args.max_core_hours = None
 
     runner = IOPSRunner(config, args)
     runner.run()
@@ -126,6 +127,7 @@ def test_integration_with_cache(simple_integration_config, tmp_path):
     args = Mock()
     args.use_cache = False
     args.log_level = "INFO"
+    args.max_core_hours = None
 
     runner1 = IOPSRunner(config, args)
     runner1.run()
@@ -227,6 +229,7 @@ def test_integration_multi_round(tmp_path):
     args = Mock()
     args.use_cache = False
     args.log_level = "INFO"
+    args.max_core_hours = None
 
     runner = IOPSRunner(config, args)
     runner.run()
@@ -313,6 +316,7 @@ def test_integration_with_post_script(tmp_path):
     args = Mock()
     args.use_cache = False
     args.log_level = "INFO"
+    args.max_core_hours = None
 
     runner = IOPSRunner(config, args)
     runner.run()

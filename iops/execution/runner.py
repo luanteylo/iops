@@ -9,6 +9,7 @@ from iops.results.writer import save_test_execution
 from typing import Optional
 from pathlib import Path
 from jinja2 import Template
+from datetime import datetime
 
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
@@ -50,6 +51,67 @@ class IOPSRunner(HasLogger):
         # Track actual output path (rendered from template)
         self.actual_output_path: Optional[Path] = None
 
+        # Budget tracking
+        self.max_core_hours: Optional[float] = None
+        self.accumulated_core_hours: float = 0.0
+        self.budget_exceeded: bool = False
+
+        # Determine effective budget (CLI overrides config)
+        if hasattr(args, 'max_core_hours') and args.max_core_hours is not None:
+            self.max_core_hours = args.max_core_hours
+        elif cfg.benchmark.max_core_hours is not None:
+            self.max_core_hours = cfg.benchmark.max_core_hours
+
+        # Prepare cores expression template (defaults to 1 if not specified)
+        self.cores_expr = cfg.benchmark.cores_expr or "1"
+        self.cores_template = Template(self.cores_expr)
+
+        if self.max_core_hours is not None:
+            self.logger.info(f"Budget: {self.max_core_hours} core-hours (cores expr: {self.cores_expr})")
+
+    def _compute_cores(self, test) -> int:
+        """Compute the number of cores for a test using cores_expr."""
+        try:
+            cores_str = self.cores_template.render(**test.vars)
+            cores = int(eval(cores_str))
+            return max(1, cores)  # Ensure at least 1 core
+        except Exception as e:
+            self.logger.warning(f"Failed to compute cores for test {test.execution_id}: {e}. Defaulting to 1.")
+            return 1
+
+    def _compute_core_hours(self, test) -> float:
+        """Compute core-hours used by a test."""
+        # Get execution time from metadata
+        start = test.metadata.get("__start")
+        end = test.metadata.get("__end")
+
+        if not start or not end:
+            self.logger.debug(f"Missing start/end times for test {test.execution_id}, cannot compute core-hours")
+            return 0.0
+
+        try:
+            # Parse timestamps
+            if isinstance(start, str):
+                start = datetime.fromisoformat(start)
+            if isinstance(end, str):
+                end = datetime.fromisoformat(end)
+
+            # Compute hours
+            duration_seconds = (end - start).total_seconds()
+            duration_hours = duration_seconds / 3600.0
+
+            # Get cores
+            cores = self._compute_cores(test)
+
+            # Compute core-hours
+            core_hours = cores * duration_hours
+
+            return core_hours
+
+        except Exception as e:
+            self.logger.warning(f"Failed to compute core-hours for test {test.execution_id}: {e}")
+            return 0.0
+
     def run(self):
         self.logger.info("=" * 70)
         self.logger.info(f"Starting IOPS Runner: {self.cfg.benchmark.name}")
@@ -58,6 +120,15 @@ class IOPSRunner(HasLogger):
         test_count = 0
 
         while True:
+            # Check budget before scheduling next test
+            if self.max_core_hours is not None and self.accumulated_core_hours >= self.max_core_hours:
+                self.budget_exceeded = True
+                self.logger.warning("=" * 70)
+                self.logger.warning(f"Budget limit reached: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours")
+                self.logger.warning("Stopping execution (current tests will complete)")
+                self.logger.warning("=" * 70)
+                break
+
             test = self.planner.next_test()
             if test is None:
                 break
@@ -164,9 +235,36 @@ class IOPSRunner(HasLogger):
             # Record completed test for round-based search
             self.planner.record_completed_test(test)
 
+            # Track core-hours budget if enabled
+            if self.max_core_hours is not None and not used_cache:
+                core_hours_used = self._compute_core_hours(test)
+                self.accumulated_core_hours += core_hours_used
+
+                if core_hours_used > 0:
+                    cores = self._compute_cores(test)
+                    remaining = self.max_core_hours - self.accumulated_core_hours
+                    self.logger.debug(
+                        f"  [Budget] Used {core_hours_used:.4f} core-hours ({cores} cores) | "
+                        f"Total: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} | "
+                        f"Remaining: {remaining:.2f}"
+                    )
+
         # Final statistics
         self.logger.info("=" * 70)
-        self.logger.info(f"Benchmark completed: {test_count} tests total")
+
+        if self.budget_exceeded:
+            self.logger.info(f"Benchmark stopped: {test_count} tests completed (budget limit reached)")
+        else:
+            self.logger.info(f"Benchmark completed: {test_count} tests total")
+
+        # Budget statistics
+        if self.max_core_hours is not None:
+            utilization = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
+            status_msg = "EXCEEDED" if self.budget_exceeded else "OK"
+            self.logger.info(
+                f"Budget: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours "
+                f"({utilization:.1f}% utilized) [{status_msg}]"
+            )
 
         if self.cache and self.use_cache_reads:
             hit_rate = (self.cache_hits / test_count * 100) if test_count > 0 else 0

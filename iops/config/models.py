@@ -27,6 +27,8 @@ class BenchmarkConfig:
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
     random_seed: Optional[int] = None  # seed for any random operations
     cache_exclude_vars: Optional[List[str]] = None  # variables to exclude from cache hash
+    max_core_hours: Optional[float] = None  # Budget limit in core-hours
+    cores_expr: Optional[str] = None  # Jinja expression to compute cores (e.g., "{{ nodes * ppn }}")
 
 
 @dataclass

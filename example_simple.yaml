@@ -5,9 +5,12 @@ benchmark:
   sqlite_db: "/home/luan/iops.db"
   repetitions: 2 # global repetitions for each test case. It is ignored when rounds has its own value
   search_method: "exhaustive" # used to define the policy for test execution selection
-  executor : "local" # specify the executor to use : local | slurm 
+  executor : "local" # specify the executor to use : local | slurm
   random_seed: 43  # seed for any random operations in the benchmark
   cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars
+  # Budget configuration (optional)
+  max_core_hours: 100.0  # Maximum CPU core-hours budget (can be overridden by --max-core-hours CLI argument)
+  cores_expr: "{{ processes_per_node }}"  # Jinja expression to compute cores (defaults to 1 if not specified)
 
 
 
