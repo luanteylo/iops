@@ -133,6 +133,128 @@ class ReportGenerator:
         except Exception as e:
             return f"[Error rendering command: {e}]"
 
+    def _calculate_total_execution_time(self) -> tuple[Optional[float], Optional[str]]:
+        """
+        Calculate total execution time from first test start to last test end.
+
+        Returns:
+            Tuple of (seconds, formatted_string) or (None, None) if timestamps unavailable
+        """
+        try:
+            start_times = pd.to_datetime(self.df['metadata.__start'], errors='coerce')
+            end_times = pd.to_datetime(self.df['metadata.__end'], errors='coerce')
+
+            if start_times.isna().all() or end_times.isna().all():
+                return None, None
+
+            first_start = start_times.min()
+            last_end = end_times.max()
+
+            total_seconds = (last_end - first_start).total_seconds()
+
+            # Format as human-readable
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
+            seconds = int(total_seconds % 60)
+
+            if hours > 0:
+                formatted = f"{hours}h {minutes}m {seconds}s"
+            elif minutes > 0:
+                formatted = f"{minutes}m {seconds}s"
+            else:
+                formatted = f"{seconds}s"
+
+            return total_seconds, formatted
+
+        except Exception as e:
+            return None, None
+
+    def _calculate_total_core_hours(self) -> Optional[float]:
+        """
+        Calculate total core-hours consumed by all tests.
+
+        Returns:
+            Total core-hours or None if cannot be calculated
+        """
+        try:
+            cores_expr = self.metadata['benchmark'].get('cores_expr')
+            if not cores_expr:
+                return None
+
+            # Parse timestamps
+            start_times = pd.to_datetime(self.df['metadata.__start'], errors='coerce')
+            end_times = pd.to_datetime(self.df['metadata.__end'], errors='coerce')
+
+            if start_times.isna().all() or end_times.isna().all():
+                return None
+
+            # Calculate duration for each test
+            durations_hours = (end_times - start_times).dt.total_seconds() / 3600.0
+
+            # Calculate cores for each test using cores_expr
+            template = Template(cores_expr)
+            total_core_hours = 0.0
+
+            for idx, row in self.df.iterrows():
+                # Extract variable values for this row
+                var_values = {}
+                for var_name in self.metadata['variables'].keys():
+                    col = self._get_var_column(var_name)
+                    if col in self.df.columns:
+                        var_values[var_name] = row[col]
+
+                # Render cores expression
+                try:
+                    cores_str = template.render(**var_values)
+                    cores = eval(cores_str)  # Safe here as we control the template
+                    core_hours = cores * durations_hours.iloc[idx]
+                    total_core_hours += core_hours
+                except Exception:
+                    continue
+
+            return total_core_hours
+
+        except Exception as e:
+            return None
+
+    def _calculate_average_cores(self) -> Optional[float]:
+        """
+        Calculate average number of cores used per test.
+
+        Returns:
+            Average cores or None if cannot be calculated
+        """
+        try:
+            cores_expr = self.metadata['benchmark'].get('cores_expr')
+            if not cores_expr:
+                return None
+
+            template = Template(cores_expr)
+            total_cores = 0
+            count = 0
+
+            for idx, row in self.df.iterrows():
+                # Extract variable values for this row
+                var_values = {}
+                for var_name in self.metadata['variables'].keys():
+                    col = self._get_var_column(var_name)
+                    if col in self.df.columns:
+                        var_values[var_name] = row[col]
+
+                # Render cores expression
+                try:
+                    cores_str = template.render(**var_values)
+                    cores = eval(cores_str)  # Safe here as we control the template
+                    total_cores += cores
+                    count += 1
+                except Exception:
+                    continue
+
+            return total_cores / count if count > 0 else None
+
+        except Exception as e:
+            return None
+
     def _compute_pareto_frontier(self, metrics: List[str], objectives: Dict[str, str], report_vars: List[str]) -> pd.DataFrame:
         """
         Compute Pareto frontier for multiple metrics.
@@ -350,6 +472,34 @@ class ReportGenerator:
     def _generate_summary_section(self, report_vars: List[str], metrics: List[str]) -> str:
         """Generate summary statistics section."""
         html = "<h2>Summary Statistics</h2>\n"
+
+        # Execution Overview
+        html += "<h3>Execution Overview</h3>\n<table>\n"
+        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
+
+        # Total tests
+        total_tests = len(self.df)
+        html += f"<tr><td><strong>Total Tests</strong></td><td>{total_tests}</td></tr>\n"
+
+        # Execution time
+        if 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
+            execution_time, formatted_time = self._calculate_total_execution_time()
+            if execution_time is not None:
+                html += f"<tr><td><strong>Total Execution Time</strong></td><td>{formatted_time}</td></tr>\n"
+
+        # Core-hours (if cores_expr is defined)
+        cores_expr = self.metadata['benchmark'].get('cores_expr')
+        if cores_expr:
+            total_core_hours = self._calculate_total_core_hours()
+            if total_core_hours is not None:
+                html += f"<tr><td><strong>Total Core-Hours</strong></td><td>{total_core_hours:.2f}</td></tr>\n"
+
+                # Average cores per test
+                avg_cores = self._calculate_average_cores()
+                if avg_cores is not None:
+                    html += f"<tr><td><strong>Average Cores per Test</strong></td><td>{avg_cores:.1f}</td></tr>\n"
+
+        html += "</table>\n"
 
         # Variable ranges
         html += "<h3>Report Variables</h3>\n<table>\n"

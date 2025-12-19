@@ -1,0 +1,67 @@
+benchmark:
+  name: IOR Benchmark
+  description: I/O performance testing with IOR
+  workdir: ./workdir
+  executor: slurm
+  search_method: exhaustive
+  repetitions: 3
+vars:
+  processes_per_node:
+    type: int
+  volume_size_gb:
+    type: int
+  block_size_mb:
+    type: int
+    expr: (volume_size_gb * 1024) / processes_per_node
+  summary_file:
+    type: str
+    expr: '{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json'
+command:
+  template: ior -w -b {{ block_size_mb }}mb -t 1mb -O summaryFile={{ summary_file
+    }} -O summaryFormat=JSON -o {{ output_path }}/output.ior
+scripts:
+- name: main
+  submit: sbatch
+  script_template: '#!/bin/bash
+
+
+    #SBATCH --job-name={{ benchmark.name }}_{{ execution_id }}_{{ repetition }}
+
+    #SBATCH --ntasks-per-node={{ processes_per_node }}
+
+    #SBATCH --time=00:30:00
+
+    #SBATCH -o batch%j.out
+
+    #SBATCH -e batch%j.err
+
+
+    # Load required modules
+
+    # module load ...
+
+
+    # Execute benchmark command
+
+    {{ command.template }}
+
+
+    # Capture exit code
+
+    exit_code=$?
+
+    echo "Exit code: $exit_code"
+
+    exit $exit_code'
+  parser:
+    file: '{{ execution_dir }}/output_{{ execution_id }}_{{ repetition }}.txt'
+    metrics:
+    - name: bwMiB
+    parser_script: "def parse(file_path):\n    import json\n    with open(file_path)\
+      \ as f:\n        data = json.load(f)\n    # Extract write bandwidth from IOR\
+      \ JSON output\n    return {'bwMiB': data['tests'][0]['Results'][0]['bwMiB']}\n"
+output:
+  sink:
+    type: csv
+    path: '{{ workdir }}/results.csv'
+    mode: append
