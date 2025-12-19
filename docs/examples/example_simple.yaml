@@ -86,7 +86,7 @@ scripts:
       file: "{{ summary_file }}"
       metrics:
         - name: bwMiB
-      parser_script: .scripts/ior_parser.py
+      parser_script: scripts/ior_parser.py
 
         
 

@@ -126,13 +126,13 @@ command:
 scripts:
   - name: "ior"
     submit: "sbatch"
-    script_template: .scripts/ior_plafrim_slurm.sh
+    script_template: scripts/ior_plafrim_slurm.sh
     # Parser: Extract metrics from IOR JSON output
     parser:
       file: "{{ summary_file }}"
       metrics:
         - name: bwMiB
-      parser_script: .scripts/ior_parser.py
+      parser_script: scripts/ior_parser.py
 
 # -----------------------------------------------------------------------------
 # Output: Results storage

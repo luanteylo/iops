@@ -72,7 +72,7 @@ scripts:
         - name: iops
         - name: latency
         - name: totalTime
-      parser_script: .scripts/ior_parser.py
+      parser_script: scripts/ior_parser.py
 
         
 
