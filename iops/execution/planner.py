@@ -439,3 +439,15 @@ class Exhaustive(BasePlanner, HasLogger):
             # test_idx_for_log is informational; we keep idx+1 as "matrix position"
             self._prepare_execution_artifacts(test, rep_idx, test_idx_for_log=idx + 1)
             return test
+
+
+# Import Bayesian planner to register it (must be after BasePlanner is fully defined)
+try:
+    from iops.execution.bayesian_planner import BayesianPlanner
+except ImportError:
+    # scikit-optimize not installed, Bayesian planner not available
+    pass
+except Exception as e:
+    # Other import error - log it for debugging
+    import warnings
+    warnings.warn(f"Failed to import BayesianPlanner: {e}")

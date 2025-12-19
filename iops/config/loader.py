@@ -254,7 +254,8 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         max_core_hours=b.get("max_core_hours"),
         cores_expr=b.get("cores_expr"),
         estimated_time_seconds=b.get("estimated_time_seconds"),
-        report_vars=b.get("report_vars")
+        report_vars=b.get("report_vars"),
+        bayesian_config=b.get("bayesian_config")
     )
 
     # ---- vars ----
