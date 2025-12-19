@@ -1,0 +1,197 @@
+# IOR Benchmark - Multi-Round Optimization
+#
+# This example demonstrates:
+# - Multi-round optimization workflow
+# - Progressive parameter refinement
+# - Round-specific configurations
+# - Result propagation between rounds
+# - SQLite output with full history
+
+benchmark:
+  name: "IOR Multi-Round Optimization"
+  description: "Progressive optimization: nodes → processes → block size"
+  workdir: "/scratch/$USER/ior_optimization"
+  sqlite_db: "/scratch/$USER/ior_cache.db"
+  executor: "slurm"
+  search_method: "exhaustive"
+  random_seed: 42
+
+vars:
+  # Swept variables (global definition)
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [8, 16, 32]
+
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16, 32]
+
+  stripe_count:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 4, 8]
+
+  # Derived variables
+  total_processes:
+    type: int
+    expr: "nodes * processes_per_node"
+
+  block_size_mb:
+    type: int
+    expr: "(volume_size_gb * 1024) / total_processes"
+
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}.json"
+
+  stripe_dir:
+    type: str
+    expr: "/scratch/$USER/stripe_{{ stripe_count }}"
+
+command:
+  template: >
+    mpirun -np {{ total_processes }}
+    ior -w -b {{ block_size_mb }}mb -t 1mb
+    -O summaryFile={{ summary_file }}
+    -O summaryFormat=JSON
+    -o {{ stripe_dir }}/test.ior
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    nodes: "{{ nodes }}"
+    total_procs: "{{ total_processes }}"
+    stripe_count: "{{ stripe_count }}"
+
+  env:
+    OMP_NUM_THREADS: "1"
+
+scripts:
+  - name: "ior_optimization"
+    submit: "sbatch --parsable"
+
+    script_template: |
+      #!/bin/bash
+      #SBATCH --job-name=ior_opt_{{ round_name }}_{{ execution_id }}
+      #SBATCH --output={{ execution_dir }}/stdout
+      #SBATCH --error={{ execution_dir }}/stderr
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=01:00:00
+      #SBATCH --partition=compute
+
+      module load openmpi/4.1.1
+      module load ior/3.3.0
+
+      echo "========================================="
+      echo "Round:         {{ round_name }}"
+      echo "Round Index:   {{ round_index }}"
+      echo "Execution ID:  {{ execution_id }}"
+      echo "Repetition:    {{ repetition }}/{{ repetitions }}"
+      echo "Nodes:         {{ nodes }}"
+      echo "PPN:           {{ processes_per_node }}"
+      echo "Volume:        {{ volume_size_gb }}GB"
+      echo "Stripe Count:  {{ stripe_count }}"
+      echo "========================================="
+
+      # Setup stripe directory
+      mkdir -p {{ stripe_dir }}
+      lfs setstripe -c {{ stripe_count }} {{ stripe_dir }}
+
+      # Run benchmark
+      {{ command.template }}
+
+      echo "Completed at $(date)"
+
+    post:
+      script: |
+        #!/bin/bash
+        echo "Round {{ round_name }} execution completed"
+        echo "Summary: {{ summary_file }}"
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+        - name: iops
+        - name: latency
+      parser_script: |
+        import json
+
+        def parse(file_path: str):
+            """Parse IOR JSON output."""
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            result = data["tests"][0]["Results"][0]
+
+            return {
+                "bwMiB": float(result["bwMiB"]),
+                "iops": float(result["OPs"]),
+                "latency": float(result["MeanTime"])
+            }
+
+output:
+  sink:
+    type: sqlite
+    path: "{{ workdir }}/optimization_results.db"
+    table: "ior_optimization"
+    mode: append
+
+# Multi-round optimization workflow
+rounds:
+  # Round 1: Find optimal number of nodes
+  - name: "optimize_nodes"
+    description: "Find best node count for maximum bandwidth"
+    sweep_vars: ["nodes"]
+    fixed_overrides:
+      processes_per_node: 16
+      volume_size_gb: 8
+      stripe_count: 4
+    repetitions: 3
+    search:
+      metric: "bwMiB"
+      objective: "max"
+
+  # Round 2: With best nodes, optimize processes per node
+  - name: "optimize_processes"
+    description: "Find best process count using optimal nodes from round 1"
+    sweep_vars: ["processes_per_node"]
+    fixed_overrides:
+      volume_size_gb: 8
+      stripe_count: 4
+    repetitions: 3
+    search:
+      metric: "bwMiB"
+      objective: "max"
+
+  # Round 3: Optimize volume size with best nodes and processes
+  - name: "optimize_volume"
+    description: "Find optimal data volume size"
+    sweep_vars: ["volume_size_gb"]
+    fixed_overrides:
+      stripe_count: 4
+    repetitions: 3
+    search:
+      metric: "bwMiB"
+      objective: "max"
+
+  # Round 4: Fine-tune stripe count
+  - name: "optimize_stripe"
+    description: "Find optimal Lustre stripe count"
+    sweep_vars: ["stripe_count"]
+    repetitions: 5
+    search:
+      metric: "bwMiB"
+      objective: "max"

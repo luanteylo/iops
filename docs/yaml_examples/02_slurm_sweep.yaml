@@ -1,0 +1,162 @@
+# IOR Benchmark - SLURM Execution with Parameter Sweep
+#
+# This example demonstrates:
+# - SLURM job submission
+# - Multiple swept variables (nodes, processes_per_node, volume_size)
+# - Derived variables (block_size, total_processes)
+# - Execution caching (sqlite_db)
+# - Parquet output with field filtering
+
+benchmark:
+  name: "IOR SLURM Parameter Sweep"
+  description: "Multi-dimensional parameter sweep using SLURM"
+  workdir: "/scratch/$USER/ior_sweep"
+  sqlite_db: "/scratch/$USER/ior_cache.db"
+  executor: "slurm"
+  repetitions: 3
+  search_method: "exhaustive"
+  random_seed: 42
+
+vars:
+  # Swept variables
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+
+  processes_per_node:
+    type: int
+    sweep:
+      mode: range
+      start: 16
+      end: 32
+      step: 16
+
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16]
+
+  # Derived variables
+  total_processes:
+    type: int
+    expr: "nodes * processes_per_node"
+
+  block_size_mb:
+    type: int
+    expr: "(volume_size_gb * 1024) / total_processes"
+
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}.json"
+
+  output_file:
+    type: str
+    expr: "{{ execution_dir }}/data.ior"
+
+command:
+  template: >
+    mpirun -np {{ total_processes }}
+    ior -w -b {{ block_size_mb }}mb -t 1mb
+    -O summaryFile={{ summary_file }}
+    -O summaryFormat=JSON
+    -o {{ output_file }}
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+    nodes: "{{ nodes }}"
+    processes: "{{ total_processes }}"
+
+  env:
+    OMP_NUM_THREADS: "1"
+
+scripts:
+  - name: "ior_slurm"
+    submit: "sbatch --parsable"
+
+    script_template: |
+      #!/bin/bash
+      #SBATCH --job-name=ior_{{ execution_id }}
+      #SBATCH --output={{ execution_dir }}/stdout
+      #SBATCH --error={{ execution_dir }}/stderr
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=00:30:00
+      #SBATCH --partition=compute
+
+      # Load modules
+      module load openmpi/4.1.1
+      module load ior/3.3.0
+
+      echo "========================================="
+      echo "Job ID:        $SLURM_JOB_ID"
+      echo "Execution ID:  {{ execution_id }}"
+      echo "Repetition:    {{ repetition }}/{{ repetitions }}"
+      echo "Nodes:         {{ nodes }}"
+      echo "Processes:     {{ total_processes }}"
+      echo "Block Size:    {{ block_size_mb }}MB"
+      echo "========================================="
+
+      # Run benchmark
+      {{ command.template }}
+
+      echo "Completed at $(date)"
+      echo "Summary: {{ summary_file }}"
+
+    post:
+      script: |
+        #!/bin/bash
+        echo "Job completed successfully"
+        echo "Output file size: $(stat -c%s {{ output_file }})"
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+        - name: iops
+        - name: latency
+      parser_script: |
+        import json
+
+        def parse(file_path: str):
+            """Parse IOR JSON output and extract metrics."""
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError("No tests found in IOR JSON")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError("No Results found in IOR JSON")
+
+            result = results[0]
+
+            return {
+                "bwMiB": float(result["bwMiB"]),
+                "iops": float(result["OPs"]),
+                "latency": float(result["MeanTime"])
+            }
+
+output:
+  sink:
+    type: parquet
+    path: "{{ workdir }}/results.parquet"
+    mode: append
+    include:
+      - "execution.execution_id"
+      - "execution.repetition"
+      - "vars.nodes"
+      - "vars.processes_per_node"
+      - "vars.volume_size_gb"
+      - "vars.total_processes"
+      - "vars.block_size_mb"
+      - "metadata.operation"
+      - "metrics.bwMiB"
+      - "metrics.iops"
+      - "metrics.latency"
