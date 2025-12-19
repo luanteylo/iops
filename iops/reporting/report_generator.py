@@ -779,7 +779,7 @@ class ReportGenerator:
                 )
 
             # Update y-axis to show only tested values
-            fig.update_yaxis(
+            fig.update_yaxes(
                 tickmode='array',
                 tickvals=unique_values,
                 ticktext=[str(v) for v in unique_values],
@@ -902,12 +902,12 @@ class ReportGenerator:
         )
 
         # Set categorical axes to show only tested values
-        fig.update_xaxis(
+        fig.update_xaxes(
             tickmode='array',
             tickvals=unique_var1,
             ticktext=[str(v) for v in unique_var1]
         )
-        fig.update_yaxis(
+        fig.update_yaxes(
             tickmode='array',
             tickvals=unique_var2,
             ticktext=[str(v) for v in unique_var2]
