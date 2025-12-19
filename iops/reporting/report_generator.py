@@ -222,6 +222,12 @@ class ReportGenerator:
         html_parts = []
         html_parts.append(self._generate_header())
         html_parts.append(self._generate_summary_section(report_vars, metrics))
+
+        # Add Bayesian optimization section if applicable
+        search_method = self.metadata['benchmark'].get('search_method', '').lower()
+        if search_method == 'bayesian':
+            html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
+
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
         # Add Pareto frontier section if we have multiple metrics
@@ -435,6 +441,64 @@ class ReportGenerator:
 
         return html
 
+    def _generate_bayesian_optimization_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate Bayesian optimization search evolution section."""
+        html = "<h2>Bayesian Optimization Search Evolution</h2>\n"
+        html += "<p>These plots show how the Bayesian optimization algorithm explored the parameter space "
+        html += "and converged towards optimal configurations over successive iterations.</p>\n"
+
+        # Get target metric from bayesian_config
+        bayesian_config = self.metadata['benchmark'].get('bayesian_config', {})
+        target_metric = bayesian_config.get('target_metric')
+        objective = bayesian_config.get('objective', 'maximize')
+        n_initial_points = bayesian_config.get('n_initial_points', 5)
+
+        if not target_metric:
+            html += "<p><em>Warning: target_metric not found in bayesian_config</em></p>\n"
+            return html
+
+        # Ensure we have execution_id for ordering
+        if 'execution.execution_id' not in self.df.columns:
+            html += "<p><em>Warning: execution_id not found in results</em></p>\n"
+            return html
+
+        html += f"<div class='info-box'>\n"
+        html += f"<p><strong>Target Metric:</strong> {target_metric} ({objective})</p>\n"
+        html += f"<p><strong>Initial Exploration:</strong> First {n_initial_points} iterations (random sampling)</p>\n"
+        html += f"<p><strong>Bayesian Optimization:</strong> Subsequent iterations (guided by surrogate model)</p>\n"
+        html += "</div>\n"
+
+        # Create plots
+        # 1. Metric evolution over iterations
+        html += "<h3>Metric Evolution</h3>\n"
+        html += "<p>Shows how the target metric evolved as the algorithm explored different configurations. "
+        html += "The best value found so far is highlighted.</p>\n"
+        fig_metric_evolution = self._create_bayesian_metric_evolution_plot(
+            target_metric, objective, n_initial_points
+        )
+        html += f"<div>{fig_metric_evolution.to_html(include_plotlyjs=False, div_id='bayesian_metric_evolution')}</div>\n"
+
+        # 2. Parameter evolution over iterations
+        html += "<h3>Parameter Evolution</h3>\n"
+        html += "<p>Shows which parameter values were explored at each iteration. "
+        html += "Colors indicate the metric value achieved.</p>\n"
+        fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
+            report_vars, target_metric, objective, n_initial_points
+        )
+        html += f"<div>{fig_param_evolution.to_html(include_plotlyjs=False, div_id='bayesian_param_evolution')}</div>\n"
+
+        # 3. 2D parameter space exploration (if we have exactly 2 swept parameters)
+        if len(report_vars) == 2:
+            html += "<h3>2D Parameter Space Exploration</h3>\n"
+            html += "<p>Shows the sequence in which different parameter combinations were explored. "
+            html += "Numbers indicate iteration order; colors show metric values.</p>\n"
+            fig_2d_space = self._create_bayesian_2d_space_plot(
+                report_vars, target_metric, objective, n_initial_points
+            )
+            html += f"<div>{fig_2d_space.to_html(include_plotlyjs=False, div_id='bayesian_2d_space')}</div>\n"
+
+        return html
+
     def _generate_pareto_section(self, metrics: List[str], report_vars: List[str]) -> str:
         """Generate Pareto frontier analysis section."""
         html = "<h2>Pareto Frontier Analysis</h2>\n"
@@ -568,6 +632,288 @@ class ReportGenerator:
 
         html += '</div>\n'
         return html
+
+    def _create_bayesian_metric_evolution_plot(
+        self, target_metric: str, objective: str, n_initial_points: int
+    ) -> go.Figure:
+        """
+        Create plot showing metric evolution over Bayesian optimization iterations.
+
+        Shows:
+        - Observed metric values at each iteration
+        - Running best (cumulative max/min)
+        - Distinction between exploration and exploitation phases
+        """
+        metric_col = self._get_metric_column(target_metric)
+
+        # Group by execution_id and compute mean across repetitions
+        df_grouped = self.df.groupby('execution.execution_id').agg({
+            metric_col: 'mean'
+        }).reset_index()
+        df_grouped = df_grouped.sort_values('execution.execution_id')
+
+        iterations = df_grouped['execution.execution_id'].values
+        metric_values = df_grouped[metric_col].values
+
+        # Compute running best
+        if objective == 'maximize':
+            running_best = pd.Series(metric_values).cummax().values
+        else:
+            running_best = pd.Series(metric_values).cummin().values
+
+        # Create figure with two traces
+        fig = go.Figure()
+
+        # Observed values with phase coloring
+        colors = ['#3498db' if i < n_initial_points else '#2ecc71' for i in range(len(iterations))]
+
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=metric_values,
+            mode='markers+lines',
+            name='Observed',
+            marker=dict(size=10, color=colors, line=dict(width=1, color='white')),
+            line=dict(color='lightgray', width=1),
+            hovertemplate='Iteration %{x}<br>' + target_metric + ': %{y:.4f}<extra></extra>'
+        ))
+
+        # Running best
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_best,
+            mode='lines',
+            name=f'Best so far ({objective})',
+            line=dict(color='#e74c3c', width=3, dash='dash'),
+            hovertemplate='Iteration %{x}<br>Best: %{y:.4f}<extra></extra>'
+        ))
+
+        # Add vertical line at end of exploration phase
+        if n_initial_points > 0 and n_initial_points < len(iterations):
+            fig.add_vline(
+                x=n_initial_points,
+                line=dict(color='orange', width=2, dash='dot'),
+                annotation_text='End of Random Exploration',
+                annotation_position='top'
+            )
+
+        fig.update_layout(
+            title=f'{target_metric} Evolution Over Iterations',
+            xaxis_title='Iteration',
+            yaxis_title=target_metric,
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
+        )
+
+        return fig
+
+    def _create_bayesian_parameter_evolution_plot(
+        self, report_vars: List[str], target_metric: str, objective: str, n_initial_points: int
+    ) -> go.Figure:
+        """
+        Create subplot showing evolution of each parameter over iterations.
+
+        Each parameter gets its own subplot showing values explored over time,
+        colored by the metric value achieved.
+        """
+        metric_col = self._get_metric_column(target_metric)
+
+        # Group by execution_id and compute mean across repetitions
+        agg_dict = {metric_col: 'mean'}
+        for var in report_vars:
+            var_col = self._get_var_column(var)
+            agg_dict[var_col] = 'first'  # Parameters should be same for all repetitions
+
+        df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
+        df_grouped = df_grouped.sort_values('execution.execution_id')
+
+        iterations = df_grouped['execution.execution_id'].values
+        metric_values = df_grouped[metric_col].values
+
+        # Create subplots - one per parameter
+        n_params = len(report_vars)
+        fig = make_subplots(
+            rows=n_params, cols=1,
+            subplot_titles=[f'{var} Evolution' for var in report_vars],
+            vertical_spacing=0.15 / max(n_params, 1)
+        )
+
+        for idx, var in enumerate(report_vars, 1):
+            var_col = self._get_var_column(var)
+            param_values = df_grouped[var_col].values
+
+            # Get unique sorted values for this parameter
+            unique_values = sorted(df_grouped[var_col].unique())
+
+            fig.add_trace(
+                go.Scatter(
+                    x=iterations,
+                    y=param_values,
+                    mode='markers+lines',
+                    marker=dict(
+                        size=10,
+                        color=metric_values,
+                        colorscale='Viridis',
+                        showscale=(idx == 1),  # Only show colorbar for first subplot
+                        colorbar=dict(
+                            title=target_metric,
+                            x=1.1
+                        ),
+                        line=dict(width=1, color='white')
+                    ),
+                    line=dict(color='lightgray', width=1),
+                    name=var,
+                    showlegend=False,
+                    hovertemplate=f'{var}: %{{y}}<br>{target_metric}: %{{marker.color:.4f}}<extra></extra>'
+                ),
+                row=idx, col=1
+            )
+
+            # Add vertical line at end of exploration phase
+            if n_initial_points > 0 and n_initial_points < len(iterations):
+                fig.add_vline(
+                    x=n_initial_points,
+                    line=dict(color='orange', width=1, dash='dot'),
+                    row=idx, col=1
+                )
+
+            # Update y-axis to show only tested values
+            fig.update_yaxis(
+                tickmode='array',
+                tickvals=unique_values,
+                ticktext=[str(v) for v in unique_values],
+                row=idx, col=1
+            )
+
+        fig.update_xaxes(title_text='Iteration', row=n_params, col=1)
+        fig.update_layout(
+            height=250 * n_params,
+            title_text='Parameter Values Explored Over Iterations',
+            showlegend=False,
+            template='plotly_white',
+            hovermode='closest'
+        )
+
+        return fig
+
+    def _create_bayesian_2d_space_plot(
+        self, report_vars: List[str], target_metric: str, objective: str, n_initial_points: int
+    ) -> go.Figure:
+        """
+        Create 2D scatter plot showing exploration of parameter space.
+
+        Only works when exactly 2 parameters are swept.
+        Shows sequence of exploration with iteration numbers.
+        """
+        if len(report_vars) != 2:
+            # Return empty figure if not exactly 2 parameters
+            return go.Figure()
+
+        var1, var2 = report_vars
+        var1_col = self._get_var_column(var1)
+        var2_col = self._get_var_column(var2)
+        metric_col = self._get_metric_column(target_metric)
+
+        # Group by execution_id and compute mean across repetitions
+        df_grouped = self.df.groupby('execution.execution_id').agg({
+            var1_col: 'first',
+            var2_col: 'first',
+            metric_col: 'mean'
+        }).reset_index()
+        df_grouped = df_grouped.sort_values('execution.execution_id')
+
+        iterations = df_grouped['execution.execution_id'].values
+        var1_values = df_grouped[var1_col].values
+        var2_values = df_grouped[var2_col].values
+        metric_values = df_grouped[metric_col].values
+
+        # Split into exploration and exploitation phases
+        exploration_mask = iterations <= n_initial_points
+
+        fig = go.Figure()
+
+        # Exploration phase (random)
+        if exploration_mask.any():
+            fig.add_trace(go.Scatter(
+                x=var1_values[exploration_mask],
+                y=var2_values[exploration_mask],
+                mode='markers+text',
+                marker=dict(
+                    size=15,
+                    color=metric_values[exploration_mask],
+                    colorscale='Viridis',
+                    showscale=True,
+                    colorbar=dict(title=target_metric),
+                    line=dict(width=2, color='white'),
+                    symbol='circle'
+                ),
+                text=[str(i) for i in iterations[exploration_mask]],
+                textposition='middle center',
+                textfont=dict(size=8, color='white'),
+                name='Exploration',
+                hovertemplate=f'{var1}: %{{x}}<br>{var2}: %{{y}}<br>{target_metric}: %{{marker.color:.4f}}<br>Iteration: %{{text}}<extra></extra>'
+            ))
+
+        # Exploitation phase (Bayesian-guided)
+        exploitation_mask = ~exploration_mask
+        if exploitation_mask.any():
+            fig.add_trace(go.Scatter(
+                x=var1_values[exploitation_mask],
+                y=var2_values[exploitation_mask],
+                mode='markers+text',
+                marker=dict(
+                    size=15,
+                    color=metric_values[exploitation_mask],
+                    colorscale='Viridis',
+                    showscale=False,
+                    line=dict(width=2, color='orange'),
+                    symbol='diamond'
+                ),
+                text=[str(i) for i in iterations[exploitation_mask]],
+                textposition='middle center',
+                textfont=dict(size=8, color='white'),
+                name='Optimization',
+                hovertemplate=f'{var1}: %{{x}}<br>{var2}: %{{y}}<br>{target_metric}: %{{marker.color:.4f}}<br>Iteration: %{{text}}<extra></extra>'
+            ))
+
+        # Add lines connecting sequential iterations
+        fig.add_trace(go.Scatter(
+            x=var1_values,
+            y=var2_values,
+            mode='lines',
+            line=dict(color='lightgray', width=1),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+
+        # Get unique values for axes
+        unique_var1 = sorted(self.df[var1_col].unique())
+        unique_var2 = sorted(self.df[var2_col].unique())
+
+        fig.update_layout(
+            title=f'2D Parameter Space Exploration<br><sub>Circles = Exploration, Diamonds = Optimization</sub>',
+            xaxis_title=var1,
+            yaxis_title=var2,
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
+        )
+
+        # Set categorical axes to show only tested values
+        fig.update_xaxis(
+            tickmode='array',
+            tickvals=unique_var1,
+            ticktext=[str(v) for v in unique_var1]
+        )
+        fig.update_yaxis(
+            tickmode='array',
+            tickvals=unique_var2,
+            ticktext=[str(v) for v in unique_var2]
+        )
+
+        return fig
 
     def _create_bar_plot(self, metric: str, var: str) -> go.Figure:
         """Create bar plot of metric vs variable."""
