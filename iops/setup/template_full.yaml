@@ -1,0 +1,483 @@
+# =============================================================================
+# IOPS Benchmark Configuration Template (SLURM-Ready)
+# =============================================================================
+#
+# This is a comprehensive template showing all available IOPS configuration options.
+# Copy this file and customize it for your benchmark needs.
+#
+# Quick Start:
+#   1. Copy this file: cp template.yaml my_benchmark.yaml
+#   2. Edit the configuration to match your needs
+#   3. Validate: iops my_benchmark.yaml --check_setup
+#   4. Dry run: iops my_benchmark.yaml --dry-run
+#   5. Execute: iops my_benchmark.yaml
+#
+# Documentation: See docs/CLAUDE.md for detailed architecture and usage
+# =============================================================================
+
+
+# =============================================================================
+# BENCHMARK CONFIGURATION
+# =============================================================================
+benchmark:
+  # Required: Name of the benchmark (used in logs and job names)
+  name: "IOR Benchmark"
+
+  # Optional: Description of what this benchmark measures
+  description: "A benchmark to measure I/O performance using the IOR tool"
+
+  # Required: Working directory where all run outputs will be stored
+  # Structure: <workdir>/run_NNN/runs/ and <workdir>/run_NNN/logs/
+  workdir: "/path/to/your/workdir"
+
+  # Optional: SQLite database for caching execution results
+  # When --use_cache is specified, results are reused if parameters match
+  # Set this to enable caching across multiple runs
+  sqlite_db: "/path/to/your/cache.db"
+
+  # Optional: Number of repetitions for each test case (default: 1)
+  # Can be overridden per round. Higher values improve statistical validity
+  repetitions: 3
+
+  # Required: Test selection strategy
+  # Options:
+  #   - "exhaustive": Test all parameter combinations (full factorial sweep)
+  #   - "bayesian": Intelligent optimization using Bayesian methods (fewer tests)
+  #   - "random": Random sampling of parameter space
+  search_method: "exhaustive"
+
+  # Required: Execution backend
+  # Options:
+  #   - "local": Run scripts locally using subprocess
+  #   - "slurm": Submit jobs to SLURM cluster via sbatch
+  executor: "slurm"
+
+  # Optional: Random seed for reproducible random operations (default: None)
+  # Used by random and bayesian search methods
+  random_seed: 42
+
+  # Optional: Variables to exclude from cache key computation
+  # Useful for path-based derived variables that shouldn't affect caching
+  # Example: ["summary_file", "output_path"] - paths vary but don't affect results
+  cache_exclude_vars: ["summary_file"]
+
+  # Optional: Budget configuration (SLURM only)
+  # Maximum CPU core-hours budget - execution stops when budget is exhausted
+  # Can be overridden with --max-core-hours CLI argument
+  max_core_hours: 1000
+
+  # Optional: Jinja expression to compute cores used per execution (SLURM only)
+  # Used with max_core_hours for budget tracking
+  # Examples:
+  #   - "{{ ntasks }}" - total tasks across all nodes
+  #   - "{{ nodes * processes_per_node }}" - explicit calculation
+  cores_expr: "{{ ntasks }}"
+
+  # Optional: Estimated execution time per test in seconds (SLURM only)
+  # Used for dry-run budget analysis and scheduling estimates
+  # Can be overridden with --estimated-time CLI argument (supports scenarios: "120,240,360")
+  estimated_time_seconds: 300
+
+  # Optional: Variables to include in analysis reports
+  # When using --analyze, only these variables will be used in plots and Pareto frontier
+  # Useful when you have string variables that shouldn't be plotted
+  # If omitted, all numeric swept variables are included
+  report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+
+
+# =============================================================================
+# VARIABLES CONFIGURATION
+# =============================================================================
+# Define parameters that will be swept or computed during execution.
+# Each variable has:
+#   - type: int | float | str
+#   - sweep: defines how values vary (for swept variables)
+#   - expr: computation from other variables (for derived variables)
+#
+# Variable types:
+#   - Swept: Parameter values to test (generates execution matrix)
+#   - Derived: Computed from other variables using expressions
+#
+# All variables are available in Jinja2 templates as {{ variable_name }}
+# =============================================================================
+vars:
+  # ---------------------------------------------------------------------------
+  # SWEPT VARIABLES (define parameter space)
+  # ---------------------------------------------------------------------------
+
+  # Example: Number of compute nodes
+  nodes:
+    type: int
+    sweep:
+      mode: list  # Options: list | range
+      values: [4, 8, 32]
+      # For range mode:
+      # mode: range
+      # start: 1
+      # end: 64
+      # step: 1
+
+  # Example: MPI processes per node
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [8, 16, 32]
+
+  # Example: Data volume size
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [32, 64, 128]
+
+  # Example: String parameter (e.g., different paths or configurations)
+  # Useful for testing across different file systems or OST configurations
+  ost_count:
+    type: str
+    sweep:
+      mode: list
+      values: ["/beegfs/data/ior_1", "/beegfs/data/ior_2", "/beegfs/data/ior_4", "/beegfs/data/ior_8"]
+
+  # ---------------------------------------------------------------------------
+  # DERIVED VARIABLES (computed from other variables)
+  # ---------------------------------------------------------------------------
+  # Expression syntax:
+  #   - Jinja2: "{{ var1 + var2 }}"
+  #   - Python: "var1 * 2 + var2"
+  #   - Functions: min(), max(), round(), floor(), ceil()
+  # ---------------------------------------------------------------------------
+
+  # Example: Extract number from path string
+  ost_number:
+    type: str
+    expr: "{{ ost_count.split('_')[-1] }}"
+
+  # Example: Compute block size based on volume and process count
+  block_size_mb:
+    type: int
+    expr: "((volume_size_gb * 1024) / processes_per_node)"
+
+  # Example: Total MPI tasks
+  ntasks:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+  # Example: Per-execution output file path
+  # Uses special variables: execution_dir, execution_id, repetition
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+
+# =============================================================================
+# COMMAND CONFIGURATION
+# =============================================================================
+# The benchmark command to execute. Uses Jinja2 templating.
+# Available in templates:
+#   - All variables from 'vars' section: {{ variable_name }}
+#   - {{ execution_id }} - unique ID for each execution
+#   - {{ repetition }} - current repetition number (1-based)
+#   - {{ execution_dir }} - per-execution working directory
+#   - {{ workdir }} - base working directory
+#   - {{ round_name }}, {{ round_index }} - round information (if using rounds)
+# =============================================================================
+command:
+  # The command template - can be multiline using YAML '>' or '|' syntax
+  template: >
+    ior -w -b {{ block_size_mb }}mb -t 1mb
+    -O summaryFile={{ summary_file }} -O summaryFormat=JSON
+    -o {{ ost_count }}/output.ior
+
+  # Optional: Additional metadata to attach to results
+  # This appears in output as metadata.* columns
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+
+
+# =============================================================================
+# SCRIPTS CONFIGURATION
+# =============================================================================
+# Define execution scripts (SLURM submission, parsing, etc.)
+# Supports:
+#   - External script files: script_template: path/to/script.sh
+#   - Embedded scripts: script_template: | (inline YAML multiline string)
+#
+# NOTE: For better maintainability, use external script files referenced by path.
+#       Embedded scripts are shown here for completeness but are harder to debug
+#       and edit. See docs/examples/scripts/ for reference implementations.
+# =============================================================================
+scripts:
+  # Script name (can define multiple scripts)
+  - name: "ior"
+
+    # SLURM submission command (required for executor: slurm)
+    submit: "sbatch"
+
+    # ---------------------------------------------------------------------------
+    # OPTION 1: EXTERNAL SCRIPT FILE (RECOMMENDED)
+    # ---------------------------------------------------------------------------
+    # Reference an external script file. This is the preferred approach.
+    # Example: script_template: scripts/ior_plafrim_slurm.sh
+    #
+    # See docs/examples/scripts/ior_plafrim_slurm.sh for a complete example
+    # ---------------------------------------------------------------------------
+
+    # ---------------------------------------------------------------------------
+    # OPTION 2: EMBEDDED SCRIPT (shown here for reference)
+    # ---------------------------------------------------------------------------
+    # You can embed the script directly in YAML. However, this makes editing
+    # and debugging more difficult. Use external files when possible.
+    # ---------------------------------------------------------------------------
+    script_template: |
+      #!/bin/bash
+
+      #SBATCH --job-name=iops_{{ execution_id }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=04:00:00
+      #SBATCH --chdir={{ execution_dir }}
+      #SBATCH -o batch%j.out
+      #SBATCH -e batch%j.err
+      #SBATCH --exclusive
+
+      # Uncomment and customize these SLURM directives as needed:
+      # #SBATCH --partition=your_partition
+      # #SBATCH --constraint=your_constraint
+      # #SBATCH --account=your_account
+      # #SBATCH --qos=your_qos
+
+      # Load required modules (customize for your cluster)
+      module purge
+      module load mpi/openmpi/4.0.1
+
+      # Optional: Log SLURM allocation details for debugging
+      echo "=== SLURM Allocation Info ==="
+      echo "Requested nodes: {{ nodes }}"
+      echo "Requested ntasks-per-node: {{ processes_per_node }}"
+      echo "Allocated SLURM_JOB_NUM_NODES: $SLURM_JOB_NUM_NODES"
+      echo "Allocated SLURM_NNODES: $SLURM_NNODES"
+      echo "Allocated SLURM_NODELIST: $SLURM_NODELIST"
+      echo "Allocated SLURM_NTASKS: $SLURM_NTASKS"
+      echo "Allocated SLURM_TASKS_PER_NODE: $SLURM_TASKS_PER_NODE"
+      echo "============================="
+
+      # Execute the benchmark command
+      # Note: SLURM sets MPI task count automatically via --ntasks
+      mpirun {{ command.template }}
+
+      # Capture exit code
+      exit_code=$?
+      echo "Exit code: $exit_code"
+      exit $exit_code
+
+    # ---------------------------------------------------------------------------
+    # POST-EXECUTION SCRIPT (optional)
+    # ---------------------------------------------------------------------------
+    # Runs after the main script completes (success or failure)
+    # Useful for cleanup, notifications, or logging
+    # ---------------------------------------------------------------------------
+    post:
+      script: |
+        #!/bin/bash
+        echo "Job completed at $(date)"
+        echo "Summary file: {{ summary_file }}"
+
+        # Optional: Copy results to a shared location
+        # cp {{ summary_file }} /shared/results/
+
+    # ---------------------------------------------------------------------------
+    # PARSER CONFIGURATION
+    # ---------------------------------------------------------------------------
+    # Defines how to extract metrics from output files
+    # ---------------------------------------------------------------------------
+    parser:
+      # File to parse (typically a variable pointing to the output)
+      file: "{{ summary_file }}"
+
+      # List of metrics to extract
+      # Each metric name must be returned by the parser script
+      metrics:
+        - name: bwMiB       # Bandwidth in MiB/s
+        # Add more metrics as needed:
+        # - name: iops      # I/O operations per second
+        # - name: latency   # Average latency
+        # - name: runtime   # Total execution time
+
+      # ---------------------------------------------------------------------------
+      # PARSER SCRIPT OPTIONS:
+      # ---------------------------------------------------------------------------
+      # OPTION 1: EXTERNAL PARSER SCRIPT (RECOMMENDED for maintainability)
+      #   Reference an external Python script with a parse(file_path) function.
+      #   This makes editing and debugging easier.
+      #   See docs/examples/scripts/ior_parser.py for a complete example.
+      #
+      #   To use external script, uncomment and update the path:
+      #   parser_script: scripts/ior_parser.py
+      #
+      # OPTION 2: EMBEDDED PARSER SCRIPT (shown below, easier to get started)
+      #   Embed the parser directly in this YAML file.
+      #   Must define: def parse(file_path: str) -> dict
+      # ---------------------------------------------------------------------------
+      parser_script: |
+        import json
+
+        def parse(file_path: str):
+            """
+            Parse IOR JSON output and extract metrics.
+
+            This is an example parser for IOR JSON format output.
+            Customize this function to parse your benchmark's output format.
+
+            Args:
+                file_path: Path to the output file to parse
+
+            Returns:
+                dict: Metrics dictionary with keys matching 'metrics' list above
+                      Example: {"bwMiB": 1234.5, "iops": 5000}
+            """
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            # Navigate IOR JSON structure
+            # Customize this section based on your output format
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError("No tests found in IOR JSON")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError("No Results found in IOR JSON")
+
+            # Find write operation (or use first result)
+            write_res = next(
+                (r for r in results if str(r.get("access", "")).lower() == "write"),
+                results[0],
+            )
+
+            # Return metrics dictionary
+            # Keys MUST match the names in 'metrics' list above
+            return {
+                "bwMiB": write_res.get("bwMiB"),
+                # Add more metrics as needed:
+                # "iops": write_res.get("iops"),
+                # "latency": write_res.get("latency"),
+            }
+
+
+# =============================================================================
+# OUTPUT CONFIGURATION
+# =============================================================================
+# Define how results should be stored
+# Supports schema evolution: new columns are added automatically in append mode
+# =============================================================================
+output:
+  sink:
+    # Output format: csv | parquet | sqlite
+    type: csv
+
+    # Output path (supports Jinja2 templating)
+    path: "{{ workdir }}/results.csv"
+
+    # Write mode:
+    #   - append: Add to existing file (creates if missing)
+    #   - overwrite: Replace existing file
+    mode: append
+
+    # Optional: Include only specific fields (mutually exclusive with 'exclude')
+    # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB
+    # include: ["execution.execution_id", "vars.*", "metrics.*"]
+
+    # Optional: Exclude specific fields (mutually exclusive with 'include')
+    # Useful for removing verbose fields like descriptions
+    exclude: ["benchmark.description"]
+
+    # Optional: Table name (only for sqlite type)
+    table: results
+
+
+# =============================================================================
+# ADVANCED: ROUNDS CONFIGURATION (optional)
+# =============================================================================
+# Multi-stage optimization workflow: optimize different parameters sequentially
+# Each round tests a subset of variables, and the best result propagates forward
+#
+# Uncomment to enable rounds:
+# =============================================================================
+# rounds:
+#   # Round 1: Optimize node count
+#   - name: "optimize_nodes"
+#
+#     # Variables to sweep in this round (others use global defaults)
+#     sweep_vars: ["nodes"]
+#
+#     # Optional: Override specific variables with fixed values for this round
+#     fixed_overrides:
+#       processes_per_node: 16
+#       volume_size_gb: 32
+#
+#     # Search configuration for this round
+#     search:
+#       metric: "bwMiB"        # Metric to optimize
+#       objective: "max"        # "max" or "min"
+#
+#     # Optional: Override repetitions for this round
+#     repetitions: 3
+#
+#   # Round 2: Optimize processes per node using best node count from Round 1
+#   - name: "optimize_processes"
+#     sweep_vars: ["processes_per_node"]
+#     search:
+#       metric: "bwMiB"
+#       objective: "max"
+#     repetitions: 5
+
+
+# =============================================================================
+# ADDITIONAL NOTES
+# =============================================================================
+#
+# Jinja2 Template Variables (available in all templates):
+#   - {{ execution_id }}          - Unique execution identifier
+#   - {{ repetition }}            - Current repetition number (1-based)
+#   - {{ execution_dir }}         - Per-execution working directory
+#   - {{ workdir }}               - Base working directory
+#   - {{ round_name }}            - Round name (if using rounds)
+#   - {{ round_index }}           - Round index (if using rounds)
+#   - {{ vars.variable_name }}    - Any variable from 'vars' section
+#   - {{ metadata.key }}          - Any metadata from 'command.metadata'
+#   - {{ command.template }}      - The rendered command
+#   - {{ benchmark.name }}        - Benchmark name
+#
+# Special Features:
+#   - Cache: Use --use_cache to reuse results from previous runs
+#   - Dry-run: Use --dry-run to preview execution without running tests
+#   - Budget: Set max_core_hours and cores_expr for resource limits
+#   - Reports: Use --analyze /path/to/run_NNN to generate HTML analysis
+#   - Validation: Use --check_setup to validate configuration without execution
+#
+# Working Directory Structure:
+#   <workdir>/
+#   ├── run_001/
+#   │   ├── runs/
+#   │   │   ├── exec_0001/
+#   │   │   │   └── repetition_001/
+#   │   │   │       ├── run_ior.sh       # Generated script
+#   │   │   │       ├── stdout           # Job stdout
+#   │   │   │       ├── stderr           # Job stderr
+#   │   │   │       └── batch12345.out   # SLURM output
+#   │   │   └── ...
+#   │   ├── logs/
+#   │   │   └── iops.log                 # IOPS framework log
+#   │   └── run_metadata.json            # Run metadata for reports
+#   └── results.csv                      # Results output
+#
+# For more information:
+#   - Architecture: docs/CLAUDE.md
+#   - Examples: docs/examples/
+#   - Repository: https://github.com/your-repo/iops
+#
+# =============================================================================

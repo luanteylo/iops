@@ -114,11 +114,13 @@ iops --version
 
 ### 1. Create a Configuration
 
-Use the interactive wizard to generate a YAML configuration:
+Generate a comprehensive YAML template with all options documented:
 
 ```bash
 iops --generate_setup my_config.yaml
 ```
+
+This creates a fully-commented template showing all available configuration options. Customize it for your needs.
 
 Or start from an example:
 
@@ -346,7 +348,7 @@ iops <config.yaml> [options]
 # Generate analysis report
 iops analyze <workdir/run_NNN>
 
-# Interactive setup wizard
+# Generate configuration template
 iops --generate_setup [output.yaml]
 
 # Show version

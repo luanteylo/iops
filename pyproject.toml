@@ -4,20 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iops-benchmark"
-dynamic = ["version"]
+version = "3.0.0"
 description = "A generic benchmark orchestration framework for automated parametric experiments"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "BSD-3-Clause"}
+license = "BSD-3-Clause"
 authors = [
-    {name = "Luan Teylo", email = "luan.gouveia@inria.fr"}
+    {name = "TADAAM - INRIA Bordeaux", email = "luan.teylo@inria.fr"}
 ]
 keywords = ["benchmark", "performance", "testing", "parametric", "sweep", "hpc", "slurm"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: BSD License",
     "Topic :: Software Development :: Testing",
     "Topic :: System :: Benchmark",
     "Programming Language :: Python :: 3",
@@ -46,9 +45,6 @@ Issues = "https://gitlab.inria.fr/lgouveia/iops/-/issues"
 
 [project.scripts]
 iops = "iops.main:main"
-
-[tool.setuptools.dynamic]
-version = {file = "iops/VERSION"}
 
 [tool.setuptools.packages.find]
 include = ["iops*"]

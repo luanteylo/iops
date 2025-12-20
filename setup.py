@@ -40,7 +40,6 @@ setup(
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: BSD License",
         "Topic :: Software Development :: Testing",
         "Topic :: System :: Benchmark",
         "Programming Language :: Python :: 3",

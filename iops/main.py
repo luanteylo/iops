@@ -226,23 +226,25 @@ def main():
     args = parse_arguments()
     logger = initialize_logger(args)
 
-    # Handle --generate_setup mode (interactive wizard)
+    # Handle --generate_setup mode (template generator)
     if args.generate_setup:
         from iops.setup import BenchmarkWizard
 
         try:
             wizard = BenchmarkWizard()
-            output_file = wizard.run()
+            # Pass the output path if specified
+            output_path = str(args.generate_setup) if args.generate_setup else None
+            output_file = wizard.run(output_path=output_path)
 
             if output_file:
-                logger.info(f"Configuration wizard completed successfully")
+                logger.info(f"Configuration template generated successfully: {output_file}")
             else:
-                logger.info("Configuration wizard cancelled")
+                logger.info("Template generation cancelled")
 
         except KeyboardInterrupt:
-            logger.info("\n\nWizard cancelled by user")
+            logger.info("\n\nTemplate generation cancelled by user")
         except Exception as e:
-            logger.error(f"Wizard failed: {e}")
+            logger.error(f"Template generation failed: {e}")
             if args.verbose:
                 raise
         return
