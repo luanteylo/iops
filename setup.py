@@ -15,7 +15,7 @@ def read_long_description():
         return f.read()
 
 setup(
-    name="iops",
+    name="iops-benchmark",
     version=read_version(),
     author="TADAAM - INRIA Bordeaux",
     author_email="luan.teylo@inria.fr",

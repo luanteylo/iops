@@ -37,7 +37,7 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 Once published to PyPI, you'll be able to install IOPS with a single command:
 
 ```bash
-pip install iops
+pip install iops-benchmark
 ```
 
 ### Basic Installation (from source)
