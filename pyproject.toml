@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iops-benchmark"
-version = "3.0.3"
+dynamic = ["version"]
 description = "A generic benchmark orchestration framework for automated parametric experiments"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -52,3 +52,6 @@ include = ["iops*", "docs*"]
 [tool.setuptools.package-data]
 iops = ["VERSION", "**/*.yaml", "**/*.yml"]
 docs = ["**/*.md", "**/*.yaml", "**/*.yml", "**/*.py", "**/*.sh", "**/*.txt"]
+
+[tool.setuptools.dynamic]
+version = {file = ["iops/VERSION"]}
