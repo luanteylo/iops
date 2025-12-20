@@ -383,7 +383,326 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
     return cfg
 
 
-# ----------------- Validation function ----------------- #
+# ----------------- Validation functions ----------------- #
+
+def validate_yaml_config(config_path: Path) -> List[str]:
+    """
+    Validate a YAML configuration file and return a list of all errors found.
+
+    This function attempts to load and validate the configuration file,
+    catching all errors and returning them as a list. If the configuration
+    is valid, an empty list is returned.
+
+    Args:
+        config_path: Path to the YAML configuration file
+
+    Returns:
+        List of error messages (empty if valid)
+    """
+    errors: List[str] = []
+
+    # Check if file exists
+    if not config_path.exists():
+        errors.append(f"Configuration file not found: {config_path}")
+        return errors
+
+    if not config_path.is_file():
+        errors.append(f"Path is not a file: {config_path}")
+        return errors
+
+    # Try to load and parse the YAML
+    try:
+        with open(config_path, "r") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        errors.append(f"YAML syntax error: {e}")
+        return errors
+    except Exception as e:
+        errors.append(f"Failed to read configuration file: {e}")
+        return errors
+
+    if data is None:
+        errors.append("Configuration file is empty")
+        return errors
+
+    if not isinstance(data, dict):
+        errors.append("Configuration file must contain a YAML dictionary")
+        return errors
+
+    # Get config directory for resolving relative script paths
+    config_dir = config_path.parent
+
+    # Validate required top-level sections
+    required_sections = ["benchmark", "vars", "command", "scripts", "output"]
+    for section in required_sections:
+        if section not in data:
+            errors.append(f"Missing required section: '{section}'")
+
+    if errors:
+        return errors
+
+    # Try to parse and validate the configuration
+    try:
+        # ---- benchmark ----
+        b = data["benchmark"]
+
+        # Check required benchmark fields
+        if "name" not in b:
+            errors.append("benchmark.name is required")
+        if "workdir" not in b:
+            errors.append("benchmark.workdir is required")
+
+        # Validate workdir if present
+        if "workdir" in b:
+            try:
+                workdir = _expand_path(b["workdir"])
+                if not workdir.exists():
+                    errors.append(f"benchmark.workdir does not exist: {workdir}")
+                elif not workdir.is_dir():
+                    errors.append(f"benchmark.workdir is not a directory: {workdir}")
+            except Exception as e:
+                errors.append(f"Invalid benchmark.workdir path: {e}")
+
+        # Validate repetitions
+        if "repetitions" in b:
+            reps = b["repetitions"]
+            if not isinstance(reps, int) or reps < 1:
+                errors.append("benchmark.repetitions must be an integer >= 1")
+
+        # Validate search_method
+        if "search_method" in b:
+            method = b["search_method"]
+            if method not in ("greedy", "bayesian", "exhaustive"):
+                errors.append(f"benchmark.search_method must be one of: greedy, bayesian, exhaustive (got '{method}')")
+
+        # Validate executor
+        if "executor" in b:
+            executor = b["executor"]
+            if executor not in ("slurm", "local"):
+                errors.append(f"benchmark.executor must be one of: slurm, local (got '{executor}')")
+
+    except KeyError as e:
+        errors.append(f"Missing required benchmark field: {e}")
+    except Exception as e:
+        errors.append(f"Error validating benchmark section: {e}")
+
+    # ---- vars ----
+    try:
+        vars_data = data.get("vars", {})
+        if not vars_data:
+            errors.append("At least one variable must be defined in 'vars'")
+
+        for name, cfg in vars_data.items():
+            if not isinstance(cfg, dict):
+                errors.append(f"var '{name}' must be a dictionary")
+                continue
+
+            if "type" not in cfg:
+                errors.append(f"var '{name}' is missing required field 'type'")
+
+            has_sweep = "sweep" in cfg and cfg["sweep"] is not None
+            has_expr = "expr" in cfg and cfg["expr"] is not None
+
+            if not has_sweep and not has_expr:
+                errors.append(f"var '{name}' must define either a 'sweep' or an 'expr'")
+
+            if has_sweep and has_expr:
+                errors.append(f"var '{name}' cannot have both 'sweep' and 'expr'")
+
+            if has_sweep:
+                sweep = cfg["sweep"]
+                if not isinstance(sweep, dict):
+                    errors.append(f"var '{name}' sweep must be a dictionary")
+                    continue
+
+                if "mode" not in sweep:
+                    errors.append(f"var '{name}' sweep is missing required field 'mode'")
+                    continue
+
+                mode = sweep["mode"]
+                if mode == "range":
+                    if "start" not in sweep:
+                        errors.append(f"var '{name}' with mode 'range' is missing 'start'")
+                    if "end" not in sweep:
+                        errors.append(f"var '{name}' with mode 'range' is missing 'end'")
+                    if "step" not in sweep:
+                        errors.append(f"var '{name}' with mode 'range' is missing 'step'")
+
+                    if "step" in sweep and sweep["step"] == 0:
+                        errors.append(f"var '{name}' with mode 'range' cannot have step=0")
+
+                elif mode == "list":
+                    if "values" not in sweep:
+                        errors.append(f"var '{name}' with mode 'list' is missing 'values'")
+                    elif not sweep["values"]:
+                        errors.append(f"var '{name}' with mode 'list' must have non-empty 'values'")
+                else:
+                    errors.append(f"var '{name}' has invalid sweep.mode='{mode}' (must be 'range' or 'list')")
+
+    except Exception as e:
+        errors.append(f"Error validating vars section: {e}")
+
+    # ---- command ----
+    try:
+        command_data = data.get("command", {})
+        if not isinstance(command_data, dict):
+            errors.append("'command' section must be a dictionary")
+        elif "template" not in command_data:
+            errors.append("command.template is required")
+        elif not command_data["template"] or not str(command_data["template"]).strip():
+            errors.append("command.template must not be empty")
+
+    except Exception as e:
+        errors.append(f"Error validating command section: {e}")
+
+    # ---- scripts ----
+    try:
+        scripts_data = data.get("scripts", [])
+        if not scripts_data:
+            errors.append("At least one script must be defined in 'scripts'")
+
+        if not isinstance(scripts_data, list):
+            errors.append("'scripts' section must be a list")
+        else:
+            for idx, s in enumerate(scripts_data):
+                if not isinstance(s, dict):
+                    errors.append(f"scripts[{idx}] must be a dictionary")
+                    continue
+
+                script_name = s.get("name", f"script[{idx}]")
+
+                if "name" not in s:
+                    errors.append(f"scripts[{idx}] is missing required field 'name'")
+
+                if "submit" not in s:
+                    errors.append(f"script '{script_name}' is missing required field 'submit'")
+
+                if "script_template" not in s:
+                    errors.append(f"script '{script_name}' is missing required field 'script_template'")
+                elif not s["script_template"] or not str(s["script_template"]).strip():
+                    errors.append(f"script '{script_name}' must have a non-empty script_template")
+
+                # Validate post block if present
+                if "post" in s and s["post"] is not None:
+                    post = s["post"]
+                    if not isinstance(post, dict):
+                        errors.append(f"script '{script_name}' post must be a dictionary")
+                    elif "script" not in post or not post["script"] or not str(post["script"]).strip():
+                        errors.append(f"script '{script_name}' has a 'post' block but empty or missing 'script'")
+
+                # Validate parser block if present
+                if "parser" in s and s["parser"] is not None:
+                    parser = s["parser"]
+                    if not isinstance(parser, dict):
+                        errors.append(f"script '{script_name}' parser must be a dictionary")
+                        continue
+
+                    if "file" not in parser or not parser["file"] or not str(parser["file"]).strip():
+                        errors.append(f"script '{script_name}' parser.file is required and must not be empty")
+
+                    if "parser_script" not in parser or not parser["parser_script"] or not str(parser["parser_script"]).strip():
+                        errors.append(f"script '{script_name}' parser.parser_script is required and must not be empty")
+                    else:
+                        # Load parser script content if it's a file reference
+                        parser_script = _load_script_content(parser["parser_script"], config_dir)
+                        ok, err = validate_parser_script(parser_script)
+                        if not ok:
+                            errors.append(f"script '{script_name}' has invalid parser_script: {err}")
+
+                    if "metrics" not in parser or not parser["metrics"]:
+                        errors.append(f"script '{script_name}' parser.metrics is required and must be non-empty")
+                    elif isinstance(parser["metrics"], list):
+                        for m_idx, metric in enumerate(parser["metrics"]):
+                            if not isinstance(metric, dict):
+                                errors.append(f"script '{script_name}' parser.metrics[{m_idx}] must be a dictionary")
+                            elif "name" not in metric:
+                                errors.append(f"script '{script_name}' parser.metrics[{m_idx}] is missing 'name'")
+
+    except Exception as e:
+        errors.append(f"Error validating scripts section: {e}")
+
+    # ---- output ----
+    try:
+        output_data = data.get("output", {})
+        if not isinstance(output_data, dict):
+            errors.append("'output' section must be a dictionary")
+        elif "sink" not in output_data:
+            errors.append("output.sink is required")
+        else:
+            sink = output_data["sink"]
+            if not isinstance(sink, dict):
+                errors.append("output.sink must be a dictionary")
+            else:
+                if "type" not in sink:
+                    errors.append("output.sink.type is required")
+                elif sink["type"] not in ("csv", "parquet", "sqlite"):
+                    errors.append(f"output.sink.type must be one of: csv, parquet, sqlite (got '{sink['type']}')")
+
+                if "path" not in sink or not sink["path"] or not str(sink["path"]).strip():
+                    errors.append("output.sink.path is required and must not be empty")
+
+                if "mode" in sink and sink["mode"] not in ("append", "overwrite"):
+                    errors.append(f"output.sink.mode must be 'append' or 'overwrite' (got '{sink['mode']}')")
+
+                if "include" in sink and sink["include"] and "exclude" in sink and sink["exclude"]:
+                    errors.append("output.sink cannot define both 'include' and 'exclude'")
+
+                if "type" in sink and sink["type"] == "sqlite":
+                    if "table" not in sink or not sink["table"] or not str(sink["table"]).strip():
+                        errors.append("output.sink.table is required and must not be empty when type=sqlite")
+
+    except Exception as e:
+        errors.append(f"Error validating output section: {e}")
+
+    # ---- rounds (optional) ----
+    try:
+        rounds_data = data.get("rounds", [])
+        if rounds_data:
+            if not isinstance(rounds_data, list):
+                errors.append("'rounds' section must be a list")
+            else:
+                for idx, rnd in enumerate(rounds_data):
+                    if not isinstance(rnd, dict):
+                        errors.append(f"rounds[{idx}] must be a dictionary")
+                        continue
+
+                    round_name = rnd.get("name", f"round[{idx}]")
+
+                    if "name" not in rnd or not rnd["name"]:
+                        errors.append(f"rounds[{idx}] must have a non-empty 'name'")
+
+                    if "sweep_vars" not in rnd or not rnd["sweep_vars"]:
+                        errors.append(f"round '{round_name}' must define a non-empty 'sweep_vars' list")
+                    elif isinstance(rnd["sweep_vars"], list):
+                        # Check if sweep_vars reference valid vars
+                        vars_data = data.get("vars", {})
+                        for vname in rnd["sweep_vars"]:
+                            if vname not in vars_data:
+                                errors.append(f"round '{round_name}' references unknown sweep var '{vname}'")
+
+                    if "fixed_overrides" in rnd and isinstance(rnd["fixed_overrides"], dict):
+                        vars_data = data.get("vars", {})
+                        for vname in rnd["fixed_overrides"].keys():
+                            if vname not in vars_data:
+                                errors.append(f"round '{round_name}' fixed_overrides references unknown var '{vname}'")
+
+                    if "search" not in rnd or rnd["search"] is None:
+                        errors.append(f"round '{round_name}' must define a 'search' block")
+                    elif isinstance(rnd["search"], dict):
+                        search = rnd["search"]
+                        if "metric" not in search or not search["metric"]:
+                            errors.append(f"round '{round_name}' search.metric is required and must not be empty")
+
+                        if "objective" not in search:
+                            errors.append(f"round '{round_name}' search.objective is required")
+                        elif search["objective"] not in ("max", "min"):
+                            errors.append(f"round '{round_name}' search.objective must be 'max' or 'min' (got '{search['objective']}')")
+
+    except Exception as e:
+        errors.append(f"Error validating rounds section: {e}")
+
+    return errors
+
 
 def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     """

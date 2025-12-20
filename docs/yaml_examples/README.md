@@ -146,5 +146,5 @@ See [YAML_FORMAT.md](../YAML_FORMAT.md) for complete reference.
 1. **Start small**: Begin with `01_simple_local.yaml` and modify incrementally
 2. **Use cache**: Always set `sqlite_db` and use `--use_cache` for iterative development
 3. **Test locally first**: Validate with `executor: local` before using SLURM
-4. **Check logs**: Use `--log_level DEBUG --log_terminal` for detailed output
+4. **Check logs**: Use `--log_level DEBUG` for detailed output
 5. **Rounds for optimization**: Use multi-round workflows to reduce total executions

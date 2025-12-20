@@ -26,22 +26,39 @@ pip install -r requirements.txt
 ### Running the Tool
 ```bash
 # Run with a configuration file
-iops setup.yaml
+iops config.yaml
 
 # Or via python module
-python -m iops.main setup.yaml
+python -m iops.main config.yaml
+
+# Interactive setup wizard (generates config YAML)
+iops --generate_setup
+iops --generate_setup my_config.yaml
 
 # Check configuration validity
-iops setup.yaml --check_setup
+iops config.yaml --check_setup
 
 # Show version
 iops --version
 
 # Enable verbose logging
-iops setup.yaml --log_level DEBUG --log_terminal
+iops config.yaml --log_level DEBUG
 
 # Use cache to skip already-executed tests
-iops setup.yaml --use_cache
+iops config.yaml --use_cache
+
+# Preview execution without running (dry-run mode)
+iops config.yaml --dry-run
+
+# Set budget limit (SLURM only)
+iops config.yaml --max-core-hours 1000
+
+# Provide execution time estimates for budget calculation
+iops config.yaml --estimated-time 120  # seconds per test
+iops config.yaml --estimated-time 60,120,300  # scenario-based estimates
+
+# Generate HTML report from completed run
+iops analyze /path/to/workdir/run_001
 ```
 
 ### Testing
@@ -270,17 +287,15 @@ Cache statistics: 12 hits, 3 misses (80.0% hit rate)
 
 ## Important Implementation Notes
 
-1. **Legacy code in `config/legacy/`**: The files `config_loader.py` and `file_utils.py` are legacy modules for the old IOR-specific configuration format. The new generic YAML format uses `config/loader.py`, `config/models.py`, and `execution/matrix.py`. The legacy code is kept for backwards compatibility but should not be modified.
+1. **Parser scripts must define `parse(file_path: str) -> dict`**: The function name and signature are validated at config load time using AST parsing (no execution).
 
-2. **Parser scripts must define `parse(file_path: str) -> dict`**: The function name and signature are validated at config load time using AST parsing (no execution).
+2. **SLURM executor does not use sacct or sbatch --wait**: Status tracking uses `squeue` polling and `scontrol show job` for finalization. Falls back to parser output existence if job ages out of SLURM records.
 
-3. **SLURM executor does not use sacct or sbatch --wait**: Status tracking uses `squeue` polling and `scontrol show job` for finalization. Falls back to parser output existence if job ages out of SLURM records.
+3. **Repetitions are randomly interleaved**: The exhaustive planner randomly selects which test+repetition to run next, improving statistical validity when jobs have variable runtime.
 
-4. **Repetitions are randomly interleaved**: The exhaustive planner randomly selects which test+repetition to run next, improving statistical validity when jobs have variable runtime.
+4. **Schema evolution for CSV/Parquet**: If new columns appear during append, the entire file is rewritten with the extended schema. Old rows get `None` for new columns.
 
-5. **Schema evolution for CSV/Parquet**: If new columns appear during append, the entire file is rewritten with the extended schema. Old rows get `None` for new columns.
-
-6. **Working directory structure**:
+5. **Working directory structure**:
    ```
    <workdir>/
    ├── run_001/
@@ -310,7 +325,8 @@ When adding new features to the YAML format:
 
 ## Debugging Tips
 
-- Use `--log_level DEBUG --log_terminal` to see detailed execution flow
+- Logs appear in both terminal and log file by default. Use `--no-log-terminal` to disable terminal output
+- Use `--log_level DEBUG` to see detailed execution flow
 - Check `<workdir>/run_NNN/runs/*/repetition_*/stdout` and `stderr` for job output
 - Enable `test.describe()` output by setting log level to DEBUG (shows full rendered templates)
 - Use `execution_id` in file paths to avoid collisions: `"{{ execution_dir }}/output_{{ execution_id }}.dat"`

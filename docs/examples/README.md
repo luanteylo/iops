@@ -288,7 +288,7 @@ Reuses results when re-running with same parameters.
 ### Debug Mode
 See detailed execution flow:
 ```bash
-iops config.yaml --log_level DEBUG --log_terminal
+iops config.yaml --log_level DEBUG
 ```
 
 ### Budget Management

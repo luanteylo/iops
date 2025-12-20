@@ -2,10 +2,8 @@ import argparse
 import logging
 from pathlib import Path
 
-from iops.config.legacy.file_utils import FileUtils
 from iops.logger import setup_logger
 from iops.execution.runner import IOPSRunner
-#from iops.config.legacy.config_loader import ConfigValidationError, IOPSConfig
 from iops.config.loader import load_generic_config, validate_generic_config
 from iops.config.models import ConfigValidationError, GenericBenchmarkConfig
 from iops.execution.matrix import build_execution_matrix
@@ -29,7 +27,7 @@ def parse_arguments():
                         help="Generate a default setup YAML file. Optionally specify a path (default: iops_config.yaml)")
     parser.add_argument('--check_setup', action='store_true', help="Validate the setup YAML file and exit")
     parser.add_argument('--log_file', type=Path, default=Path("iops.log"), help="Path to the log file")
-    parser.add_argument('--log_terminal', action='store_true', help="Print logs to terminal")
+    parser.add_argument('--no-log-terminal', action='store_true', help="Disable logging to terminal (logs only to file)")
     parser.add_argument('--log_level', type=str, default='INFO', help="Logging level (default: INFO)")
     parser.add_argument('--verbose', action='store_true', help="Show full traceback for errors")
     parser.add_argument('--use_cache', action='store_true',
@@ -51,7 +49,7 @@ def initialize_logger(args):
     return setup_logger(
         name="iops",
         log_file=args.log_file,
-        to_stdout=args.log_terminal,
+        to_stdout=not args.no_log_terminal,
         to_file=args.log_file is not None,
         level=getattr(logging, args.log_level.upper(), logging.INFO)
     )
@@ -271,6 +269,19 @@ def main():
     if not args.setup_file:
         logger.error("No setup file provided for validation or execution.")
         return
+
+    # Handle --check_setup mode (validate only)
+    if args.check_setup:
+        from iops.config.loader import validate_yaml_config
+        errors = validate_yaml_config(Path(args.setup_file))
+        if errors:
+            logger.error(f"Configuration validation failed with {len(errors)} error(s):")
+            for i, err in enumerate(errors, 1):
+                logger.error(f"  {i}. {err}")
+            return
+        else:
+            logger.info("Configuration is valid.")
+            return
 
     cfg = load_generic_config(Path(args.setup_file), logger=logger)
     log_execution_context(cfg, args, logger)

@@ -244,7 +244,7 @@ cache.clear_cache()
 
 3. Enable debug logging to see cache hits/misses:
    ```bash
-   iops config.yaml --use_cache --log_level DEBUG --log_terminal
+   iops config.yaml --use_cache --log_level DEBUG
    ```
 
 ### Parameter Mismatch
@@ -256,7 +256,7 @@ cache.clear_cache()
 1. **Derived variables with run-specific paths**:
    ```bash
    # Enable debug logging to see what's being hashed
-   iops config.yaml --use_cache --log_level DEBUG --log_terminal | grep "param_hash"
+   iops config.yaml --use_cache --log_level DEBUG | grep "param_hash"
    ```
 
    If you see different hashes for identical parameters, check for variables containing:

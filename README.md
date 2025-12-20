@@ -1,114 +1,152 @@
 # IOPS - I/O Performance Suite
 
-If you've ever tried to optimize I/O performance on an HPC cluster, you know the challenge. You write bash scripts to run IOR with different parameters. Then more scripts to parse the results. Then more scripts to generate graphs. Then you realize you need to test on another machine and have to adapt everything again.
+**A generic benchmark orchestration framework for automated parametric experiments.**
 
-We've been there. Back in 2022, we published [this paper](https://inria.hal.science/hal-03753813/) where we ran countless IOR experiments on our cluster and discovered some really interesting things—including configuration mistakes that were crippling our performance. The process involved significant manual work: scripting, data aggregation, and result analysis.
+IOPS automates the generation, execution, and analysis of benchmark experiments. Instead of writing custom scripts for each benchmark study, you define a YAML configuration describing what to vary, what to run, and what to measure—IOPS handles the rest.
 
-However, this approach was not sustainable in the long term. We needed a tool that could automate the entire process, making it reproducible, portable, and efficient. IOPS was born.
+## What is IOPS?
 
-## What Does IOPS Actually Do?
+IOPS (I/O Performance Suite) is a framework that transforms benchmark experiments from manual scripting into automated, reproducible workflows.
 
-IOPS is a benchmark orchestration framework. Here's what that means:
+**Without IOPS**: Write bash scripts → Parse outputs → Aggregate data → Generate plots → Repeat for each parameter change
 
-**The Problem**: To get maximum I/O bandwidth from your parallel file system, you need to find the sweet spot for multiple parameters:
-- Number of compute nodes and processes
-- Data volume (file sizes)
-- Access patterns
-- Striping configurations (OST counts, stripe sizes)
+**With IOPS**: Write one YAML config → Run `iops config.yaml` → Get interactive HTML reports
 
-And here's the catch: these parameters are interdependent. You can't just test them independently. You need to test file sizes with 4 nodes, find the plateau, then test with 8 nodes, go back and re-test file sizes, rinse and repeat until you find the optimal combination.
+Originally designed for I/O performance studies (see [our 2022 paper](https://inria.hal.science/hal-03753813/)), IOPS has evolved into a generic framework for any parametric benchmark workflow.
 
-**The Traditional Approach**: Write multiple bash scripts, run tests for days, manually aggregate results, generate graphs in Python, analyze data to identify patterns, and often discover mistakes that require re-running everything.
+## Key Features
 
-**The IOPS Approach**: Write one YAML file. Run `iops run config.yaml`. IOPS generates an HTML report with interactive plots showing exactly where your bottlenecks are and what parameters give you peak performance.
+- **Parameter Sweeping**: Automatically generate and execute tests for all parameter combinations
+- **Multiple Search Strategies**: Exhaustive, Bayesian optimization, or random sampling
+- **Execution Backends**: Run locally or submit to SLURM clusters
+- **Smart Caching**: Skip redundant tests with parameter-aware result caching
+- **Budget Control**: Set core-hour limits to avoid exceeding compute allocations
+- **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis
+- **Flexible Output**: Export results to CSV, Parquet, or SQLite
 
-### Key Features
+## Installation
 
-IOPS isn't just a "run all combinations" tool (though it can do that). It provides intelligent optimization:
+### Prerequisites
 
-**Bayesian Optimization**: Instead of testing all 192 parameter combinations, IOPS uses Gaussian Process optimization to find the optimal configuration in just 20 tests. That's a 90% reduction in execution time and compute resources.
+- Python 3.10 or later
+- For benchmark execution: Required tools in PATH (e.g., `ior`, `mpirun` for I/O benchmarks)
+- For SLURM clusters: Access to a SLURM scheduler
 
-**Intelligent Caching**: Ran some tests already? IOPS remembers. It won't re-run tests with identical parameters. Change one thing, re-run with `--use_cache`, and only the new configurations get tested.
-
-**Budget Control**: Set a core-hours limit and IOPS stops when you hit it. No more accidentally burning through your allocation.
-
-**Automatic Reports**: Rich HTML reports with interactive Plotly graphs, statistical analysis, Pareto frontiers, and best configurations automatically identified. No more manual graph generation.
-
----
-
-## The Evolution
-
-IOPS started as an IOR-specific automation tool and evolved into a general-purpose benchmark orchestration framework:
-
-- ✅ **Originally**: IOR-specific, bash scripts, manual everything
-- ✅ **Version 0.x**: Python automation, multi-round testing
-- ✅ **Version 1.0**: Generic YAML framework, Bayesian optimization, SLURM integration, interactive reports, setup wizard
-
-Now you can use IOPS for any benchmark, not just IOR: LAMMPS, GROMACS, or your custom I/O application.
-
----
-
-## Quick Start
-
-### Installation
+### Basic Installation
 
 ```bash
-# Clone the repo
+# Clone the repository
 git clone https://gitlab.inria.fr/lgouveia/iops.git
 cd iops
 
-# Install dependencies
+# Install dependencies and package
 pip install -r requirements.txt
 pip install -e .
 
-# Verify it works
+# Verify installation
 iops --version
 ```
 
-### Create Your First Benchmark
+### Using a Virtual Environment (Recommended)
 
-Use the interactive wizard:
+Using a virtual environment keeps IOPS dependencies isolated from your system Python:
+
+**Option 1: Python venv**
 
 ```bash
-iops --generate_setup
+# Create virtual environment
+python3 -m venv iops_env
+
+# Activate it
+source iops_env/bin/activate  # On Linux/Mac
+
+# Install IOPS
+pip install -r requirements.txt
+pip install -e .
+
+# Verify installation
+iops --version
 ```
 
-The wizard will ask you questions like "What do you want to benchmark?" and "Where do you want to run it?" and generate a proper YAML configuration for you. No YAML knowledge required.
-
-Or copy an example:
+**Option 2: Conda**
 
 ```bash
-cp docs/examples/example_simple.yaml my_benchmark.yaml
+# Create conda environment
+conda create -n iops python=3.10
+conda activate iops
+
+# Install IOPS
+pip install -r requirements.txt
+pip install -e .
+
+# Verify installation
+iops --version
 ```
 
-### Run It
+## Quick Start
+
+### 1. Create a Configuration
+
+Use the interactive wizard to generate a YAML configuration:
 
 ```bash
-# Preview what will happen (always do this first)
-iops run my_benchmark.yaml --dry-run
-
-# Actually run it
-iops run my_benchmark.yaml
-
-# With budget control (for SLURM)
-iops run my_benchmark.yaml --max-core-hours 500
+iops --generate_setup my_config.yaml
 ```
 
-### Get Beautiful Reports
+Or start from an example:
 
 ```bash
+cp docs/examples/example_simple.yaml my_config.yaml
+```
+
+### 2. Preview Your Benchmark
+
+```bash
+# Dry-run to see what will be executed
+iops my_config.yaml --dry-run
+
+# Check configuration validity
+iops my_config.yaml --check_setup
+```
+
+### 3. Run the Benchmark
+
+```bash
+# Basic execution
+iops my_config.yaml
+
+# With caching (skip already-executed tests)
+iops my_config.yaml --use_cache
+
+# With budget limit (SLURM only)
+iops my_config.yaml --max-core-hours 1000
+
+# With verbose logging
+iops my_config.yaml --log_level DEBUG
+```
+
+### 4. Generate Analysis Report
+
+```bash
+# Generate HTML report with interactive plots
 iops analyze /path/to/workdir/run_001
 ```
 
-Opens an HTML report with everything you need: best configurations, interactive plots, statistics, execution time, core-hours consumed.
+## How It Works
 
----
+IOPS follows a simple workflow:
 
-## Understanding How It Works
+1. **Configuration**: Define variables to sweep, commands to run, and metrics to measure in a YAML file
+2. **Planning**: IOPS generates execution instances for parameter combinations
+3. **Execution**: Runs tests locally or submits SLURM jobs
+4. **Parsing**: Extracts metrics from output files using your parser script
+5. **Storage**: Saves results to CSV, SQLite, or Parquet
+6. **Analysis**: Generates HTML reports with interactive plots and statistics
 
 ### Core Concepts
 
-**Variables**: Things you want to vary
+**Variables**: Parameters you want to vary
+
 ```yaml
 vars:
   nodes:
@@ -118,88 +156,69 @@ vars:
       values: [4, 8, 16, 32]
 ```
 
-**Commands**: What to run (with Jinja2 templating)
+**Commands**: What to execute (supports Jinja2 templating)
+
 ```yaml
 command:
-  template: "ior -w -b {{ block_size }}mb -o /output"
+  template: "ior -w -b {{ block_size }}mb -o {{ output_file }}"
 ```
 
 **Metrics**: What to measure
+
 ```yaml
 metrics:
-  - name: bwMiB  # Bandwidth in MiB/s
+  - name: bandwidth_mbps
+  - name: latency_ms
 ```
 
 **Search Methods**:
-- **exhaustive**: Test everything (safe, thorough, slow)
-- **bayesian**: Use machine learning to find optima (fast, efficient, smart)
-- **random**: Random sampling (useful for statistical analysis)
+- `exhaustive`: Test all combinations (thorough, complete)
+- `bayesian`: Gaussian Process optimization (efficient, finds optima faster)
+- `random`: Random sampling (useful for statistical analysis)
 
 ### Example Configuration
 
-Here's a real, working example:
-
 ```yaml
 benchmark:
-  name: "My IOR Study"
+  name: "My Benchmark Study"
   workdir: "./workdir"
   executor: "local"  # or "slurm" for clusters
-  search_method: "bayesian"
-
-  bayesian_config:
-    target_metric: "bwMiB"
-    objective: "maximize"
-    n_iterations: 20
+  search_method: "exhaustive"
+  repetitions: 3
 
 vars:
-  processes:
+  threads:
     type: int
     sweep:
       mode: list
       values: [1, 2, 4, 8]
 
-  block_size_mb:
+  buffer_size:
     type: int
     sweep:
       mode: list
-      values: [1, 4, 16]
+      values: [4, 16, 64]
 
 command:
-  template: >
-    ior -w -b {{ block_size_mb }}mb -t 1mb
-    -O summaryFile={{ output_file }}
-    -O summaryFormat=JSON
+  template: "my_benchmark --threads {{ threads }} --buffer {{ buffer_size }}"
 
 scripts:
-  - name: "ior"
+  - name: "benchmark"
     parser:
-      file: "{{ output_file }}"
+      file: "{{ execution_dir }}/output.json"
       metrics:
-        - name: bwMiB
-      parser_script: scripts/ior_parser.py
+        - name: throughput
+      parser_script: scripts/parse_results.py
 
 output:
   sink:
-    type: sqlite
-    path: "{{ workdir }}/results.db"
+    type: csv
+    path: "{{ workdir }}/results.csv"
 ```
-
-### What Happens When You Run This?
-
-1. **Planning**: IOPS generates execution instances for your parameter combinations
-2. **Execution**: Runs tests (locally or submits SLURM jobs)
-3. **Monitoring**: Tracks job status, handles failures gracefully
-4. **Parsing**: Extracts metrics from output files
-5. **Storage**: Saves results to CSV/SQLite/Parquet
-6. **Analysis**: Generates HTML reports with plots and statistics
-
-All automatic. All reproducible. All tracked.
-
----
 
 ## SLURM Integration
 
-IOPS provides native SLURM support:
+IOPS provides native SLURM cluster support with automatic job submission, monitoring, and budget tracking:
 
 ```yaml
 benchmark:
@@ -215,212 +234,90 @@ scripts:
       #SBATCH --nodes={{ nodes }}
       #SBATCH --ntasks-per-node={{ processes_per_node }}
       #SBATCH --time=01:00:00
-      #SBATCH --exclusive
 
       module load mpi/openmpi
       {{ command.template }}
 ```
 
 Features:
-- Automatic job submission and monitoring
-- Budget tracking (core-hours limits)
-- Signal handling (Ctrl+C cancels all jobs)
-- Multi-node allocation
-- Job status tracking without sacct
-
----
-
-## Examples
-
-Check `docs/examples/` for real, working examples:
-
-| Example | What It Does | Why You'd Use It |
-|---------|--------------|------------------|
-| `example_simple.yaml` | Basic IOR benchmark | Learning IOPS |
-| `example_bayesian.yaml` | Bayesian optimization | Finding optima fast |
-| `example_plafrim.yaml` | Multi-node SLURM | Cluster performance studies |
-| `example_plafrim_bayesian.yaml` | Cluster + Bayesian | Optimizing HPC apps efficiently |
-
-Each example is documented and ready to run.
-
----
+- Automatic job submission and status monitoring
+- Core-hours budget tracking and enforcement
+- Multi-node resource allocation
+- Graceful handling of job failures
 
 ## Advanced Features
 
+### Result Caching
+
+IOPS caches execution results to avoid redundant tests. Enable caching by specifying a SQLite database in your config:
+
+```yaml
+benchmark:
+  sqlite_db: "/path/to/cache.db"
+```
+
+Then use `--use_cache` to skip tests with identical parameters:
+
+```bash
+iops config.yaml --use_cache
+```
+
 ### Multi-Round Execution
 
-Test in stages, carry best results forward:
+Run experiments in stages with the `rounds` feature:
 
 ```yaml
 rounds:
-  - name: "warmup"
+  - name: "explore"
+    sweep_vars: ["nodes"]
     repetitions: 1
-    vars:
-      processes: [4]
 
-  - name: "main"
+  - name: "validate"
+    sweep_vars: ["nodes", "processes_per_node"]
     repetitions: 5
-    vars:
-      processes: [1, 2, 4, 8, 16]
 ```
 
-### Custom Parsers
+Best results from each round propagate to the next.
 
-Extract metrics from any output format:
+### Budget Control
 
-```python
-# my_parser.py
-def parse(file_path):
-    with open(file_path) as f:
-        data = json.load(f)
-
-    return {
-        'bandwidth': data['results']['bw'],
-        'latency': data['results']['lat']
-    }
-```
-
-### Caching System
-
-Avoid redundant tests:
+Prevent exceeding compute allocations:
 
 ```bash
-# First run - executes everything
-iops run config.yaml
+# Set budget limit from command line
+iops config.yaml --max-core-hours 1000
 
-# Second run - reuses cached results
-iops run config.yaml --use_cache
-```
-
-### Budget Management
-
-Never exceed your allocation:
-
-```yaml
+# Or in YAML config
 benchmark:
   max_core_hours: 500
   cores_expr: "{{ nodes * ppn }}"
 ```
 
-```bash
-iops run config.yaml --max-core-hours 1000  # Override from CLI
-```
+## Examples
 
----
+Check `docs/examples/` for working configuration examples:
 
-## Analysis Reports: What You Get
+- `example_simple.yaml` - Basic local execution
+- `example_bayesian.yaml` - Bayesian optimization
+- `example_plafrim.yaml` - SLURM cluster deployment
+- `example_plafrim_bayesian.yaml` - Cluster with Bayesian search
 
-After running, `iops analyze` generates reports with:
-
-### Summary Statistics
-- Total tests, execution time, core-hours consumed
-- Variable ranges, metric distributions
-
-### Best Configurations
-- Top 5 parameter combinations per metric
-- Statistical confidence (mean, std, sample count)
-- Actual commands for reproducibility
-
-### Interactive Visualizations
-- Parameter sweep heatmaps
-- Metric evolution over iterations
-- Pareto frontiers for multi-objective optimization
-- Bayesian evolution plots (exploration vs exploitation)
-
-### Real Example Output:
-```
-Execution Overview
-┌────────────────────────────┬──────────────┐
-│ Total Tests                │ 60           │
-│ Total Execution Time       │ 2h 15m 30s   │
-│ Total Core-Hours           │ 1250.50      │
-│ Average Cores per Test     │ 32.0         │
-└────────────────────────────┴──────────────┘
-
-Best Configuration for bwMiB
-┌──────┬────────┬─────────────────┬──────────────┐
-│ Rank │ Nodes  │ Processes/Node  │ bwMiB (mean) │
-├──────┼────────┼─────────────────┼──────────────┤
-│  1   │ 32     │ 16              │ 45234.2      │
-│  2   │ 16     │ 16              │ 38901.7      │
-│  3   │ 32     │ 8               │ 35678.3      │
-└──────┴────────┴─────────────────┴──────────────┘
-```
-
----
-
-## Why Should You Care About All This?
-
-Three reasons:
-
-1. **Tune Your Applications**: Find the parameters that give you maximum I/O performance
-2. **Validate Your System**: Ensure your cluster delivers expected performance
-3. **Identify Bottlenecks**: Discover misconfigured file systems, network issues, or resource contention
-
-Back to that paper we mentioned earlier—we found configuration problems that were limiting our cluster's performance. IOPS helps you find those problems automatically.
-
----
-
-## Technical Architecture
-
-### Architecture
-
-```
-iops/
-├── config/         # YAML parsing and validation
-├── execution/      # Test orchestration
-│   ├── planner.py     # Search strategies (exhaustive, Bayesian)
-│   ├── executors/     # Local and SLURM execution
-│   └── cache.py       # Result caching
-├── reporting/      # HTML report generation
-└── setup/          # Interactive wizard
-```
-
-### Key Design Decisions
-
-**Lazy Rendering**: Variables are templates until needed, allowing dynamic modification
-
-**Jinja2 Everywhere**: Commands, scripts, file paths—all support `{{ variable }}` syntax
-
-**Registry Pattern**: Executors and planners register themselves, easy to extend
-
-**Reproducibility First**: Every run saves metadata, configurations, and provenance
-
-### Extending IOPS
-
-Want to add a new executor? Easy:
-
-```python
-@BaseExecutor.register("my_executor")
-class MyExecutor(BaseExecutor):
-    def submit(self, test):
-        # Your submission logic
-        pass
-
-    def wait_and_collect(self, test):
-        # Your collection logic
-        pass
-```
-
-Same for planners, parsers, output formats—everything is pluggable.
-
----
-
-## Command-Line Reference
+## Command Reference
 
 ```bash
 # Run benchmark
-iops run <config.yaml> [options]
+iops <config.yaml> [options]
 
-# Options:
-  --dry-run              Preview execution without running
-  --use_cache            Reuse results from previous runs
-  --max-core-hours N     Budget limit (stops after N core-hours)
-  --estimated-time N     Time estimate per test (seconds)
-  --log_level LEVEL      Logging verbosity (DEBUG, INFO, WARNING)
+# Common options:
+  --dry-run              Preview without executing
+  --use_cache            Skip cached tests
+  --max-core-hours N     Budget limit (SLURM)
+  --log_level LEVEL      Verbosity (DEBUG, INFO, WARNING)
+  --no-log-terminal      Disable terminal logging (log to file only)
+  --check_setup          Validate configuration
 
-# Generate report
-iops analyze <workdir>
+# Generate analysis report
+iops analyze <workdir/run_NNN>
 
 # Interactive setup wizard
 iops --generate_setup [output.yaml]
@@ -429,49 +326,7 @@ iops --generate_setup [output.yaml]
 iops --version
 ```
 
----
+## License
 
-## Detailed Installation
-
-### Prerequisites
-
-- Python 3.10+
-- For IOR benchmarks: MPI, IOR compiled and in PATH
-- For SLURM: Access to a cluster with SLURM scheduler
-
-### Install from GitLab
-
-```bash
-git clone https://gitlab.inria.fr/lgouveia/iops.git
-cd iops
-pip install -r requirements.txt
-pip install -e .
-```
-
-### Verify Installation
-
-```bash
-iops --version  # Should show: IOPS Tool v1.0.0
-```
-
-### Optional: Conda Environment
-
-```bash
-conda env create -f environment.yml
-conda activate iops_env
-pip install -e .
-```
-
----
-
-## The Tools Folder (Legacy Utilities)
-
-The `tools/` directory contains utilities from our original research:
-
-- `code_shooter.py`: Generate randomized test sequences
-- `hourglass.py`: Temporal spacing for test repetitions
-- `ior_2_csv.py`: Process IOR outputs to CSV
-- `file_tracker.py`: Monitor file attributes on BeeGFS
-
-These were developed for [the paper](https://inria.hal.science/hal-03753813/) and are kept for backward compatibility. For new work, use the main IOPS framework.
+This project is developed at Inria. See LICENSE file for details.
 
