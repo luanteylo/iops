@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iops-benchmark"
-version = "3.0.2"
+version = "3.0.3"
 description = "A generic benchmark orchestration framework for automated parametric experiments"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,7 +47,8 @@ Issues = "https://gitlab.inria.fr/lgouveia/iops/-/issues"
 iops = "iops.main:main"
 
 [tool.setuptools.packages.find]
-include = ["iops*"]
+include = ["iops*", "docs*"]
 
 [tool.setuptools.package-data]
 iops = ["VERSION", "**/*.yaml", "**/*.yml"]
+docs = ["**/*.md", "**/*.yaml", "**/*.yml", "**/*.py", "**/*.sh", "**/*.txt"]

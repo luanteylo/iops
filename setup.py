@@ -1,5 +1,6 @@
 from setuptools import setup, find_packages
 from pathlib import Path
+import glob
 
 def parse_requirements(filename):
     with open(filename, "r") as f:
@@ -13,6 +14,15 @@ def read_long_description():
     readme_path = Path(__file__).parent / "README.md"
     with open(readme_path, "r", encoding="utf-8") as f:
         return f.read()
+
+def get_data_files():
+    """Get all docs files to include in the package"""
+    data_files = []
+    for pattern in ["docs/**/*.md", "docs/**/*.yaml", "docs/**/*.yml", "docs/**/*.py", "docs/**/*.sh", "docs/**/*.txt"]:
+        files = glob.glob(pattern, recursive=True)
+        if files:
+            data_files.extend(files)
+    return data_files
 
 setup(
     name="iops-benchmark",
@@ -31,7 +41,7 @@ setup(
     },
     packages=find_packages(),
     package_data={
-        "iops": ["VERSION", "**/*.yaml", "**/*.yml"],
+        "iops": ["VERSION", "**/*.yaml", "**/*.yml"] + get_data_files(),
     },
     include_package_data=True,
     install_requires=parse_requirements("requirements.txt"),
