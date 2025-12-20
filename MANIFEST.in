@@ -2,9 +2,9 @@ include README.md
 include LICENSE
 include requirements.txt
 include requirements-dev.txt
-recursive-include iops *.py
+recursive-include iops *.py *.yaml *.yml
 include iops/VERSION
-recursive-include docs *.md *.yaml *.py *.txt
+recursive-include docs *.md *.yaml *.yml *.py *.txt
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]
 recursive-exclude * .DS_Store

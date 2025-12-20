@@ -11,6 +11,9 @@ class BenchmarkWizard:
 
     def __init__(self):
         self.template_path = Path(__file__).parent / "template_full.yaml"
+        # Path to example scripts in the package
+        package_root = Path(__file__).parent.parent.parent
+        self.scripts_source = package_root / "docs" / "examples" / "scripts"
 
     def run(self, output_path: Optional[str] = None) -> Optional[str]:
         """
@@ -48,14 +51,62 @@ class BenchmarkWizard:
             shutil.copy(self.template_path, output_file)
             print(f"\n✓ Configuration template saved to: {output_file.absolute()}")
 
+            # Copy scripts folder to the same directory as the output file
+            scripts_copied = self._copy_scripts_folder(output_file)
+
             # Show next steps
-            self._print_next_steps(filename)
+            self._print_next_steps(filename, scripts_copied)
 
             return str(output_file.absolute())
 
         except Exception as e:
             print(f"\n✗ Error saving file: {e}")
             return None
+
+    def _copy_scripts_folder(self, output_file: Path) -> bool:
+        """
+        Copy the example scripts folder to the same directory as the output file.
+
+        Args:
+            output_file: Path to the generated configuration file
+
+        Returns:
+            True if scripts were copied successfully, False otherwise
+        """
+        try:
+            # Destination is a 'scripts' folder next to the output file
+            scripts_dest = output_file.parent / "scripts"
+
+            # Check if scripts source exists
+            if not self.scripts_source.exists():
+                print(f"\n⚠ Warning: Example scripts not found at {self.scripts_source}")
+                return False
+
+            # Check if destination already exists
+            if scripts_dest.exists():
+                print(f"\n⚠ Scripts folder already exists at {scripts_dest.absolute()}")
+                prompt = "   Overwrite scripts folder? (y/N): "
+                try:
+                    answer = input(prompt).strip().lower()
+                    if not answer.startswith('y'):
+                        print("   → Keeping existing scripts folder")
+                        return True
+                except (KeyboardInterrupt, EOFError):
+                    print("\n   → Keeping existing scripts folder")
+                    return True
+
+                # Remove existing folder
+                shutil.rmtree(scripts_dest)
+
+            # Copy the scripts folder
+            shutil.copytree(self.scripts_source, scripts_dest)
+            print(f"✓ Example scripts copied to: {scripts_dest.absolute()}")
+
+            return True
+
+        except Exception as e:
+            print(f"\n⚠ Warning: Could not copy scripts folder: {e}")
+            return False
 
     def _print_header(self):
         """Print wizard header."""
@@ -93,7 +144,7 @@ class BenchmarkWizard:
             print("\n\n✗ Cancelled by user")
             sys.exit(0)
 
-    def _print_next_steps(self, filename: str):
+    def _print_next_steps(self, filename: str, scripts_copied: bool):
         """Print next steps for the user."""
         print("\n" + "=" * 70)
         print("Next Steps:")
@@ -106,7 +157,12 @@ class BenchmarkWizard:
         print(f"   • Adjust variables and their sweep ranges")
         print(f"   • Modify the command template")
         print(f"   • Update SLURM directives (partition, time, etc.)")
-        print(f"   • Optionally extract scripts to separate files")
+        if scripts_copied:
+            print(f"   • Example scripts are ready in ./scripts/ folder")
+            print(f"   • Parser: scripts/ior_parser.py")
+            print(f"   • SLURM script: scripts/ior_plafrim_slurm.sh")
+        else:
+            print(f"   • Update script paths or use embedded scripts")
         print(f"\n3. Validate the configuration:")
         print(f"   iops {filename} --check_setup")
         print(f"\n4. Preview execution (dry-run):")

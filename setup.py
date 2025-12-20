@@ -31,7 +31,7 @@ setup(
     },
     packages=find_packages(),
     package_data={
-        "iops": ["VERSION"],
+        "iops": ["VERSION", "**/*.yaml", "**/*.yml"],
     },
     include_package_data=True,
     install_requires=parse_requirements("requirements.txt"),

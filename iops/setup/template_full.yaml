@@ -217,62 +217,67 @@ scripts:
     submit: "sbatch"
 
     # ---------------------------------------------------------------------------
-    # OPTION 1: EXTERNAL SCRIPT FILE (RECOMMENDED)
+    # SCRIPT OPTIONS:
     # ---------------------------------------------------------------------------
-    # Reference an external script file. This is the preferred approach.
-    # Example: script_template: scripts/ior_plafrim_slurm.sh
+    # OPTION 1: EXTERNAL SCRIPT FILE (RECOMMENDED - Active by default)
+    #   Reference an external script file. This is the preferred approach.
+    #   The wizard copied working example scripts to ./scripts/ folder:
+    #     - scripts/ior_plafrim_slurm.sh (SLURM submission script)
+    #     - scripts/ior_parser.py (Result parser)
     #
-    # See docs/examples/scripts/ior_plafrim_slurm.sh for a complete example
+    #   Customize these scripts for your cluster and benchmark needs.
     # ---------------------------------------------------------------------------
+    script_template: scripts/ior_plafrim_slurm.sh
 
     # ---------------------------------------------------------------------------
-    # OPTION 2: EMBEDDED SCRIPT (shown here for reference)
+    # OPTION 2: EMBEDDED SCRIPT (alternative, less maintainable)
+    #   You can embed the script directly in YAML. However, this makes editing
+    #   and debugging more difficult. Use external files when possible.
+    #
+    #   To use embedded script, comment out the line above and uncomment below:
     # ---------------------------------------------------------------------------
-    # You can embed the script directly in YAML. However, this makes editing
-    # and debugging more difficult. Use external files when possible.
-    # ---------------------------------------------------------------------------
-    script_template: |
-      #!/bin/bash
-
-      #SBATCH --job-name=iops_{{ execution_id }}
-      #SBATCH --ntasks={{ ntasks }}
-      #SBATCH --nodes={{ nodes }}
-      #SBATCH --ntasks-per-node={{ processes_per_node }}
-      #SBATCH --time=04:00:00
-      #SBATCH --chdir={{ execution_dir }}
-      #SBATCH -o batch%j.out
-      #SBATCH -e batch%j.err
-      #SBATCH --exclusive
-
-      # Uncomment and customize these SLURM directives as needed:
-      # #SBATCH --partition=your_partition
-      # #SBATCH --constraint=your_constraint
-      # #SBATCH --account=your_account
-      # #SBATCH --qos=your_qos
-
-      # Load required modules (customize for your cluster)
-      module purge
-      module load mpi/openmpi/4.0.1
-
-      # Optional: Log SLURM allocation details for debugging
-      echo "=== SLURM Allocation Info ==="
-      echo "Requested nodes: {{ nodes }}"
-      echo "Requested ntasks-per-node: {{ processes_per_node }}"
-      echo "Allocated SLURM_JOB_NUM_NODES: $SLURM_JOB_NUM_NODES"
-      echo "Allocated SLURM_NNODES: $SLURM_NNODES"
-      echo "Allocated SLURM_NODELIST: $SLURM_NODELIST"
-      echo "Allocated SLURM_NTASKS: $SLURM_NTASKS"
-      echo "Allocated SLURM_TASKS_PER_NODE: $SLURM_TASKS_PER_NODE"
-      echo "============================="
-
-      # Execute the benchmark command
-      # Note: SLURM sets MPI task count automatically via --ntasks
-      mpirun {{ command.template }}
-
-      # Capture exit code
-      exit_code=$?
-      echo "Exit code: $exit_code"
-      exit $exit_code
+    # script_template: |
+    #   #!/bin/bash
+    #
+    #   #SBATCH --job-name=iops_{{ execution_id }}
+    #   #SBATCH --ntasks={{ ntasks }}
+    #   #SBATCH --nodes={{ nodes }}
+    #   #SBATCH --ntasks-per-node={{ processes_per_node }}
+    #   #SBATCH --time=04:00:00
+    #   #SBATCH --chdir={{ execution_dir }}
+    #   #SBATCH -o batch%j.out
+    #   #SBATCH -e batch%j.err
+    #   #SBATCH --exclusive
+    #
+    #   # Uncomment and customize these SLURM directives as needed:
+    #   # #SBATCH --partition=your_partition
+    #   # #SBATCH --constraint=your_constraint
+    #   # #SBATCH --account=your_account
+    #   # #SBATCH --qos=your_qos
+    #
+    #   # Load required modules (customize for your cluster)
+    #   module purge
+    #   module load mpi/openmpi/4.0.1
+    #
+    #   # Optional: Log SLURM allocation details for debugging
+    #   echo "=== SLURM Allocation Info ==="
+    #   echo "Requested nodes: {{ nodes }}"
+    #   echo "Requested ntasks-per-node: {{ processes_per_node }}"
+    #   echo "Allocated SLURM_JOB_NUM_NODES: $SLURM_JOB_NUM_NODES"
+    #   echo "Allocated SLURM_NNODES: $SLURM_NNODES"
+    #   echo "Allocated SLURM_NODELIST: $SLURM_NODELIST"
+    #   echo "Allocated SLURM_NTASKS: $SLURM_NTASKS"
+    #   echo "Allocated SLURM_TASKS_PER_NODE: $SLURM_TASKS_PER_NODE"
+    #   echo "============================="
+    #
+    #   # Execute the benchmark command
+    #   # Note: SLURM sets MPI task count automatically via --ntasks
+    #   mpirun {{ command.template }}
+    #
+    #   # Capture exit code
+    #   exit_code=$?
+    #   echo "Exit code: $exit_code"
+    #   exit $exit_code
 
     # ---------------------------------------------------------------------------
     # POST-EXECUTION SCRIPT (optional)
@@ -310,62 +315,66 @@ scripts:
       # ---------------------------------------------------------------------------
       # PARSER SCRIPT OPTIONS:
       # ---------------------------------------------------------------------------
-      # OPTION 1: EXTERNAL PARSER SCRIPT (RECOMMENDED for maintainability)
+      # OPTION 1: EXTERNAL PARSER SCRIPT (RECOMMENDED - Active by default)
       #   Reference an external Python script with a parse(file_path) function.
       #   This makes editing and debugging easier.
-      #   See docs/examples/scripts/ior_parser.py for a complete example.
+      #   The wizard copied a working IOR parser to: scripts/ior_parser.py
       #
-      #   To use external script, uncomment and update the path:
-      #   parser_script: scripts/ior_parser.py
-      #
-      # OPTION 2: EMBEDDED PARSER SCRIPT (shown below, easier to get started)
+      #   Customize this script to parse your benchmark's output format.
+      # ---------------------------------------------------------------------------
+      parser_script: scripts/ior_parser.py
+
+      # ---------------------------------------------------------------------------
+      # OPTION 2: EMBEDDED PARSER SCRIPT (alternative)
       #   Embed the parser directly in this YAML file.
       #   Must define: def parse(file_path: str) -> dict
+      #
+      #   To use embedded parser, comment out the line above and uncomment below:
       # ---------------------------------------------------------------------------
-      parser_script: |
-        import json
-
-        def parse(file_path: str):
-            """
-            Parse IOR JSON output and extract metrics.
-
-            This is an example parser for IOR JSON format output.
-            Customize this function to parse your benchmark's output format.
-
-            Args:
-                file_path: Path to the output file to parse
-
-            Returns:
-                dict: Metrics dictionary with keys matching 'metrics' list above
-                      Example: {"bwMiB": 1234.5, "iops": 5000}
-            """
-            with open(file_path, "r") as f:
-                data = json.load(f)
-
-            # Navigate IOR JSON structure
-            # Customize this section based on your output format
-            tests = data.get("tests", [])
-            if not tests:
-                raise ValueError("No tests found in IOR JSON")
-
-            results = tests[0].get("Results", [])
-            if not results:
-                raise ValueError("No Results found in IOR JSON")
-
-            # Find write operation (or use first result)
-            write_res = next(
-                (r for r in results if str(r.get("access", "")).lower() == "write"),
-                results[0],
-            )
-
-            # Return metrics dictionary
-            # Keys MUST match the names in 'metrics' list above
-            return {
-                "bwMiB": write_res.get("bwMiB"),
-                # Add more metrics as needed:
-                # "iops": write_res.get("iops"),
-                # "latency": write_res.get("latency"),
-            }
+      # parser_script: |
+      #   import json
+      #
+      #   def parse(file_path: str):
+      #       """
+      #       Parse IOR JSON output and extract metrics.
+      #
+      #       This is an example parser for IOR JSON format output.
+      #       Customize this function to parse your benchmark's output format.
+      #
+      #       Args:
+      #           file_path: Path to the output file to parse
+      #
+      #       Returns:
+      #           dict: Metrics dictionary with keys matching 'metrics' list above
+      #                 Example: {"bwMiB": 1234.5, "iops": 5000}
+      #       """
+      #       with open(file_path, "r") as f:
+      #           data = json.load(f)
+      #
+      #       # Navigate IOR JSON structure
+      #       # Customize this section based on your output format
+      #       tests = data.get("tests", [])
+      #       if not tests:
+      #           raise ValueError("No tests found in IOR JSON")
+      #
+      #       results = tests[0].get("Results", [])
+      #       if not results:
+      #           raise ValueError("No Results found in IOR JSON")
+      #
+      #       # Find write operation (or use first result)
+      #       write_res = next(
+      #           (r for r in results if str(r.get("access", "")).lower() == "write"),
+      #           results[0],
+      #       )
+      #
+      #       # Return metrics dictionary
+      #       # Keys MUST match the names in 'metrics' list above
+      #       return {
+      #           "bwMiB": write_res.get("bwMiB"),
+      #           # Add more metrics as needed:
+      #           # "iops": write_res.get("iops"),
+      #           # "latency": write_res.get("latency"),
+      #       }
 
 
 # =============================================================================
