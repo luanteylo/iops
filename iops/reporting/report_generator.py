@@ -137,13 +137,23 @@ class ReportGenerator:
     def _calculate_total_execution_time(self) -> tuple[Optional[float], Optional[str]]:
         """
         Calculate total execution time from first test start to last test end.
+        Excludes cached results to avoid mixing timestamps from different runs.
 
         Returns:
             Tuple of (seconds, formatted_string) or (None, None) if timestamps unavailable
         """
         try:
-            start_times = pd.to_datetime(self.df['metadata.__start'], errors='coerce')
-            end_times = pd.to_datetime(self.df['metadata.__end'], errors='coerce')
+            # Filter out cached results (they have timestamps from previous runs)
+            df_executed = self.df.copy()
+            if 'metadata.__cached' in df_executed.columns:
+                df_executed = df_executed[df_executed['metadata.__cached'] != True]
+
+            # If all results were cached, we can't calculate execution time for this run
+            if len(df_executed) == 0:
+                return None, None
+
+            start_times = pd.to_datetime(df_executed['metadata.__start'], errors='coerce')
+            end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
 
             if start_times.isna().all() or end_times.isna().all():
                 return None, None
@@ -485,11 +495,20 @@ class ReportGenerator:
         total_tests = len(self.df)
         html += f"<tr><td><strong>Total Tests</strong></td><td>{total_tests}</td></tr>\n"
 
+        # Check for cached results
+        cached_count = 0
+        if 'metadata.__cached' in self.df.columns:
+            cached_count = (self.df['metadata.__cached'] == True).sum()
+            if cached_count > 0:
+                executed_count = total_tests - cached_count
+                html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({executed_count} executed)</td></tr>\n"
+
         # Execution time
         if 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
             execution_time, formatted_time = self._calculate_total_execution_time()
             if execution_time is not None:
-                html += f"<tr><td><strong>Total Execution Time</strong></td><td>{formatted_time}</td></tr>\n"
+                exec_time_label = "Total Execution Time" + (" (executed tests only)" if cached_count > 0 else "")
+                html += f"<tr><td><strong>{exec_time_label}</strong></td><td>{formatted_time}</td></tr>\n"
 
         # Core-hours (if cores_expr is defined)
         cores_expr = self.metadata['benchmark'].get('cores_expr')
