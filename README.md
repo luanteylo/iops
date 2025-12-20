@@ -32,15 +32,38 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - For benchmark execution: Required tools in PATH (e.g., `ior`, `mpirun` for I/O benchmarks)
 - For SLURM clusters: Access to a SLURM scheduler
 
-### Basic Installation
+### Quick Installation (from PyPI - Coming Soon)
+
+Once published to PyPI, you'll be able to install IOPS with a single command:
+
+```bash
+pip install iops
+```
+
+### Basic Installation (from source)
 
 ```bash
 # Clone the repository
 git clone https://gitlab.inria.fr/lgouveia/iops.git
 cd iops
 
-# Install dependencies and package
-pip install -r requirements.txt
+# Install the package with dependencies
+pip install .
+
+# Verify installation
+iops --version
+```
+
+### Development Installation
+
+For development work, install in editable mode:
+
+```bash
+# Clone the repository
+git clone https://gitlab.inria.fr/lgouveia/iops.git
+cd iops
+
+# Install in editable mode
 pip install -e .
 
 # Verify installation
@@ -60,8 +83,10 @@ python3 -m venv iops_env
 # Activate it
 source iops_env/bin/activate  # On Linux/Mac
 
-# Install IOPS
-pip install -r requirements.txt
+# Install IOPS (from source)
+pip install .
+
+# Or for development
 pip install -e .
 
 # Verify installation
@@ -75,8 +100,10 @@ iops --version
 conda create -n iops python=3.10
 conda activate iops
 
-# Install IOPS
-pip install -r requirements.txt
+# Install IOPS (from source)
+pip install .
+
+# Or for development
 pip install -e .
 
 # Verify installation
