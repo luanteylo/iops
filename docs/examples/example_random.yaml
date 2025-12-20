@@ -1,0 +1,240 @@
+# IOPS Benchmark Configuration - Random Sampling Example
+#
+# This example demonstrates random sampling of the parameter space instead of
+# exhaustive search. Random sampling is useful when:
+# - The parameter space is very large (exhaustive would take too long)
+# - You want quick exploration of the parameter space
+# - You're doing initial reconnaissance before focused optimization
+#
+# Features Demonstrated:
+# - Random sampling with n_samples (explicit number of configurations)
+# - Random sampling with percentage (proportion of total space)
+# - Multi-round optimization with random sampling
+# - Reproducible sampling with random_seed
+#
+# Usage:
+#   Normal run:  python -m iops.main example_random.yaml
+#   Dry-run:     python -m iops.main example_random.yaml --dry-run
+#   With cache:  python -m iops.main example_random.yaml --use_cache
+#
+
+benchmark:
+  name: "IOR Random Sampling Benchmark"
+  description: "Demonstrates random sampling of parameter space"
+  workdir: "/home/luan/workdir/"
+  sqlite_db: "/home/luan/iops.db"
+  repetitions: 3  # Each sampled configuration runs 3 times for statistical validity
+
+  # Use random sampling planner instead of exhaustive
+  search_method: "random"
+
+  # Random sampling configuration
+  random_config:
+    # Option 1: Explicit number of samples
+    n_samples: 10  # Sample 10 random configurations from the parameter space
+
+    # Option 2: Percentage of total space (mutually exclusive with n_samples)
+    # Uncomment the line below and comment out n_samples to use percentage-based sampling
+    # percentage: 0.2  # Sample 20% of the parameter space
+
+    # Optional: behavior when n_samples >= total space size
+    fallback_to_exhaustive: true  # Use full space if sample >= total (default: true)
+
+  executor: "local"  # Use local executor for this example (change to "slurm" for cluster)
+  random_seed: 42  # Ensures reproducible sampling (same sample each run)
+
+  # Budget tracking
+  max_core_hours: 50
+  cores_expr: "{{ processes_per_node }}"
+
+  # Variables for analysis reports
+  report_vars: ["processes_per_node", "volume_size_gb", "transfer_size_mb"]
+
+# Variables definition
+vars:
+  # Swept variable: processes per node
+  # Full range would be 16 values (1-16)
+  processes_per_node:
+    type: int
+    sweep:
+      mode: range
+      start: 1
+      end: 16
+      step: 1
+
+  # Swept variable: volume size
+  # 5 different values
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8, 16]
+
+  # Swept variable: transfer size
+  # 4 different values
+  transfer_size_mb:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 4, 16, 64]
+
+  # Total parameter space: 16 × 5 × 4 = 320 configurations
+  # With n_samples=10, we randomly sample 10 out of 320 (about 3%)
+  # With percentage=0.2, we would sample 64 out of 320 (20%)
+
+  # Derived variable: block size
+  block_size_mb:
+    type: int
+    expr: "(volume_size_gb * 1024) / processes_per_node"
+
+  # Derived variable: output file path
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+# Command template
+command:
+  template: >
+    ior -w -b {{ block_size_mb }}mb -t {{ transfer_size_mb }}mb
+    -O summaryFile={{summary_file}} -O summaryFormat=JSON
+    -o /home/luan/filesystem/output.ior
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+
+# Execution scripts
+scripts:
+  - name: "ior"
+    submit: "bash"
+
+    script_template: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "Running IOR with {{ processes_per_node }} processes..."
+      echo "Volume: {{ volume_size_gb }}GB, Block: {{ block_size_mb }}MB, Transfer: {{ transfer_size_mb }}MB"
+
+      mpirun --oversubscribe -np {{ processes_per_node }} {{ command.template }}
+
+      echo "Repetition {{ repetition }} completed."
+
+    # Parser to extract metrics from IOR JSON output
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: "bwMiB"
+          type: float
+        - name: "iops"
+          type: float
+        - name: "latency_mean"
+          type: float
+
+      parser_script: |
+        import json
+
+        def parse(file_path: str) -> dict:
+            """Parse IOR JSON summary file."""
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+
+            # Extract write performance metrics
+            write_results = data['tests'][0]['Results'][0]
+
+            return {
+                'bwMiB': write_results['bwMiB'],
+                'iops': write_results['IOPS'],
+                'latency_mean': write_results['Mean(s)']
+            }
+
+# Output configuration
+output:
+  sink:
+    type: "csv"
+    path: "{{ workdir }}/results_random.csv"
+    mode: "append"
+
+  # Include specific fields in output
+  include:
+    - "benchmark.name"
+    - "execution.*"
+    - "vars.*"
+    - "metrics.*"
+    - "metadata.operation"
+
+---
+# Alternative Configuration: Multi-Round Random Sampling
+#
+# Uncomment the section below (and comment out the single-round config above)
+# to demonstrate multi-round optimization with random sampling.
+#
+# In this approach:
+# 1. First round samples processes_per_node values
+# 2. Best result propagates to second round
+# 3. Second round samples volume_size_gb with best processes_per_node
+#
+# This is useful for sequential parameter optimization when you can't explore
+# the full joint space but want to optimize one variable at a time.
+
+# benchmark:
+#   name: "IOR Multi-Round Random Sampling"
+#   description: "Sequential optimization with random sampling"
+#   workdir: "/home/luan/workdir/"
+#   search_method: "random"
+#
+#   random_config:
+#     n_samples: 5  # Sample 5 configs per round
+#
+#   executor: "local"
+#   random_seed: 42
+#
+# # Multi-round configuration
+# rounds:
+#   # Round 1: Optimize processes_per_node
+#   - name: "optimize_processes"
+#     description: "Find best processes_per_node"
+#     sweep_vars: ["processes_per_node"]
+#
+#     # Fix other variables during this round
+#     fixed_overrides:
+#       volume_size_gb: 4
+#       transfer_size_mb: 4
+#
+#     # Search for maximum bandwidth
+#     search:
+#       metric: "bwMiB"
+#       objective: "max"
+#
+#     repetitions: 3
+#
+#   # Round 2: Optimize volume_size_gb with best processes_per_node
+#   - name: "optimize_volume"
+#     description: "Find best volume_size_gb"
+#     sweep_vars: ["volume_size_gb"]
+#
+#     # Note: best processes_per_node from round 1 is automatically used
+#     fixed_overrides:
+#       transfer_size_mb: 4
+#
+#     search:
+#       metric: "bwMiB"
+#       objective: "max"
+#
+#     repetitions: 3
+#
+#   # Round 3: Optimize transfer_size_mb with best values from previous rounds
+#   - name: "optimize_transfer"
+#     description: "Find best transfer_size_mb"
+#     sweep_vars: ["transfer_size_mb"]
+#
+#     # Note: best processes_per_node and volume_size_gb from previous rounds
+#     # are automatically propagated
+#
+#     search:
+#       metric: "bwMiB"
+#       objective: "max"
+#
+#     repetitions: 3
+#
+# # vars, command, scripts, output sections remain the same...

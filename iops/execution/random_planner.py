@@ -1,66 +1,66 @@
-from iops.logger import HasLogger
-from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix
+"""Random sampling planner for IOPS.
 
-from typing import List, Any
-from abc import ABC, abstractmethod
+This module implements a random sampling planner that randomly samples N configurations
+from the full parameter space. Supports multi-round optimization with best-result
+propagation, following the exhaustive planner's proven patterns.
+"""
+
+import copy
+import json
+from collections import defaultdict
 from pathlib import Path
-import random
+from typing import Any, Dict, Optional
+
+from iops.config.models import GenericBenchmarkConfig
+from iops.execution.matrix import build_execution_matrix
+from iops.execution.planner import BasePlanner
+from iops.logger import HasLogger
 
 
-class BasePlanner(ABC, HasLogger):
-    _registry = {}
-
-    def __init__(self, cfg: GenericBenchmarkConfig):
-        self.cfg = cfg
-        # create a random generator with a fixed seed for reproducibility
-        self.random = random.Random(cfg.benchmark.random_seed)
-        self.logger.info("Planner initialized with benchmark config: %s", cfg.benchmark)
-        self.logger.info("Using random seed: %s", cfg.benchmark.random_seed)
-
-    @classmethod
-    def register(cls, name):
-        def decorator(subclass):
-            cls._registry[name.lower()] = subclass
-            return subclass
-        return decorator
-
-    @classmethod
-    def build(cls, cfg) -> "BasePlanner":
-        name = cfg.benchmark.search_method
-        executor_cls = cls._registry.get(name.lower())
-        if executor_cls is None:
-            raise ValueError(f"Executor '{name}' is not registered.")
-        return executor_cls(cfg)
-
-    def random_sample(self, items: List[ExecutionInstance]) -> List[ExecutionInstance]:
-        # randomly sample all items of the list
-        sample_size = len(items)
-        if sample_size > 0:
-            self.logger.debug(f"  [Planner] Shuffling execution order ({sample_size} tests)")
-            items = self.random.sample(items, sample_size)
-        return items
-
-    @abstractmethod
-    def next_test(self) -> Any:
-        pass
-    
-    @abstractmethod
-    def record_completed_test(self, test: Any)  -> None:
-        pass
-
-
-@BasePlanner.register("exhaustive")
-class Exhaustive(BasePlanner, HasLogger):
+@BasePlanner.register("random")
+class RandomSamplingPlanner(BasePlanner, HasLogger):
     """
-    A brute-force planner that exhaustively searches the parameter space,
-    supports multiple rounds and repetitions.
+    Random sampling planner that randomly samples N configurations from the
+    full parameter space.
 
-    Idea B (implemented): random interleaving of repetitions within each execution_matrix.
+    Supports multi-round optimization with best-result propagation between rounds.
+    Uses the same repetition interleaving strategy as the exhaustive planner for
+    statistical robustness.
+
+    Configuration (YAML):
+        benchmark:
+          search_method: "random"
+          random_config:
+            # Option 1: Explicit number of samples
+            n_samples: 20
+
+            # Option 2: Percentage of total space (mutually exclusive with n_samples)
+            # percentage: 0.1  # 10% of parameter space
+
+            # Optional: behavior when n_samples >= total_space
+            fallback_to_exhaustive: true  # default: true
+
+    Features:
+    - Random sampling without replacement
+    - Multi-round optimization with best-result propagation
+    - Repetition interleaving for statistical robustness
+    - Reproducible sampling with random_seed
+    - Two sampling modes: explicit n_samples or percentage
     """
 
     def __init__(self, cfg: GenericBenchmarkConfig):
         super().__init__(cfg)
+
+        # Get random sampling configuration
+        self.random_cfg = self._get_random_config()
+
+        # Sampling configuration
+        self.n_samples: Optional[int] = self.random_cfg.get('n_samples')
+        self.percentage: Optional[float] = self.random_cfg.get('percentage')
+        self.fallback_to_exhaustive: bool = self.random_cfg.get('fallback_to_exhaustive', True)
+
+        # Validate configuration
+        self._validate_config()
 
         # Queue of round names (empty list if no rounds were defined)
         self.round_queue: list[str] = [r.name for r in cfg.rounds] if cfg.rounds else []
@@ -70,6 +70,8 @@ class Exhaustive(BasePlanner, HasLogger):
         self.execution_matrix: list[Any] | None = None
         self.current_index: int = 0
         self.total_tests: int = 0
+        self.total_space_size: int = 0  # Full parameter space size
+        self.sampled_size: int = 0  # Actual sample size used
 
         # Single-round control flag
         self._single_round_built: bool = False
@@ -80,25 +82,139 @@ class Exhaustive(BasePlanner, HasLogger):
         # Track completed tests for search (includes all repetitions)
         self._completed_tests: list[Any] = []
 
-        # ------------------------------------------------------------------
-        # Idea B state (per execution_matrix): random interleaving of reps
-        # ------------------------------------------------------------------
-        self._active_indices: list[int] = []          # tests with reps remaining
-        self._next_rep_by_idx: dict[int, int] = {}    # next rep (0-based) per test index
+        # Repetition interleaving state (Idea B from exhaustive)
+        self._active_indices: list[int] = []  # tests with reps remaining
+        self._next_rep_by_idx: dict[int, int] = {}  # next rep (0-based) per test index
         self._total_reps_by_idx: dict[int, int] = {}  # total reps per test index
-        self._attempt_count: int = 0                  # attempts emitted in current matrix
-        self._attempt_total: int = 0                  # sum(repetitions) in current matrix
+        self._attempt_count: int = 0  # attempts emitted in current matrix
+        self._attempt_total: int = 0  # sum(repetitions) in current matrix
 
+        # Log initialization
+        sampling_mode = f"n_samples={self.n_samples}" if self.n_samples is not None else f"percentage={self.percentage}"
         self.logger.info(
-            "Exhaustive planner initialized. "
-            "Multiple rounds: %s; rounds=%s",
+            "Random sampling planner initialized. "
+            "Sampling mode: %s; Multiple rounds: %s; rounds=%s",
+            sampling_mode,
             self.multiple_rounds,
             self.round_queue if self.round_queue else "single round",
         )
 
+    def _get_random_config(self) -> Dict[str, Any]:
+        """
+        Extract random sampling config from benchmark config.
+
+        Returns:
+            Dictionary with random sampling configuration.
+        """
+        if hasattr(self.cfg.benchmark, 'random_config') and self.cfg.benchmark.random_config:
+            return self.cfg.benchmark.random_config
+
+        # Return empty dict if not specified (will be caught by validation)
+        return {}
+
+    def _validate_config(self):
+        """Validate random sampling configuration."""
+        # Must have exactly one of n_samples or percentage
+        if self.n_samples is not None and self.percentage is not None:
+            raise ValueError(
+                "random_config: cannot specify both 'n_samples' and 'percentage'. "
+                "Choose one."
+            )
+
+        if self.n_samples is None and self.percentage is None:
+            raise ValueError(
+                "random_config: must specify either 'n_samples' or 'percentage'"
+            )
+
+        # Validate n_samples
+        if self.n_samples is not None:
+            if not isinstance(self.n_samples, int) or self.n_samples < 1:
+                raise ValueError(
+                    f"random_config.n_samples must be a positive integer, got: {self.n_samples}"
+                )
+
+        # Validate percentage
+        if self.percentage is not None:
+            if not isinstance(self.percentage, (int, float)) or self.percentage <= 0:
+                raise ValueError(
+                    f"random_config.percentage must be positive, got: {self.percentage}"
+                )
+            if self.percentage > 1.0:
+                self.logger.warning(
+                    f"random_config.percentage > 1.0 ({self.percentage}), clamping to 1.0"
+                )
+                self.percentage = 1.0
+
+    def _compute_sample_size(self, total_space: int) -> int:
+        """
+        Compute the actual sample size based on configuration.
+
+        Args:
+            total_space: Total size of parameter space
+
+        Returns:
+            Sample size (clamped to valid range [1, total_space])
+        """
+        if self.n_samples is not None:
+            # Explicit number of samples
+            if self.n_samples >= total_space:
+                if self.fallback_to_exhaustive:
+                    self.logger.warning(
+                        f"Requested n_samples={self.n_samples} >= total_space={total_space}. "
+                        f"Using full exhaustive search."
+                    )
+                    return total_space
+                else:
+                    self.logger.warning(
+                        f"Requested n_samples={self.n_samples} >= total_space={total_space}. "
+                        f"Clamping to total_space."
+                    )
+                    return total_space
+            return self.n_samples
+
+        else:
+            # Percentage-based sampling
+            sample_size = max(1, int(total_space * self.percentage))
+            self.logger.info(
+                f"Sampling {self.percentage*100:.1f}% of parameter space: "
+                f"{sample_size}/{total_space} configurations"
+            )
+            return sample_size
+
+    def _sample_execution_matrix(self, full_matrix: list[Any]) -> list[Any]:
+        """
+        Randomly sample configurations from the full execution matrix.
+
+        Args:
+            full_matrix: Full execution matrix (all parameter combinations)
+
+        Returns:
+            Sampled subset of execution matrix
+        """
+        self.total_space_size = len(full_matrix)
+        self.sampled_size = self._compute_sample_size(self.total_space_size)
+
+        if self.sampled_size >= self.total_space_size:
+            # Use full matrix (exhaustive)
+            self.logger.info(
+                f"Using full parameter space: {self.total_space_size} configurations"
+            )
+            return full_matrix
+
+        # Random sampling without replacement
+        sampled_matrix = self.random.sample(full_matrix, self.sampled_size)
+
+        self.logger.info(
+            f"Randomly sampled {self.sampled_size}/{self.total_space_size} configurations "
+            f"({self.sampled_size/self.total_space_size*100:.1f}%)"
+        )
+
+        return sampled_matrix
+
     # ------------------------------------------------------------------ #
-    # Internal helpers
+    # Internal helpers (from exhaustive planner)
     # ------------------------------------------------------------------ #
+
     def _init_interleaving_state(self) -> None:
         """
         Initialize the Idea B bookkeeping for the current execution_matrix.
@@ -127,7 +243,7 @@ class Exhaustive(BasePlanner, HasLogger):
 
     def _build_next_execution_matrix(self) -> bool:
         """
-        Build the next execution_matrix.
+        Build the next execution_matrix with random sampling.
 
         Returns:
             True if a new matrix with at least one test was built.
@@ -150,21 +266,24 @@ class Exhaustive(BasePlanner, HasLogger):
             self.current_round = self.round_queue.pop(0)
             self.logger.info("Building execution matrix for round: %s", self.current_round)
 
-            # Assumes build_execution_matrix supports a `defaults=` kwarg
-            self.execution_matrix = self.random_sample(
-                build_execution_matrix(
-                    self.cfg,
-                    round_name=self.current_round,
-                    defaults=self._defaults_for_next_round or None,
-                )
+            # Build full matrix, then sample
+            full_matrix = build_execution_matrix(
+                self.cfg,
+                round_name=self.current_round,
+                defaults=self._defaults_for_next_round or None,
             )
+
+            # Sample from full matrix and shuffle
+            sampled_matrix = self._sample_execution_matrix(full_matrix)
+            self.execution_matrix = self.random_sample(sampled_matrix)
 
             self.total_tests = len(self.execution_matrix)
 
             self.logger.info(
-                "Total tests in execution matrix for round '%s': %d",
+                "Total tests in execution matrix for round '%s': %d (sampled from %d)",
                 self.current_round,
                 self.total_tests,
+                self.total_space_size,
             )
 
             if self.total_tests > 0:
@@ -183,12 +302,20 @@ class Exhaustive(BasePlanner, HasLogger):
         self.current_index = 0
         self.current_round = None
 
-        self.execution_matrix = self.random_sample(build_execution_matrix(self.cfg))
+        # Build full matrix, then sample
+        full_matrix = build_execution_matrix(self.cfg)
+        sampled_matrix = self._sample_execution_matrix(full_matrix)
+        self.execution_matrix = self.random_sample(sampled_matrix)
+
         self.total_tests = len(self.execution_matrix)
 
         self._single_round_built = True  # mark as built
 
-        self.logger.info("Total tests in execution matrix: %d", self.total_tests)
+        self.logger.info(
+            "Total tests in execution matrix: %d (sampled from %d)",
+            self.total_tests,
+            self.total_space_size,
+        )
 
         if self.total_tests > 0:
             self._init_interleaving_state()
@@ -202,7 +329,6 @@ class Exhaustive(BasePlanner, HasLogger):
         This captures the test state after execution, including all metrics.
         We need to make a copy because the test object gets reused for different repetitions.
         """
-        import copy
         # Deep copy to preserve metrics and metadata from this specific execution
         test_snapshot = copy.deepcopy(test)
         self._completed_tests.append(test_snapshot)
@@ -242,9 +368,6 @@ class Exhaustive(BasePlanner, HasLogger):
 
         # Group tests by parameter combination (base_vars = params without repetition)
         # Map: param_signature -> [(test, metric_value), ...]
-        from collections import defaultdict
-        import json
-
         param_groups = defaultdict(list)
 
         for test in self._completed_tests:
@@ -374,12 +497,13 @@ class Exhaustive(BasePlanner, HasLogger):
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
+
     def next_test(self) -> Any:
         """
         Returns the next test to run (including repetitions),
         or None when all tests in all rounds are done.
 
-        Idea B: random interleaving of repetitions.
+        Uses random interleaving of repetitions (Idea B from exhaustive planner).
         """
         while True:
             matrix_finished = (
@@ -443,24 +567,3 @@ class Exhaustive(BasePlanner, HasLogger):
             # test_idx_for_log is informational; we keep idx+1 as "matrix position"
             self._prepare_execution_artifacts(test, rep_idx, test_idx_for_log=idx + 1)
             return test
-
-
-# Import Bayesian planner to register it (must be after BasePlanner is fully defined)
-try:
-    from iops.execution.bayesian_planner import BayesianPlanner
-except ImportError:
-    # scikit-optimize not installed, Bayesian planner not available
-    pass
-except Exception as e:
-    # Other import error - log it for debugging
-    import warnings
-    warnings.warn(f"Failed to import BayesianPlanner: {e}")
-
-# Import Random planner to register it
-try:
-    from iops.execution.random_planner import RandomSamplingPlanner
-except ImportError:
-    pass
-except Exception as e:
-    import warnings
-    warnings.warn(f"Failed to import RandomSamplingPlanner: {e}")

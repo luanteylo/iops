@@ -146,13 +146,21 @@ repetitions: 3  # Each test runs 3 times
 
 #### `search_method` (optional, default: "exhaustive")
 Test selection strategy:
-- `exhaustive`: Run all parameter combinations
+- `exhaustive`: Run all parameter combinations (full sweep)
+- `random`: Randomly sample N configurations from parameter space
+- `bayesian`: Bayesian optimization using Gaussian Process models
 - `greedy`: (future) Greedy search optimization
-- `bayesian`: (future) Bayesian optimization
 
 ```yaml
 search_method: "exhaustive"
 ```
+
+**When to use each method**:
+- **Exhaustive**: Small parameter spaces, need complete coverage, want deterministic results
+- **Random**: Large parameter spaces, quick exploration, initial reconnaissance
+- **Bayesian**: Expensive evaluations, smooth objective functions, focused optimization
+
+See `random_config` and `bayesian_config` sections below for configuration details.
 
 #### `executor` (optional, default: "slurm")
 Execution backend:
@@ -290,6 +298,139 @@ iops config.yaml --dry-run --estimated-time 120
 # - Wall-clock time estimate
 # - Sample test configurations
 ```
+
+#### `random_config` (optional, required if `search_method: "random"`)
+Configuration for random sampling planner. Randomly samples N configurations from the full parameter space instead of exhaustive search.
+
+**When to use**:
+- Large parameter spaces where exhaustive search is too expensive
+- Initial exploration before focused optimization
+- Quick reconnaissance of parameter space
+- Budget-constrained experiments
+
+**Configuration options**:
+```yaml
+benchmark:
+  search_method: "random"
+  random_config:
+    # Option 1: Explicit number of samples (mutually exclusive with percentage)
+    n_samples: 20  # Sample exactly 20 random configurations
+
+    # Option 2: Percentage of total space (mutually exclusive with n_samples)
+    # percentage: 0.1  # Sample 10% of parameter space
+
+    # Optional: behavior when n_samples >= total_space
+    fallback_to_exhaustive: true  # Use full space if sample >= total (default: true)
+```
+
+**Parameters**:
+- **`n_samples`** (int, optional): Explicit number of configurations to sample
+  - Must be positive integer
+  - Mutually exclusive with `percentage`
+  - If `n_samples >= total_space`, behavior depends on `fallback_to_exhaustive`
+
+- **`percentage`** (float, optional): Proportion of parameter space to sample
+  - Value between 0.0 and 1.0 (e.g., 0.1 = 10%)
+  - Mutually exclusive with `n_samples`
+  - Clamped to 1.0 if > 1.0 (with warning)
+  - Ensures at least 1 sample even for very small percentages
+
+- **`fallback_to_exhaustive`** (bool, optional, default: true): Behavior when sample size >= total space
+  - `true`: Use exhaustive search (all configurations)
+  - `false`: Clamp sample size to total space size
+
+**Examples**:
+
+Explicit number of samples:
+```yaml
+vars:
+  processes: { type: int, sweep: { mode: list, values: [1,2,4,8,16,32] } }  # 6 values
+  volume: { type: int, sweep: { mode: list, values: [1,2,4,8,16] } }        # 5 values
+  # Total space: 6 × 5 = 30 configurations
+
+benchmark:
+  search_method: "random"
+  random_config:
+    n_samples: 10  # Sample 10 out of 30 (33%)
+  repetitions: 3   # Each sample runs 3 times
+  # Total tests: 10 × 3 = 30 test executions
+```
+
+Percentage-based sampling:
+```yaml
+benchmark:
+  search_method: "random"
+  random_config:
+    percentage: 0.2  # Sample 20% of parameter space
+  random_seed: 42    # Ensures reproducible sampling
+```
+
+**Multi-round support**:
+Random sampling works with multi-round optimization. Each round independently samples from its parameter space and propagates best results to the next round:
+
+```yaml
+benchmark:
+  search_method: "random"
+  random_config:
+    n_samples: 10
+
+rounds:
+  - name: "optimize_processes"
+    sweep_vars: ["processes"]
+    search:
+      metric: "throughput"
+      objective: "max"
+    # Samples 10 random 'processes' values
+
+  - name: "optimize_volume"
+    sweep_vars: ["volume"]
+    search:
+      metric: "throughput"
+      objective: "max"
+    # Uses best 'processes' from round 1, samples 10 random 'volume' values
+```
+
+**Reproducibility**:
+Use `random_seed` in the benchmark config to ensure consistent sampling across runs:
+```yaml
+benchmark:
+  search_method: "random"
+  random_config:
+    n_samples: 15
+  random_seed: 12345  # Same seed = same sample
+```
+
+**Notes**:
+- Sampling is without replacement (no duplicate configurations)
+- Samples complete ExecutionInstance objects (preserves derived variables)
+- Repetitions are randomly interleaved for statistical robustness
+- Same `random_seed` produces identical samples across runs
+
+#### `bayesian_config` (optional, required if `search_method: "bayesian"`)
+Configuration for Bayesian optimization planner. Uses Gaussian Process models to intelligently explore parameter space and find optimal configurations.
+
+**Requires**: `scikit-optimize` package (`pip install scikit-optimize`)
+
+**Configuration**:
+```yaml
+benchmark:
+  search_method: "bayesian"
+  bayesian_config:
+    target_metric: "throughput"  # Metric to optimize
+    objective: "maximize"        # "maximize" or "minimize"
+    n_initial_points: 5          # Random exploration before optimization
+    n_iterations: 20             # Total evaluations
+    acquisition_func: "EI"       # "EI", "PI", or "LCB"
+```
+
+**Parameters**:
+- **`target_metric`** (str): Name of metric to optimize (from parser output)
+- **`objective`** (str): Optimization direction: `"maximize"` or `"minimize"`
+- **`n_initial_points`** (int): Random samples before Bayesian optimization starts
+- **`n_iterations`** (int): Total number of parameter evaluations
+- **`acquisition_func`** (str): Acquisition function (`"EI"` = Expected Improvement, `"PI"` = Probability of Improvement, `"LCB"` = Lower Confidence Bound)
+
+**See**: `docs/examples/example_bayesian.yaml` for complete example
 
 ### Complete Example
 

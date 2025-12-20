@@ -255,7 +255,8 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         cores_expr=b.get("cores_expr"),
         estimated_time_seconds=b.get("estimated_time_seconds"),
         report_vars=b.get("report_vars"),
-        bayesian_config=b.get("bayesian_config")
+        bayesian_config=b.get("bayesian_config"),
+        random_config=b.get("random_config")
     )
 
     # ---- vars ----
@@ -719,11 +720,11 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError("benchmark.workdir must be a directory")
     if cfg.benchmark.repetitions is not None and cfg.benchmark.repetitions < 1:
         raise ConfigValidationError("benchmark.repetitions must be >= 1")
-    # search_method: greedy or bayesian or exhaustive (optional)
+    # search_method: exhaustive, random, bayesian, or greedy (optional)
     if cfg.benchmark.search_method is not None:
-        if cfg.benchmark.search_method not in ("greedy", "bayesian", "exhaustive"):
+        if cfg.benchmark.search_method not in ("exhaustive", "random", "bayesian", "greedy"):
             raise ConfigValidationError(
-                "benchmark.search_method must be one of: greedy, bayesian, exhaustive"
+                "benchmark.search_method must be one of: exhaustive, random, bayesian, greedy"
             )
 
     # ---- vars ----

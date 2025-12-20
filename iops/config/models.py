@@ -32,6 +32,7 @@ class BenchmarkConfig:
     estimated_time_seconds: Optional[float] = None  # Estimated execution time per test (for dry-run)
     report_vars: Optional[List[str]] = None  # Variables to include in analysis reports (default: all numeric swept vars)
     bayesian_config: Optional[Dict[str, Any]] = None  # Bayesian optimization configuration
+    random_config: Optional[Dict[str, Any]] = None  # Random sampling configuration
 
 
 @dataclass

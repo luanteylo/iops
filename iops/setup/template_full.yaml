@@ -42,8 +42,12 @@ benchmark:
   # Required: Test selection strategy
   # Options:
   #   - "exhaustive": Test all parameter combinations (full factorial sweep)
+  #   - "random": Randomly sample N configurations from parameter space
   #   - "bayesian": Intelligent optimization using Bayesian methods (fewer tests)
-  #   - "random": Random sampling of parameter space
+  # When to use:
+  #   - exhaustive: Small parameter spaces, need complete coverage
+  #   - random: Large parameter spaces, quick exploration, budget constraints
+  #   - bayesian: Expensive evaluations, smooth objective functions
   search_method: "exhaustive"
 
   # Required: Execution backend
@@ -83,6 +87,51 @@ benchmark:
   # Useful when you have string variables that shouldn't be plotted
   # If omitted, all numeric swept variables are included
   report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+
+  # ---------------------------------------------------------------------------
+  # RANDOM SAMPLING CONFIGURATION (required when search_method: "random")
+  # ---------------------------------------------------------------------------
+  # Configuration for random sampling planner
+  # Randomly samples N configurations instead of testing all combinations
+  # Useful for large parameter spaces where exhaustive search is too expensive
+  #
+  # Uncomment to enable random sampling:
+  # ---------------------------------------------------------------------------
+  # random_config:
+  #   # Option 1: Explicit number of samples (mutually exclusive with percentage)
+  #   n_samples: 20  # Sample exactly 20 random configurations
+  #
+  #   # Option 2: Percentage of total space (mutually exclusive with n_samples)
+  #   # percentage: 0.1  # Sample 10% of parameter space
+  #
+  #   # Optional: behavior when n_samples >= total_space (default: true)
+  #   fallback_to_exhaustive: true  # Use full space if sample >= total
+  #
+  # Notes:
+  #   - Must specify either n_samples OR percentage (not both)
+  #   - Sampling is without replacement (no duplicates)
+  #   - Use random_seed for reproducible sampling
+  #   - Works with multi-round optimization (samples independently per round)
+  #
+  # Example: Sample 15 random configurations from parameter space
+  # random_config:
+  #   n_samples: 15
+
+  # ---------------------------------------------------------------------------
+  # BAYESIAN OPTIMIZATION CONFIGURATION (required when search_method: "bayesian")
+  # ---------------------------------------------------------------------------
+  # Configuration for Bayesian optimization planner
+  # Uses Gaussian Process models to intelligently explore parameter space
+  # Requires: pip install scikit-optimize
+  #
+  # Uncomment to enable Bayesian optimization:
+  # ---------------------------------------------------------------------------
+  # bayesian_config:
+  #   target_metric: "bwMiB"      # Metric to optimize (from parser)
+  #   objective: "maximize"       # "maximize" or "minimize"
+  #   n_initial_points: 5         # Random samples before optimization starts
+  #   n_iterations: 20            # Total number of evaluations
+  #   acquisition_func: "EI"      # "EI" (Expected Improvement), "PI", or "LCB"
 
 
 # =============================================================================
