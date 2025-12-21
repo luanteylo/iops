@@ -1,3 +1,8 @@
+---
+title: "IOPS - I/O Performance Suite"
+type: docs
+---
+
 # IOPS - I/O Performance Suite
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
@@ -26,41 +31,10 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 
 ## Quick Links
 
-<div class="grid cards" markdown>
-
--   :material-download:{ .lg .middle } __Installation__
-
-    ---
-
-    Get started with IOPS in minutes
-
-    [:octicons-arrow-right-24: Install now](getting-started/installation.md)
-
--   :material-lightning-bolt:{ .lg .middle } __Quick Start__
-
-    ---
-
-    Run your first benchmark in 5 minutes
-
-    [:octicons-arrow-right-24: Quick start guide](getting-started/quickstart.md)
-
--   :material-book-open-variant:{ .lg .middle } __User Guide__
-
-    ---
-
-    Learn how to configure and use IOPS
-
-    [:octicons-arrow-right-24: Read the guide](user-guide/configuration.md)
-
--   :material-code-braces:{ .lg .middle } __Examples__
-
-    ---
-
-    Explore working examples and templates
-
-    [:octicons-arrow-right-24: View examples](examples/index.md)
-
-</div>
+- **[Installation](docs/getting-started/installation)** - Get started with IOPS in minutes
+- **[Quick Start](docs/getting-started/quickstart)** - Run your first benchmark in 5 minutes
+- **[User Guide](docs/user-guide/configuration)** - Learn how to configure and use IOPS
+- **[Examples](docs/examples/)** - Explore working examples and templates
 
 ## How It Works
 
@@ -121,4 +95,4 @@ iops config.yaml
 
 ## License
 
-This project is developed at INRIA. See the [License](about/license.md) page for details.
+This project is developed at INRIA. See the [License](docs/about/license) page for details.

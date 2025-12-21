@@ -18,5 +18,8 @@ iops.log
 iops.db
 iops_config.yaml
 .claude/
-docs/claude.md
-site/
+# Hugo build output
+public/
+.hugo_build.lock
+resources/_gen/
+go.sum

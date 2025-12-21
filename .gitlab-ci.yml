@@ -26,15 +26,12 @@ test:
     - dev-1.0
     - dev-3.0
 
-# Build documentation
+# Build documentation with Hugo
 pages:
   stage: deploy
-  image: python:3.10
-  before_script:
-    - pip install -r requirements-docs.txt
+  image: registry.gitlab.com/pages/hugo/hugo_extended:latest
   script:
-    - mkdocs build --strict --verbose
-    - mv site public
+    - hugo --minify
   artifacts:
     paths:
       - public
@@ -47,14 +44,12 @@ pages:
 # Preview documentation for merge requests
 pages:preview:
   stage: build
-  image: python:3.10
-  before_script:
-    - pip install -r requirements-docs.txt
+  image: registry.gitlab.com/pages/hugo/hugo_extended:latest
   script:
-    - mkdocs build --strict --verbose
+    - hugo --minify
   artifacts:
     paths:
-      - site
+      - public
     expire_in: 1 week
   only:
     - merge_requests
