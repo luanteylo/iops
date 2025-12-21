@@ -39,7 +39,7 @@ pages:
     paths:
       - public
   only:
-    - dev-1.0  # Deploy docs from main branch
+    - dev-3.0  # Deploy docs from main branch
   # Uncomment to deploy from tags
   # only:
   #   - tags
