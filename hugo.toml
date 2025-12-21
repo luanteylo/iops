@@ -1,34 +1,17 @@
 baseURL = 'https://lgouveia.gitlabpages.inria.fr/iops/'
 languageCode = 'en-us'
 title = 'IOPS - I/O Performance Suite'
-theme = 'hugo-book'
+theme = 'hugo-geekdoc'
 
 # Enable Git info
 enableGitInfo = true
 
 [params]
-  # (Optional) Set this to true if you use capital letters in file names
-  BookMenuBundle = '/menu'
-
-  # (Optional) Set this to true to enable 'Last Modified by' date and git author
-  BookRepo = 'https://gitlab.inria.fr/lgouveia/iops'
-  BookEditPath = '-/edit/dev-1.0'
-
-  # (Optional) Set this to true to enable a dark mode toggle
-  BookTheme = 'auto'
-
-  # (Optional) Set this to false if you don't want to display a logo
-  BookLogo = ''
-
-  # (Optional) Set this to true to enable the table of contents in the sidebar
-  BookToC = true
-
-  # Enable section pages
-  BookSection = '*'
-
-  # Configure code highlighting
-  [params.BookSearch]
-    BookSearchConfig = '{"tokenize": "forward"}'
+  # GeekDoc specific parameters
+  geekdocRepo = "https://gitlab.inria.fr/lgouveia/iops"
+  geekdocEditPath = "-/edit/dev-1.0"
+  geekdocSearch = true
+  geekdocDarkMode = true
 
 [markup]
   [markup.goldmark]
@@ -42,24 +25,16 @@ enableGitInfo = true
     anchorLineNos = false
     codeFences = true
     guessSyntax = false
-    hl_Lines = ""
-    lineAnchors = ""
-    lineNoStart = 1
     lineNos = false
     lineNumbersInTable = true
     noClasses = true
     style = "monokai"
     tabWidth = 4
 
-[menu]
-  [[menu.before]]
-    name = "GitLab"
-    url = "https://gitlab.inria.fr/lgouveia/iops"
-    weight = 10
-  [[menu.after]]
-    name = "PyPI"
-    url = "https://pypi.org/project/iops-benchmark/"
-    weight = 20
+[taxonomies]
+  tag = "tags"
 
 [outputs]
-  home = ["HTML", "RSS", "JSON"]
+  home = ["HTML", "RSS"]
+  page = ["HTML"]
+  section = ["HTML"]
