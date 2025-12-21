@@ -8,8 +8,8 @@ enableGitInfo = true
 
 [params]
   subtitle = "A generic benchmark orchestration framework"
-  logo = "/images/logo.png"
-  favicon = "/images/logo.png"
+  logo = "images/logo.png"
+  favicon = "images/logo.png"
   dateFormat = "January 2, 2006"
   commit = false
   rss = true
