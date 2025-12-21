@@ -8,6 +8,13 @@ All notable changes to IOPS (I/O Performance Suite) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Configurable SLURM commands via `executor_options.commands` for systems with command wrappers
+- Support for customizing `status`, `info`, and `cancel` commands in SLURM executor
+- Documentation for executor_options in YAML schema reference and execution backends guide
+
 ## [3.0.4] - 2025-12-20
 
 ### Added

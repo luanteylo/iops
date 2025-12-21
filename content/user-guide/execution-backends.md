@@ -121,6 +121,36 @@ IOPS automatically:
 - Handles job failures gracefully
 - Tracks resource usage
 
+### Custom SLURM Commands
+
+For systems with command wrappers or custom SLURM installations, you can customize the commands used for job management:
+
+```yaml
+benchmark:
+  executor: "slurm"
+  executor_options:
+    commands:
+      status: "squeue"       # Command to query job status
+      info: "scontrol"       # Command to get job information
+      cancel: "scancel"      # Command to cancel jobs
+```
+
+**Example with wrapper**:
+
+```yaml
+benchmark:
+  executor: "slurm"
+  executor_options:
+    commands:
+      status: "lrms-wrapper squeue"
+      info: "lrms-wrapper scontrol"
+      cancel: "lrms-wrapper scancel"
+```
+
+This allows IOPS to work with various SLURM configurations and wrapper systems commonly found in HPC environments.
+
+**Note**: The submit command is configured separately via `scripts[].submit` to allow per-script customization.
+
 ## Comparison
 
 | Feature | Local | SLURM |

@@ -17,6 +17,33 @@ class ConfigValidationError(Exception):
 # ----------------- Core blocks ----------------- #
 
 @dataclass
+class ExecutorOptionsConfig:
+    """
+    Executor-specific configuration options.
+
+    For SLURM executor, you can override the commands used for job management.
+    This is useful when running on systems with command wrappers or custom SLURM installations.
+
+    Example:
+        executor_options:
+          commands:
+            submit: "sbatch"
+            status: "squeue"
+            info: "scontrol"
+            cancel: "scancel"
+
+    If you need to use a wrapper for all commands:
+        executor_options:
+          commands:
+            submit: "lrms-wrapper sbatch"
+            status: "lrms-wrapper squeue"
+            info: "lrms-wrapper scontrol"
+            cancel: "lrms-wrapper scancel"
+    """
+    commands: Optional[Dict[str, str]] = None
+
+
+@dataclass
 class BenchmarkConfig:
     name: str
     description: Optional[str]
@@ -25,6 +52,7 @@ class BenchmarkConfig:
     sqlite_db: Optional[Path] = None
     search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
+    executor_options: Optional[ExecutorOptionsConfig] = None  # executor-specific configuration
     random_seed: Optional[int] = None  # seed for any random operations
     cache_exclude_vars: Optional[List[str]] = None  # variables to exclude from cache hash
     max_core_hours: Optional[float] = None  # Budget limit in core-hours

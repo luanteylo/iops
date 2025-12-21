@@ -38,6 +38,10 @@ class SlurmExecutor(BaseExecutor):
     Finalization logic when job leaves squeue:
       - Prefer scontrol show job <jobid> (JobState/ExitCode)
       - If scontrol has no record, fall back to parser success.
+
+    Configurable Commands:
+      - Commands can be customized via executor_options.commands in YAML
+      - Useful for systems with command wrappers or custom SLURM installations
     """
 
     SLURM_ACTIVE_STATES = {
@@ -49,6 +53,21 @@ class SlurmExecutor(BaseExecutor):
         "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
         "PREEMPTED", "BOOT_FAIL",
     }
+
+    def __init__(self, cfg):
+        """Initialize SLURM executor with configurable commands."""
+        super().__init__(cfg)
+
+        # Extract command overrides from executor_options
+        executor_options = cfg.benchmark.executor_options
+        custom_commands = {}
+        if executor_options and executor_options.commands:
+            custom_commands = executor_options.commands
+
+        # Set commands with defaults (note: submit is handled separately via scripts[].submit)
+        self.cmd_status = custom_commands.get("status", "squeue")
+        self.cmd_info = custom_commands.get("info", "scontrol")
+        self.cmd_cancel = custom_commands.get("cancel", "scancel")
 
     def submit(self, test) -> None:
         self._init_execution_metadata(test)
@@ -299,8 +318,9 @@ class SlurmExecutor(BaseExecutor):
         Returns job state string (e.g., PENDING/RUNNING/...) or None if not in queue.
         """
         try:
+            cmd = shlex.split(self.cmd_status) + ["-j", job_id, "--noheader", "--format=%T"]
             r = subprocess.run(
-                ["squeue", "-j", job_id, "--noheader", "--format=%T"],
+                cmd,
                 capture_output=True,
                 text=True,
                 check=True,
@@ -312,7 +332,7 @@ class SlurmExecutor(BaseExecutor):
         except subprocess.CalledProcessError as e:
             # treat failure as "not visible in queue" (best effort)
             self.logger.debug(
-                f"  [SlurmExec] squeue failed for job {job_id}: {(e.stderr or str(e)).strip()}"
+                f"  [SlurmExec] {self.cmd_status} failed for job {job_id}: {(e.stderr or str(e)).strip()}"
             )
             return None
 
@@ -325,8 +345,9 @@ class SlurmExecutor(BaseExecutor):
           otherwise None values.
         """
         try:
+            cmd = shlex.split(self.cmd_info) + ["show", "job", job_id]
             r = subprocess.run(
-                ["scontrol", "show", "job", job_id],
+                cmd,
                 capture_output=True,
                 text=True,
                 check=True,
@@ -350,7 +371,7 @@ class SlurmExecutor(BaseExecutor):
         except subprocess.CalledProcessError as e:
             # common if job aged out: "Invalid job id specified"
             self.logger.debug(
-                f"  [SlurmExec] scontrol query failed for job {job_id} (likely aged out): "
+                f"  [SlurmExec] {self.cmd_info} query failed for job {job_id} (likely aged out): "
                 f"{(e.stderr or str(e)).strip()}"
             )
             return {"state": None, "exitcode": None}

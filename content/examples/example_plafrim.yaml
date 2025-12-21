@@ -24,6 +24,11 @@ benchmark:
   repetitions: 1 # global repetitions for each test case. It is ignored when rounds has its own value
   search_method: "exhaustive" # used to define the policy for test execution selection
   executor : "slurm" # specify the executor to use : local | slurm
+  # executor_options:  # Optional: customize SLURM commands (useful for wrapper systems)
+  #   commands:
+  #     status: "squeue"       # default: squeue
+  #     info: "scontrol"       # default: scontrol
+  #     cancel: "scancel"      # default: scancel
   random_seed: 43  # seed for any random operations in the benchmark
   cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars from cache key
   # Budget configuration (optional)

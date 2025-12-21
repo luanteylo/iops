@@ -13,6 +13,7 @@ from iops.config.models import (
     ConfigValidationError,
     GenericBenchmarkConfig,
     BenchmarkConfig,
+    ExecutorOptionsConfig,
     VarConfig,
     SweepConfig,
     CommandConfig,
@@ -241,6 +242,14 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
     b = data["benchmark"]
     # if search method is not defined, we will execute all test cases (exhaustive)
 
+    # Parse executor_options if present
+    executor_options = None
+    if "executor_options" in b and b["executor_options"] is not None:
+        eo = b["executor_options"]
+        executor_options = ExecutorOptionsConfig(
+            commands=eo.get("commands")
+        )
+
     benchmark = BenchmarkConfig(
         name=b["name"],
         description=b.get("description"),
@@ -249,6 +258,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         sqlite_db=_expand_path(b["sqlite_db"]) if "sqlite_db" in b else None,
         search_method=b.get("search_method", "exhaustive"),
         executor=b.get("executor", "slurm"),
+        executor_options=executor_options,
         random_seed=b.get("random_seed", 42),
         cache_exclude_vars=b.get("cache_exclude_vars", []),
         max_core_hours=b.get("max_core_hours"),

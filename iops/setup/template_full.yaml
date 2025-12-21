@@ -56,6 +56,35 @@ benchmark:
   #   - "slurm": Submit jobs to SLURM cluster via sbatch
   executor: "slurm"
 
+  # Optional: Executor-specific configuration options
+  # ---------------------------------------------------------------------------
+  # EXECUTOR OPTIONS (optional)
+  # ---------------------------------------------------------------------------
+  # For SLURM executor: Customize commands used for job management
+  # Useful when running on systems with command wrappers or custom SLURM installations
+  #
+  # Uncomment to customize SLURM commands:
+  # ---------------------------------------------------------------------------
+  # executor_options:
+  #   commands:
+  #     # Command to query job status (default: "squeue")
+  #     status: "squeue"
+  #
+  #     # Command to get job information (default: "scontrol")
+  #     info: "scontrol"
+  #
+  #     # Command to cancel jobs (default: "scancel")
+  #     cancel: "scancel"
+  #
+  # Example: Using a wrapper for all SLURM commands
+  # executor_options:
+  #   commands:
+  #     status: "lrms-wrapper squeue"
+  #     info: "lrms-wrapper scontrol"
+  #     cancel: "lrms-wrapper scancel"
+  #
+  # Note: The submit command is configured separately via scripts[].submit
+
   # Optional: Random seed for reproducible random operations (default: None)
   # Used by random and bayesian search methods
   random_seed: 42

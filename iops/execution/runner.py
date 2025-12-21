@@ -14,6 +14,7 @@ import json
 import signal
 import sys
 import subprocess
+import shlex
 
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
@@ -137,11 +138,15 @@ class IOPSRunner(HasLogger):
 
         # Cancel all submitted jobs
         failed_cancellations = []
+        # Get cancel command from executor (handles command wrappers)
+        cancel_cmd = getattr(self.executor, 'cmd_cancel', 'scancel')
+
         for job_id in self.submitted_job_ids:
             try:
                 self.logger.info(f"  Canceling job {job_id}...")
+                cmd = shlex.split(cancel_cmd) + [job_id]
                 result = subprocess.run(
-                    ['scancel', job_id],
+                    cmd,
                     capture_output=True,
                     text=True,
                     timeout=10
@@ -168,7 +173,7 @@ class IOPSRunner(HasLogger):
             self.logger.warning(
                 f"\nFailed to cancel {len(failed_cancellations)} job(s): {', '.join(failed_cancellations)}"
             )
-            self.logger.warning("You may need to cancel them manually with: scancel <job_id>")
+            self.logger.warning(f"You may need to cancel them manually with: {cancel_cmd} <job_id>")
         else:
             self.logger.info(f"\n✓ All {len(self.submitted_job_ids)} job(s) canceled successfully")
 

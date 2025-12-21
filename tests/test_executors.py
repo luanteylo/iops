@@ -222,3 +222,118 @@ def test_executor_truncate_output():
     assert "line0" in truncated  # First line
     assert "line19" in truncated  # Last line
     assert "omitted" in truncated  # Truncation marker
+
+
+def test_slurm_executor_default_commands():
+    """Test SlurmExecutor uses default commands when executor_options not provided."""
+    config = Mock()
+    config.benchmark = Mock()
+    config.benchmark.executor_options = None
+    config.execution = Mock()
+
+    executor = SlurmExecutor(config)
+
+    assert executor.cmd_status == "squeue"
+    assert executor.cmd_info == "scontrol"
+    assert executor.cmd_cancel == "scancel"
+
+
+def test_slurm_executor_custom_commands():
+    """Test SlurmExecutor uses custom commands from executor_options."""
+    from iops.config.models import ExecutorOptionsConfig
+
+    config = Mock()
+    config.benchmark = Mock()
+    config.benchmark.executor_options = ExecutorOptionsConfig(
+        commands={
+            "status": "lrms-wrapper squeue",
+            "info": "lrms-wrapper scontrol",
+            "cancel": "lrms-wrapper scancel"
+        }
+    )
+    config.execution = Mock()
+
+    executor = SlurmExecutor(config)
+
+    assert executor.cmd_status == "lrms-wrapper squeue"
+    assert executor.cmd_info == "lrms-wrapper scontrol"
+    assert executor.cmd_cancel == "lrms-wrapper scancel"
+
+
+def test_slurm_executor_partial_custom_commands():
+    """Test SlurmExecutor uses defaults for unspecified commands."""
+    from iops.config.models import ExecutorOptionsConfig
+
+    config = Mock()
+    config.benchmark = Mock()
+    config.benchmark.executor_options = ExecutorOptionsConfig(
+        commands={
+            "status": "custom-squeue"
+        }
+    )
+    config.execution = Mock()
+
+    executor = SlurmExecutor(config)
+
+    assert executor.cmd_status == "custom-squeue"
+    assert executor.cmd_info == "scontrol"  # default
+    assert executor.cmd_cancel == "scancel"  # default
+
+
+def test_slurm_executor_squeue_uses_custom_command(mock_test_instance):
+    """Test that _squeue_state uses custom status command."""
+    from iops.config.models import ExecutorOptionsConfig
+
+    config = Mock()
+    config.benchmark = Mock()
+    config.benchmark.executor_options = ExecutorOptionsConfig(
+        commands={"status": "wrapper squeue"}
+    )
+    config.execution = Mock()
+
+    executor = SlurmExecutor(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="RUNNING",
+            stderr=""
+        )
+
+        state = executor._squeue_state("12345")
+
+        # Check that the custom command was used
+        call_args = mock_run.call_args[0][0]
+        assert call_args[0:2] == ["wrapper", "squeue"]
+        assert "-j" in call_args
+        assert "12345" in call_args
+
+
+def test_slurm_executor_scontrol_uses_custom_command(mock_test_instance):
+    """Test that _scontrol_info uses custom info command."""
+    from iops.config.models import ExecutorOptionsConfig
+
+    config = Mock()
+    config.benchmark = Mock()
+    config.benchmark.executor_options = ExecutorOptionsConfig(
+        commands={"info": "wrapper scontrol"}
+    )
+    config.execution = Mock()
+
+    executor = SlurmExecutor(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="JobState=COMPLETED ExitCode=0:0",
+            stderr=""
+        )
+
+        info = executor._scontrol_info("12345")
+
+        # Check that the custom command was used
+        call_args = mock_run.call_args[0][0]
+        assert call_args[0:2] == ["wrapper", "scontrol"]
+        assert "show" in call_args
+        assert "job" in call_args
+        assert "12345" in call_args

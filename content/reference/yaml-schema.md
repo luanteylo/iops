@@ -86,6 +86,11 @@ benchmark:
   repetitions: integer            # Optional: global repetitions (default: 1)
   search_method: string           # Optional: "exhaustive" | "greedy" | "bayesian"
   executor: string                # Optional: "local" | "slurm" (default: "slurm")
+  executor_options:               # Optional: executor-specific configuration
+    commands:                     # Optional: customize SLURM commands (for wrappers)
+      status: string              # Optional: status command (default: "squeue")
+      info: string                # Optional: info command (default: "scontrol")
+      cancel: string              # Optional: cancel command (default: "scancel")
   random_seed: integer            # Optional: seed for randomization (default: 42)
   cache_exclude_vars: list        # Optional: variables to exclude from cache hash
   max_core_hours: float           # Optional: CPU core-hours budget limit
@@ -173,6 +178,30 @@ Execution backend:
 ```yaml
 executor: "local"
 ```
+
+#### `executor_options` (optional)
+Executor-specific configuration options.
+
+**For SLURM executor**: Customize commands used for job management. This is useful when running on systems with command wrappers or custom SLURM installations.
+
+```yaml
+executor_options:
+  commands:
+    status: "squeue"       # Command to query job status (default: "squeue")
+    info: "scontrol"       # Command to get job information (default: "scontrol")
+    cancel: "scancel"      # Command to cancel jobs (default: "scancel")
+```
+
+**Example with wrapper**:
+```yaml
+executor_options:
+  commands:
+    status: "lrms-wrapper squeue"
+    info: "lrms-wrapper scontrol"
+    cancel: "lrms-wrapper scancel"
+```
+
+**Note**: The submit command is configured separately via `scripts[].submit` (see Scripts section).
 
 #### `random_seed` (optional, default: 42)
 Seed for random operations (e.g., repetition interleaving).
