@@ -1,0 +1,20 @@
+/* Custom styles for IOPS documentation */
+
+/* Add custom styles here if needed */
+
+.md-typeset h1 {
+    font-weight: 600;
+}
+
+.md-typeset code {
+    background-color: var(--md-code-bg-color);
+}
+
+/* Improve table styling */
+.md-typeset table:not([class]) {
+    border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset table:not([class]) th {
+    background-color: var(--md-default-fg-color--lightest);
+}

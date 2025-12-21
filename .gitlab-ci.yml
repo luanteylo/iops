@@ -1,0 +1,62 @@
+# GitLab CI/CD configuration for IOPS
+
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+# Run tests
+test:
+  stage: test
+  image: python:3.10
+  before_script:
+    - pip install -e .
+    - pip install -r requirements-dev.txt
+  script:
+    - pytest tests/
+  only:
+    - merge_requests
+    - dev-1.0
+    - dev-3.0
+
+# Build documentation
+pages:
+  stage: deploy
+  image: python:3.10
+  before_script:
+    - pip install -r requirements-docs.txt
+  script:
+    - mkdocs build --strict --verbose
+    - mv site public
+  artifacts:
+    paths:
+      - public
+  only:
+    - dev-1.0  # Deploy docs from main branch
+  # Uncomment to deploy from tags
+  # only:
+  #   - tags
+
+# Preview documentation for merge requests
+pages:preview:
+  stage: build
+  image: python:3.10
+  before_script:
+    - pip install -r requirements-docs.txt
+  script:
+    - mkdocs build --strict --verbose
+  artifacts:
+    paths:
+      - site
+    expire_in: 1 week
+  only:
+    - merge_requests
+  except:
+    - dev-1.0
