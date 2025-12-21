@@ -39,10 +39,11 @@ benchmark:
   executor: "slurm"                   # SLURM cluster execution
   # executor_options:                 # Optional: customize SLURM commands (useful for wrapper systems)
   #   commands:
-  #     submit: "sbatch"              # default: sbatch (can be overridden per-script)
-  #     status: "squeue"              # default: squeue
-  #     info: "scontrol"              # default: scontrol
-  #     cancel: "scancel"             # default: scancel
+  #     submit: "sbatch"                                     # default: sbatch (can be overridden per-script)
+  #     status: "squeue -j {job_id} --noheader --format=%T" # default (use {job_id} placeholder)
+  #     info: "scontrol show job {job_id}"                  # default
+  #     cancel: "scancel {job_id}"                          # default
+  #   poll_interval: 30                                      # default: 30 seconds (job status polling)
   random_seed: 42                     # Reproducibility
 
   # Cache and budget settings

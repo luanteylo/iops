@@ -22,28 +22,35 @@ class ExecutorOptionsConfig:
     Executor-specific configuration options.
 
     For SLURM executor, you can override the commands used for job management.
+    Commands are templates that support {job_id} placeholder for dynamic substitution.
     This is useful when running on systems with command wrappers or custom SLURM installations.
 
-    Example:
+    Example with default SLURM commands:
         executor_options:
           commands:
-            submit: "sbatch"         # Default submit command (can be overridden per-script)
-            status: "squeue"         # Job status query command
-            info: "scontrol"         # Job information command
-            cancel: "scancel"        # Job cancellation command
+            submit: "sbatch"                                      # Default submit (per-script override)
+            status: "squeue -j {job_id} --noheader --format=%T"  # Job status query
+            info: "scontrol show job {job_id}"                   # Job information
+            cancel: "scancel {job_id}"                           # Job cancellation
+          poll_interval: 30                                       # Status check interval (seconds)
 
-    If you need to use a wrapper for all commands:
+    Example with wrapper and custom flags:
         executor_options:
           commands:
             submit: "lrms-wrapper sbatch"
-            status: "lrms-wrapper squeue"
-            info: "lrms-wrapper scontrol"
-            cancel: "lrms-wrapper scancel"
+            status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags
+            info: "lrms-wrapper info {job_id}"
+            cancel: "lrms-wrapper kill {job_id}"
+          poll_interval: 10                                       # Check status every 10 seconds
+
+    Placeholders:
+        {job_id} - Replaced with the SLURM job ID at runtime
 
     Note: The submit command specified here is a default. Individual scripts can override
     it by specifying their own submit command in scripts[].submit.
     """
     commands: Optional[Dict[str, str]] = None
+    poll_interval: Optional[int] = None  # Polling interval in seconds for SLURM job status checks
 
 
 @dataclass

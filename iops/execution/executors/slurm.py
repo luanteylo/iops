@@ -55,7 +55,7 @@ class SlurmExecutor(BaseExecutor):
     }
 
     def __init__(self, cfg):
-        """Initialize SLURM executor with configurable commands."""
+        """Initialize SLURM executor with configurable command templates and polling interval."""
         super().__init__(cfg)
 
         # Extract command overrides from executor_options
@@ -64,12 +64,22 @@ class SlurmExecutor(BaseExecutor):
         if executor_options and executor_options.commands:
             custom_commands = executor_options.commands
 
-        # Set commands with defaults
+        # Set command templates with defaults
+        # Templates support {job_id} placeholder for runtime substitution
         # Note: submit can be overridden per-script via scripts[].submit
         self.cmd_submit = custom_commands.get("submit", "sbatch")
-        self.cmd_status = custom_commands.get("status", "squeue")
-        self.cmd_info = custom_commands.get("info", "scontrol")
-        self.cmd_cancel = custom_commands.get("cancel", "scancel")
+        self.cmd_status = custom_commands.get("status", "squeue -j {job_id} --noheader --format=%T")
+        self.cmd_info = custom_commands.get("info", "scontrol show job {job_id}")
+        self.cmd_cancel = custom_commands.get("cancel", "scancel {job_id}")
+
+        # Set polling interval with fallback chain:
+        # 1. executor_options.poll_interval
+        # 2. execution.status_check_delay
+        # 3. default: 30 seconds
+        if executor_options and executor_options.poll_interval is not None:
+            self.poll_interval = executor_options.poll_interval
+        else:
+            self.poll_interval = getattr(getattr(cfg, "execution", None), "status_check_delay", 30)
 
     def submit(self, test) -> None:
         self._init_execution_metadata(test)
@@ -202,9 +212,7 @@ class SlurmExecutor(BaseExecutor):
             test.metadata["__error"] = msg
             return
 
-        poll_interval = getattr(getattr(self.cfg, "execution", None), "status_check_delay", 30)
-
-        self.logger.debug(f"  [SlurmExec] Waiting for job {job_id} (poll interval={poll_interval}s)")
+        self.logger.debug(f"  [SlurmExec] Waiting for job {job_id} (poll interval={self.poll_interval}s)")
 
         last_state = None
         while True:
@@ -222,7 +230,7 @@ class SlurmExecutor(BaseExecutor):
                 self.logger.info("SLURM job %s state: %s", job_id, state)
                 last_state = state
 
-            time.sleep(poll_interval)
+            time.sleep(self.poll_interval)
 
         # Job left squeue - unregister from tracking (no longer needs cleanup)
         test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -316,9 +324,13 @@ class SlurmExecutor(BaseExecutor):
     def _squeue_state(self, job_id: str) -> Optional[str]:
         """
         Returns job state string (e.g., PENDING/RUNNING/...) or None if not in queue.
+        Uses cmd_status template with {job_id} placeholder.
         """
         try:
-            cmd = shlex.split(self.cmd_status) + ["-j", job_id, "--noheader", "--format=%T"]
+            # Format the command template with job_id
+            cmd_str = self.cmd_status.format(job_id=job_id)
+            cmd = shlex.split(cmd_str)
+
             r = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -332,20 +344,24 @@ class SlurmExecutor(BaseExecutor):
         except subprocess.CalledProcessError as e:
             # treat failure as "not visible in queue" (best effort)
             self.logger.debug(
-                f"  [SlurmExec] {self.cmd_status} failed for job {job_id}: {(e.stderr or str(e)).strip()}"
+                f"  [SlurmExec] Status command failed for job {job_id}: {(e.stderr or str(e)).strip()}"
             )
             return None
 
     def _scontrol_info(self, job_id: str) -> Dict[str, Optional[str]]:
         """
         Best-effort final status without sacct.
+        Uses cmd_info template with {job_id} placeholder.
 
         Returns:
           {"state": "...", "exitcode": "..."} when available,
           otherwise None values.
         """
         try:
-            cmd = shlex.split(self.cmd_info) + ["show", "job", job_id]
+            # Format the command template with job_id
+            cmd_str = self.cmd_info.format(job_id=job_id)
+            cmd = shlex.split(cmd_str)
+
             r = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -371,7 +387,7 @@ class SlurmExecutor(BaseExecutor):
         except subprocess.CalledProcessError as e:
             # common if job aged out: "Invalid job id specified"
             self.logger.debug(
-                f"  [SlurmExec] {self.cmd_info} query failed for job {job_id} (likely aged out): "
+                f"  [SlurmExec] Info command failed for job {job_id} (likely aged out): "
                 f"{(e.stderr or str(e)).strip()}"
             )
             return {"state": None, "exitcode": None}

@@ -123,20 +123,21 @@ IOPS automatically:
 
 ### Custom SLURM Commands
 
-For systems with command wrappers or custom SLURM installations, you can customize the commands used for job management:
+For systems with command wrappers or custom SLURM installations, you can customize the command templates used for job management. Commands are templates that support `{job_id}` placeholder for runtime substitution:
 
 ```yaml
 benchmark:
   executor: "slurm"
   executor_options:
     commands:
-      submit: "sbatch"       # Default submit command
-      status: "squeue"       # Command to query job status
-      info: "scontrol"       # Command to get job information
-      cancel: "scancel"      # Command to cancel jobs
+      submit: "sbatch"                                      # Default submit command
+      status: "squeue -j {job_id} --noheader --format=%T"  # Job status query template
+      info: "scontrol show job {job_id}"                   # Job information template
+      cancel: "scancel {job_id}"                           # Job cancellation template
+    poll_interval: 30                                       # Status polling interval (seconds)
 ```
 
-**Example with wrapper**:
+**Example with wrapper and custom flags**:
 
 ```yaml
 benchmark:
@@ -144,14 +145,18 @@ benchmark:
   executor_options:
     commands:
       submit: "lrms-wrapper sbatch"
-      status: "lrms-wrapper squeue"
-      info: "lrms-wrapper scontrol"
-      cancel: "lrms-wrapper scancel"
+      status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags: -r instead of -j
+      info: "lrms-wrapper info {job_id}"
+      cancel: "lrms-wrapper kill {job_id}"
+    poll_interval: 10                                       # Check status every 10 seconds
 ```
 
-This allows IOPS to work with various SLURM configurations and wrapper systems commonly found in HPC environments.
+This allows IOPS to work with various SLURM configurations and wrapper systems commonly found in HPC environments. The `{job_id}` placeholder is replaced with the actual job ID at runtime, giving you complete control over command structure and flags.
 
-**Note**: The `submit` command specified in `executor_options` is a default. Individual scripts can override it by specifying their own `submit` in `scripts[].submit`, allowing per-script customization when needed.
+**Notes**:
+- The `submit` command specified in `executor_options` is a default. Individual scripts can override it via `scripts[].submit`.
+- The `{job_id}` placeholder is required for status, info, and cancel commands.
+- The `poll_interval` controls how often (in seconds) IOPS checks job status during execution. Default is 30 seconds.
 
 ## Comparison
 

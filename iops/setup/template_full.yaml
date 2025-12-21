@@ -61,6 +61,7 @@ benchmark:
   # EXECUTOR OPTIONS (optional)
   # ---------------------------------------------------------------------------
   # For SLURM executor: Customize commands used for job management
+  # Commands are templates that support {job_id} placeholder for runtime substitution
   # Useful when running on systems with command wrappers or custom SLURM installations
   #
   # Uncomment to customize SLURM commands:
@@ -71,22 +72,28 @@ benchmark:
   #     # Can be overridden per-script via scripts[].submit
   #     submit: "sbatch"
   #
-  #     # Command to query job status (default: "squeue")
-  #     status: "squeue"
+  #     # Command to query job status (default: "squeue -j {job_id} --noheader --format=%T")
+  #     # The {job_id} placeholder is replaced with the actual job ID at runtime
+  #     status: "squeue -j {job_id} --noheader --format=%T"
   #
-  #     # Command to get job information (default: "scontrol")
-  #     info: "scontrol"
+  #     # Command to get job information (default: "scontrol show job {job_id}")
+  #     info: "scontrol show job {job_id}"
   #
-  #     # Command to cancel jobs (default: "scancel")
-  #     cancel: "scancel"
+  #     # Command to cancel jobs (default: "scancel {job_id}")
+  #     cancel: "scancel {job_id}"
   #
-  # Example: Using a wrapper for all SLURM commands
+  #   # Polling interval in seconds for SLURM job status checks (default: 30)
+  #   # Controls how often IOPS queries job status during wait_and_collect
+  #   poll_interval: 30
+  #
+  # Example: Using a wrapper with custom flags and faster polling
   # executor_options:
   #   commands:
   #     submit: "lrms-wrapper sbatch"
-  #     status: "lrms-wrapper squeue"
-  #     info: "lrms-wrapper scontrol"
-  #     cancel: "lrms-wrapper scancel"
+  #     status: "lrms-wrapper -r {job_id} --custom-format"     # Custom flag: -r instead of -j
+  #     info: "lrms-wrapper info {job_id}"
+  #     cancel: "lrms-wrapper kill {job_id}"
+  #   poll_interval: 10                                        # Check status every 10 seconds
   #
   # Note: Individual scripts can override the submit command via scripts[].submit
 

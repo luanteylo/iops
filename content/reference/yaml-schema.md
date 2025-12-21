@@ -87,11 +87,12 @@ benchmark:
   search_method: string           # Optional: "exhaustive" | "greedy" | "bayesian"
   executor: string                # Optional: "local" | "slurm" (default: "slurm")
   executor_options:               # Optional: executor-specific configuration
-    commands:                     # Optional: customize SLURM commands (for wrappers)
-      submit: string              # Optional: default submit command (default: "sbatch")
-      status: string              # Optional: status command (default: "squeue")
-      info: string                # Optional: info command (default: "scontrol")
-      cancel: string              # Optional: cancel command (default: "scancel")
+    commands:                     # Optional: customize SLURM command templates
+      submit: string              # Optional: submit command (default: "sbatch")
+      status: string              # Optional: status template (default: "squeue -j {job_id} --noheader --format=%T")
+      info: string                # Optional: info template (default: "scontrol show job {job_id}")
+      cancel: string              # Optional: cancel template (default: "scancel {job_id}")
+    poll_interval: integer        # Optional: status polling interval in seconds (default: 30)
   random_seed: integer            # Optional: seed for randomization (default: 42)
   cache_exclude_vars: list        # Optional: variables to exclude from cache hash
   max_core_hours: float           # Optional: CPU core-hours budget limit
@@ -183,28 +184,35 @@ executor: "local"
 #### `executor_options` (optional)
 Executor-specific configuration options.
 
-**For SLURM executor**: Customize commands used for job management. This is useful when running on systems with command wrappers or custom SLURM installations.
+**For SLURM executor**: Customize command templates used for job management. Commands are templates that support `{job_id}` placeholder for runtime substitution. This is useful when running on systems with command wrappers or custom SLURM installations.
 
 ```yaml
 executor_options:
   commands:
-    submit: "sbatch"       # Default submit command (default: "sbatch")
-    status: "squeue"       # Command to query job status (default: "squeue")
-    info: "scontrol"       # Command to get job information (default: "scontrol")
-    cancel: "scancel"      # Command to cancel jobs (default: "scancel")
+    submit: "sbatch"                                      # Default submit command
+    status: "squeue -j {job_id} --noheader --format=%T"  # Job status query template
+    info: "scontrol show job {job_id}"                   # Job information template
+    cancel: "scancel {job_id}"                           # Job cancellation template
+  poll_interval: 30                                       # Status polling interval (seconds)
 ```
 
-**Example with wrapper**:
+**Example with wrapper and custom flags**:
 ```yaml
 executor_options:
   commands:
     submit: "lrms-wrapper sbatch"
-    status: "lrms-wrapper squeue"
-    info: "lrms-wrapper scontrol"
-    cancel: "lrms-wrapper scancel"
+    status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags: -r instead of -j
+    info: "lrms-wrapper info {job_id}"
+    cancel: "lrms-wrapper kill {job_id}"
+  poll_interval: 10                                       # Check status every 10 seconds
 ```
 
-**Note**: The `submit` command specified here is a default. Individual scripts can override it by specifying their own `submit` command in `scripts[].submit`.
+**Placeholders**:
+- `{job_id}` - Replaced with the SLURM job ID at runtime
+
+**Notes**:
+- The `submit` command specified here is a default. Individual scripts can override it via `scripts[].submit`.
+- The `{job_id}` placeholder is required for status, info, and cancel commands.
 
 #### `random_seed` (optional, default: 42)
 Seed for random operations (e.g., repetition interleaving).

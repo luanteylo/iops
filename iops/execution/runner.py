@@ -138,13 +138,15 @@ class IOPSRunner(HasLogger):
 
         # Cancel all submitted jobs
         failed_cancellations = []
-        # Get cancel command from executor (handles command wrappers)
-        cancel_cmd = getattr(self.executor, 'cmd_cancel', 'scancel')
+        # Get cancel command template from executor (handles command wrappers)
+        cancel_cmd_template = getattr(self.executor, 'cmd_cancel', 'scancel {job_id}')
 
         for job_id in self.submitted_job_ids:
             try:
                 self.logger.info(f"  Canceling job {job_id}...")
-                cmd = shlex.split(cancel_cmd) + [job_id]
+                # Format the command template with job_id
+                cmd_str = cancel_cmd_template.format(job_id=job_id)
+                cmd = shlex.split(cmd_str)
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
@@ -173,7 +175,9 @@ class IOPSRunner(HasLogger):
             self.logger.warning(
                 f"\nFailed to cancel {len(failed_cancellations)} job(s): {', '.join(failed_cancellations)}"
             )
-            self.logger.warning(f"You may need to cancel them manually with: {cancel_cmd} <job_id>")
+            # Show template with placeholder for manual reference
+            manual_cmd = cancel_cmd_template.replace('{job_id}', '<job_id>')
+            self.logger.warning(f"You may need to cancel them manually with: {manual_cmd}")
         else:
             self.logger.info(f"\n✓ All {len(self.submitted_job_ids)} job(s) canceled successfully")
 
