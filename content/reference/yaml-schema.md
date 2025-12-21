@@ -88,6 +88,7 @@ benchmark:
   executor: string                # Optional: "local" | "slurm" (default: "slurm")
   executor_options:               # Optional: executor-specific configuration
     commands:                     # Optional: customize SLURM commands (for wrappers)
+      submit: string              # Optional: default submit command (default: "sbatch")
       status: string              # Optional: status command (default: "squeue")
       info: string                # Optional: info command (default: "scontrol")
       cancel: string              # Optional: cancel command (default: "scancel")
@@ -187,6 +188,7 @@ Executor-specific configuration options.
 ```yaml
 executor_options:
   commands:
+    submit: "sbatch"       # Default submit command (default: "sbatch")
     status: "squeue"       # Command to query job status (default: "squeue")
     info: "scontrol"       # Command to get job information (default: "scontrol")
     cancel: "scancel"      # Command to cancel jobs (default: "scancel")
@@ -196,12 +198,13 @@ executor_options:
 ```yaml
 executor_options:
   commands:
+    submit: "lrms-wrapper sbatch"
     status: "lrms-wrapper squeue"
     info: "lrms-wrapper scontrol"
     cancel: "lrms-wrapper scancel"
 ```
 
-**Note**: The submit command is configured separately via `scripts[].submit` (see Scripts section).
+**Note**: The `submit` command specified here is a default. Individual scripts can override it by specifying their own `submit` command in `scripts[].submit`.
 
 #### `random_seed` (optional, default: 42)
 Seed for random operations (e.g., repetition interleaving).

@@ -67,6 +67,10 @@ benchmark:
   # ---------------------------------------------------------------------------
   # executor_options:
   #   commands:
+  #     # Default submit command (default: "sbatch")
+  #     # Can be overridden per-script via scripts[].submit
+  #     submit: "sbatch"
+  #
   #     # Command to query job status (default: "squeue")
   #     status: "squeue"
   #
@@ -79,11 +83,12 @@ benchmark:
   # Example: Using a wrapper for all SLURM commands
   # executor_options:
   #   commands:
+  #     submit: "lrms-wrapper sbatch"
   #     status: "lrms-wrapper squeue"
   #     info: "lrms-wrapper scontrol"
   #     cancel: "lrms-wrapper scancel"
   #
-  # Note: The submit command is configured separately via scripts[].submit
+  # Note: Individual scripts can override the submit command via scripts[].submit
 
   # Optional: Random seed for reproducible random operations (default: None)
   # Used by random and bayesian search methods

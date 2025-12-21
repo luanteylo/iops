@@ -27,10 +27,10 @@ class ExecutorOptionsConfig:
     Example:
         executor_options:
           commands:
-            submit: "sbatch"
-            status: "squeue"
-            info: "scontrol"
-            cancel: "scancel"
+            submit: "sbatch"         # Default submit command (can be overridden per-script)
+            status: "squeue"         # Job status query command
+            info: "scontrol"         # Job information command
+            cancel: "scancel"        # Job cancellation command
 
     If you need to use a wrapper for all commands:
         executor_options:
@@ -39,6 +39,9 @@ class ExecutorOptionsConfig:
             status: "lrms-wrapper squeue"
             info: "lrms-wrapper scontrol"
             cancel: "lrms-wrapper scancel"
+
+    Note: The submit command specified here is a default. Individual scripts can override
+    it by specifying their own submit command in scripts[].submit.
     """
     commands: Optional[Dict[str, str]] = None
 

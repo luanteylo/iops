@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Configurable SLURM commands via `executor_options.commands` for systems with command wrappers
-- Support for customizing `status`, `info`, and `cancel` commands in SLURM executor
+- Support for customizing `submit`, `status`, `info`, and `cancel` commands in SLURM executor
+- Default submit command can be specified in executor_options (scripts can still override)
 - Documentation for executor_options in YAML schema reference and execution backends guide
 
 ## [3.0.4] - 2025-12-20

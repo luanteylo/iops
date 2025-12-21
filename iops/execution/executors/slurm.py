@@ -64,7 +64,9 @@ class SlurmExecutor(BaseExecutor):
         if executor_options and executor_options.commands:
             custom_commands = executor_options.commands
 
-        # Set commands with defaults (note: submit is handled separately via scripts[].submit)
+        # Set commands with defaults
+        # Note: submit can be overridden per-script via scripts[].submit
+        self.cmd_submit = custom_commands.get("submit", "sbatch")
         self.cmd_status = custom_commands.get("status", "squeue")
         self.cmd_info = custom_commands.get("info", "scontrol")
         self.cmd_cancel = custom_commands.get("cancel", "scancel")
@@ -88,13 +90,11 @@ class SlurmExecutor(BaseExecutor):
             test.metadata["__error"] = msg
             return
 
+        # Use script-specific submit command, or fall back to executor default
         submit_cmd = (test.submit_cmd or "").strip()
         if not submit_cmd:
-            msg = "test.submit_cmd is empty. It must come from YAML scripts[].submit."
-            self.logger.error(f"  [SlurmExec] ERROR: {msg}")
-            test.metadata["__executor_status"] = self.STATUS_ERROR
-            test.metadata["__error"] = msg
-            return
+            submit_cmd = self.cmd_submit
+            self.logger.debug(f"  [SlurmExec] Using default submit command: {submit_cmd}")
 
         cmd = shlex.split(submit_cmd)
 

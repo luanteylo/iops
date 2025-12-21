@@ -26,6 +26,7 @@ benchmark:
   executor : "slurm" # specify the executor to use : local | slurm
   # executor_options:  # Optional: customize SLURM commands (useful for wrapper systems)
   #   commands:
+  #     submit: "sbatch"       # default: sbatch (can be overridden per-script)
   #     status: "squeue"       # default: squeue
   #     info: "scontrol"       # default: scontrol
   #     cancel: "scancel"      # default: scancel
