@@ -1,6 +1,7 @@
 baseURL = 'https://lgouveia.gitlabpages.inria.fr/iops/'
 languageCode = 'en-us'
 title = 'IOPS - I/O Performance Suite'
+theme = 'hugo-book'
 
 # Enable Git info
 enableGitInfo = true
@@ -62,8 +63,3 @@ enableGitInfo = true
 
 [outputs]
   home = ["HTML", "RSS", "JSON"]
-
-# Module configuration for Hugo Book theme
-[module]
-  [[module.imports]]
-    path = "github.com/alex-shpak/hugo-book"
