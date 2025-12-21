@@ -1,4 +1,7 @@
-# Search Methods
+---
+title: "Search Methods"
+---
+
 
 IOPS supports multiple search strategies for exploring your parameter space. Each method has different trade-offs between thoroughness, efficiency, and use cases.
 

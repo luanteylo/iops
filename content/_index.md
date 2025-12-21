@@ -1,6 +1,6 @@
 ---
 title: "IOPS - I/O Performance Suite"
-type: docs
+weight: 1
 ---
 
 # IOPS - I/O Performance Suite
@@ -29,23 +29,21 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis
 - **Flexible Output**: Export results to CSV, Parquet, or SQLite
 
-## Quick Links
+## Quick Start
 
-- **[Installation](docs/getting-started/installation)** - Get started with IOPS in minutes
-- **[Quick Start](docs/getting-started/quickstart)** - Run your first benchmark in 5 minutes
-- **[User Guide](docs/user-guide/configuration)** - Learn how to configure and use IOPS
-- **[Examples](docs/examples/)** - Explore working examples and templates
+Get started quickly with these guides:
 
-## How It Works
+- [Installation](getting-started/installation) - Get IOPS installed in minutes
+- [Quick Start](getting-started/quickstart) - Run your first benchmark
+- [Basic Concepts](getting-started/concepts) - Understand how IOPS works
 
-IOPS follows a simple workflow:
+## Documentation Sections
 
-1. **Configuration**: Define variables to sweep, commands to run, and metrics to measure in a YAML file
-2. **Planning**: IOPS generates execution instances for parameter combinations
-3. **Execution**: Runs tests locally or submits SLURM jobs
-4. **Parsing**: Extracts metrics from output files using your parser script
-5. **Storage**: Saves results to CSV, SQLite, or Parquet
-6. **Analysis**: Generates HTML reports with interactive plots and statistics
+- **[Getting Started](getting-started)** - Installation, quick start, and basic concepts
+- **[User Guide](user-guide)** - Detailed guides for using all IOPS features
+- **[Examples](examples)** - Working examples and templates
+- **[Reference](reference)** - CLI and YAML schema reference
+- **[About](about)** - Changelog, license, and contributing
 
 ## Simple Example
 
@@ -87,12 +85,8 @@ Run it with:
 iops config.yaml
 ```
 
-## Community and Support
+## Links
 
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)
 - **Issues**: [Issue Tracker](https://gitlab.inria.fr/lgouveia/iops/-/issues)
 - **PyPI**: [iops-benchmark](https://pypi.org/project/iops-benchmark/)
-
-## License
-
-This project is developed at INRIA. See the [License](docs/about/license) page for details.

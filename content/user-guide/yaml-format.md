@@ -1,4 +1,7 @@
-# YAML Configuration Format
+---
+title: "YAML Configuration Format"
+---
+
 
 This page provides a complete reference for the IOPS YAML configuration format.
 

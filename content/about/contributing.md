@@ -1,4 +1,7 @@
-# Contributing to IOPS
+---
+title: "Contributing to IOPS"
+---
+
 
 Thank you for your interest in contributing to IOPS! This document provides guidelines for contributing to the project.
 

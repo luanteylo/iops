@@ -1,4 +1,7 @@
-# Changelog
+---
+title: "Changelog"
+---
+
 
 All notable changes to IOPS (I/O Performance Suite) are documented here.
 

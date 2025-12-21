@@ -1,4 +1,7 @@
-# Simple Local Example
+---
+title: "Simple Local Example"
+---
+
 
 This example demonstrates basic IOPS usage with local execution.
 

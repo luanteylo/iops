@@ -1,4 +1,7 @@
-# Installation
+---
+title: "Installation"
+---
+
 
 ## Prerequisites
 

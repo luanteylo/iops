@@ -1,4 +1,7 @@
-# Quick Start
+---
+title: "Quick Start"
+---
+
 
 This guide will walk you through running your first benchmark with IOPS in just a few minutes.
 

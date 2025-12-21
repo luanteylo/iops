@@ -1,40 +1,29 @@
 baseURL = 'https://lgouveia.gitlabpages.inria.fr/iops/'
 languageCode = 'en-us'
 title = 'IOPS - I/O Performance Suite'
-theme = 'hugo-geekdoc'
+theme = 'hugo-theme-relearn'
 
 # Enable Git info
 enableGitInfo = true
 
 [params]
-  # GeekDoc specific parameters
-  geekdocRepo = "https://gitlab.inria.fr/lgouveia/iops"
-  geekdocEditPath = "-/edit/dev-1.0"
-  geekdocSearch = true
-  geekdocDarkMode = true
+  description = "A generic benchmark orchestration framework for automated parametric experiments"
+  author = "INRIA - TADAAM Team"
+
+  # Relearn theme specific
+  editURL = "https://gitlab.inria.fr/lgouveia/iops/-/edit/dev-1.0/"
+  showVisitedLinks = true
+  disableSearch = false
+  disableNextPrev = false
 
 [markup]
   [markup.goldmark]
     [markup.goldmark.renderer]
       unsafe = true
-  [markup.tableOfContents]
-    endLevel = 3
-    ordered = false
-    startLevel = 2
   [markup.highlight]
-    anchorLineNos = false
     codeFences = true
-    guessSyntax = false
-    lineNos = false
-    lineNumbersInTable = true
-    noClasses = true
     style = "monokai"
-    tabWidth = 4
-
-[taxonomies]
-  tag = "tags"
 
 [outputs]
-  home = ["HTML", "RSS"]
-  page = ["HTML"]
+  home = ["HTML", "RSS", "JSON"]
   section = ["HTML"]

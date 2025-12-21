@@ -1,4 +1,7 @@
-# Analysis & Reports
+---
+title: "Analysis & Reports"
+---
+
 
 IOPS can generate interactive HTML reports with plots and statistical analysis from your benchmark results.
 

@@ -1,4 +1,7 @@
-# SLURM Cluster Example
+---
+title: "SLURM Cluster Example"
+---
+
 
 This example demonstrates running benchmarks on an HPC cluster with SLURM.
 

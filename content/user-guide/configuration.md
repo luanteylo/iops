@@ -1,4 +1,7 @@
-# Configuration Guide
+---
+title: "Configuration Guide"
+---
+
 
 This guide explains how to configure IOPS for your benchmarking needs.
 

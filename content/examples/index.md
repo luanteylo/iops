@@ -1,4 +1,7 @@
-# Examples
+---
+title: "Examples"
+---
+
 
 This section provides working examples demonstrating various IOPS features.
 

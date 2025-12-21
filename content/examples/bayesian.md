@@ -1,4 +1,7 @@
-# Bayesian Optimization Example
+---
+title: "Bayesian Optimization Example"
+---
+
 
 This example demonstrates using Bayesian optimization to efficiently explore parameter space.
 

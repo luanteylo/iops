@@ -1,4 +1,7 @@
-# Core Concepts
+---
+title: "Core Concepts"
+---
+
 
 Understanding these core concepts will help you make the most of IOPS.
 
