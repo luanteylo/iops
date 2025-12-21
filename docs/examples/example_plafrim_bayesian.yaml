@@ -1,0 +1,200 @@
+# =============================================================================
+# IOPS Benchmark Configuration - PlaFRIM Bayesian Optimization
+# =============================================================================
+#
+# This example demonstrates Bayesian optimization on PlaFRIM cluster using SLURM
+# to efficiently find optimal IOR parameters for maximum write bandwidth.
+#
+# Features:
+# - Bayesian optimization for intelligent parameter search
+# - SLURM multi-node execution with proper resource allocation
+# - Budget tracking and core-hours management
+# - Automatic analysis reports with evolution plots
+#
+# Usage:
+#   Run optimization:  iops run example_plafrim_bayesian.yaml
+#   Generate report:   iops analyze /home/lgouveia/workdir/run_XXX
+#   Debug mode:        iops run example_plafrim_bayesian.yaml --log_level DEBUG
+#
+# =============================================================================
+
+benchmark:
+  name: "IOR Bayesian Optimization - PlaFRIM"
+  description: "Find optimal IOR parameters for maximum write bandwidth using Bayesian optimization on PlaFRIM cluster"
+  workdir: "/home/lgouveia/workdir/"
+  sqlite_db: "/home/lgouveia/iops_bayesian.db"
+
+  # Bayesian optimization settings
+  search_method: "bayesian"
+
+  bayesian_config:
+    target_metric: "bwMiB"           # Optimize write bandwidth
+    objective: "maximize"             # Maximize bandwidth
+    n_initial_points: 5               # Random exploration phase (5 configurations)
+    n_iterations: 20                  # Total evaluations (20 configurations)
+    acquisition_func: "EI"            # Expected Improvement (balanced exploration/exploitation)
+
+  # Execution settings
+  repetitions: 3                      # Repetitions per configuration for robust estimates
+  executor: "slurm"                   # SLURM cluster execution
+  # executor_options:                 # Optional: customize SLURM commands (useful for wrapper systems)
+  #   commands:
+  #     submit: "sbatch"                                     # default: sbatch (can be overridden per-script)
+  #     status: "squeue -j {job_id} --noheader --format=%T" # default (use {job_id} placeholder)
+  #     info: "scontrol show job {job_id}"                  # default
+  #     cancel: "scancel {job_id}"                          # default
+  #   poll_interval: 30                                      # default: 30 seconds (job status polling)
+  random_seed: 42                     # Reproducibility
+
+  # Cache and budget settings
+  cache_exclude_vars: ["summary_file"]
+  max_core_hours: 2000                # Budget limit (adjust based on allocation)
+  cores_expr: "{{ nodes * processes_per_node }}"  # Total cores = nodes × processes_per_node
+  estimated_time_seconds: 300         # ~5 minutes per test
+
+  # Report configuration
+  report_vars: ["nodes", "processes_per_node", "volume_size_gb", "ost_number"]
+
+# -----------------------------------------------------------------------------
+# Variables: Bayesian search space
+# -----------------------------------------------------------------------------
+
+vars:
+  # Number of compute nodes (discrete)
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [2, 4, 8,]          # Test different node counts
+
+  # MPI processes per node (discrete)
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16]               # Test different process counts
+
+  # Data volume size (discrete)
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [16, 32]        # Test different data sizes
+
+  # Number of OSTs (discrete) - for BeegFS striping
+  ost_number:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]             # Test different OST counts
+
+  # Derived variables (computed from swept variables)
+
+  # Total MPI tasks across all nodes
+  ntasks:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+  # Block size per process
+  block_size_mb:
+    type: int
+    expr: "{{ (volume_size_gb * 1024) / ntasks }}"
+
+  # Map ost_number to actual BeegFS path
+  ost_count:
+    type: str
+    expr: "{{ '/beegfs/lgouveia/ior_' + ost_number|string }}"
+
+  # Output file path with execution metadata
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+# -----------------------------------------------------------------------------
+# Command: IOR benchmark command template
+# -----------------------------------------------------------------------------
+
+command:
+  template: >
+    ior -w -b {{ block_size_mb }}mb -t 1mb
+    -O summaryFile={{summary_file}} -O summaryFormat=JSON
+    -o {{ost_count}}/output.ior
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+    cluster: "PlaFRIM"
+
+# -----------------------------------------------------------------------------
+# Scripts: SLURM job submission and execution
+# -----------------------------------------------------------------------------
+
+scripts:
+  - name: "ior"
+    submit: "sbatch"
+    script_template: scripts/ior_plafrim_slurm.sh
+    # Parser: Extract metrics from IOR JSON output
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+      parser_script: scripts/ior_parser.py
+
+# -----------------------------------------------------------------------------
+# Output: Results storage
+# -----------------------------------------------------------------------------
+
+output:
+  sink:
+    type: "csv"
+    path: "{{ workdir }}/results_bayesian.csv"
+    mode: "append"
+    exclude: ["benchmark.name", "benchmark.description"]
+
+# =============================================================================
+# Notes:
+# =============================================================================
+#
+# 1. Search Space:
+#    - nodes: [4, 8, 16, 32] → 4 values
+#    - processes_per_node: [4, 8, 16] → 3 values
+#    - volume_size_gb: [16, 32, 64, 128] → 4 values
+#    - ost_number: [1, 2, 4, 8] → 4 values
+#    Total combinations: 4 × 3 × 4 × 4 = 192 configurations
+#    Bayesian optimization will test only 20 (10% sampling)
+#
+# 2. Optimization Strategy:
+#    - First 5 iterations: Random exploration
+#    - Next 15 iterations: Bayesian-guided optimization
+#    - Each configuration tested 3 times (repetitions)
+#    - Total tests: 20 configurations × 3 repetitions = 60 runs
+#
+# 3. Expected Behavior:
+#    - Algorithm will converge towards optimal parameters
+#    - Early iterations explore diverse configurations
+#    - Later iterations focus on promising regions
+#    - Report shows evolution plots visualizing convergence
+#
+# 4. Resource Usage:
+#    - Estimated time: 20 configs × 3 reps × 5 min = 5 hours
+#    - Core-hours: depends on node/process combinations tested
+#    - Budget tracking ensures it stays within max_core_hours limit
+#
+# 5. Analysis:
+#    After completion, generate report:
+#      iops analyze /home/lgouveia/workdir/run_XXX
+#
+#    Report includes:
+#    - Best configuration found
+#    - Metric evolution over iterations
+#    - Parameter evolution plots
+#    - Exploration vs exploitation visualization
+#
+# 6. SLURM Notes:
+#    - Uses only --nodes and --ntasks-per-node (no --ntasks conflict)
+#    - --exclusive flag ensures dedicated node access
+#    - --constraint=bora targets specific node type
+#    - mpirun gets task count automatically from SLURM
+#
+# =============================================================================

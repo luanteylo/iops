@@ -11,9 +11,9 @@ class BenchmarkWizard:
 
     def __init__(self):
         self.template_path = Path(__file__).parent / "template_full.yaml"
-        # Path to example scripts in the package
+        # Path to examples directory in the package
         package_root = Path(__file__).parent.parent.parent
-        self.scripts_source = package_root / "docs" / "examples" / "scripts"
+        self.examples_source = package_root / "docs" / "examples"
 
     def run(self, output_path: Optional[str] = None) -> Optional[str]:
         """
@@ -51,11 +51,11 @@ class BenchmarkWizard:
             shutil.copy(self.template_path, output_file)
             print(f"\n✓ Configuration template saved to: {output_file.absolute()}")
 
-            # Copy scripts folder to the same directory as the output file
-            scripts_copied = self._copy_scripts_folder(output_file)
+            # Copy examples folder to the same directory as the output file
+            examples_copied = self._copy_examples_folder(output_file)
 
             # Show next steps
-            self._print_next_steps(filename, scripts_copied)
+            self._print_next_steps(filename, examples_copied)
 
             return str(output_file.absolute())
 
@@ -63,49 +63,49 @@ class BenchmarkWizard:
             print(f"\n✗ Error saving file: {e}")
             return None
 
-    def _copy_scripts_folder(self, output_file: Path) -> bool:
+    def _copy_examples_folder(self, output_file: Path) -> bool:
         """
-        Copy the example scripts folder to the same directory as the output file.
+        Copy the examples folder (YAML configs and scripts) to the same directory as the output file.
 
         Args:
             output_file: Path to the generated configuration file
 
         Returns:
-            True if scripts were copied successfully, False otherwise
+            True if examples were copied successfully, False otherwise
         """
         try:
-            # Destination is a 'scripts' folder next to the output file
-            scripts_dest = output_file.parent / "scripts"
+            # Destination is an 'examples' folder next to the output file
+            examples_dest = output_file.parent / "examples"
 
-            # Check if scripts source exists
-            if not self.scripts_source.exists():
-                print(f"\n⚠ Warning: Example scripts not found at {self.scripts_source}")
+            # Check if examples source exists
+            if not self.examples_source.exists():
+                print(f"\n⚠ Warning: Examples not found at {self.examples_source}")
                 return False
 
             # Check if destination already exists
-            if scripts_dest.exists():
-                print(f"\n⚠ Scripts folder already exists at {scripts_dest.absolute()}")
-                prompt = "   Overwrite scripts folder? (y/N): "
+            if examples_dest.exists():
+                print(f"\n⚠ Examples folder already exists at {examples_dest.absolute()}")
+                prompt = "   Overwrite examples folder? (y/N): "
                 try:
                     answer = input(prompt).strip().lower()
                     if not answer.startswith('y'):
-                        print("   → Keeping existing scripts folder")
+                        print("   → Keeping existing examples folder")
                         return True
                 except (KeyboardInterrupt, EOFError):
-                    print("\n   → Keeping existing scripts folder")
+                    print("\n   → Keeping existing examples folder")
                     return True
 
                 # Remove existing folder
-                shutil.rmtree(scripts_dest)
+                shutil.rmtree(examples_dest)
 
-            # Copy the scripts folder
-            shutil.copytree(self.scripts_source, scripts_dest)
-            print(f"✓ Example scripts copied to: {scripts_dest.absolute()}")
+            # Copy the examples folder
+            shutil.copytree(self.examples_source, examples_dest)
+            print(f"✓ Examples copied to: {examples_dest.absolute()}")
 
             return True
 
         except Exception as e:
-            print(f"\n⚠ Warning: Could not copy scripts folder: {e}")
+            print(f"\n⚠ Warning: Could not copy examples folder: {e}")
             return False
 
     def _print_header(self):
@@ -144,31 +144,36 @@ class BenchmarkWizard:
             print("\n\n✗ Cancelled by user")
             sys.exit(0)
 
-    def _print_next_steps(self, filename: str, scripts_copied: bool):
+    def _print_next_steps(self, filename: str, examples_copied: bool):
         """Print next steps for the user."""
         print("\n" + "=" * 70)
         print("Next Steps:")
         print("=" * 70)
-        print(f"\n1. Edit the configuration:")
+        print(f"\n1. Review example configurations:")
+        if examples_copied:
+            print(f"   • Check out example YAMLs in ./examples/ folder:")
+            print(f"     - example_simple.yaml - Basic configuration")
+            print(f"     - example_bayesian.yaml - Bayesian optimization")
+            print(f"     - example_random.yaml - Random search")
+            print(f"   • Example scripts in ./examples/scripts/ folder:")
+            print(f"     - ior_parser.py - Custom parser example")
+            print(f"     - ior_plafrim_slurm.sh - SLURM script example")
+        print(f"\n2. Edit the configuration:")
         print(f"   nano {filename}")
         print(f"   # or use your preferred editor")
-        print(f"\n2. Customize the configuration:")
+        print(f"\n3. Customize the configuration:")
         print(f"   • Update paths (workdir, sqlite_db)")
         print(f"   • Adjust variables and their sweep ranges")
         print(f"   • Modify the command template")
         print(f"   • Update SLURM directives (partition, time, etc.)")
-        if scripts_copied:
-            print(f"   • Example scripts are ready in ./scripts/ folder")
-            print(f"   • Parser: scripts/ior_parser.py")
-            print(f"   • SLURM script: scripts/ior_plafrim_slurm.sh")
-        else:
+        if not examples_copied:
             print(f"   • Update script paths or use embedded scripts")
-        print(f"\n3. Validate the configuration:")
+        print(f"\n4. Validate the configuration:")
         print(f"   iops {filename} --check_setup")
-        print(f"\n4. Preview execution (dry-run):")
+        print(f"\n5. Preview execution (dry-run):")
         print(f"   iops {filename} --dry-run")
-        print(f"\n5. Run the benchmark:")
+        print(f"\n6. Run the benchmark:")
         print(f"   iops {filename}")
-        print(f"\n6. Analyze results:")
+        print(f"\n7. Analyze results:")
         print(f"   iops --analyze /path/to/workdir/run_NNN")
         print("=" * 70 + "\n")
