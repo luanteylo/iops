@@ -1,5 +1,10 @@
 # GitLab CI/CD configuration for IOPS
 
+default:
+  image: "${CI_TEMPLATE_REGISTRY_HOST}/pages/hugo:latest"
+  tags:
+    - ci.inria.fr
+
 stages:
   - test
   - build
@@ -7,6 +12,7 @@ stages:
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  GIT_SUBMODULE_STRATEGY: recursive
 
 cache:
   paths:
@@ -16,42 +22,37 @@ cache:
 test:
   stage: test
   image: python:3.10
+  tags:
+    - ci.inria.fr
   before_script:
     - pip install -e .
     - pip install -r requirements-dev.txt
   script:
     - pytest tests/
-  only:
-    - merge_requests
-    - dev-1.0
-    - dev-3.0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev-1.0"
+    - if: $CI_COMMIT_BRANCH == "dev-3.0"
 
 # Build documentation with Hugo
 pages:
   stage: deploy
-  image: registry.gitlab.com/pages/hugo/hugo_extended:latest
   script:
     - hugo --minify
   artifacts:
     paths:
       - public
-  only:
-    - dev-3.0  # Deploy docs from main branch
-  # Uncomment to deploy from tags
-  # only:
-  #   - tags
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 # Preview documentation for merge requests
 pages:preview:
   stage: build
-  image: registry.gitlab.com/pages/hugo/hugo_extended:latest
   script:
     - hugo --minify
   artifacts:
     paths:
       - public
     expire_in: 1 week
-  only:
-    - merge_requests
-  except:
-    - dev-1.0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
