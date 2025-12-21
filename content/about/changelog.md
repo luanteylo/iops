@@ -8,13 +8,14 @@ All notable changes to IOPS (I/O Performance Suite) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.5] - 2025-12-21
 
 ### Added
 - Configurable SLURM commands via `executor_options.commands` for systems with command wrappers
 - Support for customizing `submit`, `status`, `info`, and `cancel` commands in SLURM executor
-- Default submit command can be specified in executor_options (scripts can still override)
-- Documentation for executor_options in YAML schema reference and execution backends guide
+- Default submit command can be specified in executor_options (scripts can still override per-script)
+- Comprehensive documentation for executor_options in YAML schema reference and execution backends guide
+- Test coverage for executor_options functionality (7 new tests)
 
 ## [3.0.4] - 2025-12-20
 
