@@ -12,7 +12,7 @@
 #   4. Dry run: iops my_benchmark.yaml --dry-run
 #   5. Execute: iops my_benchmark.yaml
 #
-# Documentation: See docs/CLAUDE.md for detailed architecture and usage
+# Documentation: https://lgouveia.gitlabpages.inria.fr/iops/reference/yaml-schema/ 
 # =============================================================================
 
 
@@ -48,15 +48,40 @@ benchmark:
   #   - exhaustive: Small parameter spaces, need complete coverage
   #   - random: Large parameter spaces, quick exploration, budget constraints
   #   - bayesian: Expensive evaluations, smooth objective functions
+  
   search_method: "exhaustive"
+  
+  # Uncomment to enable random sampling:
+  #search_method: "random"  
+  # random_config:
+  #   # Option 1: Explicit number of samples (mutually exclusive with percentage)
+  #   n_samples: 20  # Sample exactly 20 random configurations
+  #
+  #   # Option 2: Percentage of total space (mutually exclusive with n_samples)
+  #   # percentage: 0.1  # Sample 10% of parameter space
+  #
+  #   # Optional: behavior when n_samples >= total_space (default: true)
+  #   fallback_to_exhaustive: true  # Use full space if sample >= total
+
+  # Uncomment to enable Bayesian optimization:
+  #search_method: "bayesian"
+  # bayesian_config:
+  #   target_metric: "bwMiB"      # Metric to optimize (from parser)
+  #   objective: "maximize"       # "maximize" or "minimize"
+  #   n_initial_points: 5         # Random samples before optimization starts
+  #   n_iterations: 20            # Total number of evaluations
+  #   acquisition_func: "EI"      # "EI" (Expected Improvement), "PI", or "LCB"
+  
+
 
   # Required: Execution backend
   # Options:
   #   - "local": Run scripts locally using subprocess
   #   - "slurm": Submit jobs to SLURM cluster via sbatch
+  
+  # executor: "local"
+  
   executor: "slurm"
-
-  # Optional: Executor-specific configuration options
   # ---------------------------------------------------------------------------
   # EXECUTOR OPTIONS (optional)
   # ---------------------------------------------------------------------------
@@ -86,16 +111,6 @@ benchmark:
   #   # Controls how often IOPS queries job status during wait_and_collect
   #   poll_interval: 30
   #
-  # Example: Using a wrapper with custom flags and faster polling
-  # executor_options:
-  #   commands:
-  #     submit: "lrms-wrapper sbatch"
-  #     status: "lrms-wrapper -r {job_id} --custom-format"     # Custom flag: -r instead of -j
-  #     info: "lrms-wrapper info {job_id}"
-  #     cancel: "lrms-wrapper kill {job_id}"
-  #   poll_interval: 10                                        # Check status every 10 seconds
-  #
-  # Note: Individual scripts can override the submit command via scripts[].submit
 
   # Optional: Random seed for reproducible random operations (default: None)
   # Used by random and bayesian search methods
@@ -129,50 +144,7 @@ benchmark:
   # If omitted, all numeric swept variables are included
   report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
 
-  # ---------------------------------------------------------------------------
-  # RANDOM SAMPLING CONFIGURATION (required when search_method: "random")
-  # ---------------------------------------------------------------------------
-  # Configuration for random sampling planner
-  # Randomly samples N configurations instead of testing all combinations
-  # Useful for large parameter spaces where exhaustive search is too expensive
-  #
-  # Uncomment to enable random sampling:
-  # ---------------------------------------------------------------------------
-  # random_config:
-  #   # Option 1: Explicit number of samples (mutually exclusive with percentage)
-  #   n_samples: 20  # Sample exactly 20 random configurations
-  #
-  #   # Option 2: Percentage of total space (mutually exclusive with n_samples)
-  #   # percentage: 0.1  # Sample 10% of parameter space
-  #
-  #   # Optional: behavior when n_samples >= total_space (default: true)
-  #   fallback_to_exhaustive: true  # Use full space if sample >= total
-  #
-  # Notes:
-  #   - Must specify either n_samples OR percentage (not both)
-  #   - Sampling is without replacement (no duplicates)
-  #   - Use random_seed for reproducible sampling
-  #   - Works with multi-round optimization (samples independently per round)
-  #
-  # Example: Sample 15 random configurations from parameter space
-  # random_config:
-  #   n_samples: 15
-
-  # ---------------------------------------------------------------------------
-  # BAYESIAN OPTIMIZATION CONFIGURATION (required when search_method: "bayesian")
-  # ---------------------------------------------------------------------------
-  # Configuration for Bayesian optimization planner
-  # Uses Gaussian Process models to intelligently explore parameter space
-  # Requires: pip install scikit-optimize
-  #
-  # Uncomment to enable Bayesian optimization:
-  # ---------------------------------------------------------------------------
-  # bayesian_config:
-  #   target_metric: "bwMiB"      # Metric to optimize (from parser)
-  #   objective: "maximize"       # "maximize" or "minimize"
-  #   n_initial_points: 5         # Random samples before optimization starts
-  #   n_iterations: 20            # Total number of evaluations
-  #   acquisition_func: "EI"      # "EI" (Expected Improvement), "PI", or "LCB"
+ 
 
 
 # =============================================================================
@@ -224,10 +196,10 @@ vars:
   # Example: String parameter (e.g., different paths or configurations)
   # Useful for testing across different file systems or OST configurations
   ost_count:
-    type: str
+    type: int
     sweep:
       mode: list
-      values: ["/beegfs/data/ior_1", "/beegfs/data/ior_2", "/beegfs/data/ior_4", "/beegfs/data/ior_8"]
+      values: [1, 2,  4, 8]
 
   # ---------------------------------------------------------------------------
   # DERIVED VARIABLES (computed from other variables)
@@ -239,14 +211,14 @@ vars:
   # ---------------------------------------------------------------------------
 
   # Example: Extract number from path string
-  ost_number:
+  ost_path:
     type: str
-    expr: "{{ ost_count.split('_')[-1] }}"
+    expr: "/beegfs/user/ior_{{ ost_count }}"
 
   # Example: Compute block size based on volume and process count
   block_size_mb:
     type: int
-    expr: "((volume_size_gb * 1024) / processes_per_node)"
+    expr: "(volume_size_gb * 1024) // (nodes * processes_per_node)" # '//' needs to garantee integer division
 
   # Example: Total MPI tasks
   ntasks:
@@ -277,14 +249,14 @@ command:
   template: >
     ior -w -b {{ block_size_mb }}mb -t 1mb
     -O summaryFile={{ summary_file }} -O summaryFormat=JSON
-    -o {{ ost_count }}/output.ior
+    -o {{ ost_path }}/output.ior
 
   # Optional: Additional metadata to attach to results
   # This appears in output as metadata.* columns
   metadata:
     operation: "write"
-    io_engine: "MPI-IO"
-    access_pattern: "contiguous"
+    filestrategy: "shared-file"
+    spatiality: "contiguous"
 
 
 # =============================================================================
@@ -303,7 +275,8 @@ scripts:
   # Script name (can define multiple scripts)
   - name: "ior"
 
-    # SLURM submission command (required for executor: slurm)
+    # submission method for this script (required for local and slurm executors)
+    #submit: "bash"        # for local executor
     submit: "sbatch"
 
     # ---------------------------------------------------------------------------
@@ -317,7 +290,7 @@ scripts:
     #
     #   Customize these scripts for your cluster and benchmark needs.
     # ---------------------------------------------------------------------------
-    script_template: scripts/ior_plafrim_slurm.sh
+    script_template: examples/scripts/ior_plafrim_slurm.sh
 
     # ---------------------------------------------------------------------------
     # OPTION 2: EMBEDDED SCRIPT (alternative, less maintainable)
@@ -349,25 +322,9 @@ scripts:
     #   module purge
     #   module load mpi/openmpi/4.0.1
     #
-    #   # Optional: Log SLURM allocation details for debugging
-    #   echo "=== SLURM Allocation Info ==="
-    #   echo "Requested nodes: {{ nodes }}"
-    #   echo "Requested ntasks-per-node: {{ processes_per_node }}"
-    #   echo "Allocated SLURM_JOB_NUM_NODES: $SLURM_JOB_NUM_NODES"
-    #   echo "Allocated SLURM_NNODES: $SLURM_NNODES"
-    #   echo "Allocated SLURM_NODELIST: $SLURM_NODELIST"
-    #   echo "Allocated SLURM_NTASKS: $SLURM_NTASKS"
-    #   echo "Allocated SLURM_TASKS_PER_NODE: $SLURM_TASKS_PER_NODE"
-    #   echo "============================="
-    #
     #   # Execute the benchmark command
     #   # Note: SLURM sets MPI task count automatically via --ntasks
     #   mpirun {{ command.template }}
-    #
-    #   # Capture exit code
-    #   exit_code=$?
-    #   echo "Exit code: $exit_code"
-    #   exit $exit_code
 
     # ---------------------------------------------------------------------------
     # POST-EXECUTION SCRIPT (optional)
@@ -380,9 +337,6 @@ scripts:
         #!/bin/bash
         echo "Job completed at $(date)"
         echo "Summary file: {{ summary_file }}"
-
-        # Optional: Copy results to a shared location
-        # cp {{ summary_file }} /shared/results/
 
     # ---------------------------------------------------------------------------
     # PARSER CONFIGURATION
@@ -412,7 +366,7 @@ scripts:
       #
       #   Customize this script to parse your benchmark's output format.
       # ---------------------------------------------------------------------------
-      parser_script: scripts/ior_parser.py
+      parser_script: examples/scripts/ior_parser.py
 
       # ---------------------------------------------------------------------------
       # OPTION 2: EMBEDDED PARSER SCRIPT (alternative)
