@@ -1,20 +1,49 @@
 baseURL = 'https://lgouveia.gitlabpages.inria.fr/iops/'
 languageCode = 'en-us'
 title = 'IOPS - I/O Performance Suite'
-theme = 'hugo-theme-relearn'
+theme = 'beautifulhugo'
 
 # Enable Git info
 enableGitInfo = true
 
 [params]
-  description = "A generic benchmark orchestration framework for automated parametric experiments"
-  author = "INRIA - TADAAM Team"
+  subtitle = "A generic benchmark orchestration framework"
+  logo = "/images/logo.png"
+  favicon = "/images/logo.png"
+  dateFormat = "January 2, 2006"
+  commit = false
+  rss = true
+  comments = false
 
-  # Relearn theme specific
-  editURL = "https://gitlab.inria.fr/lgouveia/iops/-/edit/dev-1.0/"
-  showVisitedLinks = true
-  disableSearch = false
-  disableNextPrev = false
+[[menu.main]]
+  name = "Home"
+  url = ""
+  weight = 1
+
+[[menu.main]]
+  name = "Getting Started"
+  url = "getting-started/"
+  weight = 2
+
+[[menu.main]]
+  name = "User Guide"
+  url = "user-guide/"
+  weight = 3
+
+[[menu.main]]
+  name = "Examples"
+  url = "examples/"
+  weight = 4
+
+[[menu.main]]
+  name = "Reference"
+  url = "reference/"
+  weight = 5
+
+[[menu.main]]
+  name = "About"
+  url = "about/"
+  weight = 6
 
 [markup]
   [markup.goldmark]
@@ -23,7 +52,3 @@ enableGitInfo = true
   [markup.highlight]
     codeFences = true
     style = "monokai"
-
-[outputs]
-  home = ["HTML", "RSS", "JSON"]
-  section = ["HTML"]

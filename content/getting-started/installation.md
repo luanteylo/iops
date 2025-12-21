@@ -13,8 +13,7 @@ Before installing IOPS, ensure you have:
 
 ## Quick Installation (from PyPI)
 
-!!! info "Coming Soon"
-    Once published to PyPI, you'll be able to install IOPS with a single command.
+Install IOPS directly from PyPI:
 
 ```bash
 pip install iops-benchmark
