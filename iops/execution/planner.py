@@ -44,10 +44,32 @@ class BasePlanner(ABC, HasLogger):
     @abstractmethod
     def next_test(self) -> Any:
         pass
-    
+
     @abstractmethod
     def record_completed_test(self, test: Any)  -> None:
         pass
+
+    def get_progress(self) -> dict:
+        """
+        Get current execution progress information.
+
+        Returns:
+            Dictionary with progress metrics:
+            - completed: Number of tests completed
+            - total: Total number of tests expected
+            - percentage: Completion percentage (0-100)
+            - remaining: Number of tests remaining
+        """
+        # Use attributes that subclasses should have
+        attempt_count = getattr(self, '_attempt_count', 0)
+        attempt_total = getattr(self, '_attempt_total', 0)
+
+        return {
+            'completed': attempt_count,
+            'total': attempt_total,
+            'percentage': (attempt_count / attempt_total * 100) if attempt_total > 0 else 0,
+            'remaining': attempt_total - attempt_count
+        }
 
 
 @BasePlanner.register("exhaustive")

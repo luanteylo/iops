@@ -259,6 +259,22 @@ class IOPSRunner(HasLogger):
             self.logger.warning(f"Failed to compute core-hours for test {test.execution_id}: {e}")
             return 0.0
 
+    def _make_progress_bar(self, percentage: float, width: int = 30) -> str:
+        """
+        Create a visual progress bar.
+
+        Args:
+            percentage: Completion percentage (0-100)
+            width: Width of the progress bar in characters
+
+        Returns:
+            Progress bar string like "[==============>           ]"
+        """
+        filled = int(width * percentage / 100)
+        bar = "=" * filled + ">" * (1 if filled < width else 0)
+        bar = bar.ljust(width)
+        return f"[{bar}]"
+
     def _save_run_metadata(self, test_count: int = 0):
         """Save runtime metadata for report generation."""
         try:
@@ -741,14 +757,27 @@ class IOPSRunner(HasLogger):
                 core_hours_used = self._compute_core_hours(test)
                 self.accumulated_core_hours += core_hours_used
 
-                if core_hours_used > 0:
-                    cores = self._compute_cores(test)
-                    remaining = self.max_core_hours - self.accumulated_core_hours
-                    self.logger.debug(
-                        f"  [Budget] Used {core_hours_used:.4f} core-hours ({cores} cores) | "
-                        f"Total: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} | "
-                        f"Remaining: {remaining:.2f}"
-                    )
+            # Display progress and budget information periodically
+            progress = self.planner.get_progress()
+            show_progress = (
+                test_count % 10 == 0 or  # Every 10 tests
+                progress['percentage'] in [25, 50, 75] or  # At milestone percentages
+                progress['remaining'] == 0  # Last test
+            )
+
+            if show_progress and progress['total'] > 0:
+                progress_bar = self._make_progress_bar(progress['percentage'])
+                self.logger.info("-" * 70)
+                self.logger.info(f"Progress: {progress_bar} {progress['percentage']:.1f}%")
+                self.logger.info(f"  Completed: {progress['completed']}/{progress['total']} tests ({progress['remaining']} remaining)")
+
+                # Show core-hour usage if enabled
+                if self.max_core_hours is not None:
+                    used_pct = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
+                    remaining_budget = self.max_core_hours - self.accumulated_core_hours
+                    self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} ({used_pct:.1f}% used, {remaining_budget:.2f} remaining)")
+
+                self.logger.info("-" * 70)
 
         # Final statistics
         self.logger.info("=" * 70)
