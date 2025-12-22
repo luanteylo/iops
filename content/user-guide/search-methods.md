@@ -136,6 +136,65 @@ vars:
 | **Bayesian** | Focused | Fast for optimization | Finding optima, expensive tests | No |
 | **Random** | Statistical | Fast | Exploration, large spaces | With seed |
 
+## Exhaustive Variables
+
+The `exhaustive_vars` feature allows you to combine intelligent search with exhaustive testing for specific variables. This is useful when you want to analyze the full impact of certain variables while efficiently exploring others.
+
+```yaml
+benchmark:
+  search_method: "bayesian"  # or "random"
+  exhaustive_vars: ["ost_num"]  # Test all values at each search point
+```
+
+### How It Works
+
+When using Bayesian or random search with `exhaustive_vars`:
+
+1. The search method selects points in the **search space** (non-exhaustive variables)
+2. For each selected point, IOPS tests **all values** of exhaustive variables
+3. Results include the full cross-product
+
+### Example
+
+```yaml
+benchmark:
+  search_method: "bayesian"
+  bayesian_config:
+    target_metric: "bandwidth_mbps"
+    objective: "maximize"
+    n_initial_points: 3
+    n_iterations: 8
+  exhaustive_vars: ["ost_num"]  # Always test all OST values
+
+vars:
+  nodes: { type: int, sweep: { mode: list, values: [1, 2, 4, 8] } }
+  ppn: { type: int, sweep: { mode: list, values: [4, 8, 16] } }
+  ost_num: { type: int, sweep: { mode: list, values: [1, 2, 4, 8, 16] } }
+```
+
+**Execution flow:**
+- Bayesian selects point: `(nodes=4, ppn=16)`
+- IOPS tests all ost_num values:
+  - `(nodes=4, ppn=16, ost_num=1)`
+  - `(nodes=4, ppn=16, ost_num=2)`
+  - `(nodes=4, ppn=16, ost_num=4)`
+  - `(nodes=4, ppn=16, ost_num=8)`
+  - `(nodes=4, ppn=16, ost_num=16)`
+- Total: 8 search points × 5 ost_num values = 40 tests
+- Compare to: Full factorial would be 4 × 3 × 5 = 60 tests
+
+### When to Use
+
+- **Analyze variable impact**: Understand how one variable (e.g., OST count) affects performance across different configurations
+- **Hybrid exploration**: Use intelligent search for expensive variables, exhaustive testing for cheap ones
+- **Systematic analysis**: Ensure complete coverage of specific variables while reducing total test count
+
+### Notes
+
+- With `search_method: "exhaustive"`, `exhaustive_vars` has no effect (already tests all combinations)
+- Exhaustive variables must have a `sweep` definition
+- Can specify multiple exhaustive variables: `exhaustive_vars: ["ost_num", "stripe_size"]`
+
 ## Multi-Round Workflows
 
 Search methods work with multi-round optimization:

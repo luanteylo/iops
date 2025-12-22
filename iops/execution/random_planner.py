@@ -185,31 +185,83 @@ class RandomSamplingPlanner(BasePlanner, HasLogger):
         """
         Randomly sample configurations from the full execution matrix.
 
+        If exhaustive_vars is configured, groups instances by search point
+        and samples search points (not individual instances), then returns
+        all instances from selected search points.
+
         Args:
             full_matrix: Full execution matrix (all parameter combinations)
 
         Returns:
             Sampled subset of execution matrix
         """
-        self.total_space_size = len(full_matrix)
-        self.sampled_size = self._compute_sample_size(self.total_space_size)
-
-        if self.sampled_size >= self.total_space_size:
-            # Use full matrix (exhaustive)
-            self.logger.info(
-                f"Using full parameter space: {self.total_space_size} configurations"
-            )
+        if not full_matrix:
             return full_matrix
 
-        # Random sampling without replacement
-        sampled_matrix = self.random.sample(full_matrix, self.sampled_size)
+        # Check if exhaustive_vars is being used
+        has_exhaustive_vars = bool(full_matrix[0].exhaustive_var_names)
 
-        self.logger.info(
-            f"Randomly sampled {self.sampled_size}/{self.total_space_size} configurations "
-            f"({self.sampled_size/self.total_space_size*100:.1f}%)"
-        )
+        if has_exhaustive_vars:
+            # Group instances by search point
+            from collections import defaultdict
+            search_point_groups = defaultdict(list)
 
-        return sampled_matrix
+            for instance in full_matrix:
+                search_point = instance.get_search_point()
+                search_point_groups[search_point].append(instance)
+
+            # Total space size is the number of unique search points
+            self.total_space_size = len(search_point_groups)
+            self.sampled_size = self._compute_sample_size(self.total_space_size)
+
+            if self.sampled_size >= self.total_space_size:
+                # Use all search points (exhaustive)
+                self.logger.info(
+                    f"Using all {self.total_space_size} search points "
+                    f"(each expanded with {len(full_matrix[0].exhaustive_var_names)} exhaustive vars)"
+                )
+                return full_matrix
+
+            # Sample random search points
+            search_points = list(search_point_groups.keys())
+            sampled_search_points = self.random.sample(search_points, self.sampled_size)
+
+            # Collect all instances from sampled search points
+            sampled_matrix = []
+            for sp in sampled_search_points:
+                sampled_matrix.extend(search_point_groups[sp])
+
+            exhaustive_count = len(search_point_groups[sampled_search_points[0]])
+            self.logger.info(
+                f"Randomly sampled {self.sampled_size}/{self.total_space_size} search points "
+                f"({self.sampled_size/self.total_space_size*100:.1f}%), "
+                f"each with {exhaustive_count} exhaustive var combinations. "
+                f"Total instances: {len(sampled_matrix)}"
+            )
+
+            return sampled_matrix
+
+        else:
+            # Original behavior: no exhaustive vars, sample individual instances
+            self.total_space_size = len(full_matrix)
+            self.sampled_size = self._compute_sample_size(self.total_space_size)
+
+            if self.sampled_size >= self.total_space_size:
+                # Use full matrix (exhaustive)
+                self.logger.info(
+                    f"Using full parameter space: {self.total_space_size} configurations"
+                )
+                return full_matrix
+
+            # Random sampling without replacement
+            sampled_matrix = self.random.sample(full_matrix, self.sampled_size)
+
+            self.logger.info(
+                f"Randomly sampled {self.sampled_size}/{self.total_space_size} configurations "
+                f"({self.sampled_size/self.total_space_size*100:.1f}%)"
+            )
+
+            return sampled_matrix
 
     # ------------------------------------------------------------------ #
     # Internal helpers (from exhaustive planner)

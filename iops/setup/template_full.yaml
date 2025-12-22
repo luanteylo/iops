@@ -121,6 +121,16 @@ benchmark:
   # Example: ["summary_file", "output_path"] - paths vary but don't affect results
   cache_exclude_vars: ["summary_file"]
 
+  # Optional: Variables to test exhaustively at each search point
+  # For Bayesian/random search: these variables are fully expanded for each selected point
+  # Use case: Analyze the impact of specific variables (e.g., ost_num) across all values
+  #           while using intelligent search for other variables
+  # Example: With search_method="bayesian" and exhaustive_vars=["ost_num"]:
+  #   - Bayesian optimizer selects (nodes=4, block_size=64)
+  #   - IOPS tests all ost_num values: (4, 64, ost_num=1), (4, 64, ost_num=2), etc.
+  # For exhaustive search: this has no effect (all combinations already tested)
+  # exhaustive_vars: ["ost_num"]
+
   # Optional: Budget configuration (SLURM only)
   # Maximum CPU core-hours budget - execution stops when budget is exhausted
   # Can be overridden with --max-core-hours CLI argument

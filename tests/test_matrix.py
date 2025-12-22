@@ -132,3 +132,77 @@ def test_matrix_cartesian_product(tmp_path, sample_config_dict):
     combinations = {(t.vars["nodes"], t.vars["threads"]) for t in matrix}
     expected = {(1, 1), (1, 2), (2, 1), (2, 2)}
     assert combinations == expected
+
+
+def test_matrix_exhaustive_vars(tmp_path, sample_config_dict):
+    """Test exhaustive_vars feature for full expansion."""
+    # Add exhaustive_vars to benchmark config
+    sample_config_dict["benchmark"]["exhaustive_vars"] = ["ppn"]
+
+    # Add another variable to sweep
+    sample_config_dict["vars"]["block_size"] = {
+        "type": "int",
+        "sweep": {
+            "mode": "list",
+            "values": [4, 16]
+        }
+    }
+
+    # ppn becomes exhaustive (will be fully expanded for each search point)
+    # Remove expr first (can't have both sweep and expr)
+    sample_config_dict["vars"]["ppn"] = {
+        "type": "int",
+        "sweep": {
+            "mode": "list",
+            "values": [1, 2, 4]
+        }
+    }
+
+    config_file = tmp_path / "exhaustive.yaml"
+    import yaml
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    matrix = build_execution_matrix(config)
+
+    # Should have (2 nodes * 2 block_size) * 3 ppn = 12 tests
+    # Search space: nodes × block_size = 4 points
+    # Exhaustive space: ppn = 3 values
+    # Total: 4 * 3 = 12
+    assert len(matrix) == 12
+
+    # Check that for each (nodes, block_size) combination, all ppn values exist
+    search_points = {(t.vars["nodes"], t.vars["block_size"]) for t in matrix}
+    assert len(search_points) == 4  # 2 nodes * 2 block_size
+
+    for search_point in search_points:
+        nodes, block_size = search_point
+        # Filter tests for this search point
+        tests_at_point = [t for t in matrix
+                         if t.vars["nodes"] == nodes and t.vars["block_size"] == block_size]
+
+        # Should have all 3 ppn values
+        ppn_values = {t.vars["ppn"] for t in tests_at_point}
+        assert ppn_values == {1, 2, 4}, f"Missing ppn values for {search_point}"
+
+
+def test_matrix_exhaustive_vars_validation(tmp_path, sample_config_dict):
+    """Test that exhaustive_vars validation catches errors."""
+    from iops.config.models import ConfigValidationError
+
+    # Add a non-existent variable to exhaustive_vars
+    sample_config_dict["benchmark"]["exhaustive_vars"] = ["nonexistent_var"]
+
+    config_file = tmp_path / "invalid.yaml"
+    import yaml
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+
+    # Should raise validation error when building matrix
+    with pytest.raises(ConfigValidationError) as excinfo:
+        build_execution_matrix(config)
+
+    assert "nonexistent_var" in str(excinfo.value) and "not swept" in str(excinfo.value)

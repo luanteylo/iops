@@ -140,6 +140,16 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
             logger.debug(f"      expr : {var.expr}")
 
     # ------------------------------------------------------------------
+    # Exhaustive vars (if specified)
+    if cfg.benchmark.exhaustive_vars:
+        logger.debug(sub)
+        logger.debug("Exhaustive Variables")
+        logger.debug(sub)
+        logger.debug("  These variables will be fully tested for each search point:")
+        for var_name in cfg.benchmark.exhaustive_vars:
+            logger.debug(f"    - {var_name}")
+
+    # ------------------------------------------------------------------
     logger.debug(sub)
     logger.debug("Command")
     logger.debug(sub)

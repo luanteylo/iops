@@ -3,6 +3,12 @@ Bayesian Optimization Planner for IOPS benchmarks.
 
 Uses Bayesian optimization to efficiently search the parameter space
 and find optimal configurations for a target metric (e.g., maximize bandwidth).
+
+TODO: Add exhaustive_vars support similar to RandomSamplingPlanner:
+- Group instances by search point (non-exhaustive variables)
+- Optimize over search variables only
+- For each suggested point, test all exhaustive variable values
+- Aggregate results from exhaustive vars (e.g., mean, max) for GP fitting
 """
 
 from iops.execution.planner import BasePlanner
