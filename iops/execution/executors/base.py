@@ -91,6 +91,29 @@ class BaseExecutor(ABC, HasLogger):
         meta.setdefault("__end", None)
         meta.setdefault("__error", None)
 
+    def _safe_is_file(self, path) -> bool:
+        """
+        Safely check if a path is a file, handling filesystem errors.
+
+        On HPC systems with network filesystems (NFS/Lustre), stat() calls
+        can fail with OSError due to stale file handles, permission issues,
+        or timing problems. This method handles such errors gracefully.
+
+        Args:
+            path: Path object or None to check
+
+        Returns:
+            True if path exists and is a file, False otherwise
+        """
+        if path is None:
+            return False
+        try:
+            return path.is_file()
+        except OSError as e:
+            # Log at debug level to avoid spam, as this can happen on HPC systems
+            self.logger.debug(f"  [Executor] Filesystem error checking path {path}: {e}")
+            return False
+
     @abstractmethod
     def wait_and_collect(self, test: ExecutionInstance):
         """

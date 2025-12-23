@@ -27,7 +27,7 @@ class LocalExecutor(BaseExecutor):
             f"script={test.script_file.name if test.script_file else 'N/A'}"
         )
 
-        if test.script_file is None or not isinstance(test.script_file, Path) or not test.script_file.is_file():
+        if test.script_file is None or not isinstance(test.script_file, Path) or not self._safe_is_file(test.script_file):
             msg = "test.script_file is not set or invalid."
             self.logger.error(f"  [LocalExec] ERROR: {msg}")
             test.metadata["__executor_status"] = self.STATUS_ERROR
@@ -101,7 +101,7 @@ class LocalExecutor(BaseExecutor):
             test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
 
             # Execute post-processing script if present
-            if test.post_script_file and test.post_script_file.is_file():
+            if self._safe_is_file(test.post_script_file):
                 self.logger.debug(f"  [LocalExec] Running post-processing script")
                 post_success = self._run_post_script(test)
                 if not post_success:
@@ -142,7 +142,7 @@ class LocalExecutor(BaseExecutor):
         Returns:
             True if post script succeeded or doesn't exist, False if it failed
         """
-        if not test.post_script_file or not test.post_script_file.is_file():
+        if not self._safe_is_file(test.post_script_file):
             return True  # No post script, that's okay
 
         if not test.execution_dir:

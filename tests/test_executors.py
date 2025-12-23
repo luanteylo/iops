@@ -397,3 +397,131 @@ def test_slurm_executor_script_submit_overrides_default(mock_test_instance):
         call_args = mock_run.call_args[0][0]
         assert call_args[0] == "script-specific-sbatch"
         assert "--parsable" in call_args
+
+
+def test_local_executor_permission_denied_on_script_file(mock_test_instance):
+    """Test LocalExecutor handles permission errors gracefully when checking script file."""
+    config = Mock()
+    executor = LocalExecutor(config)
+
+    # Mock the _safe_is_file to simulate permission denied
+    with patch.object(executor, '_safe_is_file', return_value=False):
+        executor.submit(mock_test_instance)
+
+        # Should handle gracefully and mark as error
+        assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_ERROR
+        assert "__error" in mock_test_instance.metadata
+        assert "not set or invalid" in mock_test_instance.metadata["__error"]
+
+
+def test_local_executor_permission_denied_on_post_script(mock_test_instance, tmp_path):
+    """Test LocalExecutor handles permission errors gracefully when checking post-script file."""
+    config = Mock()
+    executor = LocalExecutor(config)
+
+    # Create a post script path (file exists but we'll simulate permission error)
+    mock_test_instance.post_script_file = tmp_path / "post.sh"
+    mock_test_instance.post_script_file.write_text("#!/bin/bash\necho 'post'")
+
+    with patch("subprocess.run") as mock_run:
+        # Main script succeeds
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="main output",
+            stderr=""
+        )
+
+        # Mock is_file to raise PermissionError on post_script_file check
+        original_is_file = Path.is_file
+
+        def mock_is_file(self):
+            # Raise permission error for post script file
+            if self.name == "post.sh":
+                raise PermissionError(f"Permission denied: {self}")
+            return original_is_file(self)
+
+        with patch.object(Path, 'is_file', mock_is_file):
+            executor.submit(mock_test_instance)
+
+            # Should succeed (main script ran) and skip post-script gracefully
+            assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_SUCCEEDED
+            # Post script should not have been executed (only one subprocess.run call for main script)
+            assert mock_run.call_count == 1
+            # Should not have post script return code
+            assert "__post_returncode" not in mock_test_instance.metadata
+
+
+def test_slurm_executor_permission_denied_on_post_script(mock_test_instance, tmp_path):
+    """Test SlurmExecutor handles permission errors gracefully when checking post-script file."""
+    config = Mock()
+    config.execution = Mock()
+    config.execution.status_check_delay = 1
+    config.benchmark = Mock()
+    config.benchmark.executor_options = None
+
+    executor = SlurmExecutor(config)
+
+    # Create a post script path
+    mock_test_instance.post_script_file = tmp_path / "post.sh"
+    mock_test_instance.post_script_file.write_text("#!/bin/bash\necho 'post'")
+
+    # Setup a succeeded test in wait_and_collect
+    mock_test_instance.metadata["__jobid"] = "12345"
+    mock_test_instance.metadata["__executor_status"] = executor.STATUS_SUCCEEDED
+
+    # Mock is_file to raise PermissionError on post_script_file check
+    original_is_file = Path.is_file
+
+    def mock_is_file(self):
+        if self.name == "post.sh":
+            raise PermissionError(f"Permission denied: {self}")
+        return original_is_file(self)
+
+    with patch.object(Path, 'is_file', mock_is_file):
+        with patch.object(executor, '_squeue_state', return_value=None):
+            with patch.object(executor, '_scontrol_info', return_value={"state": "COMPLETED", "exitcode": "0:0"}):
+                with patch.object(executor, '_try_parse_metrics', return_value=True):
+                    executor.wait_and_collect(mock_test_instance)
+
+                    # Should complete successfully without trying to run post script
+                    assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_SUCCEEDED
+                    # Should not have post script metadata
+                    assert "__post_returncode" not in mock_test_instance.metadata
+
+
+def test_safe_is_file_handles_oserror():
+    """Test that _safe_is_file helper handles various OSError scenarios."""
+    config = Mock()
+    executor = LocalExecutor(config)
+
+    # Test with None
+    assert executor._safe_is_file(None) is False
+
+    # Test with valid path that exists
+    with patch.object(Path, 'is_file', return_value=True):
+        test_path = Path("/some/path")
+        assert executor._safe_is_file(test_path) is True
+
+    # Test with PermissionError
+    def raise_permission_error():
+        raise PermissionError("Permission denied")
+
+    with patch.object(Path, 'is_file', side_effect=raise_permission_error):
+        test_path = Path("/restricted/path")
+        assert executor._safe_is_file(test_path) is False
+
+    # Test with FileNotFoundError (stale NFS handle scenario)
+    def raise_file_not_found():
+        raise FileNotFoundError("Stale file handle")
+
+    with patch.object(Path, 'is_file', side_effect=raise_file_not_found):
+        test_path = Path("/nfs/stale/path")
+        assert executor._safe_is_file(test_path) is False
+
+    # Test with generic OSError
+    def raise_os_error():
+        raise OSError("I/O error")
+
+    with patch.object(Path, 'is_file', side_effect=raise_os_error):
+        test_path = Path("/error/path")
+        assert executor._safe_is_file(test_path) is False

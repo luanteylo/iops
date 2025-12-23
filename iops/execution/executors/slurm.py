@@ -85,7 +85,7 @@ class SlurmExecutor(BaseExecutor):
         self._init_execution_metadata(test)
 
         # Validate script_file
-        if test.script_file is None or not isinstance(test.script_file, Path) or not test.script_file.is_file():
+        if test.script_file is None or not isinstance(test.script_file, Path) or not self._safe_is_file(test.script_file):
             msg = "test.script_file is not set or invalid."
             self.logger.error(f"  [SlurmExec] ERROR: {msg}")
             test.metadata["__executor_status"] = self.STATUS_ERROR
@@ -274,7 +274,7 @@ class SlurmExecutor(BaseExecutor):
             return
 
         # Run post-processing script locally after SLURM job completes successfully
-        if test.post_script_file and test.post_script_file.is_file():
+        if self._safe_is_file(test.post_script_file):
             self.logger.debug(f"  [SlurmExec] Running post-processing script locally")
             post_success = self._run_post_script_local(test)
             if not post_success:
@@ -428,7 +428,7 @@ class SlurmExecutor(BaseExecutor):
         Returns:
             True if post script succeeded or doesn't exist, False if it failed
         """
-        if not test.post_script_file or not test.post_script_file.is_file():
+        if not self._safe_is_file(test.post_script_file):
             return True  # No post script, that's okay
 
         stdout_path = test.execution_dir / "post_stdout"
