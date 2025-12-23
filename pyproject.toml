@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A generic benchmark orchestration framework for automated parametric experiments"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "BSD-3-Clause"
+license = {text="BSD-3-Clause"}
 authors = [
     {name = "TADAAM - INRIA Bordeaux", email = "luan.teylo@inria.fr"}
 ]
