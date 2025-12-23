@@ -1,0 +1,128 @@
+# IOPS Benchmark Configuration - Example with Constraints
+#
+# This example demonstrates the use of parameter constraints to validate
+# parameter combinations before execution.
+#
+# Features Demonstrated:
+# - Constraint validation: Ensure parameter combinations are valid
+# - Multiple violation policies: skip, warn, and error
+# - Math function usage in constraints: Using modulo operator
+#
+# Usage:
+#   Dry-run:  iops example_with_constraints.yaml --dry-run
+#   Execute:  iops example_with_constraints.yaml
+
+benchmark:
+  name: "IOR Benchmark with Constraints"
+  description: "Demonstrates parameter constraint validation in IOPS"
+  workdir: "/tmp/iops_constraints_example/"
+  sqlite_db: "/tmp/iops_constraints.db"
+  repetitions: 2
+  search_method: "exhaustive"
+  executor: "local"
+  random_seed: 42
+
+vars:
+  # Block size in MB
+  block_size:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16, 32, 64]
+
+  # Transfer size in MB
+  transfer_size:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  # Number of processes
+  num_processes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+
+  # Total data size (derived)
+  total_data_mb:
+    type: int
+    expr: "block_size * num_processes"
+
+  # Summary file path (derived)
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+# Constraints section - validates parameter combinations
+constraints:
+  # Constraint 1: Block size must be a multiple of transfer size
+  # This is a common requirement in IOR benchmarks
+  - name: "block_transfer_alignment"
+    rule: "block_size % transfer_size == 0"
+    violation_policy: "skip"
+    description: "Block size must be a multiple of transfer size for IOR"
+
+  # Constraint 2: Transfer size cannot exceed block size
+  - name: "transfer_not_larger_than_block"
+    rule: "transfer_size <= block_size"
+    violation_policy: "skip"
+    description: "Transfer size cannot be larger than block size"
+
+  # Constraint 3: Warn if total data size is very small
+  - name: "reasonable_data_size"
+    rule: "total_data_mb >= 8"
+    violation_policy: "warn"
+    description: "Total data size should be at least 8MB for meaningful benchmarks"
+
+  # Constraint 4: Limit maximum total data size
+  - name: "max_data_size"
+    rule: "total_data_mb <= 256"
+    violation_policy: "skip"
+    description: "Total data size should not exceed 256MB in this example"
+
+command:
+  template: >
+    ior -w -b {{ block_size }}mb -t {{ transfer_size }}mb
+    -O summaryFile={{summary_file}} -O summaryFormat=JSON
+    -o /tmp/output.ior
+
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+
+scripts:
+  - name: "ior_constrained"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "Running IOR with constraints validation"
+      echo "Block size: {{ block_size }}MB"
+      echo "Transfer size: {{ transfer_size }}MB"
+      echo "Num processes: {{ num_processes }}"
+      echo "Total data: {{ total_data_mb }}MB"
+
+      mpirun --oversubscribe -np {{ num_processes }} {{ command.template }}
+
+      echo "Test completed (repetition {{ repetition }})"
+
+    post:
+      script: |
+        #!/bin/bash
+        echo "Post-processing: Summary file at {{ summary_file }}"
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+      parser_script: scripts/ior_parser.py
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results_with_constraints.csv"
+    mode: append
+    exclude: ["benchmark.name", "benchmark.description"]
+    table: results

@@ -16,6 +16,7 @@ from iops.config.models import (
     ExecutorOptionsConfig,
     VarConfig,
     SweepConfig,
+    ConstraintConfig,
     CommandConfig,
     ScriptConfig,
     PostConfig,
@@ -381,9 +382,24 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
             )
         )
 
+    # Parse constraints (optional section)
+    constraints_data = data.get("constraints", [])
+    constraints = []
+    for idx, c_data in enumerate(constraints_data):
+        if not isinstance(c_data, dict):
+            raise ConfigValidationError(f"constraints[{idx}] must be a dictionary")
+
+        constraints.append(ConstraintConfig(
+            name=c_data.get("name", f"constraint_{idx}"),
+            rule=c_data["rule"],  # required
+            violation_policy=c_data.get("violation_policy", "skip"),
+            description=c_data.get("description"),
+        ))
+
     cfg = GenericBenchmarkConfig(
         benchmark=benchmark,
         vars=vars_cfg,
+        constraints=constraints,
         command=command,
         scripts=scripts,
         output=output,
@@ -553,6 +569,32 @@ def validate_yaml_config(config_path: Path) -> List[str]:
 
     except Exception as e:
         errors.append(f"Error validating vars section: {e}")
+
+    # ---- constraints ----
+    try:
+        constraints_data = data.get("constraints", [])
+        if constraints_data is not None:
+            if not isinstance(constraints_data, list):
+                errors.append("'constraints' must be a list")
+            else:
+                for idx, constraint in enumerate(constraints_data):
+                    if not isinstance(constraint, dict):
+                        errors.append(f"constraints[{idx}] must be a dictionary")
+                        continue
+
+                    # Required fields
+                    if "rule" not in constraint:
+                        errors.append(f"constraints[{idx}] missing required field 'rule'")
+
+                    # Validate violation_policy
+                    policy = constraint.get("violation_policy", "skip")
+                    if policy not in ["skip", "error", "warn"]:
+                        errors.append(
+                            f"constraints[{idx}].violation_policy must be 'skip', 'error', or 'warn', got '{policy}'"
+                        )
+
+    except Exception as e:
+        errors.append(f"Error validating constraints section: {e}")
 
     # ---- command ----
     try:

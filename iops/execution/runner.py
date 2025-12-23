@@ -386,6 +386,21 @@ class IOPSRunner(HasLogger):
         self.logger.info("  ✗ NOT execute any tests")
         self.logger.info("")
 
+        # Report constraints if configured
+        if self.cfg.constraints:
+            self.logger.info("=" * 70)
+            self.logger.info("CONSTRAINTS CONFIGURED:")
+            self.logger.info("=" * 70)
+            for constraint in self.cfg.constraints:
+                self.logger.info(f"  • {constraint.name}")
+                self.logger.info(f"    Rule: {constraint.rule}")
+                self.logger.info(f"    Policy: {constraint.violation_policy}")
+                if constraint.description:
+                    self.logger.info(f"    Description: {constraint.description}")
+                self.logger.info("")
+            self.logger.info("Note: Invalid parameter combinations will be filtered during matrix generation.")
+            self.logger.info("")
+
         # Generate all test scripts using the planner
         self.logger.info("Generating execution scripts...")
         test_count = 0

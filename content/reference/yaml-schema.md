@@ -13,12 +13,13 @@ title: "IOPS YAML Format Reference"
 2. [File Structure Overview](#file-structure-overview)
 3. [Section: `benchmark`](#section-benchmark)
 4. [Section: `vars`](#section-vars)
-5. [Section: `command`](#section-command)
-6. [Section: `scripts`](#section-scripts)
-7. [Section: `output`](#section-output)
-8. [Section: `rounds` (Optional)](#section-rounds-optional)
-9. [Jinja2 Templating](#jinja2-templating)
-10. [Complete Examples](#complete-examples)
+5. [Section: `constraints` (Optional)](#section-constraints-optional)
+6. [Section: `command`](#section-command)
+7. [Section: `scripts`](#section-scripts)
+8. [Section: `output`](#section-output)
+9. [Section: `rounds` (Optional)](#section-rounds-optional)
+10. [Jinja2 Templating](#jinja2-templating)
+11. [Complete Examples](#complete-examples)
 
 ---
 
@@ -54,6 +55,9 @@ benchmark:       # Global configuration (name, workdir, etc.)
 vars:            # Variable definitions (swept and derived)
   ...
 
+constraints:     # (Optional) Parameter validation rules
+  ...
+
 command:         # Command template and metadata
   ...
 
@@ -67,7 +71,7 @@ rounds:          # (Optional) Multi-round optimization workflow
   ...
 ```
 
-**All sections are required except `rounds`.**
+**All sections are required except `constraints` and `rounds`.**
 
 ---
 
@@ -650,6 +654,123 @@ vars:
 ```
 
 **Generates**: `3 nodes × 2 processes × 3 volumes = 18 executions`
+
+---
+
+## Section: `constraints` (Optional)
+
+Defines validation rules for parameter combinations. Constraints filter invalid configurations before execution, preventing wasted time on tests that would fail.
+
+### Schema
+
+```yaml
+constraints:
+  - name: string              # Required: unique constraint identifier
+    rule: string              # Required: Python expression returning bool
+    violation_policy: string  # Optional: "skip" | "error" | "warn" (default: "skip")
+    description: string       # Optional: human-readable explanation
+```
+
+### Fields
+
+#### `name` (required)
+Unique identifier for this constraint. Used in logs and error messages.
+
+#### `rule` (required)
+Python expression that must evaluate to `True` (valid) or `False` (invalid).
+
+**Available in expressions:**
+- All variables (swept, derived, and fixed)
+- Math functions: `min`, `max`, `abs`, `round`, `floor`, `ceil`, `int`, `float`
+
+**Expression must return boolean:**
+- Valid: `block_size % transfer_size == 0`
+- Valid: `nodes * processes_per_node <= 128`
+- Valid: `transfer_size <= block_size`
+
+#### `violation_policy` (optional, default: "skip")
+
+Action to take when constraint is violated:
+
+- **`skip`** (default): Silently filter out invalid parameter combinations
+- **`error`**: Stop execution immediately with error message
+- **`warn`**: Log warning but proceed with execution
+
+#### `description` (optional)
+Human-readable explanation of the constraint. Included in violation messages.
+
+### Example
+
+```yaml
+vars:
+  block_size:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16, 32, 64]
+
+  transfer_size:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  num_processes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+
+constraints:
+  # Ensure block size is multiple of transfer size (common in IOR)
+  - name: "block_transfer_alignment"
+    rule: "block_size % transfer_size == 0"
+    violation_policy: "skip"
+    description: "Block size must be a multiple of transfer size"
+
+  # Transfer size cannot exceed block size
+  - name: "transfer_size_limit"
+    rule: "transfer_size <= block_size"
+    violation_policy: "skip"
+
+  # Warn about potentially problematic configurations
+  - name: "reasonable_total_size"
+    rule: "block_size * num_processes >= 8"
+    violation_policy: "warn"
+    description: "Total data size should be at least 8MB"
+```
+
+**Effect:**
+- Without constraints: `5 block_size × 4 transfer_size × 3 processes = 60 combinations`
+- With constraints: Filters invalid combinations (e.g., `block_size=4, transfer_size=8`)
+- Result: Only valid combinations are executed
+
+### Common Use Cases
+
+**Parameter divisibility:**
+```yaml
+rule: "block_size % transfer_size == 0"
+```
+
+**Relationship validation:**
+```yaml
+rule: "transfer_size <= block_size"
+```
+
+**Resource limits:**
+```yaml
+rule: "nodes * processes_per_node <= 256"
+```
+
+**Minimum thresholds:**
+```yaml
+rule: "volume_size_gb >= 16"
+```
+
+**Complex conditions:**
+```yaml
+rule: "nodes > 1 and processes_per_node >= 4"
+```
 
 ---
 

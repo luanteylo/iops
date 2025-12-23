@@ -93,6 +93,15 @@ class VarConfig:
 
 
 @dataclass
+class ConstraintConfig:
+    """A validation constraint on parameter combinations."""
+    name: str                                                   # Unique constraint identifier
+    rule: str                                                   # Python expression returning bool
+    violation_policy: Literal["skip", "error", "warn"] = "skip"  # Action on violation
+    description: Optional[str] = None                           # Human-readable description
+
+
+@dataclass
 class CommandConfig:
     template: str
     metadata: Dict[str, Any]
@@ -198,4 +207,5 @@ class GenericBenchmarkConfig:
     command: CommandConfig
     scripts: List[ScriptConfig]
     output: OutputConfig
+    constraints: List[ConstraintConfig] = field(default_factory=list)
     rounds: List[RoundConfig] = field(default_factory=list)

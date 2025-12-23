@@ -16,7 +16,7 @@ from iops.config.models import (
     MetricConfig,
     ConfigValidationError,
 )
-
+from iops.constraints.evaluator import filter_execution_matrix
 
 
 # ----------------- Jinja helpers ----------------- #
@@ -993,5 +993,25 @@ def build_execution_matrix(
                 )
 
                 executions.append(exec_instance)
+
+    # Apply constraints if defined
+    if cfg.constraints:
+        import logging
+        logger = logging.getLogger(__name__)
+
+        executions, violations = filter_execution_matrix(
+            executions,
+            cfg.constraints,
+            logger
+        )
+
+        # Log summary of constraint filtering
+        if violations:
+            skipped = sum(1 for v in violations if v.violation_policy == "skip")
+            warned = sum(1 for v in violations if v.violation_policy == "warn")
+            logger.info(
+                f"Constraint filtering complete: {len(executions)} instances remaining after filtering. "
+                f"({skipped} skipped, {warned} warned)"
+            )
 
     return executions

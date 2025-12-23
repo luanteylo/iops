@@ -322,6 +322,18 @@ benchmark:
   cores_expr: "{{ nodes * ppn }}"
 ```
 
+## Documentation
+
+For comprehensive documentation, examples, and tutorials, visit:
+
+**[https://lgouveia.gitlabpages.inria.fr/iops/](https://lgouveia.gitlabpages.inria.fr/iops/)**
+
+The documentation includes:
+- Complete YAML configuration reference
+- User guides for all features
+- Working examples for various scenarios
+- Best practices and optimization tips
+
 ## Examples
 
 Check `docs/examples/` for working configuration examples:

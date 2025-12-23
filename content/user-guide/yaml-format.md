@@ -14,6 +14,7 @@ An IOPS configuration file has these main sections:
 ```yaml
 benchmark:    # Global configuration
 vars:         # Parameter definitions
+constraints:  # (Optional) Parameter validation rules
 command:      # Command template
 scripts:      # Execution scripts and parsers
 output:       # Output configuration
