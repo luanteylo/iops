@@ -84,7 +84,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
         logger.info(line)
 
     logger.info("")
-    logger.info("  IOPS — I/O Performance Suite")
+    logger.info("  IOPS")
     logger.info(f"  Version: {IOPS_VERSION}")
     logger.info(f"  Setup File: {args.setup_file}")    
     logger.info("")

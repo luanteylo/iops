@@ -1,4 +1,4 @@
-# IOPS - I/O Performance Suite
+# IOPS
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
 
@@ -6,7 +6,7 @@ IOPS automates the generation, execution, and analysis of benchmark experiments.
 
 ## What is IOPS?
 
-IOPS (I/O Performance Suite) is a framework that transforms benchmark experiments from manual scripting into automated, reproducible workflows.
+IOPS is a framework that transforms benchmark experiments from manual scripting into automated, reproducible workflows.
 
 **Without IOPS**: Write bash scripts → Parse outputs → Aggregate data → Generate plots → Repeat for each parameter change
 

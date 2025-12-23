@@ -9,6 +9,7 @@ stages:
   - test
   - build
   - deploy
+  - release
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
@@ -56,3 +57,24 @@ pages:preview:
     expire_in: 1 week
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Publish to PyPI when a tag is created
+publish-pypi:
+  stage: release
+  image: python:3.10
+  tags:
+    - ci.inria.fr
+  before_script:
+    - pip install build twine
+  script:
+    # Clean previous builds
+    - rm -rf dist/ build/ *.egg-info iops.egg-info
+    # Build package
+    - python -m build
+    # Upload to PyPI
+    - python -m twine upload dist/*
+  rules:
+    # Only run on tags matching v*.*.* pattern
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  # Only allow manual trigger as safety measure (optional - remove to auto-publish)
+  when: manual
