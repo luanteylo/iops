@@ -20,10 +20,10 @@
 # =============================================================================
 benchmark:
   # Required: Name of the benchmark (used in logs and job names)
-  name: "IOR Benchmark"
+  name: "mdtest Benchmark"
 
   # Optional: Description of what this benchmark measures
-  description: "A benchmark to measure I/O performance using the IOR tool"
+  description: "A benchmark to measure metadata performance using the mdtest tool"
 
   # Required: Working directory where all run outputs will be stored
   # Structure: <workdir>/run_NNN/runs/ and <workdir>/run_NNN/logs/
@@ -65,11 +65,11 @@ benchmark:
   # Uncomment to enable Bayesian optimization:
   #search_method: "bayesian"
   # bayesian_config:
-  #   target_metric: "bwMiB"      # Metric to optimize (from parser)
-  #   objective: "maximize"       # "maximize" or "minimize"
-  #   n_initial_points: 5         # Random samples before optimization starts
-  #   n_iterations: 20            # Total number of evaluations
-  #   acquisition_func: "EI"      # "EI" (Expected Improvement), "PI", or "LCB"
+  #   target_metric: "file_creation_rate"  # Metric to optimize (from parser)
+  #   objective: "maximize"                # "maximize" or "minimize"
+  #   n_initial_points: 5                  # Random samples before optimization starts
+  #   n_iterations: 20                     # Total number of evaluations
+  #   acquisition_func: "EI"               # "EI" (Expected Improvement), "PI", or "LCB"
   
 
 
@@ -117,8 +117,8 @@ benchmark:
 
   # Optional: Variables to exclude from cache key computation
   # Useful for path-based derived variables that shouldn't affect caching
-  # Example: ["summary_file", "output_path"] - paths vary but don't affect results
-  cache_exclude_vars: ["summary_file"]
+  # Example: ["output_file", "test_dir"] - paths vary but don't affect results
+  cache_exclude_vars: ["output_file", "test_dir"]
 
   # Optional: Variables to test exhaustively at each search point
   # For Bayesian/random search: these variables are fully expanded for each selected point
@@ -151,7 +151,7 @@ benchmark:
   # When using --analyze, only these variables will be used in plots and Pareto frontier
   # Useful when you have string variables that shouldn't be plotted
   # If omitted, all numeric swept variables are included
-  report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+  report_vars: ["nodes", "processes_per_node", "files_per_task", "tree_depth", "branch_factor", "file_size_bytes"]
 
  
 
@@ -176,69 +176,73 @@ vars:
   # SWEPT VARIABLES (define parameter space)
   # ---------------------------------------------------------------------------
 
-  # Example: Number of compute nodes
+  # Number of compute nodes
   nodes:
     type: int
     sweep:
       mode: list  # Options: list | range
-      values: [4, 8, 32]
-      # For range mode:
-      # mode: range
-      # start: 1
-      # end: 64
-      # step: 1
+      values: [1, 2, 4]
 
-  # Example: MPI processes per node
+  # MPI processes per node
   processes_per_node:
     type: int
     sweep:
       mode: list
-      values: [8, 16, 32]
+      values: [4, 8, 16]
 
-  # Example: Data volume size
-  volume_size_gb:
+  # Number of files to create per MPI task
+  # mdtest creates files_per_task * ntasks total files
+  files_per_task:
     type: int
     sweep:
       mode: list
-      values: [32, 64, 128]
+      values: [100, 1000, 10000]
 
-  # Example: String parameter (e.g., different paths or configurations)
-  # Useful for testing across different file systems or OST configurations
-  ost_count:
+  # Directory tree depth (0 = flat structure)
+  tree_depth:
     type: int
     sweep:
       mode: list
-      values: [1, 2,  4, 8]
+      values: [0, 2]
+
+  # Branching factor for directory tree (directories per level)
+  # Only relevant when tree_depth > 0
+  branch_factor:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 10]
+
+  # File size in bytes (mdtest focuses on metadata, so typically small)
+  file_size_bytes:
+    type: int
+    sweep:
+      mode: list
+      values: [0, 4096]  # 0 = empty files, 4096 = 4KB
 
   # ---------------------------------------------------------------------------
   # DERIVED VARIABLES (computed from other variables)
   # ---------------------------------------------------------------------------
-  # Expression syntax:
-  #   - Jinja2: "{{ var1 + var2 }}"
-  #   - Python: "var1 * 2 + var2"
-  #   - Functions: min(), max(), round(), floor(), ceil()
-  # ---------------------------------------------------------------------------
 
-  # Example: Extract number from path string
-  ost_path:
-    type: str
-    expr: "/beegfs/user/ior_{{ ost_count }}"
-
-  # Example: Compute block size based on volume and process count
-  block_size_mb:
-    type: int
-    expr: "(volume_size_gb * 1024) // (nodes * processes_per_node)" # '//' needs to garantee integer division
-
-  # Example: Total MPI tasks
+  # Total MPI tasks across all nodes
   ntasks:
     type: int
     expr: "{{ nodes * processes_per_node }}"
 
-  # Example: Per-execution output file path
-  # Uses special variables: execution_dir, execution_id, repetition
-  summary_file:
+  # Total number of files created in the test
+  total_files:
+    type: int
+    expr: "{{ files_per_task * ntasks }}"
+
+  # Test directory path
+  test_dir:
     type: str
-    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+    expr: "/path/to/testfs/mdtest_{{ execution_id }}"
+
+  # Output file for mdtest results
+  output_file:
+    type: str
+    expr: "{{ execution_dir }}/mdtest_output_{{ execution_id }}_{{ repetition }}.txt"
 
 
 # Optional: Constraints to validate parameter combinations before execution
@@ -268,16 +272,16 @@ vars:
 command:
   # The command template - can be multiline using YAML '>' or '|' syntax
   template: >
-    ior -w -b {{ block_size_mb }}mb -t 1mb
-    -O summaryFile={{ summary_file }} -O summaryFormat=JSON
-    -o {{ ost_path }}/output.ior
+    mdtest -n {{ files_per_task }} -d {{ test_dir }}
+    -z {{ tree_depth }} -b {{ branch_factor }}
+    -w {{ file_size_bytes }} -F -C -T -r
+    -o {{ output_file }}
 
   # Optional: Additional metadata to attach to results
   # This appears in output as metadata.* columns
   metadata:
-    operation: "write"
-    filestrategy: "shared-file"
-    spatiality: "contiguous"
+    benchmark_type: "metadata"
+    operations: "create,stat,remove"
 
 
 # =============================================================================
@@ -294,7 +298,7 @@ command:
 # =============================================================================
 scripts:
   # Script name (can define multiple scripts)
-  - name: "ior"
+  - name: "mdtest"
 
     # submission method for this script (required for local and slurm executors)
     #submit: "bash"        # for local executor
@@ -303,50 +307,51 @@ scripts:
     # ---------------------------------------------------------------------------
     # SCRIPT OPTIONS:
     # ---------------------------------------------------------------------------
-    # OPTION 1: EXTERNAL SCRIPT FILE (RECOMMENDED - Active by default)
+    # OPTION 1: EXTERNAL SCRIPT FILE (use this when you have a separate script)
     #   Reference an external script file. This is the preferred approach.
-    #   The wizard copied working example scripts organized by tool:
-    #     - examples/ior/scripts/ior_slurm.sh (SLURM submission script for IOR)
-    #     - examples/ior/scripts/ior_parser.py (IOR result parser)
-    #     - examples/mdtest/scripts/ (for mdtest-specific scripts)
+    #   You can create a custom SLURM script for mdtest.
     #
     #   Customize these scripts for your cluster and benchmark needs.
     # ---------------------------------------------------------------------------
-    script_template: examples/ior/scripts/ior_slurm.sh
+    # script_template: examples/scripts/mdtest_slurm.sh
 
     # ---------------------------------------------------------------------------
-    # OPTION 2: EMBEDDED SCRIPT (alternative, less maintainable)
-    #   You can embed the script directly in YAML. However, this makes editing
-    #   and debugging more difficult. Use external files when possible.
-    #
-    #   To use embedded script, comment out the line above and uncomment below:
+    # OPTION 2: EMBEDDED SCRIPT (active by default for this mdtest example)
+    #   Embedded script directly in YAML for quick testing.
     # ---------------------------------------------------------------------------
-    # script_template: |
-    #   #!/bin/bash
-    #
-    #   #SBATCH --job-name=iops_{{ execution_id }}
-    #   #SBATCH --ntasks={{ ntasks }}
-    #   #SBATCH --nodes={{ nodes }}
-    #   #SBATCH --ntasks-per-node={{ processes_per_node }}
-    #   #SBATCH --time=04:00:00
-    #   #SBATCH --chdir={{ execution_dir }}
-    #   #SBATCH -o batch%j.out
-    #   #SBATCH -e batch%j.err
-    #   #SBATCH --exclusive
-    #
-    #   # Uncomment and customize these SLURM directives as needed:
-    #   # #SBATCH --partition=your_partition
-    #   # #SBATCH --constraint=your_constraint
-    #   # #SBATCH --account=your_account
-    #   # #SBATCH --qos=your_qos
-    #
-    #   # Load required modules (customize for your cluster)
-    #   module purge
-    #   module load mpi/openmpi/4.0.1
-    #
-    #   # Execute the benchmark command
-    #   # Note: SLURM sets MPI task count automatically via --ntasks
-    #   mpirun {{ command.template }}
+    script_template: |
+      #!/bin/bash
+
+      #SBATCH --job-name=mdtest_{{ execution_id }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=02:00:00
+      #SBATCH --chdir={{ execution_dir }}
+      #SBATCH -o batch%j.out
+      #SBATCH -e batch%j.err
+      #SBATCH --exclusive
+
+      # Uncomment and customize these SLURM directives as needed:
+      # #SBATCH --partition=your_partition
+      # #SBATCH --constraint=your_constraint
+      # #SBATCH --account=your_account
+      # #SBATCH --qos=your_qos
+
+      # Load required modules (customize for your cluster)
+      module purge
+      module load mpi/openmpi/4.0.1
+      # module load mdtest  # If mdtest is a module
+
+      # Create test directory
+      mkdir -p {{ test_dir }}
+
+      # Execute the benchmark command
+      # Note: SLURM sets MPI task count automatically via --ntasks
+      mpirun {{ command.template }}
+
+      # Cleanup test directory after benchmark
+      rm -rf {{ test_dir }}
 
     # ---------------------------------------------------------------------------
     # POST-EXECUTION SCRIPT (optional)
@@ -358,7 +363,7 @@ scripts:
       script: |
         #!/bin/bash
         echo "Job completed at $(date)"
-        echo "Summary file: {{ summary_file }}"
+        echo "Output file: {{ output_file }}"
 
     # ---------------------------------------------------------------------------
     # PARSER CONFIGURATION
@@ -367,80 +372,81 @@ scripts:
     # ---------------------------------------------------------------------------
     parser:
       # File to parse (typically a variable pointing to the output)
-      file: "{{ summary_file }}"
+      file: "{{ output_file }}"
 
-      # List of metrics to extract
+      # List of metrics to extract from mdtest output
       # Each metric name must be returned by the parser script
       metrics:
-        - name: bwMiB       # Bandwidth in MiB/s
-        # Add more metrics as needed:
-        # - name: iops      # I/O operations per second
-        # - name: latency   # Average latency
-        # - name: runtime   # Total execution time
+        - name: file_creation_rate    # Files created per second
+        - name: file_stat_rate         # Files stat'd per second
+        - name: file_removal_rate      # Files removed per second
+        - name: tree_creation_rate     # Tree creation rate
+        - name: tree_removal_rate      # Tree removal rate
 
       # ---------------------------------------------------------------------------
-      # PARSER SCRIPT OPTIONS:
+      # PARSER SCRIPT: EMBEDDED (for mdtest text output)
       # ---------------------------------------------------------------------------
-      # OPTION 1: EXTERNAL PARSER SCRIPT (RECOMMENDED - Active by default)
-      #   Reference an external Python script with a parse(file_path) function.
-      #   This makes editing and debugging easier.
-      #   The wizard copied a working IOR parser to: examples/ior/scripts/ior_parser.py
-      #
-      #   Customize this script to parse your benchmark's output format.
+      # Parses mdtest text output and extracts performance metrics
       # ---------------------------------------------------------------------------
-      parser_script: examples/ior/scripts/ior_parser.py
+      parser_script: |
+        import re
 
-      # ---------------------------------------------------------------------------
-      # OPTION 2: EMBEDDED PARSER SCRIPT (alternative)
-      #   Embed the parser directly in this YAML file.
-      #   Must define: def parse(file_path: str) -> dict
-      #
-      #   To use embedded parser, comment out the line above and uncomment below:
-      # ---------------------------------------------------------------------------
-      # parser_script: |
-      #   import json
-      #
-      #   def parse(file_path: str):
-      #       """
-      #       Parse IOR JSON output and extract metrics.
-      #
-      #       This is an example parser for IOR JSON format output.
-      #       Customize this function to parse your benchmark's output format.
-      #
-      #       Args:
-      #           file_path: Path to the output file to parse
-      #
-      #       Returns:
-      #           dict: Metrics dictionary with keys matching 'metrics' list above
-      #                 Example: {"bwMiB": 1234.5, "iops": 5000}
-      #       """
-      #       with open(file_path, "r") as f:
-      #           data = json.load(f)
-      #
-      #       # Navigate IOR JSON structure
-      #       # Customize this section based on your output format
-      #       tests = data.get("tests", [])
-      #       if not tests:
-      #           raise ValueError("No tests found in IOR JSON")
-      #
-      #       results = tests[0].get("Results", [])
-      #       if not results:
-      #           raise ValueError("No Results found in IOR JSON")
-      #
-      #       # Find write operation (or use first result)
-      #       write_res = next(
-      #           (r for r in results if str(r.get("access", "")).lower() == "write"),
-      #           results[0],
-      #       )
-      #
-      #       # Return metrics dictionary
-      #       # Keys MUST match the names in 'metrics' list above
-      #       return {
-      #           "bwMiB": write_res.get("bwMiB"),
-      #           # Add more metrics as needed:
-      #           # "iops": write_res.get("iops"),
-      #           # "latency": write_res.get("latency"),
-      #       }
+        def parse(file_path: str):
+            """
+            Parse mdtest text output and extract performance metrics.
+
+            mdtest outputs text with sections for different operations:
+            - File creation
+            - File stat
+            - File removal
+            - Tree creation/removal (if tree depth > 0)
+
+            Args:
+                file_path: Path to the mdtest output file
+
+            Returns:
+                dict: Metrics dictionary with operation rates
+            """
+            with open(file_path, "r") as f:
+                content = f.read()
+
+            metrics = {}
+
+            # Parse file creation rate
+            # Pattern: "File creation     :    XXX.XXX ops/sec"
+            match = re.search(r"File creation\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["file_creation_rate"] = float(match.group(1))
+
+            # Parse file stat rate
+            # Pattern: "File stat         :    XXX.XXX ops/sec"
+            match = re.search(r"File stat\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["file_stat_rate"] = float(match.group(1))
+
+            # Parse file removal rate
+            # Pattern: "File removal      :    XXX.XXX ops/sec"
+            match = re.search(r"File removal\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["file_removal_rate"] = float(match.group(1))
+
+            # Parse tree creation rate (if applicable)
+            # Pattern: "Tree creation     :    XXX.XXX ops/sec"
+            match = re.search(r"Tree creation\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["tree_creation_rate"] = float(match.group(1))
+            else:
+                metrics["tree_creation_rate"] = None
+
+            # Parse tree removal rate (if applicable)
+            # Pattern: "Tree removal      :    XXX.XXX ops/sec"
+            match = re.search(r"Tree removal\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["tree_removal_rate"] = float(match.group(1))
+            else:
+                metrics["tree_removal_rate"] = None
+
+            return metrics
 
 
 # =============================================================================
@@ -501,10 +507,10 @@ output:
 #   # Optional: Per-metric custom plots
 #   # Plot types: line, bar, scatter, heatmap, box, violin, surface_3d
 #   metrics:
-#     bwMiB:
+#     file_creation_rate:
 #       plots:
 #         - type: "line"
-#           x_var: "block_size_mb"
+#           x_var: "files_per_task"
 #           group_by: "nodes"
 #         - type: "heatmap"
 #           x_var: "nodes"
@@ -534,13 +540,16 @@ output:
 #
 #     # Optional: Override specific variables with fixed values for this round
 #     fixed_overrides:
-#       processes_per_node: 16
-#       volume_size_gb: 32
+#       processes_per_node: 8
+#       files_per_task: 1000
+#       tree_depth: 0
+#       branch_factor: 1
+#       file_size_bytes: 0
 #
 #     # Search configuration for this round
 #     search:
-#       metric: "bwMiB"        # Metric to optimize
-#       objective: "max"        # "max" or "min"
+#       metric: "file_creation_rate"   # Metric to optimize
+#       objective: "max"                # "max" or "min"
 #
 #     # Optional: Override repetitions for this round
 #     repetitions: 3
@@ -549,7 +558,7 @@ output:
 #   - name: "optimize_processes"
 #     sweep_vars: ["processes_per_node"]
 #     search:
-#       metric: "bwMiB"
+#       metric: "file_creation_rate"
 #       objective: "max"
 #     repetitions: 5
 
@@ -583,7 +592,7 @@ output:
 #   │   ├── runs/
 #   │   │   ├── exec_0001/
 #   │   │   │   └── repetition_001/
-#   │   │   │       ├── run_ior.sh       # Generated script
+#   │   │   │       ├── run_mdtest.sh    # Generated script
 #   │   │   │       ├── stdout           # Job stdout
 #   │   │   │       ├── stderr           # Job stderr
 #   │   │   │       └── batch12345.out   # SLURM output

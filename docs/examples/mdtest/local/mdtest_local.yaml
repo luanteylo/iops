@@ -1,0 +1,295 @@
+# =============================================================================
+# IOPS mdtest Benchmark Configuration (Local Execution)
+# =============================================================================
+#
+# This configuration runs mdtest locally using the local executor.
+# Suitable for testing on a single machine or workstation.
+#
+# Quick Start:
+#   1. Update the workdir and test_dir paths below
+#   2. Ensure mdtest and MPI are installed and available
+#   3. Validate: iops examples/mdtest_config_local.yaml --check_setup
+#   4. Dry run: iops examples/mdtest_config_local.yaml --dry-run
+#   5. Execute: iops examples/mdtest_config_local.yaml
+#
+# Documentation: https://lgouveia.gitlabpages.inria.fr/iops/reference/yaml-schema/
+# =============================================================================
+
+
+# =============================================================================
+# BENCHMARK CONFIGURATION
+# =============================================================================
+benchmark:
+  # Required: Name of the benchmark (used in logs and job names)
+  name: "mdtest Benchmark (Local)"
+
+  # Optional: Description of what this benchmark measures
+  description: "Local mdtest benchmark to measure metadata performance"
+
+  # Required: Working directory where all run outputs will be stored
+  # Structure: <workdir>/run_NNN/runs/ and <workdir>/run_NNN/logs/
+  workdir: "/tmp/iops_mdtest_workdir"
+
+  # Optional: SQLite database for caching execution results
+  # When --use_cache is specified, results are reused if parameters match
+  sqlite_db: "/tmp/iops_mdtest_cache.db"
+
+  # Optional: Number of repetitions for each test case (default: 1)
+  repetitions: 2
+
+  # Required: Test selection strategy
+  search_method: "exhaustive"
+
+  # Required: Execution backend
+  executor: "local"
+
+  # Optional: Random seed for reproducible random operations (default: None)
+  random_seed: 42
+
+  # Optional: Variables to exclude from cache key computation
+  cache_exclude_vars: ["output_file", "test_dir"]
+
+  # Optional: Variables to include in analysis reports
+  report_vars: ["mpi_processes", "files_per_task", "tree_depth", "branch_factor", "file_size_bytes"]
+
+
+# =============================================================================
+# VARIABLES CONFIGURATION
+# =============================================================================
+vars:
+  # ---------------------------------------------------------------------------
+  # SWEPT VARIABLES (define parameter space)
+  # ---------------------------------------------------------------------------
+
+  # Number of MPI processes (local execution - typically lower values)
+  mpi_processes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+
+  # Number of files to create per MPI task
+  # Reduced for local testing to keep runtime reasonable
+  files_per_task:
+    type: int
+    sweep:
+      mode: list
+      values: [10, 100, 1000]
+
+  # Directory tree depth (0 = flat structure)
+  tree_depth:
+    type: int
+    sweep:
+      mode: list
+      values: [0, 1]
+
+  # Branching factor for directory tree (directories per level)
+  # Only relevant when tree_depth > 0
+  branch_factor:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 5]
+
+  # File size in bytes (mdtest focuses on metadata, so typically small)
+  file_size_bytes:
+    type: int
+    sweep:
+      mode: list
+      values: [0, 4096]  # 0 = empty files, 4096 = 4KB
+
+  # ---------------------------------------------------------------------------
+  # DERIVED VARIABLES (computed from other variables)
+  # ---------------------------------------------------------------------------
+
+  # Total number of files created in the test
+  total_files:
+    type: int
+    expr: "{{ files_per_task * mpi_processes }}"
+
+  # Test directory path
+  test_dir:
+    type: str
+    expr: "/tmp/mdtest_test_{{ execution_id }}"
+
+  # Output file for mdtest results
+  output_file:
+    type: str
+    expr: "{{ execution_dir }}/mdtest_output_{{ execution_id }}_{{ repetition }}.txt"
+
+
+# =============================================================================
+# COMMAND CONFIGURATION
+# =============================================================================
+command:
+  # The command template - can be multiline using YAML '>' or '|' syntax
+  template: >
+    mdtest -n {{ files_per_task }} -d {{ test_dir }}
+    -z {{ tree_depth }} -b {{ branch_factor }}
+    -w {{ file_size_bytes }} -F -C -T -r
+    -o {{ output_file }}
+
+  # Optional: Additional metadata to attach to results
+  metadata:
+    benchmark_type: "metadata"
+    operations: "create,stat,remove"
+    execution_mode: "local"
+
+
+# =============================================================================
+# SCRIPTS CONFIGURATION
+# =============================================================================
+scripts:
+  # Script name (can define multiple scripts)
+  - name: "mdtest"
+
+    # Submission method for local executor
+    submit: "bash"
+
+    # Script template for local execution
+    script_template: |
+      #!/bin/bash
+
+      # Set error handling
+      set -e
+
+      # Create test directory
+      mkdir -p {{ test_dir }}
+
+      # Execute the benchmark command with MPI
+      # For local execution, mpirun determines the number of processes
+      mpirun -np {{ mpi_processes }} {{ command.template }}
+
+      # Cleanup test directory after benchmark
+      rm -rf {{ test_dir }}
+
+    # ---------------------------------------------------------------------------
+    # POST-EXECUTION SCRIPT (optional)
+    # ---------------------------------------------------------------------------
+    post:
+      script: |
+        #!/bin/bash
+        echo "Job completed at $(date)"
+        echo "Output file: {{ output_file }}"
+        echo "Total files tested: {{ total_files }}"
+
+    # ---------------------------------------------------------------------------
+    # PARSER CONFIGURATION
+    # ---------------------------------------------------------------------------
+    parser:
+      # File to parse (typically a variable pointing to the output)
+      file: "{{ output_file }}"
+
+      # List of metrics to extract from mdtest output
+      metrics:
+        - name: file_creation_rate    # Files created per second
+        - name: file_stat_rate         # Files stat'd per second
+        - name: file_removal_rate      # Files removed per second
+        - name: tree_creation_rate     # Tree creation rate
+        - name: tree_removal_rate      # Tree removal rate
+
+      # Parser script for mdtest text output
+      parser_script: |
+        import re
+
+        def parse(file_path: str):
+            """
+            Parse mdtest text output and extract performance metrics.
+
+            mdtest outputs text with sections for different operations:
+            - File creation
+            - File stat
+            - File removal
+            - Tree creation/removal (if tree depth > 0)
+
+            Args:
+                file_path: Path to the mdtest output file
+
+            Returns:
+                dict: Metrics dictionary with operation rates
+            """
+            with open(file_path, "r") as f:
+                content = f.read()
+
+            metrics = {}
+
+            # Parse file creation rate
+            # Pattern: "File creation     :    XXX.XXX ops/sec"
+            match = re.search(r"File creation\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["file_creation_rate"] = float(match.group(1))
+
+            # Parse file stat rate
+            # Pattern: "File stat         :    XXX.XXX ops/sec"
+            match = re.search(r"File stat\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["file_stat_rate"] = float(match.group(1))
+
+            # Parse file removal rate
+            # Pattern: "File removal      :    XXX.XXX ops/sec"
+            match = re.search(r"File removal\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["file_removal_rate"] = float(match.group(1))
+
+            # Parse tree creation rate (if applicable)
+            # Pattern: "Tree creation     :    XXX.XXX ops/sec"
+            match = re.search(r"Tree creation\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["tree_creation_rate"] = float(match.group(1))
+            else:
+                metrics["tree_creation_rate"] = None
+
+            # Parse tree removal rate (if applicable)
+            # Pattern: "Tree removal      :    XXX.XXX ops/sec"
+            match = re.search(r"Tree removal\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
+            if match:
+                metrics["tree_removal_rate"] = float(match.group(1))
+            else:
+                metrics["tree_removal_rate"] = None
+
+            return metrics
+
+
+# =============================================================================
+# OUTPUT CONFIGURATION
+# =============================================================================
+output:
+  sink:
+    # Output format: csv | parquet | sqlite
+    type: csv
+
+    # Output path (supports Jinja2 templating)
+    path: "{{ workdir }}/results.csv"
+
+    # Write mode:
+    #   - append: Add to existing file (creates if missing)
+    #   - overwrite: Replace existing file
+    mode: append
+
+    # Optional: Exclude specific fields (mutually exclusive with 'include')
+    exclude: ["benchmark.description"]
+
+
+# =============================================================================
+# ADDITIONAL NOTES
+# =============================================================================
+#
+# Local Execution Notes:
+#   - This configuration uses the "local" executor which runs scripts directly
+#   - No SLURM cluster required - runs on your local machine
+#   - MPI processes are limited to what your machine can handle
+#   - Test parameters are scaled down for faster local testing
+#
+# Before Running:
+#   - Ensure mdtest is installed and in your PATH
+#   - Ensure MPI (OpenMPI or MPICH) is installed
+#   - Update workdir and test_dir paths as needed
+#   - The test directory will be created and cleaned up automatically
+#
+# To Run:
+#   iops examples/mdtest_config_local.yaml
+#
+# With Caching:
+#   iops examples/mdtest_config_local.yaml --use_cache
+#
+# =============================================================================
