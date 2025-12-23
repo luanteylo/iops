@@ -249,9 +249,20 @@ metrics:
 
 **Supported colorscales**: `"Viridis"`, `"Plasma"`, `"Inferno"`, `"Magma"`, `"Cividis"`, `"Blues"`, `"Reds"`, `"RdBu"`, etc.
 
-#### 5. Box Plots (Coming Soon)
+#### 5. Box Plots
 
-Statistical distribution visualization with quartiles and outliers.
+Box plots showing distribution statistics (quartiles, median) with optional outliers.
+
+**Required Parameters**:
+- `x_var` (string): Variable for categorical grouping (x-axis)
+
+**Optional Parameters**:
+- `show_outliers` (boolean): Display outlier points beyond whiskers (default: false)
+- `title` (string): Custom plot title
+- `xaxis_label` (string): Custom x-axis label
+- `yaxis_label` (string): Custom y-axis label
+- `height` (integer): Plot height in pixels
+- `width` (integer): Plot width in pixels
 
 ```yaml
 metrics:
@@ -260,13 +271,26 @@ metrics:
       - type: "box"
         x_var: "concurrency"
         show_outliers: true
+        title: "Latency Distribution by Concurrency"
+        xaxis_label: "Concurrency Level"
+        yaxis_label: "Latency (ms)"
 ```
 
-**When to use**: Understanding distribution, detecting outliers, comparing variability.
+**When to use**: Understanding distributions, detecting outliers, comparing variability across parameter values.
 
-#### 6. Violin Plots (Coming Soon)
+#### 6. Violin Plots
 
-Distribution visualization with density estimation.
+Violin plots showing distribution with kernel density estimation and embedded box plot.
+
+**Required Parameters**:
+- `x_var` (string): Variable for categorical grouping (x-axis)
+
+**Optional Parameters**:
+- `title` (string): Custom plot title
+- `xaxis_label` (string): Custom x-axis label
+- `yaxis_label` (string): Custom y-axis label
+- `height` (integer): Plot height in pixels
+- `width` (integer): Plot width in pixels
 
 ```yaml
 metrics:
@@ -274,13 +298,29 @@ metrics:
     plots:
       - type: "violin"
         x_var: "nodes"
+        title: "Latency Distribution by Node Count"
+        xaxis_label: "Number of Nodes"
+        yaxis_label: "Latency (ms)"
 ```
 
-**When to use**: Detailed distribution analysis, comparing shapes of distributions.
+**When to use**: Detailed distribution analysis, comparing shapes of distributions, visualizing density patterns.
 
-#### 7. 3D Surface Plots (Coming Soon)
+#### 7. 3D Surface Plots
 
-3D surface showing metric across two variables.
+3D surface plots showing metric values across two variables.
+
+**Required Parameters**:
+- `x_var` (string): Variable for x-axis
+- `y_var` (string): Variable for y-axis
+
+**Optional Parameters**:
+- `z_metric` (string): Metric to display as z-axis/surface (default: current metric)
+- `colorscale` (string): Plotly colorscale name (default: "Viridis")
+- `title` (string): Custom plot title
+- `xaxis_label` (string): Custom x-axis label
+- `yaxis_label` (string): Custom y-axis label
+- `height` (integer): Plot height in pixels
+- `width` (integer): Plot width in pixels
 
 ```yaml
 metrics:
@@ -290,20 +330,34 @@ metrics:
         x_var: "nodes"
         y_var: "block_size"
         z_metric: "bandwidth"
+        colorscale: "Plasma"
+        title: "Bandwidth Response Surface"
+        xaxis_label: "Number of Nodes"
+        yaxis_label: "Block Size (MB)"
 ```
 
-**When to use**: Visualizing smooth response surfaces, finding optimal regions.
+**When to use**: Visualizing smooth response surfaces, finding optimal regions in 2D parameter space, understanding interactions between two variables.
 
-#### 8. Parallel Coordinates (Coming Soon)
+#### 8. Parallel Coordinates
 
-Multi-dimensional visualization (already in default sections, but will be customizable).
+Multi-dimensional visualization showing all numeric swept variables and the metric as parallel axes.
+
+**Required Parameters**: None (automatically includes all numeric swept variables)
+
+**Optional Parameters**:
+- `colorscale` (string): Colorscale for lines colored by metric value (default: "Viridis")
+- `title` (string): Custom plot title
 
 ```yaml
 metrics:
   bandwidth:
     plots:
       - type: "parallel_coordinates"
+        colorscale: "Plasma"
+        title: "Multi-Dimensional Parameter Analysis"
 ```
+
+**When to use**: Visualizing relationships across many variables simultaneously, identifying parameter correlations, exploring high-dimensional parameter spaces.
 
 ---
 

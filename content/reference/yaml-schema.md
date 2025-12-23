@@ -1680,33 +1680,46 @@ reporting:
 
 **Plot types:**
 
-1. **`bar`** - Bar charts with error bars
+1. **`bar`** - Bar charts with error bars (mean ± std dev)
 2. **`line`** - Line plots with optional grouping
 3. **`scatter`** - Scatter plots with color/size mapping
 4. **`heatmap`** - 2D heatmaps for two variables
-5. **`box`** - Box plots (coming soon)
-6. **`violin`** - Violin plots (coming soon)
-7. **`surface_3d`** - 3D surface plots (coming soon)
-8. **`parallel_coordinates`** - Multi-dimensional (coming soon for custom use)
+5. **`box`** - Box plots showing distribution statistics
+6. **`violin`** - Violin plots with kernel density estimation
+7. **`surface_3d`** - 3D surface plots
+8. **`parallel_coordinates`** - Multi-dimensional parallel coordinates
 
-**Common plot options:**
+**Parameter Requirements by Plot Type:**
+
+| Plot Type | Required Parameters | Key Optional Parameters |
+|-----------|-------------------|------------------------|
+| `bar` | `x_var` | `show_error_bars`, `title`, axis labels, sizing |
+| `line` | `x_var` | `group_by`, `title`, axis labels, sizing |
+| `scatter` | `x_var` | `y_var`, `color_by`, `colorscale`, `title`, axis labels, sizing |
+| `heatmap` | `x_var`, `y_var` | `z_metric`, `colorscale`, `title`, axis labels, sizing |
+| `box` | `x_var` | `show_outliers`, `title`, axis labels, sizing |
+| `violin` | `x_var` | `title`, axis labels, sizing |
+| `surface_3d` | `x_var`, `y_var` | `z_metric`, `colorscale`, `title`, axis labels, sizing |
+| `parallel_coordinates` | None | `colorscale`, `title` |
+
+**All plot options:**
 
 - **`type`** (required): Plot type (see above)
-- **`x_var`** (optional): Variable for x-axis
-- **`y_var`** (optional): Variable for y-axis (scatter, surface_3d)
-- **`z_metric`** (optional): Metric for z-axis/color (heatmap, surface_3d)
-- **`group_by`** (optional): Variable to group by (creates multiple series)
-- **`color_by`** (optional): Variable to map to color (scatter)
-- **`size_by`** (optional): Variable to map to size (scatter)
-- **`title`** (optional): Plot title
-- **`xaxis_label`** (optional): X-axis label
-- **`yaxis_label`** (optional): Y-axis label
-- **`colorscale`** (optional): Colorscale name for heatmaps (default: "Viridis")
-- **`show_error_bars`** (optional): Show error bars (bar, line) (default: true)
-- **`show_outliers`** (optional): Show outliers (box) (default: true)
-- **`height`** (optional): Plot height in pixels
-- **`width`** (optional): Plot width in pixels
-- **`per_variable`** (optional): Generate one plot per swept variable (default: false)
+- **`x_var`**: Variable for x-axis (required for most plot types)
+- **`y_var`**: Variable for y-axis (required for heatmap and surface_3d; optional for scatter)
+- **`z_metric`**: Metric to display as z-axis/surface (optional; default: current metric; applies to heatmap, surface_3d)
+- **`group_by`**: Variable to group by (optional; creates multiple lines/series; applies to line)
+- **`color_by`**: Variable or metric to map to point color (optional; default: current metric; applies to scatter)
+- **`size_by`**: Variable to map to point size (optional; applies to scatter)
+- **`title`**: Plot title (optional)
+- **`xaxis_label`**: X-axis label (optional)
+- **`yaxis_label`**: Y-axis label (optional)
+- **`colorscale`**: Plotly colorscale name (optional; default: "Viridis"; applies to heatmap, scatter, surface_3d, parallel_coordinates)
+- **`show_error_bars`**: Show error bars (optional; default: true; applies to bar, line)
+- **`show_outliers`**: Show outliers beyond whiskers (optional; default: false; applies to box)
+- **`height`**: Plot height in pixels (optional; default: 500)
+- **`width`**: Plot width in pixels (optional; default: auto/responsive)
+- **`per_variable`**: Generate one plot per swept variable (optional; default: false)
 
 #### `default_plots` (optional)
 

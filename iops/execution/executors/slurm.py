@@ -225,6 +225,10 @@ class SlurmExecutor(BaseExecutor):
                 test.metadata["__executor_status"] = self.STATUS_PENDING
             else:
                 test.metadata["__executor_status"] = self.STATUS_RUNNING
+                # Record when job transitions from PENDING to RUNNING (actual job start)
+                if last_state == "PENDING" and "__job_start" not in test.metadata:
+                    test.metadata["__job_start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    self.logger.debug(f"  [SlurmExec] Job {job_id} started running at {test.metadata['__job_start']}")
 
             if state != last_state:
                 self.logger.info("SLURM job %s state: %s", job_id, state)

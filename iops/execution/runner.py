@@ -15,6 +15,7 @@ import signal
 import sys
 import subprocess
 import shlex
+import socket
 
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
@@ -275,9 +276,26 @@ class IOPSRunner(HasLogger):
         bar = bar.ljust(width)
         return f"[{bar}]"
 
-    def _save_run_metadata(self, test_count: int = 0):
+    def _save_run_metadata(self, test_count: int = 0, benchmark_start_time: Optional[datetime] = None, benchmark_end_time: Optional[datetime] = None):
         """Save runtime metadata for report generation."""
         try:
+            # Calculate timing metrics if provided
+            timing_metadata = {}
+            if benchmark_start_time and benchmark_end_time:
+                total_runtime_seconds = (benchmark_end_time - benchmark_start_time).total_seconds()
+                timing_metadata = {
+                    "benchmark_start_time": benchmark_start_time.isoformat(),
+                    "benchmark_end_time": benchmark_end_time.isoformat(),
+                    "total_runtime_seconds": total_runtime_seconds,
+                }
+
+            # Try to get hostname (best effort - don't fail if unavailable)
+            hostname = None
+            try:
+                hostname = socket.gethostname()
+            except Exception:
+                pass  # Hostname unavailable, continue without it
+
             metadata = {
                 "benchmark": {
                     "name": self.cfg.benchmark.name,
@@ -292,6 +310,8 @@ class IOPSRunner(HasLogger):
                     "bayesian_config": self.cfg.benchmark.bayesian_config,
                     "cores_expr": self.cfg.benchmark.cores_expr,
                     "max_core_hours": self.cfg.benchmark.max_core_hours,
+                    "hostname": hostname,  # Add hostname if available (best effort)
+                    **timing_metadata,  # Add timing information if available
                 },
                 "variables": {},
                 "metrics": [],
@@ -973,8 +993,12 @@ class IOPSRunner(HasLogger):
         self.logger.info("=" * 70)
 
     def run(self):
+        # Record benchmark start time
+        benchmark_start_time = datetime.now()
+
         self.logger.info("=" * 70)
         self.logger.info(f"Starting IOPS Runner: {self.cfg.benchmark.name}")
+        self.logger.info(f"Benchmark start time: {benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info("=" * 70)
 
         test_count = 0
@@ -1167,8 +1191,33 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"Results saved to: {output_path_display}")
         self.logger.info("=" * 70)
 
+        # Record benchmark end time and calculate timing metrics
+        benchmark_end_time = datetime.now()
+        total_runtime = (benchmark_end_time - benchmark_start_time).total_seconds()
+
+        # Format runtime for display
+        if total_runtime < 60:
+            runtime_str = f"{total_runtime:.1f}s"
+        elif total_runtime < 3600:
+            runtime_str = f"{total_runtime/60:.1f}m ({total_runtime:.1f}s)"
+        else:
+            runtime_str = f"{total_runtime/3600:.2f}h ({total_runtime/60:.1f}m)"
+
+        # Log timing summary
+        self.logger.info("=" * 70)
+        self.logger.info("BENCHMARK TIMING SUMMARY")
+        self.logger.info("=" * 70)
+        self.logger.info(f"Start time:    {benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"End time:      {benchmark_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"Total runtime: {runtime_str}")
+        self.logger.info("=" * 70)
+
         # Save runtime metadata for report generation
-        self._save_run_metadata(test_count=test_count)
+        self._save_run_metadata(
+            test_count=test_count,
+            benchmark_start_time=benchmark_start_time,
+            benchmark_end_time=benchmark_end_time
+        )
 
         # Save report config template for easy regeneration
         self._save_report_config_template()

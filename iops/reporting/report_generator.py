@@ -619,6 +619,11 @@ class ReportGenerator:
         benchmark_meta = self.metadata['benchmark']
         html += f"<tr><td><strong>Benchmark Name</strong></td><td>{benchmark_meta.get('name', 'N/A')}</td></tr>\n"
 
+        # Hostname (if available)
+        hostname = benchmark_meta.get('hostname')
+        if hostname:
+            html += f"<tr><td><strong>Hostname</strong></td><td>{hostname}</td></tr>\n"
+
         # Executor type
         executor = benchmark_meta.get('executor', 'local')
         html += f"<tr><td><strong>Executor</strong></td><td>{executor}</td></tr>\n"
@@ -627,8 +632,24 @@ class ReportGenerator:
         search_method = benchmark_meta.get('search_method', 'exhaustive')
         html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
 
-        # Timestamps
-        if 'timestamp' in benchmark_meta:
+        # Benchmark timing (if available, prefer detailed timing over legacy timestamp)
+        if 'benchmark_start_time' in benchmark_meta and 'benchmark_end_time' in benchmark_meta:
+            start_time = benchmark_meta['benchmark_start_time']
+            end_time = benchmark_meta['benchmark_end_time']
+            html += f"<tr><td><strong>Benchmark Start Time</strong></td><td>{start_time}</td></tr>\n"
+            html += f"<tr><td><strong>Benchmark End Time</strong></td><td>{end_time}</td></tr>\n"
+
+            if 'total_runtime_seconds' in benchmark_meta:
+                total_runtime = benchmark_meta['total_runtime_seconds']
+                if total_runtime < 60:
+                    runtime_str = f"{total_runtime:.1f}s"
+                elif total_runtime < 3600:
+                    runtime_str = f"{total_runtime/60:.1f}m ({total_runtime:.1f}s)"
+                else:
+                    runtime_str = f"{total_runtime/3600:.2f}h ({total_runtime/60:.1f}m)"
+                html += f"<tr><td><strong>Total Benchmark Runtime</strong></td><td>{runtime_str}</td></tr>\n"
+        elif 'timestamp' in benchmark_meta:
+            # Fallback to legacy timestamp if detailed timing not available
             html += f"<tr><td><strong>Benchmark Started</strong></td><td>{benchmark_meta['timestamp']}</td></tr>\n"
 
         # Report generation timestamp
@@ -688,6 +709,57 @@ class ReportGenerator:
                     else:
                         avg_duration_str = f"{avg_duration / 3600:.1f}h"
                     html += f"<tr><td><strong>Average Test Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
+
+        # SLURM-specific timing: Wait time and walltime
+        if executor == 'slurm' and '__job_start' in self.df.columns and 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
+            # Calculate wait time (submit to job start) and walltime (submit to completion)
+            df_executed = self.df[self.df['metadata.__cached'] != True] if 'metadata.__cached' in self.df.columns else self.df
+
+            if len(df_executed) > 0:
+                submit_times = pd.to_datetime(df_executed['metadata.__start'], errors='coerce')
+                job_start_times = pd.to_datetime(df_executed['__job_start'], errors='coerce')
+                end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
+
+                # Calculate wait times and walltimes
+                wait_times = (job_start_times - submit_times).dt.total_seconds()
+                walltimes = (end_times - submit_times).dt.total_seconds()
+                runtimes = (end_times - job_start_times).dt.total_seconds()
+
+                # Filter out NaN values
+                valid_wait = wait_times[~wait_times.isna()]
+                valid_wall = walltimes[~walltimes.isna()]
+                valid_run = runtimes[~runtimes.isna()]
+
+                if len(valid_wait) > 0:
+                    avg_wait = valid_wait.mean()
+                    total_wait = valid_wait.sum()
+                    if avg_wait < 60:
+                        wait_str = f"{avg_wait:.1f}s"
+                    elif avg_wait < 3600:
+                        wait_str = f"{avg_wait/60:.1f}m"
+                    else:
+                        wait_str = f"{avg_wait/3600:.2f}h"
+                    html += f"<tr><td><strong>Average Queue Wait Time</strong></td><td>{wait_str}</td></tr>\n"
+
+                if len(valid_wall) > 0:
+                    avg_wall = valid_wall.mean()
+                    if avg_wall < 60:
+                        wall_str = f"{avg_wall:.1f}s"
+                    elif avg_wall < 3600:
+                        wall_str = f"{avg_wall/60:.1f}m"
+                    else:
+                        wall_str = f"{avg_wall/3600:.2f}h"
+                    html += f"<tr><td><strong>Average Walltime (per test)</strong></td><td>{wall_str}</td></tr>\n"
+
+                if len(valid_run) > 0:
+                    avg_run = valid_run.mean()
+                    if avg_run < 60:
+                        run_str = f"{avg_run:.1f}s"
+                    elif avg_run < 3600:
+                        run_str = f"{avg_run/60:.1f}m"
+                    else:
+                        run_str = f"{avg_run/3600:.2f}h"
+                    html += f"<tr><td><strong>Average Execution Time (per test)</strong></td><td>{run_str}</td></tr>\n"
 
         # Core-hours (if cores_expr is defined)
         cores_expr = self.metadata['benchmark'].get('cores_expr')
