@@ -8,6 +8,35 @@ All notable changes to IOPS (I/O Performance Suite) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2025-12-23
+
+### Added
+- Comprehensive user-configurable reporting system
+- 8 plot types: bar, line, scatter, heatmap, box, violin, surface_3d, parallel_coordinates
+- `reporting` configuration section for complete plot customization
+- Per-metric plot configuration via YAML
+- Auto-generated `report_config.yaml` templates in workdir after each execution
+- `--report-config` CLI option to regenerate reports with different settings
+- Enhanced test summary with execution metadata (timestamps, success rate, cache stats, core-hours)
+- Theme configuration (colors, fonts, plotly styles)
+- Section control to enable/disable report components
+- Reference comments in generated configs showing available variables, metrics, and plot types
+- Plot factory system with registry pattern for extensibility
+- 113 new tests for reporting features (259 total tests passing)
+
+### Documentation
+- New comprehensive reporting user guide (content/user-guide/reporting.md)
+- Updated YAML schema reference with reporting section
+- Example configuration with reporting (content/examples/example_with_reporting.yaml)
+- Updated template_full.yaml with concise reporting section
+
+### Internal
+- Created iops/reporting/plots.py with plot factory implementation (550 lines)
+- Enhanced iops/reporting/report_generator.py with custom plot support
+- Extended iops/config/models.py with 7 new reporting dataclasses
+- Enhanced iops/config/loader.py with reporting configuration parsers
+- Updated iops/execution/runner.py for auto-generation and clean config saving
+
 ## [3.0.8] - 2025-12-23
 
 ### Added
