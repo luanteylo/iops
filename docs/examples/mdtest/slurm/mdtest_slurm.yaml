@@ -275,7 +275,6 @@ command:
     mdtest -n {{ files_per_task }} -d {{ test_dir }}
     -z {{ tree_depth }} -b {{ branch_factor }}
     -w {{ file_size_bytes }} -F -C -T -r
-    -o {{ output_file }}
 
   # Optional: Additional metadata to attach to results
   # This appears in output as metadata.* columns
@@ -348,7 +347,8 @@ scripts:
 
       # Execute the benchmark command
       # Note: SLURM sets MPI task count automatically via --ntasks
-      mpirun {{ command.template }}
+      # Redirect output to file since mdtest writes to stdout
+      mpirun {{ command.template }} > {{ output_file }} 2>&1
 
       # Cleanup test directory after benchmark
       rm -rf {{ test_dir }}
@@ -481,46 +481,95 @@ output:
 
 
 # =============================================================================
-# REPORTING CONFIGURATION (optional)
+# REPORTING CONFIGURATION
 # =============================================================================
 # Automatic HTML report generation with interactive plots
+# Reports include performance analysis, best configurations, and custom visualizations
 # Manual: iops --analyze /path/to/workdir/run_NNN
 # Custom: iops --analyze /path/to/workdir/run_NNN --report-config report.yaml
 # Docs: https://lgouveia.gitlabpages.inria.fr/iops/user-guide/reporting/
 # =============================================================================
-# reporting:
-#   enabled: false  # Auto-generate report after execution (default: false)
-#   output_filename: "analysis_report.html"
-#
-#   # Optional: Customize plot appearance
-#   theme:
-#     style: "plotly_white"  # plotly, plotly_dark, ggplot2, seaborn, simple_white
-#     colors: ["#3498db", "#e74c3c", "#2ecc71"]
-#
-#   # Optional: Control report sections (all true by default)
-#   sections:
-#     test_summary: true
-#     best_results: true
-#     variable_impact: true
-#     custom_plots: true
-#
-#   # Optional: Per-metric custom plots
-#   # Plot types: line, bar, scatter, heatmap, box, violin, surface_3d
-#   metrics:
-#     file_creation_rate:
-#       plots:
-#         - type: "line"
-#           x_var: "files_per_task"
-#           group_by: "nodes"
-#         - type: "heatmap"
-#           x_var: "nodes"
-#           y_var: "processes_per_node"
-#
-#   # Optional: Default plots for metrics without custom config
-#   default_plots:
-#     - type: "bar"
-#       per_variable: true
-#       show_error_bars: true
+reporting:
+  # Enable automatic report generation after execution
+  enabled: true
+
+  # Output configuration
+  output_filename: "mdtest_performance_report.html"
+  # output_dir defaults to workdir if not specified
+
+  # -------------------- Theme Configuration --------------------
+  theme:
+    style: "plotly_white"              # Clean white background
+    # Other options: "plotly", "plotly_dark", "ggplot2", "seaborn", "simple_white"
+
+    colors:
+      - "#1f77b4"  # Blue
+      - "#ff7f0e"  # Orange
+      - "#2ca02c"  # Green
+      - "#d62728"  # Red
+      - "#9467bd"  # Purple
+
+    font_family: "Segoe UI, Tahoma, Geneva, Verdana, sans-serif"
+
+  # -------------------- Section Control --------------------
+  sections:
+    test_summary: true           # Execution statistics and parameter space
+    best_results: true           # Top configurations per metric
+    variable_impact: true        # Variable importance analysis
+    parallel_coordinates: true   # Multi-dimensional visualization
+    pareto_frontier: true        # Multi-objective optimization
+    custom_plots: true           # User-defined plots
+
+  # -------------------- Best Results Configuration --------------------
+  best_results:
+    top_n: 5                     # Show top 5 configurations per metric
+    show_command: true           # Include the rendered command
+
+  # -------------------- Per-Metric Custom Plots --------------------
+  metrics:
+    # File creation performance
+    file_creation_rate:
+      plots:
+        - type: "line"
+          x_var: "files_per_task"
+          group_by: "nodes"
+          title: "File Creation Rate by Files per Task"
+          xaxis_label: "Files per Task"
+          yaxis_label: "Creation Rate (ops/sec)"
+          show_error_bars: true
+
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "processes_per_node"
+          title: "File Creation Rate Heatmap"
+          colorscale: "Viridis"
+
+    # File stat performance
+    file_stat_rate:
+      plots:
+        - type: "bar"
+          x_var: "tree_depth"
+          group_by: "branch_factor"
+          title: "Stat Rate by Tree Depth"
+          xaxis_label: "Tree Depth"
+          yaxis_label: "Stat Rate (ops/sec)"
+
+    # File removal performance
+    file_removal_rate:
+      plots:
+        - type: "line"
+          x_var: "files_per_task"
+          group_by: "file_size_bytes"
+          title: "File Removal Rate"
+          xaxis_label: "Files per Task"
+          yaxis_label: "Removal Rate (ops/sec)"
+
+  # -------------------- Default Plots --------------------
+  # For metrics without custom configuration
+  default_plots:
+    - type: "bar"
+      per_variable: true         # One plot per swept variable
+      show_error_bars: true
 
 
 # =============================================================================

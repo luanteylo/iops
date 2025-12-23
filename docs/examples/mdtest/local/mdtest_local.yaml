@@ -127,7 +127,6 @@ command:
     mdtest -n {{ files_per_task }} -d {{ test_dir }}
     -z {{ tree_depth }} -b {{ branch_factor }}
     -w {{ file_size_bytes }} -F -C -T -r
-    -o {{ output_file }}
 
   # Optional: Additional metadata to attach to results
   metadata:
@@ -158,7 +157,8 @@ scripts:
 
       # Execute the benchmark command with MPI
       # For local execution, mpirun determines the number of processes
-      mpirun -np {{ mpi_processes }} {{ command.template }}
+      # Redirect output to file since mdtest writes to stdout
+      mpirun -np {{ mpi_processes }} {{ command.template }} > {{ output_file }} 2>&1
 
       # Cleanup test directory after benchmark
       rm -rf {{ test_dir }}
@@ -184,70 +184,14 @@ scripts:
       metrics:
         - name: file_creation_rate    # Files created per second
         - name: file_stat_rate         # Files stat'd per second
+        - name: file_read_rate         # Files read per second
         - name: file_removal_rate      # Files removed per second
         - name: tree_creation_rate     # Tree creation rate
         - name: tree_removal_rate      # Tree removal rate
 
-      # Parser script for mdtest text output
-      parser_script: |
-        import re
-
-        def parse(file_path: str):
-            """
-            Parse mdtest text output and extract performance metrics.
-
-            mdtest outputs text with sections for different operations:
-            - File creation
-            - File stat
-            - File removal
-            - Tree creation/removal (if tree depth > 0)
-
-            Args:
-                file_path: Path to the mdtest output file
-
-            Returns:
-                dict: Metrics dictionary with operation rates
-            """
-            with open(file_path, "r") as f:
-                content = f.read()
-
-            metrics = {}
-
-            # Parse file creation rate
-            # Pattern: "File creation     :    XXX.XXX ops/sec"
-            match = re.search(r"File creation\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
-            if match:
-                metrics["file_creation_rate"] = float(match.group(1))
-
-            # Parse file stat rate
-            # Pattern: "File stat         :    XXX.XXX ops/sec"
-            match = re.search(r"File stat\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
-            if match:
-                metrics["file_stat_rate"] = float(match.group(1))
-
-            # Parse file removal rate
-            # Pattern: "File removal      :    XXX.XXX ops/sec"
-            match = re.search(r"File removal\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
-            if match:
-                metrics["file_removal_rate"] = float(match.group(1))
-
-            # Parse tree creation rate (if applicable)
-            # Pattern: "Tree creation     :    XXX.XXX ops/sec"
-            match = re.search(r"Tree creation\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
-            if match:
-                metrics["tree_creation_rate"] = float(match.group(1))
-            else:
-                metrics["tree_creation_rate"] = None
-
-            # Parse tree removal rate (if applicable)
-            # Pattern: "Tree removal      :    XXX.XXX ops/sec"
-            match = re.search(r"Tree removal\s*:\s*([\d.]+)\s*ops/sec", content, re.IGNORECASE)
-            if match:
-                metrics["tree_removal_rate"] = float(match.group(1))
-            else:
-                metrics["tree_removal_rate"] = None
-
-            return metrics
+      # External parser script for mdtest output
+      # Parses the SUMMARY rate table from mdtest output
+      parser_script: example/scripts/mdtest_parser.py
 
 
 # =============================================================================
@@ -268,6 +212,95 @@ output:
 
     # Optional: Exclude specific fields (mutually exclusive with 'include')
     exclude: ["benchmark.description"]
+
+
+# =============================================================================
+# REPORTING CONFIGURATION
+# =============================================================================
+# Automatic HTML report generation with interactive plots
+# Reports include performance analysis, best configurations, and custom visualizations
+# =============================================================================
+reporting:
+  # Enable automatic report generation after execution
+  enabled: true
+
+  # Output configuration
+  output_filename: "mdtest_performance_report.html"
+  # output_dir defaults to workdir if not specified
+
+  # -------------------- Theme Configuration --------------------
+  theme:
+    style: "plotly_white"              # Clean white background
+    # Other options: "plotly", "plotly_dark", "ggplot2", "seaborn", "simple_white"
+
+    colors:
+      - "#1f77b4"  # Blue
+      - "#ff7f0e"  # Orange
+      - "#2ca02c"  # Green
+      - "#d62728"  # Red
+      - "#9467bd"  # Purple
+
+    font_family: "Segoe UI, Tahoma, Geneva, Verdana, sans-serif"
+
+  # -------------------- Section Control --------------------
+  sections:
+    test_summary: true           # Execution statistics and parameter space
+    best_results: true           # Top configurations per metric
+    variable_impact: true        # Variable importance analysis
+    parallel_coordinates: true   # Multi-dimensional visualization
+    pareto_frontier: true        # Multi-objective optimization
+    custom_plots: true           # User-defined plots
+
+  # -------------------- Best Results Configuration --------------------
+  best_results:
+    top_n: 5                     # Show top 5 configurations per metric
+    show_command: true           # Include the rendered command
+
+  # -------------------- Per-Metric Custom Plots --------------------
+  metrics:
+    # File creation performance
+    file_creation_rate:
+      plots:
+        - type: "line"
+          x_var: "files_per_task"
+          group_by: "mpi_processes"
+          title: "File Creation Rate by Files per Task"
+          xaxis_label: "Files per Task"
+          yaxis_label: "Creation Rate (ops/sec)"
+          show_error_bars: true
+
+        - type: "heatmap"
+          x_var: "mpi_processes"
+          y_var: "files_per_task"
+          title: "File Creation Rate Heatmap"
+          colorscale: "Viridis"
+
+    # File stat performance
+    file_stat_rate:
+      plots:
+        - type: "bar"
+          x_var: "tree_depth"
+          group_by: "branch_factor"
+          title: "Stat Rate by Tree Depth"
+          xaxis_label: "Tree Depth"
+          yaxis_label: "Stat Rate (ops/sec)"
+
+    # File removal performance
+    file_removal_rate:
+      plots:
+        - type: "line"
+          x_var: "files_per_task"
+          group_by: "file_size_bytes"
+          title: "File Removal Rate"
+          xaxis_label: "Files per Task"
+          yaxis_label: "Removal Rate (ops/sec)"
+
+  # -------------------- Default Plots --------------------
+  # For metrics without custom configuration
+  default_plots:
+    - type: "bar"
+      per_variable: true         # One plot per swept variable
+      show_error_bars: true
 
 
 # =============================================================================
