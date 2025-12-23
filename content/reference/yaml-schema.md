@@ -321,7 +321,7 @@ benchmark:
 
 **Notes:**
 - Implementation: `matrix.py` partitions swept variables into search space and exhaustive space, then builds their cross-product
-- Works with Bayesian, random, and exhaustive search methods
+- Works with Bayesian and random search methods
 - With exhaustive search, this option has no effect (already exhaustive)
 
 #### `report_vars` (optional)
