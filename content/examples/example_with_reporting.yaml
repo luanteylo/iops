@@ -1,0 +1,360 @@
+# IOPS Example Configuration with Custom Reporting
+#
+# This example demonstrates the comprehensive reporting feature added in IOPS 3.x.
+# It shows how to configure automatic report generation with custom plots,
+# themes, and section control.
+#
+# Features demonstrated:
+# - Automatic report generation after execution
+# - Custom per-metric plots (line, heatmap, scatter)
+# - Theme customization (colors, fonts, style)
+# - Section control (enable/disable specific analyses)
+# - Best results configuration
+#
+# To run this example:
+#   iops example_with_reporting.yaml
+#
+# To regenerate report with custom settings:
+#   iops --analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+
+benchmark:
+  name: "IOR Benchmark with Custom Reporting"
+  description: "Demonstrates IOPS reporting feature with custom plots and visualizations"
+  workdir: "/tmp/iops_reporting_demo"
+  sqlite_db: "/tmp/iops_reporting_demo/cache.db"
+  executor: "local"
+  repetitions: 3
+  search_method: "exhaustive"
+
+vars:
+  # Swept variables - testing parameter space
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16]
+
+  block_size_mb:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16, 32]
+
+  # Derived variables
+  total_processes:
+    type: int
+    expr: "nodes * processes_per_node"
+
+  volume_size_mb:
+    type: int
+    expr: "block_size_mb * total_processes"
+
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+  output_file:
+    type: str
+    expr: "{{ execution_dir }}/test.ior"
+
+command:
+  template: >
+    mpirun -np {{ total_processes }}
+    ior -w -b {{ block_size_mb }}m -t 1m
+    -O summaryFile={{ summary_file }}
+    -O summaryFormat=JSON
+    -o {{ output_file }}
+
+  metadata:
+    operation: "write"
+    io_api: "POSIX"
+    transfer_size: "1MB"
+
+scripts:
+  - name: "ior_benchmark"
+    submit: "bash"
+
+    script_template: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "========================================="
+      echo "IOR Benchmark Execution"
+      echo "Execution ID: {{ execution_id }}"
+      echo "Repetition: {{ repetition }}/{{ repetitions }}"
+      echo "Nodes: {{ nodes }}"
+      echo "Processes per node: {{ processes_per_node }}"
+      echo "Total processes: {{ total_processes }}"
+      echo "Block size: {{ block_size_mb }}MB"
+      echo "Volume size: {{ volume_size_mb }}MB"
+      echo "========================================="
+
+      # Create output directory
+      mkdir -p {{ execution_dir }}
+
+      # Run benchmark command
+      {{ command.template }}
+
+      echo "Completed successfully at $(date)"
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bandwidth
+        - name: iops
+        - name: latency
+
+      parser_script: |
+        import json
+
+        def parse(file_path: str):
+            """
+            Parse IOR JSON summary output.
+
+            Returns:
+                dict: Metrics dictionary with bandwidth (MB/s), iops, and latency (s)
+            """
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            # Extract write results
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError(f"No tests found in {file_path}")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError(f"No results found in {file_path}")
+
+            write_result = results[0]
+
+            return {
+                "bandwidth": float(write_result["bwMiB"]),
+                "iops": float(write_result["OPs"]),
+                "latency": float(write_result["MeanTime"])
+            }
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+    mode: append
+
+# ==================== REPORTING CONFIGURATION ====================
+#
+# This section demonstrates the comprehensive reporting feature.
+# Reports are interactive HTML files with embedded Plotly visualizations.
+
+reporting:
+  # Enable automatic report generation after execution
+  enabled: true
+
+  # Output configuration
+  output_filename: "ior_performance_report.html"
+  # output_dir defaults to workdir if not specified
+
+  # -------------------- Theme Configuration --------------------
+  # Customize the visual appearance of all plots
+  theme:
+    style: "plotly_white"              # Clean white background
+    # Other options: "plotly", "plotly_dark", "ggplot2", "seaborn", "simple_white"
+
+    # Custom color palette (used for grouped/categorical data)
+    colors:
+      - "#1f77b4"  # Blue
+      - "#ff7f0e"  # Orange
+      - "#2ca02c"  # Green
+      - "#d62728"  # Red
+      - "#9467bd"  # Purple
+      - "#8c564b"  # Brown
+
+    # Font family for all text
+    font_family: "Segoe UI, Tahoma, Geneva, Verdana, sans-serif"
+
+  # -------------------- Section Control --------------------
+  # Enable/disable specific sections in the report
+  sections:
+    test_summary: true           # Execution statistics and parameter space
+    best_results: true           # Top N configurations per metric
+    variable_impact: true        # Variance-based importance analysis
+    parallel_coordinates: true   # Multi-dimensional visualization
+    pareto_frontier: true        # Multi-objective optimization (2+ metrics)
+    bayesian_evolution: false    # Skip (only relevant for Bayesian search)
+    custom_plots: true           # User-defined plots (defined below)
+
+  # -------------------- Best Results Configuration --------------------
+  best_results:
+    top_n: 5                     # Show top 5 configurations per metric
+    show_command: true           # Include the rendered command for reproducibility
+
+  # -------------------- Per-Metric Custom Plots --------------------
+  # Define custom plots for each metric
+  metrics:
+    # Bandwidth visualizations
+    bandwidth:
+      plots:
+        # Line plot: Bandwidth vs Block Size, grouped by node count
+        - type: "line"
+          x_var: "block_size_mb"
+          group_by: "nodes"
+          title: "Bandwidth Scaling by Block Size"
+          xaxis_label: "Block Size (MB)"
+          yaxis_label: "Bandwidth (MB/s)"
+          show_error_bars: true
+          height: 500
+
+        # Heatmap: Bandwidth across nodes and block size
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "block_size_mb"
+          colorscale: "Viridis"
+          title: "Bandwidth Heatmap (Nodes vs Block Size)"
+          height: 500
+
+        # Scatter plot: Parameter space exploration
+        - type: "scatter"
+          x_var: "nodes"
+          y_var: "processes_per_node"
+          color_by: "bandwidth"
+          size_by: "block_size_mb"
+          title: "Bandwidth in Parameter Space"
+          xaxis_label: "Number of Nodes"
+          yaxis_label: "Processes per Node"
+
+    # IOPS visualizations
+    iops:
+      plots:
+        # Bar chart: IOPS by total processes
+        - type: "bar"
+          x_var: "total_processes"
+          show_error_bars: true
+          title: "IOPS by Total Process Count"
+          xaxis_label: "Total Processes"
+          yaxis_label: "IOPS"
+
+        # Line plot: IOPS scaling with block size
+        - type: "line"
+          x_var: "block_size_mb"
+          group_by: "nodes"
+          title: "IOPS vs Block Size"
+          xaxis_label: "Block Size (MB)"
+          yaxis_label: "IOPS"
+          show_error_bars: true
+
+    # Latency visualizations
+    latency:
+      plots:
+        # Line plot: Latency vs block size (lower is better)
+        - type: "line"
+          x_var: "block_size_mb"
+          group_by: "nodes"
+          title: "Latency vs Block Size"
+          xaxis_label: "Block Size (MB)"
+          yaxis_label: "Mean Latency (seconds)"
+          show_error_bars: true
+
+        # Heatmap: Latency across nodes and processes
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "processes_per_node"
+          colorscale: "RdYlGn_r"  # Red (high) to Green (low), reversed
+          title: "Latency Heatmap (Nodes vs Processes)"
+
+  # -------------------- Default Plots --------------------
+  # Fallback plots for metrics without specific configuration
+  # (Not used in this example since all metrics have custom plots)
+  default_plots:
+    - type: "bar"
+      per_variable: true         # Generate one bar chart per swept variable
+      show_error_bars: true
+
+  # -------------------- Plot Sizing Defaults --------------------
+  # Default dimensions for all plots (can be overridden per plot)
+  plot_defaults:
+    height: 500                  # Default height in pixels
+    width: null                  # Auto width (responsive)
+    # margin:                    # Optional margins
+    #   l: 80
+    #   r: 80
+    #   t: 100
+    #   b: 80
+
+# ==================== USAGE NOTES ====================
+#
+# 1. Run the benchmark:
+#      iops example_with_reporting.yaml
+#
+#    This will execute the benchmark and automatically generate a report at:
+#      /tmp/iops_reporting_demo/run_001/ior_performance_report.html
+#
+# 2. Open the report in a browser:
+#      firefox /tmp/iops_reporting_demo/run_001/ior_performance_report.html
+#
+# 3. Regenerate report with different settings (without re-running tests):
+#      Create a file 'custom_report.yaml' with just the reporting section:
+#
+#      reporting:
+#        enabled: true
+#        theme:
+#          style: "plotly_dark"
+#        metrics:
+#          bandwidth:
+#            plots:
+#              - type: "heatmap"
+#                x_var: "nodes"
+#                y_var: "block_size_mb"
+#                colorscale: "Plasma"
+#
+#      Then run:
+#      iops --analyze /tmp/iops_reporting_demo/run_001 --report-config custom_report.yaml
+#
+# 4. The report includes:
+#    - Test Summary: Execution statistics, cache hits, parameter space coverage
+#    - Best Results: Top 5 configurations for each metric (bandwidth, iops, latency)
+#    - Variable Impact: Which variables affect metrics most (variance analysis)
+#    - Parallel Coordinates: Multi-dimensional view of all parameters and metrics
+#    - Pareto Frontier: Trade-offs between competing metrics
+#    - Custom Plots: All the plots defined in the metrics section above
+#
+# ==================== PLOT TYPE GUIDE ====================
+#
+# Available plot types:
+#
+# 1. bar        - Bar charts with error bars (mean ± std dev)
+#                 Best for: Comparing discrete values, showing variation
+#
+# 2. line       - Line plots with optional grouping
+#                 Best for: Trends, scaling behavior, time series
+#
+# 3. scatter    - Scatter plots with color/size mapping
+#                 Best for: Relationships, parameter space exploration
+#
+# 4. heatmap    - 2D heatmaps across two variables
+#                 Best for: Visualizing performance across parameter grid
+#
+# 5. box        - Box plots with quartiles (coming soon)
+#                 Best for: Distribution analysis, outlier detection
+#
+# 6. violin     - Violin plots with density (coming soon)
+#                 Best for: Detailed distribution shapes
+#
+# 7. surface_3d - 3D surface plots (coming soon)
+#                 Best for: Smooth response surfaces
+#
+# 8. parallel_coordinates - Multi-dimensional (coming soon for custom use)
+#                          Already available in default sections
+#
+# ==================== COLORSCALE OPTIONS ====================
+#
+# For heatmaps, available colorscales include:
+# - Sequential: Viridis, Plasma, Inferno, Magma, Cividis, Blues, Greens, Reds
+# - Diverging: RdBu, RdYlGn, Spectral, Picnic
+# - Cyclical: IceFire, Edge, Phase
+#
+# Add '_r' suffix to reverse (e.g., "Viridis_r", "RdYlGn_r")

@@ -13,24 +13,36 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from jinja2 import Template
 
+from iops.config.models import (
+    ReportingConfig,
+    ReportThemeConfig,
+    PlotConfig,
+    MetricPlotsConfig,
+    SectionConfig,
+    BestResultsConfig,
+    PlotDefaultsConfig,
+)
+
 
 class ReportGenerator:
     """Generates HTML reports from IOPS benchmark results."""
 
-    def __init__(self, workdir: Path):
+    def __init__(self, workdir: Path, report_config: Optional[ReportingConfig] = None):
         """
         Initialize report generator.
 
         Args:
             workdir: Path to the benchmark working directory (e.g., /path/to/run_001)
+            report_config: Optional reporting configuration (overrides metadata config)
         """
         self.workdir = Path(workdir)
         self.metadata_path = self.workdir / "run_metadata.json"
         self.metadata: Optional[Dict[str, Any]] = None
         self.df: Optional[pd.DataFrame] = None
+        self.report_config: Optional[ReportingConfig] = report_config
 
     def load_metadata(self):
-        """Load runtime metadata."""
+        """Load runtime metadata and reporting configuration."""
         if not self.metadata_path.exists():
             raise FileNotFoundError(
                 f"Metadata file not found: {self.metadata_path}\n"
@@ -39,6 +51,17 @@ class ReportGenerator:
 
         with open(self.metadata_path, 'r') as f:
             self.metadata = json.load(f)
+
+        # Load reporting config with priority: override > metadata > legacy defaults
+        if self.report_config is None:
+            if 'reporting' in self.metadata and self.metadata['reporting'] is not None:
+                # Modern metadata: load reporting config
+                self.report_config = self._deserialize_reporting_config(
+                    self.metadata['reporting']
+                )
+            else:
+                # Legacy metadata: use defaults matching old behavior
+                self.report_config = self._create_legacy_defaults()
 
     def load_results(self):
         """Load benchmark results from the output file."""
@@ -133,6 +156,99 @@ class ReportGenerator:
             return rendered.strip()
         except Exception as e:
             return f"[Error rendering command: {e}]"
+
+    def _deserialize_reporting_config(self, data: Dict[str, Any]) -> ReportingConfig:
+        """Deserialize reporting config from metadata JSON."""
+        def deserialize_plot(plot_data):
+            return PlotConfig(
+                type=plot_data['type'],
+                x_var=plot_data.get('x_var'),
+                y_var=plot_data.get('y_var'),
+                z_metric=plot_data.get('z_metric'),
+                group_by=plot_data.get('group_by'),
+                color_by=plot_data.get('color_by'),
+                size_by=plot_data.get('size_by'),
+                title=plot_data.get('title'),
+                xaxis_label=plot_data.get('xaxis_label'),
+                yaxis_label=plot_data.get('yaxis_label'),
+                colorscale=plot_data.get('colorscale', 'Viridis'),
+                show_error_bars=plot_data.get('show_error_bars', True),
+                show_outliers=plot_data.get('show_outliers', True),
+                height=plot_data.get('height'),
+                width=plot_data.get('width'),
+                per_variable=plot_data.get('per_variable', False),
+                include_metric=plot_data.get('include_metric', True),
+            )
+
+        theme = ReportThemeConfig(
+            style=data.get('theme', {}).get('style', 'plotly_white'),
+            colors=data.get('theme', {}).get('colors'),
+            font_family=data.get('theme', {}).get('font_family', 'Segoe UI, sans-serif'),
+        )
+
+        sections = SectionConfig(
+            test_summary=data.get('sections', {}).get('test_summary', True),
+            best_results=data.get('sections', {}).get('best_results', True),
+            variable_impact=data.get('sections', {}).get('variable_impact', True),
+            parallel_coordinates=data.get('sections', {}).get('parallel_coordinates', True),
+            pareto_frontier=data.get('sections', {}).get('pareto_frontier', True),
+            bayesian_evolution=data.get('sections', {}).get('bayesian_evolution', True),
+            custom_plots=data.get('sections', {}).get('custom_plots', True),
+        )
+
+        best_results = BestResultsConfig(
+            top_n=data.get('best_results', {}).get('top_n', 5),
+            show_command=data.get('best_results', {}).get('show_command', True),
+        )
+
+        plot_defaults = PlotDefaultsConfig(
+            height=data.get('plot_defaults', {}).get('height', 500),
+            width=data.get('plot_defaults', {}).get('width'),
+            margin=data.get('plot_defaults', {}).get('margin'),
+        )
+
+        metrics = {}
+        for metric_name, metric_data in data.get('metrics', {}).items():
+            plots = [deserialize_plot(p) for p in metric_data.get('plots', [])]
+            metrics[metric_name] = MetricPlotsConfig(plots=plots)
+
+        default_plots = [deserialize_plot(p) for p in data.get('default_plots', [])]
+
+        output_dir = None
+        if data.get('output_dir'):
+            output_dir = Path(data['output_dir'])
+
+        return ReportingConfig(
+            enabled=data.get('enabled', False),
+            output_dir=output_dir,
+            output_filename=data.get('output_filename', 'analysis_report.html'),
+            theme=theme,
+            sections=sections,
+            best_results=best_results,
+            metrics=metrics,
+            default_plots=default_plots,
+            plot_defaults=plot_defaults,
+        )
+
+    def _create_legacy_defaults(self) -> ReportingConfig:
+        """Create default config matching legacy behavior for old workdirs."""
+        return ReportingConfig(
+            enabled=False,  # Wasn't auto-generated before
+            sections=SectionConfig(
+                test_summary=True,
+                best_results=True,
+                variable_impact=True,
+                parallel_coordinates=True,
+                pareto_frontier=True,
+                bayesian_evolution=True,
+                custom_plots=True,  # Will use legacy plots
+            ),
+            metrics={},  # Empty triggers legacy plot generation
+            default_plots=[],  # Empty triggers legacy plots
+            theme=ReportThemeConfig(),
+            best_results=BestResultsConfig(),
+            plot_defaults=PlotDefaultsConfig(),
+        )
 
     def _calculate_total_execution_time(self) -> tuple[Optional[float], Optional[str]]:
         """
@@ -470,6 +586,14 @@ class ReportGenerator:
             color: #95a5a6;
             font-size: 0.9em;
         }}
+        .error {{
+            background-color: #fee;
+            border: 1px solid #fcc;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            color: #c33;
+        }}
     </style>
 </head>
 <body>
@@ -491,9 +615,50 @@ class ReportGenerator:
         html += "<h3>Execution Overview</h3>\n<table>\n"
         html += "<tr><th>Metric</th><th>Value</th></tr>\n"
 
+        # Benchmark metadata
+        benchmark_meta = self.metadata['benchmark']
+        html += f"<tr><td><strong>Benchmark Name</strong></td><td>{benchmark_meta.get('name', 'N/A')}</td></tr>\n"
+
+        # Executor type
+        executor = benchmark_meta.get('executor', 'local')
+        html += f"<tr><td><strong>Executor</strong></td><td>{executor}</td></tr>\n"
+
+        # Search method
+        search_method = benchmark_meta.get('search_method', 'exhaustive')
+        html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
+
+        # Timestamps
+        if 'timestamp' in benchmark_meta:
+            html += f"<tr><td><strong>Benchmark Started</strong></td><td>{benchmark_meta['timestamp']}</td></tr>\n"
+
+        # Report generation timestamp
+        report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        html += f"<tr><td><strong>Report Generated</strong></td><td>{report_timestamp}</td></tr>\n"
+
+        html += "</table>\n"
+
+        # Test Execution Statistics
+        html += "<h3>Test Execution Statistics</h3>\n<table>\n"
+        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
+
         # Total tests
         total_tests = len(self.df)
-        html += f"<tr><td><strong>Total Tests</strong></td><td>{total_tests}</td></tr>\n"
+        html += f"<tr><td><strong>Total Parameter Combinations</strong></td><td>{total_tests}</td></tr>\n"
+
+        # Success rate (if status column exists)
+        if 'metadata.__executor_status' in self.df.columns:
+            status_counts = self.df['metadata.__executor_status'].value_counts()
+            succeeded = status_counts.get('SUCCEEDED', 0)
+            failed = status_counts.get('FAILED', 0)
+            cancelled = status_counts.get('CANCELLED', 0)
+
+            success_rate = (succeeded / total_tests * 100) if total_tests > 0 else 0
+            html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_tests} ({success_rate:.1f}%)</td></tr>\n"
+
+            if failed > 0:
+                html += f"<tr><td><strong>Failed Tests</strong></td><td>{failed}</td></tr>\n"
+            if cancelled > 0:
+                html += f"<tr><td><strong>Cancelled Tests</strong></td><td>{cancelled}</td></tr>\n"
 
         # Check for cached results
         cached_count = 0
@@ -501,7 +666,9 @@ class ReportGenerator:
             cached_count = (self.df['metadata.__cached'] == True).sum()
             if cached_count > 0:
                 executed_count = total_tests - cached_count
-                html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({executed_count} executed)</td></tr>\n"
+                cache_rate = (cached_count / total_tests * 100) if total_tests > 0 else 0
+                html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({cache_rate:.1f}%)</td></tr>\n"
+                html += f"<tr><td><strong>Executed Tests</strong></td><td>{executed_count}</td></tr>\n"
 
         # Execution time
         if 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
@@ -509,6 +676,18 @@ class ReportGenerator:
             if execution_time is not None:
                 exec_time_label = "Total Execution Time" + (" (executed tests only)" if cached_count > 0 else "")
                 html += f"<tr><td><strong>{exec_time_label}</strong></td><td>{formatted_time}</td></tr>\n"
+
+                # Average test duration
+                executed_count = total_tests - cached_count if cached_count > 0 else total_tests
+                if executed_count > 0:
+                    avg_duration = execution_time / executed_count
+                    if avg_duration < 60:
+                        avg_duration_str = f"{avg_duration:.1f}s"
+                    elif avg_duration < 3600:
+                        avg_duration_str = f"{avg_duration / 60:.1f}m"
+                    else:
+                        avg_duration_str = f"{avg_duration / 3600:.1f}h"
+                    html += f"<tr><td><strong>Average Test Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
 
         # Core-hours (if cores_expr is defined)
         cores_expr = self.metadata['benchmark'].get('cores_expr')
@@ -768,6 +947,93 @@ class ReportGenerator:
             html += "</div>\n"
             return html
 
+        # Check if custom plots are defined for this metric
+        has_custom_plots = metric in self.report_config.metrics and len(self.report_config.metrics[metric].plots) > 0
+        has_default_plots = len(self.report_config.default_plots) > 0
+
+        if has_custom_plots:
+            # Use custom plots from config
+            html += self._generate_custom_plots(metric, self.report_config.metrics[metric].plots, swept_vars)
+        elif has_default_plots:
+            # Use default plots from config
+            html += self._generate_custom_plots(metric, self.report_config.default_plots, swept_vars)
+        else:
+            # Fall back to legacy plot generation
+            html += self._generate_legacy_plots(metric, swept_vars)
+
+        html += '</div>\n'
+        return html
+
+    def _generate_custom_plots(self, metric: str, plot_configs: List[PlotConfig], swept_vars: List[str]) -> str:
+        """Generate plots using the plot factory from plot configs."""
+        from iops.reporting.plots import create_plot
+
+        html = ""
+
+        for plot_config in plot_configs:
+            # Handle per_variable plots (generate one plot per swept variable)
+            if plot_config.per_variable:
+                for var in swept_vars:
+                    # Create a modified config for this specific variable
+                    var_config = PlotConfig(
+                        type=plot_config.type,
+                        x_var=var,
+                        y_var=plot_config.y_var,
+                        z_metric=plot_config.z_metric,
+                        group_by=plot_config.group_by,
+                        color_by=plot_config.color_by,
+                        title=plot_config.title or f"{metric} vs {var}",
+                        xaxis_label=plot_config.xaxis_label,
+                        yaxis_label=plot_config.yaxis_label,
+                        colorscale=plot_config.colorscale,
+                        show_error_bars=plot_config.show_error_bars,
+                        show_outliers=plot_config.show_outliers,
+                        height=plot_config.height,
+                        width=plot_config.width,
+                        per_variable=False,
+                    )
+
+                    try:
+                        plot = create_plot(
+                            plot_type=var_config.type,
+                            df=self.df,
+                            metric=metric,
+                            plot_config=var_config,
+                            theme=self.report_config.theme,
+                            var_column_fn=self._get_var_column,
+                            metric_column_fn=self._get_metric_column,
+                        )
+                        fig = plot.generate()
+                        html += '<div class="plot-container">\n'
+                        html += fig.to_html(full_html=False, include_plotlyjs=False)
+                        html += '</div>\n'
+                    except Exception as e:
+                        html += f'<p class="error">Error generating {var_config.type} plot for {var}: {str(e)}</p>\n'
+            else:
+                # Single plot
+                try:
+                    plot = create_plot(
+                        plot_type=plot_config.type,
+                        df=self.df,
+                        metric=metric,
+                        plot_config=plot_config,
+                        theme=self.report_config.theme,
+                        var_column_fn=self._get_var_column,
+                        metric_column_fn=self._get_metric_column,
+                    )
+                    fig = plot.generate()
+                    html += '<div class="plot-container">\n'
+                    html += fig.to_html(full_html=False, include_plotlyjs=False)
+                    html += '</div>\n'
+                except Exception as e:
+                    html += f'<p class="error">Error generating {plot_config.type} plot: {str(e)}</p>\n'
+
+        return html
+
+    def _generate_legacy_plots(self, metric: str, swept_vars: List[str]) -> str:
+        """Generate plots using legacy hardcoded logic (for backward compatibility)."""
+        html = ""
+
         # 1. Bar plots - one for each variable
         html += "<h3>Bar Plots by Variable</h3>\n"
         for var in swept_vars:
@@ -795,7 +1061,6 @@ class ReportGenerator:
             html += fig.to_html(full_html=False, include_plotlyjs=False)
             html += '</div>\n'
 
-        html += '</div>\n'
         return html
 
     def _create_bayesian_metric_evolution_plot(
@@ -1630,18 +1895,23 @@ class ReportGenerator:
 """
 
 
-def generate_report_from_workdir(workdir: Path, output_path: Optional[Path] = None) -> Path:
+def generate_report_from_workdir(
+    workdir: Path,
+    output_path: Optional[Path] = None,
+    report_config: Optional[ReportingConfig] = None
+) -> Path:
     """
     Convenience function to generate report from a workdir.
 
     Args:
         workdir: Path to benchmark working directory
         output_path: Optional custom output path
+        report_config: Optional reporting configuration (overrides metadata config)
 
     Returns:
         Path to generated HTML report
     """
-    generator = ReportGenerator(workdir)
+    generator = ReportGenerator(workdir, report_config=report_config)
     generator.load_metadata()
     generator.load_results()
     return generator.generate_report(output_path)

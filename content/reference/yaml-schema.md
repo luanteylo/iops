@@ -18,8 +18,9 @@ title: "IOPS YAML Format Reference"
 7. [Section: `scripts`](#section-scripts)
 8. [Section: `output`](#section-output)
 9. [Section: `rounds` (Optional)](#section-rounds-optional)
-10. [Jinja2 Templating](#jinja2-templating)
-11. [Complete Examples](#complete-examples)
+10. [Section: `reporting` (Optional)](#section-reporting-optional)
+11. [Jinja2 Templating](#jinja2-templating)
+12. [Complete Examples](#complete-examples)
 
 ---
 
@@ -69,9 +70,12 @@ output:          # Output configuration (CSV, Parquet, SQLite)
 
 rounds:          # (Optional) Multi-round optimization workflow
   ...
+
+reporting:       # (Optional) Custom report generation
+  ...
 ```
 
-**All sections are required except `constraints` and `rounds`.**
+**All sections are required except `constraints`, `rounds`, and `reporting`.**
 
 ---
 
@@ -1449,6 +1453,501 @@ rounds:
 - Results are saved per round: `runs/round_01_optimize_nodes/`
 - Best execution from each round propagates to next
 - Cache is round-aware when using `--use_cache`
+
+---
+
+## Section: `reporting` (Optional)
+
+Enables user-configurable report generation with custom plots and visualizations.
+
+### Overview
+
+The `reporting` section allows you to:
+
+- Auto-generate interactive HTML reports after benchmark execution
+- Define custom plots per metric with full control over visualization
+- Customize report themes, colors, and styling
+- Control which report sections to include
+- Regenerate reports with different configurations using `--report-config`
+
+**This feature is optional and disabled by default** (opt-in with `enabled: true`).
+
+### When to Use
+
+- **Automatic reports**: Set `enabled: true` to generate reports after each execution
+- **Custom visualizations**: Define per-metric plots for detailed analysis
+- **Post-execution analysis**: Use `iops --analyze` to generate reports from completed runs
+- **Visualization iteration**: Use `--report-config` to try different plot configurations without re-running benchmarks
+
+### Schema
+
+```yaml
+reporting:
+  # Core settings
+  enabled: boolean                  # Optional: enable auto-generation (default: false)
+  output_dir: path                  # Optional: report output directory (default: workdir)
+  output_filename: string           # Optional: report filename (default: "analysis_report.html")
+
+  # Theme configuration
+  theme:
+    style: string                   # Optional: plotly theme name (default: "plotly_white")
+    colors: list                    # Optional: custom color palette
+    font_family: string             # Optional: font family (default: "Segoe UI, sans-serif")
+
+  # Section control
+  sections:
+    test_summary: boolean           # Optional: execution statistics (default: true)
+    best_results: boolean           # Optional: top configurations (default: true)
+    variable_impact: boolean        # Optional: variance analysis (default: true)
+    parallel_coordinates: boolean   # Optional: multi-dimensional plot (default: true)
+    pareto_frontier: boolean        # Optional: multi-objective analysis (default: true)
+    bayesian_evolution: boolean     # Optional: Bayesian progress (default: true)
+    custom_plots: boolean           # Optional: user-defined plots (default: true)
+
+  # Best results configuration
+  best_results:
+    top_n: integer                  # Optional: number of top configs (default: 5)
+    show_command: boolean           # Optional: include rendered command (default: true)
+
+  # Per-metric plot definitions
+  metrics:
+    metric_name:                    # Metric name from parser
+      plots:
+        - type: string              # Required: plot type
+          x_var: string             # Optional: x-axis variable
+          y_var: string             # Optional: y-axis variable (scatter, surface_3d)
+          z_metric: string          # Optional: z-axis metric (heatmap, surface_3d)
+          group_by: string          # Optional: grouping variable
+          color_by: string          # Optional: color mapping variable
+          size_by: string           # Optional: size mapping variable
+          title: string             # Optional: plot title
+          xaxis_label: string       # Optional: x-axis label
+          yaxis_label: string       # Optional: y-axis label
+          colorscale: string        # Optional: colorscale name (default: "Viridis")
+          show_error_bars: boolean  # Optional: show error bars (default: true)
+          show_outliers: boolean    # Optional: show outliers (default: true)
+          height: integer           # Optional: plot height in pixels
+          width: integer            # Optional: plot width in pixels
+          per_variable: boolean     # Optional: one plot per variable (default: false)
+
+  # Default plots (fallback for metrics without specific config)
+  default_plots:
+    - type: string                  # Same schema as metrics.*.plots
+      per_variable: boolean
+      # ... other plot options
+
+  # Plot sizing defaults
+  plot_defaults:
+    height: integer                 # Optional: default height (default: 500)
+    width: integer                  # Optional: default width (default: null/auto)
+    margin:                         # Optional: plot margins
+      l: integer                    # Left margin
+      r: integer                    # Right margin
+      t: integer                    # Top margin
+      b: integer                    # Bottom margin
+```
+
+### Field Details
+
+#### `enabled` (optional, default: false)
+
+Enable automatic report generation after benchmark execution.
+
+```yaml
+reporting:
+  enabled: true
+```
+
+**When disabled (default)**, reports can still be generated manually using `iops --analyze`.
+
+#### `output_dir` (optional)
+
+Directory where reports are saved. Defaults to the run's workdir if not specified.
+
+```yaml
+reporting:
+  output_dir: "/custom/path/to/reports"
+```
+
+#### `output_filename` (optional, default: "analysis_report.html")
+
+Name of the generated HTML report file.
+
+```yaml
+reporting:
+  output_filename: "benchmark_report.html"
+```
+
+#### `theme` (optional)
+
+Customizes report appearance.
+
+##### `theme.style` (optional, default: "plotly_white")
+
+Plotly theme name. Available themes:
+- `"plotly_white"` - Clean white background (default)
+- `"plotly"` - Plotly default
+- `"plotly_dark"` - Dark theme
+- `"ggplot2"` - ggplot2-style
+- `"seaborn"` - Seaborn-style
+- `"simple_white"` - Minimal white
+
+```yaml
+reporting:
+  theme:
+    style: "plotly_dark"
+```
+
+##### `theme.colors` (optional)
+
+Custom color palette for plots (hex codes).
+
+```yaml
+reporting:
+  theme:
+    colors:
+      - "#636EFA"
+      - "#EF553B"
+      - "#00CC96"
+      - "#AB63FA"
+```
+
+##### `theme.font_family` (optional, default: "Segoe UI, sans-serif")
+
+Font family for all text in plots.
+
+```yaml
+reporting:
+  theme:
+    font_family: "Arial, Helvetica, sans-serif"
+```
+
+#### `sections` (optional)
+
+Controls which sections appear in the report. All sections are enabled by default.
+
+```yaml
+reporting:
+  sections:
+    test_summary: true           # Execution statistics
+    best_results: true           # Top N configurations
+    variable_impact: true        # Variance-based importance
+    parallel_coordinates: true   # Multi-dimensional visualization
+    pareto_frontier: true        # Multi-objective analysis
+    bayesian_evolution: false    # Skip if not using Bayesian
+    custom_plots: true           # User-defined plots
+```
+
+**Section descriptions:**
+
+- **`test_summary`**: Execution statistics (runtime, cache hits, core-hours, success rate, parameter space)
+- **`best_results`**: Top N configurations per metric with parameter values
+- **`variable_impact`**: Variance-based analysis showing which variables affect metrics most
+- **`parallel_coordinates`**: Multi-dimensional plot showing all variables and metrics
+- **`pareto_frontier`**: Multi-objective optimization analysis (requires 2+ metrics)
+- **`bayesian_evolution`**: Optimization progress over iterations (Bayesian search only)
+- **`custom_plots`**: User-defined plots from `metrics` section
+
+#### `best_results` (optional)
+
+Configures the best results section.
+
+```yaml
+reporting:
+  best_results:
+    top_n: 10                # Show top 10 configurations (default: 5)
+    show_command: true       # Include rendered command (default: true)
+```
+
+#### `metrics` (optional)
+
+Defines custom plots for specific metrics. Each metric can have multiple plots.
+
+```yaml
+reporting:
+  metrics:
+    bandwidth:               # Metric name (must match parser output)
+      plots:
+        - type: "line"
+          x_var: "block_size"
+          group_by: "nodes"
+          title: "Bandwidth vs Block Size"
+
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "block_size"
+```
+
+**Plot types:**
+
+1. **`bar`** - Bar charts with error bars
+2. **`line`** - Line plots with optional grouping
+3. **`scatter`** - Scatter plots with color/size mapping
+4. **`heatmap`** - 2D heatmaps for two variables
+5. **`box`** - Box plots (coming soon)
+6. **`violin`** - Violin plots (coming soon)
+7. **`surface_3d`** - 3D surface plots (coming soon)
+8. **`parallel_coordinates`** - Multi-dimensional (coming soon for custom use)
+
+**Common plot options:**
+
+- **`type`** (required): Plot type (see above)
+- **`x_var`** (optional): Variable for x-axis
+- **`y_var`** (optional): Variable for y-axis (scatter, surface_3d)
+- **`z_metric`** (optional): Metric for z-axis/color (heatmap, surface_3d)
+- **`group_by`** (optional): Variable to group by (creates multiple series)
+- **`color_by`** (optional): Variable to map to color (scatter)
+- **`size_by`** (optional): Variable to map to size (scatter)
+- **`title`** (optional): Plot title
+- **`xaxis_label`** (optional): X-axis label
+- **`yaxis_label`** (optional): Y-axis label
+- **`colorscale`** (optional): Colorscale name for heatmaps (default: "Viridis")
+- **`show_error_bars`** (optional): Show error bars (bar, line) (default: true)
+- **`show_outliers`** (optional): Show outliers (box) (default: true)
+- **`height`** (optional): Plot height in pixels
+- **`width`** (optional): Plot width in pixels
+- **`per_variable`** (optional): Generate one plot per swept variable (default: false)
+
+#### `default_plots` (optional)
+
+Fallback plots for metrics without specific `metrics.{name}` configuration.
+
+```yaml
+reporting:
+  default_plots:
+    - type: "bar"
+      per_variable: true      # One bar chart per variable
+      show_error_bars: true
+```
+
+These plots are only used when:
+- `sections.custom_plots: true`
+- A metric has no entry in `metrics`
+
+#### `plot_defaults` (optional)
+
+Default sizing for all plots.
+
+```yaml
+reporting:
+  plot_defaults:
+    height: 600              # Default height (default: 500)
+    width: null              # Auto width (default: null)
+    margin:
+      l: 80                  # Left margin
+      r: 80                  # Right margin
+      t: 100                 # Top margin
+      b: 80                  # Bottom margin
+```
+
+Individual plots can override these defaults.
+
+### Examples
+
+#### Minimal Configuration
+
+Enable auto-generation with defaults:
+
+```yaml
+reporting:
+  enabled: true
+```
+
+#### Custom Theme
+
+```yaml
+reporting:
+  enabled: true
+  theme:
+    style: "plotly_dark"
+    colors: ["#00d4ff", "#ff006e", "#ffbe0b"]
+    font_family: "Arial, sans-serif"
+```
+
+#### Per-Metric Custom Plots
+
+```yaml
+reporting:
+  enabled: true
+
+  metrics:
+    bandwidth:
+      plots:
+        - type: "line"
+          x_var: "block_size"
+          group_by: "nodes"
+          title: "Bandwidth vs Block Size"
+          xaxis_label: "Block Size (MB)"
+          yaxis_label: "Bandwidth (MB/s)"
+
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "block_size"
+          colorscale: "Viridis"
+          title: "Bandwidth Heatmap"
+
+        - type: "scatter"
+          x_var: "nodes"
+          y_var: "processes_per_node"
+          color_by: "bandwidth"
+
+    latency:
+      plots:
+        - type: "bar"
+          x_var: "concurrency"
+          show_error_bars: true
+```
+
+#### Section Control
+
+```yaml
+reporting:
+  enabled: true
+
+  sections:
+    test_summary: true
+    best_results: true
+    variable_impact: true
+    parallel_coordinates: false    # Skip for simple benchmarks
+    pareto_frontier: false         # Skip for single-metric benchmarks
+    bayesian_evolution: false      # Not using Bayesian search
+    custom_plots: true
+
+  best_results:
+    top_n: 10
+    show_command: true
+```
+
+#### Complete Example
+
+```yaml
+reporting:
+  enabled: true
+  output_dir: "/scratch/reports"
+  output_filename: "ior_performance.html"
+
+  theme:
+    style: "plotly_white"
+    colors: ["#1f77b4", "#ff7f0e", "#2ca02c"]
+    font_family: "Segoe UI, sans-serif"
+
+  sections:
+    test_summary: true
+    best_results: true
+    variable_impact: true
+    parallel_coordinates: true
+    pareto_frontier: true
+    bayesian_evolution: false
+    custom_plots: true
+
+  best_results:
+    top_n: 10
+    show_command: true
+
+  metrics:
+    bandwidth:
+      plots:
+        - type: "line"
+          x_var: "block_size"
+          group_by: "nodes"
+          title: "Bandwidth Scaling"
+          show_error_bars: true
+
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "block_size"
+          colorscale: "Viridis"
+
+    iops:
+      plots:
+        - type: "bar"
+          x_var: "concurrency"
+          show_error_bars: true
+          height: 600
+
+  default_plots:
+    - type: "bar"
+      per_variable: true
+      show_error_bars: true
+
+  plot_defaults:
+    height: 500
+    width: null
+```
+
+### Usage Modes
+
+#### 1. Automatic Generation
+
+Set `enabled: true` in your config:
+
+```yaml
+reporting:
+  enabled: true
+```
+
+Run benchmark normally - report generates automatically:
+
+```bash
+iops config.yaml
+```
+
+#### 2. Manual Generation
+
+Generate report from completed run:
+
+```bash
+iops --analyze /path/to/workdir/run_001
+```
+
+Works with any run, regardless of whether `reporting` was configured.
+
+#### 3. Custom Report Config
+
+Regenerate with custom visualization settings:
+
+```bash
+iops --analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+```
+
+**custom_report.yaml** contains only the `reporting` section:
+
+```yaml
+reporting:
+  enabled: true
+  theme:
+    style: "plotly_dark"
+  metrics:
+    bandwidth:
+      plots:
+        - type: "line"
+          x_var: "block_size"
+          group_by: "nodes"
+```
+
+This allows experimenting with different visualizations without re-running benchmarks.
+
+### Configuration Priority
+
+When using `--report-config`:
+
+1. **CLI-provided config** (highest priority)
+2. **Metadata from execution** (stored in workdir)
+3. **Legacy defaults** (fallback)
+
+### Backward Compatibility
+
+- **Fully backward compatible**: Old runs without `reporting` config can still be analyzed
+- **Opt-in by default**: `enabled: false` prevents surprise report generation
+- **No breaking changes**: Existing configurations work without modification
+
+### Notes
+
+- Reports are self-contained HTML files with embedded interactive Plotly visualizations
+- All plots are interactive (zoom, pan, hover for details)
+- Metric names in `metrics` must exactly match parser output
+- Variable names must match those defined in `vars`
+- See [Custom Reports & Visualization](../user-guide/reporting.md) for detailed usage guide
 
 ---
 

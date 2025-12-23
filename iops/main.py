@@ -40,6 +40,8 @@ def parse_arguments():
                         help="Estimated execution time per test in seconds. Supports single value or comma-separated scenarios: '120' or '60,120,300'")
     parser.add_argument('--analyze', type=Path, default=None,
                         help="Generate HTML analysis report from a completed benchmark run. Provide path to workdir (e.g., /path/to/run_001)")
+    parser.add_argument('--report-config', type=Path, default=None,
+                        help="Path to custom report configuration YAML (use with --analyze to override report settings)")
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
     return parser.parse_args()
@@ -262,14 +264,27 @@ def main():
     # Handle --analyze mode (generate report from existing results)
     if args.analyze:
         from iops.reporting.report_generator import generate_report_from_workdir
+        from iops.config.loader import load_report_config
 
         logger.info("=" * 70)
         logger.info("ANALYSIS MODE: Generating HTML report")
         logger.info("=" * 70)
         logger.info(f"Reading results from: {args.analyze}")
 
+        # Load custom report config if provided
+        report_config = None
+        if args.report_config:
+            logger.info(f"Using custom report config: {args.report_config}")
+            try:
+                report_config = load_report_config(args.report_config)
+            except Exception as e:
+                logger.error(f"Failed to load report config: {e}")
+                if args.verbose:
+                    raise
+                return
+
         try:
-            report_path = generate_report_from_workdir(args.analyze)
+            report_path = generate_report_from_workdir(args.analyze, report_config=report_config)
             logger.info(f"✓ Report generated: {report_path}")
             logger.info("=" * 70)
         except Exception as e:

@@ -200,6 +200,100 @@ class RoundConfig:
     search: RoundSearchConfig | None = None
 
 
+# ----------------- Reporting blocks ----------------- #
+
+@dataclass
+class ReportThemeConfig:
+    """Theming options for report generation."""
+    style: str = "plotly_white"
+    colors: Optional[List[str]] = None
+    font_family: str = "Segoe UI, Tahoma, Geneva, Verdana, sans-serif"
+
+
+@dataclass
+class PlotConfig:
+    """Configuration for a single plot."""
+    type: Literal["line", "bar", "scatter", "box", "violin", "heatmap", "surface_3d", "parallel_coordinates"]
+
+    # Variable selection
+    x_var: Optional[str] = None
+    y_var: Optional[str] = None  # For scatter, surface_3d
+    z_metric: Optional[str] = None  # For heatmap, surface_3d
+
+    # Grouping/coloring
+    group_by: Optional[str] = None
+    color_by: Optional[str] = None
+    size_by: Optional[str] = None
+
+    # Labels & titles
+    title: Optional[str] = None
+    xaxis_label: Optional[str] = None
+    yaxis_label: Optional[str] = None
+
+    # Plot-specific options
+    colorscale: str = "Viridis"
+    show_error_bars: bool = True
+    show_outliers: bool = True  # For box plots
+
+    # Sizing
+    height: Optional[int] = None
+    width: Optional[int] = None
+
+    # Special flags
+    per_variable: bool = False  # Generate one plot per swept variable
+    include_metric: bool = True  # For parallel_coordinates
+
+
+@dataclass
+class MetricPlotsConfig:
+    """Plot configurations for a specific metric."""
+    plots: List[PlotConfig] = field(default_factory=list)
+
+
+@dataclass
+class SectionConfig:
+    """Which sections to include in report."""
+    test_summary: bool = True
+    best_results: bool = True
+    variable_impact: bool = True
+    parallel_coordinates: bool = True
+    pareto_frontier: bool = True
+    bayesian_evolution: bool = True
+    custom_plots: bool = True
+
+
+@dataclass
+class BestResultsConfig:
+    """Configuration for best results section."""
+    top_n: int = 5
+    show_command: bool = True
+
+
+@dataclass
+class PlotDefaultsConfig:
+    """Default sizing and margins for plots."""
+    height: int = 500
+    width: Optional[int] = None
+    margin: Optional[Dict[str, int]] = None
+
+
+@dataclass
+class ReportingConfig:
+    """Complete reporting configuration."""
+    enabled: bool = False
+    output_dir: Optional[Path] = None
+    output_filename: str = "analysis_report.html"
+
+    theme: ReportThemeConfig = field(default_factory=ReportThemeConfig)
+    sections: SectionConfig = field(default_factory=SectionConfig)
+    best_results: BestResultsConfig = field(default_factory=BestResultsConfig)
+
+    metrics: Dict[str, MetricPlotsConfig] = field(default_factory=dict)
+    default_plots: List[PlotConfig] = field(default_factory=list)
+
+    plot_defaults: PlotDefaultsConfig = field(default_factory=PlotDefaultsConfig)
+
+
 @dataclass
 class GenericBenchmarkConfig:
     benchmark: BenchmarkConfig
@@ -209,3 +303,4 @@ class GenericBenchmarkConfig:
     output: OutputConfig
     constraints: List[ConstraintConfig] = field(default_factory=list)
     rounds: List[RoundConfig] = field(default_factory=list)
+    reporting: Optional[ReportingConfig] = None

@@ -10,7 +10,7 @@ IOPS can generate interactive HTML reports with plots and statistical analysis f
 After your benchmark completes, generate a report:
 
 ```bash
-iops analyze /path/to/workdir/run_001
+iops --analyze /path/to/workdir/run_001
 ```
 
 The report includes:
@@ -19,6 +19,50 @@ The report includes:
 - Statistical summaries
 - Parameter correlations
 - Performance comparisons
+- Best configurations per metric
+- Variable impact analysis
+- Multi-objective optimization analysis
+
+### Automatic Report Generation
+
+Enable automatic report generation in your configuration:
+
+```yaml
+reporting:
+  enabled: true
+```
+
+With this setting, reports are automatically generated after benchmark execution. See [Custom Reports & Visualization](reporting.md) for comprehensive reporting options.
+
+### Custom Report Configuration
+
+Regenerate reports with custom visualization settings using `--report-config`:
+
+```bash
+iops --analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+```
+
+This allows you to experiment with different plot types, themes, and layouts without re-running your benchmarks.
+
+**Example custom_report.yaml:**
+
+```yaml
+reporting:
+  enabled: true
+  theme:
+    style: "plotly_dark"
+    colors: ["#636EFA", "#EF553B", "#00CC96"]
+
+  metrics:
+    bandwidth:
+      plots:
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "block_size"
+          colorscale: "Viridis"
+```
+
+See the [Custom Reports & Visualization](reporting.md) guide for complete documentation on report customization.
 
 ## Controlling Report Variables
 

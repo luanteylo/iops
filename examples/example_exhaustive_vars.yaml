@@ -1,0 +1,142 @@
+# =============================================================================
+# IOPS Example: Exhaustive Variables with Bayesian Search
+# =============================================================================
+#
+# This example demonstrates the exhaustive_vars feature, which allows you to:
+# - Use intelligent search (Bayesian/random) for some variables
+# - Exhaustively test specific variables at each search point
+#
+# Use case: Analyze the impact of ost_num across all values while using
+# Bayesian optimization to efficiently explore nodes and processes_per_node
+#
+# =============================================================================
+
+benchmark:
+  name: "OST Impact Study with Bayesian Search"
+  description: "Test all OST values for each Bayesian-selected configuration"
+  workdir: "./workdir"
+  executor: "local"  # Change to "slurm" for cluster execution
+
+  # Use Bayesian optimization for nodes and processes_per_node
+  search_method: "bayesian"
+  bayesian_config:
+    target_metric: "bandwidth_mbps"
+    objective: "maximize"
+    n_initial_points: 3    # Start with 3 random configurations
+    n_iterations: 8        # Total 8 evaluations
+
+  # Test ALL ost_num values for each Bayesian-selected point
+  exhaustive_vars: ["ost_num"]
+
+  repetitions: 2
+  random_seed: 42
+
+# =============================================================================
+# VARIABLES
+# =============================================================================
+vars:
+  # Search variables (Bayesian optimizer will select values)
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16, 32]
+
+  # Exhaustive variable (all values tested at each search point)
+  ost_num:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8, 16]
+
+  # Derived variable
+  total_processes:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+# =============================================================================
+# COMMAND AND SCRIPT
+# =============================================================================
+command:
+  template: |
+    echo "Running with nodes={{ nodes }}, ppn={{ processes_per_node }}, ost_num={{ ost_num }}"
+    echo "Total processes: {{ total_processes }}"
+  metadata:
+    operation: "ost_impact_test"
+
+scripts:
+  - name: "ost_benchmark"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      # Simulated benchmark - replace with actual benchmark command
+
+      # Example: IOR benchmark with OST configuration
+      # mpirun -np {{ total_processes }} ior -w -r \
+      #   -o /lustre/testfile \
+      #   -b 1m -t 1m \
+      #   -C -e -F -k -vv
+
+      # For this example, generate synthetic results
+      BANDWIDTH=$((100 + RANDOM % 400))
+      echo "bandwidth_mbps: $BANDWIDTH" > {{ execution_dir }}/output.txt
+      echo "latency_ms: $((10 + RANDOM % 50))" >> {{ execution_dir }}/output.txt
+
+    parser:
+      file: "{{ execution_dir }}/output.txt"
+      metrics:
+        - name: "bandwidth_mbps"
+        - name: "latency_ms"
+      parser_script: |
+        def parse(file_path):
+            results = {}
+            with open(file_path) as f:
+                for line in f:
+                    if ':' in line:
+                        key, value = line.strip().split(':')
+                        results[key.strip()] = float(value.strip())
+            return results
+
+# =============================================================================
+# OUTPUT
+# =============================================================================
+output:
+  sink:
+    type: "csv"
+    path: "{{ workdir }}/results_ost_impact.csv"
+    mode: "overwrite"
+
+# =============================================================================
+# HOW THIS WORKS
+# =============================================================================
+#
+# Execution flow:
+# 1. Bayesian optimizer starts with 3 random search points
+#    Example first point: (nodes=2, processes_per_node=8)
+#
+# 2. For each search point, IOPS tests ALL ost_num values:
+#    - (nodes=2, processes_per_node=8, ost_num=1)
+#    - (nodes=2, processes_per_node=8, ost_num=2)
+#    - (nodes=2, processes_per_node=8, ost_num=4)
+#    - (nodes=2, processes_per_node=8, ost_num=8)
+#    - (nodes=2, processes_per_node=8, ost_num=16)
+#    = 5 tests per search point × 2 repetitions = 10 executions
+#
+# 3. Bayesian optimizer analyzes results and selects next search point
+#
+# 4. Total executions: 8 search points × 5 ost_num values × 2 reps = 80 tests
+#    Compare to full factorial: 4×4×5×2 = 160 tests
+#    Reduction: 50% fewer tests while still analyzing OST impact completely
+#
+# Benefits:
+# - Efficiently explore large search space (nodes, ppn) using Bayesian search
+# - Fully analyze OST impact at each explored configuration
+# - Better understanding of OST behavior across different workload patterns
+#
+# =============================================================================

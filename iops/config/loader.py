@@ -26,6 +26,13 @@ from iops.config.models import (
     OutputSinkConfig,
     RoundConfig,
     RoundSearchConfig,
+    ReportingConfig,
+    ReportThemeConfig,
+    PlotConfig,
+    MetricPlotsConfig,
+    SectionConfig,
+    BestResultsConfig,
+    PlotDefaultsConfig,
 )
 from iops.results.validation import validate_parser_script
 
@@ -396,6 +403,11 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
             description=c_data.get("description"),
         ))
 
+    # ---- reporting (optional) ----
+    reporting_cfg = None
+    if "reporting" in data and data["reporting"] is not None:
+        reporting_cfg = _parse_reporting_config(data["reporting"])
+
     cfg = GenericBenchmarkConfig(
         benchmark=benchmark,
         vars=vars_cfg,
@@ -404,11 +416,173 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         scripts=scripts,
         output=output,
         rounds=rounds_cfg,
+        reporting=reporting_cfg,
     )
 
     validate_generic_config(cfg)
     create_workdir(cfg, logger)  # logger can be None here
     return cfg
+
+
+def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
+    """
+    Parse reporting configuration dictionary into ReportingConfig dataclass.
+
+    Args:
+        data: Dictionary containing reporting configuration
+
+    Returns:
+        ReportingConfig instance
+
+    Raises:
+        ConfigValidationError: If configuration is invalid
+    """
+    # Parse theme (optional)
+    theme_cfg = ReportThemeConfig()
+    if "theme" in data and data["theme"] is not None:
+        theme_data = data["theme"]
+        theme_cfg = ReportThemeConfig(
+            style=theme_data.get("style", "plotly_white"),
+            colors=theme_data.get("colors"),
+            font_family=theme_data.get("font_family", "Segoe UI, Tahoma, Geneva, Verdana, sans-serif"),
+        )
+
+    # Parse sections (optional)
+    sections_cfg = SectionConfig()
+    if "sections" in data and data["sections"] is not None:
+        sections_data = data["sections"]
+        sections_cfg = SectionConfig(
+            test_summary=sections_data.get("test_summary", True),
+            best_results=sections_data.get("best_results", True),
+            variable_impact=sections_data.get("variable_impact", True),
+            parallel_coordinates=sections_data.get("parallel_coordinates", True),
+            pareto_frontier=sections_data.get("pareto_frontier", True),
+            bayesian_evolution=sections_data.get("bayesian_evolution", True),
+            custom_plots=sections_data.get("custom_plots", True),
+        )
+
+    # Parse best_results config (optional)
+    best_results_cfg = BestResultsConfig()
+    if "best_results" in data and data["best_results"] is not None:
+        br_data = data["best_results"]
+        best_results_cfg = BestResultsConfig(
+            top_n=br_data.get("top_n", 5),
+            show_command=br_data.get("show_command", True),
+        )
+
+    # Parse plot_defaults (optional)
+    plot_defaults_cfg = PlotDefaultsConfig()
+    if "plot_defaults" in data and data["plot_defaults"] is not None:
+        pd_data = data["plot_defaults"]
+        plot_defaults_cfg = PlotDefaultsConfig(
+            height=pd_data.get("height", 500),
+            width=pd_data.get("width"),
+            margin=pd_data.get("margin"),
+        )
+
+    # Parse per-metric plots (optional)
+    metrics_cfg: Dict[str, MetricPlotsConfig] = {}
+    if "metrics" in data and data["metrics"] is not None:
+        for metric_name, metric_data in data["metrics"].items():
+            if metric_data is None or "plots" not in metric_data:
+                continue
+
+            plots = []
+            for plot_data in metric_data["plots"]:
+                plot_cfg = PlotConfig(
+                    type=plot_data["type"],
+                    x_var=plot_data.get("x_var"),
+                    y_var=plot_data.get("y_var"),
+                    z_metric=plot_data.get("z_metric"),
+                    group_by=plot_data.get("group_by"),
+                    color_by=plot_data.get("color_by"),
+                    size_by=plot_data.get("size_by"),
+                    title=plot_data.get("title"),
+                    xaxis_label=plot_data.get("xaxis_label"),
+                    yaxis_label=plot_data.get("yaxis_label"),
+                    colorscale=plot_data.get("colorscale", "Viridis"),
+                    show_error_bars=plot_data.get("show_error_bars", True),
+                    show_outliers=plot_data.get("show_outliers", True),
+                    height=plot_data.get("height"),
+                    width=plot_data.get("width"),
+                    per_variable=plot_data.get("per_variable", False),
+                    include_metric=plot_data.get("include_metric", True),
+                )
+                plots.append(plot_cfg)
+
+            metrics_cfg[metric_name] = MetricPlotsConfig(plots=plots)
+
+    # Parse default_plots (optional)
+    default_plots = []
+    if "default_plots" in data and data["default_plots"] is not None:
+        for plot_data in data["default_plots"]:
+            plot_cfg = PlotConfig(
+                type=plot_data["type"],
+                x_var=plot_data.get("x_var"),
+                y_var=plot_data.get("y_var"),
+                z_metric=plot_data.get("z_metric"),
+                group_by=plot_data.get("group_by"),
+                color_by=plot_data.get("color_by"),
+                size_by=plot_data.get("size_by"),
+                title=plot_data.get("title"),
+                xaxis_label=plot_data.get("xaxis_label"),
+                yaxis_label=plot_data.get("yaxis_label"),
+                colorscale=plot_data.get("colorscale", "Viridis"),
+                show_error_bars=plot_data.get("show_error_bars", True),
+                show_outliers=plot_data.get("show_outliers", True),
+                height=plot_data.get("height"),
+                width=plot_data.get("width"),
+                per_variable=plot_data.get("per_variable", False),
+                include_metric=plot_data.get("include_metric", True),
+            )
+            default_plots.append(plot_cfg)
+
+    # Parse output_dir (optional)
+    output_dir = None
+    if "output_dir" in data and data["output_dir"] is not None:
+        output_dir = _expand_path(data["output_dir"])
+
+    return ReportingConfig(
+        enabled=data.get("enabled", False),
+        output_dir=output_dir,
+        output_filename=data.get("output_filename", "analysis_report.html"),
+        theme=theme_cfg,
+        sections=sections_cfg,
+        best_results=best_results_cfg,
+        metrics=metrics_cfg,
+        default_plots=default_plots,
+        plot_defaults=plot_defaults_cfg,
+    )
+
+
+def load_report_config(config_path: Path) -> ReportingConfig:
+    """
+    Load standalone report configuration YAML file.
+
+    Expected structure:
+        reporting:
+          enabled: true
+          metrics:
+            ...
+
+    Args:
+        config_path: Path to report configuration YAML file
+
+    Returns:
+        ReportingConfig instance
+
+    Raises:
+        ConfigValidationError: If configuration is invalid or missing 'reporting' section
+    """
+    with open(config_path, "r") as f:
+        data = yaml.safe_load(f)
+
+    if "reporting" not in data:
+        raise ConfigValidationError(
+            "Report config file must have 'reporting' section"
+        )
+
+    return _parse_reporting_config(data["reporting"])
 
 
 # ----------------- Validation functions ----------------- #

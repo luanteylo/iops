@@ -303,7 +303,8 @@ class IOPSRunner(HasLogger):
                 "command": {
                     "template": self.cfg.command.template,
                     "metadata": self.cfg.command.metadata or {},
-                }
+                },
+                "reporting": self._serialize_reporting_config(),
             }
 
             # Add variable definitions
@@ -369,6 +370,340 @@ class IOPSRunner(HasLogger):
 
         # Fall back to string representation
         raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+    def _serialize_reporting_config(self):
+        """Serialize ReportingConfig to JSON-serializable dict."""
+        if not self.cfg.reporting:
+            return None
+
+        def serialize_plot_config(plot_cfg):
+            """Serialize a PlotConfig to dict."""
+            return {
+                "type": plot_cfg.type,
+                "x_var": plot_cfg.x_var,
+                "y_var": plot_cfg.y_var,
+                "z_metric": plot_cfg.z_metric,
+                "group_by": plot_cfg.group_by,
+                "color_by": plot_cfg.color_by,
+                "size_by": plot_cfg.size_by,
+                "title": plot_cfg.title,
+                "xaxis_label": plot_cfg.xaxis_label,
+                "yaxis_label": plot_cfg.yaxis_label,
+                "colorscale": plot_cfg.colorscale,
+                "show_error_bars": plot_cfg.show_error_bars,
+                "show_outliers": plot_cfg.show_outliers,
+                "height": plot_cfg.height,
+                "width": plot_cfg.width,
+                "per_variable": plot_cfg.per_variable,
+                "include_metric": plot_cfg.include_metric,
+            }
+
+        reporting = self.cfg.reporting
+        return {
+            "enabled": reporting.enabled,
+            "output_dir": str(reporting.output_dir) if reporting.output_dir else None,
+            "output_filename": reporting.output_filename,
+            "theme": {
+                "style": reporting.theme.style,
+                "colors": reporting.theme.colors,
+                "font_family": reporting.theme.font_family,
+            },
+            "sections": {
+                "test_summary": reporting.sections.test_summary,
+                "best_results": reporting.sections.best_results,
+                "variable_impact": reporting.sections.variable_impact,
+                "parallel_coordinates": reporting.sections.parallel_coordinates,
+                "pareto_frontier": reporting.sections.pareto_frontier,
+                "bayesian_evolution": reporting.sections.bayesian_evolution,
+                "custom_plots": reporting.sections.custom_plots,
+            },
+            "best_results": {
+                "top_n": reporting.best_results.top_n,
+                "show_command": reporting.best_results.show_command,
+            },
+            "plot_defaults": {
+                "height": reporting.plot_defaults.height,
+                "width": reporting.plot_defaults.width,
+                "margin": reporting.plot_defaults.margin,
+            },
+            "metrics": {
+                metric_name: {
+                    "plots": [serialize_plot_config(p) for p in metric_plots.plots]
+                }
+                for metric_name, metric_plots in reporting.metrics.items()
+            },
+            "default_plots": [serialize_plot_config(p) for p in reporting.default_plots],
+        }
+
+    def _save_report_config_template(self):
+        """
+        Save a report_config.yaml template to workdir for easy report regeneration.
+
+        If user provided reporting config, saves a clean version they can expand.
+        Otherwise, generates a smart template based on detected metrics and variables.
+        """
+        try:
+            import yaml
+
+            output_path = self.cfg.benchmark.workdir / "report_config.yaml"
+
+            if self.cfg.reporting:
+                # User provided config - create clean version they can expand
+                config_dict = self._create_clean_report_config()
+            else:
+                # Generate smart template based on execution
+                config_dict = self._generate_report_config_template()
+
+            # Get swept variables and metrics for reference comments
+            swept_vars = [name for name, var in self.cfg.vars.items() if var.sweep is not None]
+            all_metrics = []
+            for script in self.cfg.scripts:
+                if script.parser and script.parser.metrics:
+                    all_metrics.extend([m.name for m in script.parser.metrics])
+
+            # Wrap in reporting section
+            yaml_content = {"reporting": config_dict}
+
+            with open(output_path, 'w') as f:
+                # Add header comment
+                f.write("# IOPS Report Configuration\n")
+                f.write("# This file was auto-generated based on your benchmark execution.\n")
+                f.write("# Edit and use with: iops --analyze <workdir> --report-config report_config.yaml\n")
+                f.write("#\n")
+                if self.cfg.reporting:
+                    f.write("# This config is based on your provided reporting settings.\n")
+                    f.write("# You can expand it by adding more plot types or customizing existing ones.\n")
+                else:
+                    f.write("# This config is a template based on your benchmark metrics and variables.\n")
+                    f.write("# Customize the plots and settings, then set enabled: true to auto-generate reports.\n")
+                f.write("#\n")
+                f.write("# Documentation: https://lgouveia.gitlabpages.inria.fr/iops/user-guide/reporting/\n")
+                f.write("#\n")
+
+                # Add reference section for available variables and metrics
+                f.write("# ============================================================================\n")
+                f.write("# AVAILABLE VARIABLES AND METRICS (for use in plot configurations)\n")
+                f.write("# ============================================================================\n")
+                f.write("#\n")
+
+                if swept_vars:
+                    f.write("# Swept Variables (use for x_var, y_var, group_by, color_by):\n")
+                    for var in swept_vars:
+                        var_type = self.cfg.vars[var].type
+                        f.write(f"#   - {var} ({var_type})\n")
+                    f.write("#\n")
+                else:
+                    f.write("# No swept variables detected\n")
+                    f.write("#\n")
+
+                if all_metrics:
+                    f.write("# Metrics (use for configuring plots):\n")
+                    for metric in all_metrics:
+                        f.write(f"#   - {metric}\n")
+                    f.write("#\n")
+                else:
+                    f.write("# No metrics detected\n")
+                    f.write("#\n")
+
+                f.write("# Plot Types Available:\n")
+                f.write("#   - bar, line, scatter, heatmap, box, violin, surface_3d, parallel_coordinates\n")
+                f.write("#\n")
+                f.write("# ============================================================================\n")
+                f.write("\n")
+
+                yaml.dump(yaml_content, f, default_flow_style=False, sort_keys=False, indent=2)
+
+            self.logger.info(f"Report config template saved: {output_path.relative_to(self.cfg.benchmark.workdir.parent)}")
+
+        except Exception as e:
+            self.logger.debug(f"Failed to save report config template: {e}")
+
+    def _create_clean_report_config(self):
+        """
+        Create a clean, editable version of the user's reporting config.
+        Includes what they specified + suggestions for expansion based on execution.
+        """
+        reporting = self.cfg.reporting
+
+        # Start with user's settings
+        config = {
+            "enabled": reporting.enabled,
+            "output_filename": reporting.output_filename,
+        }
+
+        # Add output_dir only if specified
+        if reporting.output_dir:
+            config["output_dir"] = str(reporting.output_dir)
+
+        # Theme (only include if non-default)
+        if reporting.theme.style != "plotly_white" or reporting.theme.colors or reporting.theme.font_family != "Segoe UI, sans-serif":
+            theme = {"style": reporting.theme.style}
+            if reporting.theme.colors:
+                theme["colors"] = reporting.theme.colors
+            if reporting.theme.font_family != "Segoe UI, sans-serif":
+                theme["font_family"] = reporting.theme.font_family
+            config["theme"] = theme
+
+        # Sections (only include if not all True)
+        sections_dict = {
+            "test_summary": reporting.sections.test_summary,
+            "best_results": reporting.sections.best_results,
+            "variable_impact": reporting.sections.variable_impact,
+            "custom_plots": reporting.sections.custom_plots,
+        }
+        if not all(sections_dict.values()):
+            config["sections"] = sections_dict
+
+        # User's metric configs
+        if reporting.metrics:
+            metrics_config = {}
+            for metric_name, metric_plots_config in reporting.metrics.items():
+                plots = []
+                for plot_cfg in metric_plots_config.plots:
+                    plot_dict = {"type": plot_cfg.type}
+                    if plot_cfg.x_var:
+                        plot_dict["x_var"] = plot_cfg.x_var
+                    if plot_cfg.y_var:
+                        plot_dict["y_var"] = plot_cfg.y_var
+                    if plot_cfg.group_by:
+                        plot_dict["group_by"] = plot_cfg.group_by
+                    if plot_cfg.title:
+                        plot_dict["title"] = plot_cfg.title
+                    if plot_cfg.colorscale != "Viridis":
+                        plot_dict["colorscale"] = plot_cfg.colorscale
+                    plots.append(plot_dict)
+                metrics_config[metric_name] = {"plots": plots}
+            config["metrics"] = metrics_config
+
+        # Get metrics from execution to suggest expansions
+        all_metrics = []
+        for script in self.cfg.scripts:
+            if script.parser and script.parser.metrics:
+                all_metrics.extend([m.name for m in script.parser.metrics])
+
+        # Add suggestions for metrics not yet configured
+        unconfigured_metrics = [m for m in all_metrics if m not in reporting.metrics.keys()]
+        if unconfigured_metrics:
+            config["_suggestions"] = {
+                "unconfigured_metrics": unconfigured_metrics,
+                "hint": "Add plot configurations for these metrics to customize their visualizations"
+            }
+
+        # Default plots
+        if reporting.default_plots:
+            default_plots = []
+            for plot_cfg in reporting.default_plots:
+                plot_dict = {"type": plot_cfg.type}
+                if plot_cfg.per_variable:
+                    plot_dict["per_variable"] = plot_cfg.per_variable
+                if plot_cfg.show_error_bars:
+                    plot_dict["show_error_bars"] = plot_cfg.show_error_bars
+                default_plots.append(plot_dict)
+            config["default_plots"] = default_plots
+
+        return config
+
+    def _generate_report_config_template(self):
+        """Generate a smart report config template based on execution."""
+        # Get swept variables
+        swept_vars = [name for name, var in self.cfg.vars.items() if var.sweep is not None]
+
+        # Get metrics from scripts
+        metrics = []
+        for script in self.cfg.scripts:
+            if script.parser and script.parser.metrics:
+                metrics.extend([m.name for m in script.parser.metrics])
+
+        # Build template
+        template = {
+            "enabled": False,  # User must opt-in
+            "output_filename": "analysis_report.html",
+            "theme": {
+                "style": "plotly_white",
+                "colors": ["#3498db", "#e74c3c", "#2ecc71"],
+            },
+            "sections": {
+                "test_summary": True,
+                "best_results": True,
+                "variable_impact": True,
+                "custom_plots": True,
+            },
+        }
+
+        # Add metric-specific plot examples if we have metrics
+        if metrics and swept_vars:
+            template["metrics"] = {}
+
+            # Add examples for first metric
+            if metrics:
+                first_metric = metrics[0]
+                plots = []
+
+                # Line plot if we have variables
+                if len(swept_vars) >= 1:
+                    line_plot = {
+                        "type": "line",
+                        "x_var": swept_vars[0],
+                    }
+                    if len(swept_vars) >= 2:
+                        line_plot["group_by"] = swept_vars[1]
+                    plots.append(line_plot)
+
+                # Heatmap if we have 2+ variables
+                if len(swept_vars) >= 2:
+                    plots.append({
+                        "type": "heatmap",
+                        "x_var": swept_vars[0],
+                        "y_var": swept_vars[1],
+                    })
+
+                template["metrics"][first_metric] = {"plots": plots}
+
+            # Add comment about other metrics
+            if len(metrics) > 1:
+                template["_comment"] = f"Add plot configs for other metrics: {', '.join(metrics[1:])}"
+
+        # Add default plots
+        template["default_plots"] = [
+            {
+                "type": "bar",
+                "per_variable": True,
+                "show_error_bars": True,
+            }
+        ]
+
+        return template
+
+    def _generate_report(self):
+        """Generate HTML report after execution completes."""
+        try:
+            from iops.reporting.report_generator import ReportGenerator
+
+            self.logger.info("=" * 70)
+            self.logger.info("Generating HTML report...")
+            self.logger.info("=" * 70)
+
+            # Determine output path
+            output_dir = self.cfg.reporting.output_dir or self.cfg.benchmark.workdir
+            output_filename = self.cfg.reporting.output_filename
+            output_path = Path(output_dir) / output_filename
+
+            # Create report generator
+            generator = ReportGenerator(
+                workdir=self.cfg.benchmark.workdir,
+                report_config=self.cfg.reporting
+            )
+            generator.load_metadata()
+            generator.load_results()
+            report_path = generator.generate_report(output_path=output_path)
+
+            self.logger.info(f"✓ Report generated: {report_path}")
+            self.logger.info("=" * 70)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to generate report: {e}")
+            self.logger.warning("You can manually generate the report later using:")
+            self.logger.warning(f"  iops --analyze {self.cfg.benchmark.workdir}")
 
     def run_dry(self):
         """
@@ -834,6 +1169,13 @@ class IOPSRunner(HasLogger):
 
         # Save runtime metadata for report generation
         self._save_run_metadata(test_count=test_count)
+
+        # Save report config template for easy regeneration
+        self._save_report_config_template()
+
+        # Auto-generate report if enabled
+        if self.cfg.reporting and self.cfg.reporting.enabled:
+            self._generate_report()
             
 
      
