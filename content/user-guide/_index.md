@@ -12,4 +12,5 @@ This section covers:
 - **[Search Methods](search-methods)** - Exhaustive, Bayesian, and random search
 - **[Execution Backends](execution-backends)** - Local and SLURM execution
 - **[Result Caching](caching)** - Smart caching to skip redundant tests
-- **[Analysis & Reports](analysis)** - Generate reports and analyze results
+- **[Custom Reports & Visualization](reporting)** - Interactive HTML reports with custom plots
+- **[Analysis & Output Formats](analysis)** - Generate reports, output formats, and result analysis
