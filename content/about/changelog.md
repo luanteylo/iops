@@ -23,12 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reference comments in generated configs showing available variables, metrics, and plot types
 - Plot factory system with registry pattern for extensibility
 - 113 new tests for reporting features (259 total tests passing)
+- Runnable example: examples/example_with_reporting.yaml
 
 ### Documentation
 - New comprehensive reporting user guide (content/user-guide/reporting.md)
-- Updated YAML schema reference with reporting section
+- Updated YAML schema reference with reporting section (lines 1459-1952)
 - Example configuration with reporting (content/examples/example_with_reporting.yaml)
 - Updated template_full.yaml with concise reporting section
+- Release notes: content/about/release-3.1.0.md
+
+### Fixed
+- Added plotly, pyarrow, and fastparquet to pyproject.toml dependencies for CI/CD compatibility
 
 ### Internal
 - Created iops/reporting/plots.py with plot factory implementation (550 lines)

@@ -1,9 +1,9 @@
 ---
-title: "IOPS - I/O Performance Suite"
+title: "IOPS"
 weight: 1
 ---
 
-# IOPS - I/O Performance Suite
+# IOPS 
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
 
