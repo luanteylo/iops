@@ -66,13 +66,20 @@ publish-pypi:
     - ci.inria.fr
   before_script:
     - pip install build twine
+    # Verify PyPI credentials are configured
+    - |
+      if [ -z "$TWINE_USERNAME" ] || [ -z "$TWINE_PASSWORD" ]; then
+        echo "ERROR: TWINE_USERNAME and TWINE_PASSWORD must be set in GitLab CI/CD variables"
+        exit 1
+      fi
+    - echo "PyPI credentials found (username=${TWINE_USERNAME})"
   script:
     # Clean previous builds
     - rm -rf dist/ build/ *.egg-info iops.egg-info
     # Build package
     - python -m build
-    # Upload to PyPI
-    - python -m twine upload dist/*
+    # Upload to PyPI using username/password authentication
+    - python -m twine upload --non-interactive --verbose dist/*
   rules:
     # Only run on tags matching v*.*.* pattern
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
