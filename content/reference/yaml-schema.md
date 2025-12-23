@@ -99,6 +99,8 @@ benchmark:
     poll_interval: integer        # Optional: status polling interval in seconds (default: 30)
   random_seed: integer            # Optional: seed for randomization (default: 42)
   cache_exclude_vars: list        # Optional: variables to exclude from cache hash
+  exhaustive_vars: list           # Optional: variables to test exhaustively at each search point
+  report_vars: list               # Optional: variables to include in analysis reports
   max_core_hours: float           # Optional: CPU core-hours budget limit
   cores_expr: string              # Optional: Jinja expression to compute cores (default: "1")
   estimated_time_seconds: float   # Optional: Estimated test duration for dry-run (seconds)
@@ -256,6 +258,113 @@ Without `cache_exclude_vars`, the same test would generate different cache keys:
 With `cache_exclude_vars: ["summary_file"]`, both runs match the same cache entry.
 
 **Note**: Only exclude variables that don't affect benchmark behavior. Excluding a variable like `block_size` would be incorrect since it directly impacts results.
+
+#### `exhaustive_vars` (optional)
+
+List of variable names to test exhaustively at each search point. **This enables hybrid search strategies** that combine intelligent search (Bayesian/random) with exhaustive testing for specific variables.
+
+**How it works:**
+- With Bayesian/random search: The search method selects points in the reduced space (non-exhaustive variables), then IOPS expands each point with all combinations of exhaustive variables
+- With exhaustive search: No effect (already tests all combinations)
+
+**Use cases:**
+- Analyze the impact of specific variables (e.g., OST count) while efficiently exploring others
+- Combine intelligent search for expensive parameters with exhaustive testing for cheap ones
+- Reduce total test count while maintaining complete coverage for variables of interest
+
+```yaml
+exhaustive_vars: ["ost_num"]
+```
+
+**Example scenario:**
+
+Without `exhaustive_vars` (pure Bayesian search):
+```yaml
+vars:
+  nodes: { type: int, sweep: { mode: list, values: [2, 4, 8, 16] } }
+  block_size: { type: int, sweep: { mode: list, values: [4, 8, 16, 32] } }
+  ost_num: { type: int, sweep: { mode: list, values: [1, 2, 4, 8] } }
+
+benchmark:
+  search_method: "bayesian"
+  bayesian_config:
+    n_iterations: 20  # Tests 20 random points in 3D space
+```
+
+With `exhaustive_vars`:
+```yaml
+vars:
+  nodes: { type: int, sweep: { mode: list, values: [2, 4, 8, 16] } }
+  block_size: { type: int, sweep: { mode: list, values: [4, 8, 16, 32] } }
+  ost_num: { type: int, sweep: { mode: list, values: [1, 2, 4, 8] } }
+
+benchmark:
+  search_method: "bayesian"
+  exhaustive_vars: ["ost_num"]  # Test all OST values at each Bayesian point
+  bayesian_config:
+    n_iterations: 5  # Tests 5 points in 2D space (nodes, block_size)
+  # Total tests: 5 points × 4 ost_num values = 20 tests
+```
+
+**Result**: Same number of tests, but you get complete OST coverage at each selected (nodes, block_size) configuration.
+
+**Example with multiple exhaustive variables:**
+```yaml
+benchmark:
+  search_method: "random"
+  exhaustive_vars: ["io_pattern", "ost_num"]
+  random_config:
+    n_samples: 10
+# If io_pattern has 2 values and ost_num has 4 values:
+# Total tests: 10 samples × 2 patterns × 4 OSTs = 80 tests
+```
+
+**Notes:**
+- Implementation: `matrix.py` partitions swept variables into search space and exhaustive space, then builds their cross-product
+- Works with Bayesian, random, and exhaustive search methods
+- With exhaustive search, this option has no effect (already exhaustive)
+
+#### `report_vars` (optional)
+
+List of variable names to include in analysis reports. **Use this to control which variables appear in plots and Pareto frontier analysis.**
+
+When generating reports with `iops analyze`, only these variables will be used for:
+- Parameter sweep plots
+- Pareto frontier calculations
+- Variable correlation analysis
+
+**Use cases:**
+- Exclude string variables that can't be meaningfully plotted
+- Focus analysis on key parameters
+- Simplify reports for large parameter spaces
+
+```yaml
+report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+```
+
+**Example scenario:**
+
+Configuration with many variables:
+```yaml
+vars:
+  nodes: { type: int, sweep: { mode: list, values: [2, 4, 8] } }
+  processes_per_node: { type: int, sweep: { mode: list, values: [16, 32] } }
+  volume_size_gb: { type: int, sweep: { mode: list, values: [4, 8, 16] } }
+  filesystem_path: { type: str, sweep: { mode: list, values: ["/scratch", "/beegfs"] } }
+  test_id: { type: str, expr: "test_{{ execution_id }}" }
+
+benchmark:
+  report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+  # Excludes filesystem_path and test_id from plots
+```
+
+**Default behavior:**
+If `report_vars` is not specified, all **numeric swept variables** are included in analysis reports.
+
+**Notes:**
+- Only affects report generation with `iops analyze`
+- Does not affect execution or result storage
+- All variables are still saved in output files
 
 #### `max_core_hours` (optional)
 Maximum CPU core-hours budget for benchmark execution. When specified, IOPS will stop scheduling new tests once the accumulated core-hours exceeds this limit. **Can be overridden by the `--max-core-hours` CLI argument.**

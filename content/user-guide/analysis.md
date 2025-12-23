@@ -20,6 +20,39 @@ The report includes:
 - Parameter correlations
 - Performance comparisons
 
+## Controlling Report Variables
+
+By default, reports include all numeric swept variables in plots and analysis. Use `report_vars` to control which variables appear:
+
+```yaml
+benchmark:
+  report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+```
+
+**Why use this:**
+- Exclude string variables that can't be meaningfully plotted
+- Focus analysis on key parameters
+- Simplify reports for large parameter spaces
+
+**Example:**
+
+```yaml
+vars:
+  nodes: { type: int, sweep: { mode: list, values: [2, 4, 8] } }
+  processes_per_node: { type: int, sweep: { mode: list, values: [16, 32] } }
+  volume_size_gb: { type: int, sweep: { mode: list, values: [4, 8, 16] } }
+  filesystem_path: { type: str, sweep: { mode: list, values: ["/scratch", "/beegfs"] } }
+
+benchmark:
+  report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+  # Excludes filesystem_path from plots
+```
+
+**Notes:**
+- Only affects report generation with `iops analyze`
+- Does not affect execution or result storage
+- All variables are still saved in output files
+
 ## Output Formats
 
 IOPS supports multiple output formats for results:

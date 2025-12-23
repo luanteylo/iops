@@ -7,7 +7,7 @@ IOPS is licensed under the BSD 3-Clause License.
 
 ## BSD 3-Clause License
 
-Copyright (c) 2024-2025, TADAAM - INRIA Bordeaux
+Copyright (c) 2024-2025, TADaaM - INRIA Bordeaux
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,10 +38,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## About INRIA
 
 IOPS is developed at INRIA (French Institute for Research in Computer Science and Automation),
-specifically within the TADAAM team at INRIA Bordeaux.
+specifically within the TADaaM team at INRIA Bordeaux.
 
 - **INRIA**: [https://www.inria.fr](https://www.inria.fr)
-- **TADAAM Team**: Research team focused on parallel and distributed computing
+- **TADaaM Team**: Topology-aware system-scale data management for high-performance computing
+  - Website: [https://www.inria.fr/en/tadaam](https://www.inria.fr/en/tadaam)
 
 ## Third-Party Dependencies
 

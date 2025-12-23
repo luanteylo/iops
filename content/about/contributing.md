@@ -120,6 +120,9 @@ By contributing to IOPS, you agree that your contributions will be licensed unde
 
 ## Contact
 
-- **Project Lead**: Luan Teylo (luan.teylo@inria.fr)
-- **Team**: TADAAM - INRIA Bordeaux
+- **Main Developers**:
+  - Luan Teylo
+  - Abdraman Mahamat
+  - Francieli Boito
+- **Team**: TADaaM - INRIA Bordeaux
 - **Repository**: [https://gitlab.inria.fr/lgouveia/iops](https://gitlab.inria.fr/lgouveia/iops)
