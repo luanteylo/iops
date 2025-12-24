@@ -92,6 +92,68 @@ class ReportGenerator:
         if 'metadata.__executor_status' in self.df.columns:
             self.df = self.df[self.df['metadata.__executor_status'] == 'SUCCEEDED'].copy()
 
+        # Validate and filter metrics to only those available in results
+        self._validate_and_filter_metrics()
+
+    def _validate_and_filter_metrics(self):
+        """
+        Validate that metrics in metadata exist in results and filter out missing ones.
+
+        This handles cases where:
+        - Metrics were added to config after a run was executed
+        - Parser returned None for a metric (doesn't create column)
+        - Configuration was updated but old results are being analyzed
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Get available metric columns from results
+        available_metrics = set([
+            col.replace('metrics.', '')
+            for col in self.df.columns
+            if col.startswith('metrics.')
+        ])
+
+        # Get declared metrics from metadata
+        declared_metrics = set([m['name'] for m in self.metadata['metrics']])
+
+        # Identify missing metrics
+        missing_metrics = declared_metrics - available_metrics
+
+        if missing_metrics:
+            # Log warning about missing metrics
+            logger.warning(
+                f"Metrics declared in metadata but not found in results (will be skipped): "
+                f"{sorted(missing_metrics)}"
+            )
+            logger.info(
+                f"Generating report with {len(available_metrics)} of "
+                f"{len(declared_metrics)} declared metrics"
+            )
+
+            # Filter metadata to only include available metrics
+            self.metadata['metrics'] = [
+                m for m in self.metadata['metrics']
+                if m['name'] in available_metrics
+            ]
+
+            # Filter reporting config to skip plots for missing metrics
+            if self.report_config and self.report_config.metrics:
+                # Remove metric configurations for missing metrics
+                filtered_metrics = {
+                    metric_name: metric_config
+                    for metric_name, metric_config in self.report_config.metrics.items()
+                    if metric_name in available_metrics
+                }
+                self.report_config.metrics = filtered_metrics
+
+                # Log which plot configurations were removed
+                removed_metrics = set(self.report_config.metrics.keys()) - set(filtered_metrics.keys())
+                if removed_metrics:
+                    logger.warning(
+                        f"Removed plot configurations for missing metrics: {sorted(removed_metrics)}"
+                    )
+
     def _get_swept_vars(self) -> List[str]:
         """Get list of variables that were swept."""
         swept_vars = []
