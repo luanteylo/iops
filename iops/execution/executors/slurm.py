@@ -525,7 +525,7 @@ class SlurmExecutor(BaseExecutor):
         except Exception:
             fpath = None
 
-        if fpath is None or not fpath.exists():
+        if not self._safe_is_file(fpath):
             test.metadata["__error"] = f"Parser file does not exist: {parser.file}"
             return False
 

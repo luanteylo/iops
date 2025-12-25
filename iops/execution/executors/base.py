@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
@@ -91,13 +92,62 @@ class BaseExecutor(ABC, HasLogger):
         meta.setdefault("__end", None)
         meta.setdefault("__error", None)
 
-    def _safe_is_file(self, path) -> bool:
+    # ------------------------------------------------------------------ #
+    # Filesystem helpers with retry for HPC shared filesystems
+    # ------------------------------------------------------------------ #
+
+    # Default retry settings for filesystem operations on HPC systems
+    _FS_RETRY_COUNT = 3
+    _FS_RETRY_DELAY = 1.0  # seconds between retries
+
+    def _safe_fs_check(self, path, check_fn, check_name: str = "check") -> bool:
         """
-        Safely check if a path is a file, handling filesystem errors.
+        Safely perform a filesystem check with retry logic.
 
         On HPC systems with network filesystems (NFS/Lustre), stat() calls
-        can fail with OSError due to stale file handles, permission issues,
-        or timing problems. This method handles such errors gracefully.
+        can fail with OSError/PermissionError due to:
+        - Stale file handles
+        - Metadata sync delays (file just created on another node)
+        - Transient permission issues during propagation
+
+        This method retries the check to handle transient sync issues.
+
+        Args:
+            path: Path object or None to check
+            check_fn: Function to call on path (e.g., lambda p: p.is_file())
+            check_name: Name of check for logging purposes
+
+        Returns:
+            True if check passes, False otherwise (including errors after retries)
+        """
+        if path is None:
+            return False
+
+        last_error = None
+        for attempt in range(self._FS_RETRY_COUNT):
+            try:
+                return check_fn(path)
+            except OSError as e:
+                last_error = e
+                if attempt < self._FS_RETRY_COUNT - 1:
+                    self.logger.warning(
+                        f"Filesystem {check_name} error on {path} "
+                        f"(attempt {attempt + 1}/{self._FS_RETRY_COUNT}): {e}. "
+                        f"Retrying in {self._FS_RETRY_DELAY}s... "
+                        f"(possible NFS/Lustre metadata sync delay)"
+                    )
+                    time.sleep(self._FS_RETRY_DELAY)
+
+        # All retries exhausted
+        self.logger.warning(
+            f"Filesystem {check_name} failed after {self._FS_RETRY_COUNT} "
+            f"attempts on {path}: {last_error}"
+        )
+        return False
+
+    def _safe_is_file(self, path) -> bool:
+        """
+        Safely check if a path is a file, with retry for transient errors.
 
         Args:
             path: Path object or None to check
@@ -105,14 +155,19 @@ class BaseExecutor(ABC, HasLogger):
         Returns:
             True if path exists and is a file, False otherwise
         """
-        if path is None:
-            return False
-        try:
-            return path.is_file()
-        except OSError as e:
-            # Log at debug level to avoid spam, as this can happen on HPC systems
-            self.logger.debug(f"  [Executor] Filesystem error checking path {path}: {e}")
-            return False
+        return self._safe_fs_check(path, lambda p: p.is_file(), "is_file")
+
+    def _safe_exists(self, path) -> bool:
+        """
+        Safely check if a path exists, with retry for transient errors.
+
+        Args:
+            path: Path object or None to check
+
+        Returns:
+            True if path exists, False otherwise
+        """
+        return self._safe_fs_check(path, lambda p: p.exists(), "exists")
 
     @abstractmethod
     def wait_and_collect(self, test: ExecutionInstance):
