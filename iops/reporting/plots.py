@@ -483,6 +483,89 @@ class Surface3DPlot(BasePlot):
         return self._apply_theme(fig)
 
 
+@register_plot("execution_scatter")
+class ExecutionScatterPlot(BasePlot):
+    """Scatter plot showing metric value for each execution, with all variables on hover."""
+
+    def generate(self) -> go.Figure:
+        metric_col = self._get_metric_column(self.metric)
+
+        # Check if we have execution ID column
+        if 'execution.execution_id' in self.df.columns:
+            id_col = 'execution.execution_id'
+        else:
+            # Fall back to using row index as test ID
+            id_col = None
+
+        # Identify all swept variable columns
+        var_cols = []
+        var_names = []
+        for col in self.df.columns:
+            if col.startswith('vars.'):
+                var_name = col.replace('vars.', '')
+                var_cols.append(col)
+                var_names.append(var_name)
+
+        # Build hover text with all variables
+        hover_texts = []
+        for idx, row in self.df.iterrows():
+            text_parts = []
+            # Add test ID
+            if id_col:
+                text_parts.append(f"Test ID: {row[id_col]}")
+            else:
+                text_parts.append(f"Test #: {idx}")
+            # Add metric value
+            text_parts.append(f"{self.metric}: {row[metric_col]:.4f}")
+            # Add all variables
+            text_parts.append("")  # Empty line separator
+            for var_col, var_name in zip(var_cols, var_names):
+                if var_col in self.df.columns:
+                    val = row[var_col]
+                    # Format based on type
+                    if isinstance(val, float):
+                        text_parts.append(f"{var_name}: {val:.4g}")
+                    else:
+                        text_parts.append(f"{var_name}: {val}")
+            hover_texts.append("<br>".join(text_parts))
+
+        # X values: execution ID or index
+        if id_col:
+            x_values = self.df[id_col].values
+        else:
+            x_values = list(range(len(self.df)))
+
+        y_values = self.df[metric_col].values
+
+        # Create scatter plot
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=y_values,
+                colorscale=self.config.colorscale,
+                showscale=True,
+                colorbar=dict(title=self.metric),
+                line=dict(width=1, color='white'),
+            ),
+            text=hover_texts,
+            hovertemplate='%{text}<extra></extra>',
+        ))
+
+        fig.update_layout(
+            title=self._get_title(f"{self.metric} per Execution"),
+            xaxis_title=self._get_xaxis_label("Test ID"),
+            yaxis_title=self._get_yaxis_label(self.metric),
+            hovermode='closest',
+        )
+
+        return self._apply_theme(fig)
+
+
 @register_plot("parallel_coordinates")
 class ParallelCoordinatesPlot(BasePlot):
     """Parallel coordinates plot for multi-dimensional data visualization."""

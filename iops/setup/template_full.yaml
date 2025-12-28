@@ -499,10 +499,11 @@ output:
 #     custom_plots: true
 #
 #   # Optional: Per-metric custom plots
-#   # Plot types: line, bar, scatter, heatmap, box, violin, surface_3d
+#   # Plot types: line, bar, scatter, heatmap, box, violin, surface_3d, execution_scatter
 #   metrics:
 #     bwMiB:
 #       plots:
+#         - type: "execution_scatter"    # Shows each execution with all vars on hover
 #         - type: "line"
 #           x_var: "block_size_mb"
 #           group_by: "nodes"
@@ -511,7 +512,9 @@ output:
 #           y_var: "processes_per_node"
 #
 #   # Optional: Default plots for metrics without custom config
+#   # execution_scatter is automatically included in legacy mode
 #   default_plots:
+#     - type: "execution_scatter"        # Each point = one execution, hover shows all vars
 #     - type: "bar"
 #       per_variable: true
 #       show_error_bars: true

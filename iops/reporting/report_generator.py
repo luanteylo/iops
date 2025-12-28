@@ -1166,7 +1166,33 @@ class ReportGenerator:
 
     def _generate_legacy_plots(self, metric: str, swept_vars: List[str]) -> str:
         """Generate plots using legacy hardcoded logic (for backward compatibility)."""
+        from iops.reporting.plots import create_plot
+
         html = ""
+
+        # 0. Execution scatter plot - shows each execution with all vars on hover
+        html += "<h3>All Executions</h3>\n"
+        html += "<p>Each point represents one execution. Hover to see all parameter values.</p>\n"
+        try:
+            exec_scatter_config = PlotConfig(
+                type="execution_scatter",
+                title=f"{metric} per Execution",
+            )
+            plot = create_plot(
+                plot_type="execution_scatter",
+                df=self.df,
+                metric=metric,
+                plot_config=exec_scatter_config,
+                theme=self.report_config.theme,
+                var_column_fn=self._get_var_column,
+                metric_column_fn=self._get_metric_column,
+            )
+            fig = plot.generate()
+            html += '<div class="plot-container">\n'
+            html += fig.to_html(full_html=False, include_plotlyjs=False)
+            html += '</div>\n'
+        except Exception as e:
+            html += f'<p class="error">Error generating execution scatter plot: {str(e)}</p>\n'
 
         # 1. Bar plots - one for each variable
         html += "<h3>Bar Plots by Variable</h3>\n"

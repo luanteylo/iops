@@ -176,9 +176,34 @@ Define custom plots per metric for detailed analysis.
 
 ### Plot Types
 
-IOPS supports 8 plot types:
+IOPS supports 9 plot types:
 
-#### 1. Bar Charts
+#### 1. Execution Scatter
+
+A simple scatter plot showing metric values for each test execution in sequential order.
+
+**Required Parameters**: None (automatically uses execution index as x-axis)
+
+**Optional Parameters**:
+- `title` (string): Custom plot title
+- `xaxis_label` (string): Custom x-axis label (default: "Test Execution ID")
+- `yaxis_label` (string): Custom y-axis label (default: metric name)
+- `height` (integer): Plot height in pixels
+- `width` (integer): Plot width in pixels
+
+```yaml
+metrics:
+  bandwidth:
+    plots:
+      - type: "execution_scatter"
+        title: "Bandwidth per Test Execution"
+        xaxis_label: "Test ID"
+        yaxis_label: "Bandwidth (MB/s)"
+```
+
+**When to use**: Quick visualization of all metric values in execution order. Hover displays all parameter values for each test. This is the default first plot when using legacy report mode. Useful for identifying outliers, trends across test execution order, or verifying result consistency.
+
+#### 2. Bar Charts
 
 Displays metric values with error bars (mean ± standard deviation).
 
@@ -194,7 +219,7 @@ metrics:
 
 **When to use**: Comparing discrete parameter values, showing statistical variation.
 
-#### 2. Line Plots
+#### 3. Line Plots
 
 Shows trends across continuous or ordered parameters.
 
@@ -212,7 +237,7 @@ metrics:
 
 **When to use**: Visualizing trends, scaling behavior, grouped comparisons.
 
-#### 3. Scatter Plots
+#### 4. Scatter Plots
 
 Shows individual data points with optional color/size mapping.
 
@@ -230,7 +255,7 @@ metrics:
 
 **When to use**: Exploring relationships, identifying patterns, visualizing high-dimensional data.
 
-#### 4. Heatmaps
+#### 5. Heatmaps
 
 2D heatmaps showing metric values across two variables.
 
@@ -249,7 +274,7 @@ metrics:
 
 **Supported colorscales**: `"Viridis"`, `"Plasma"`, `"Inferno"`, `"Magma"`, `"Cividis"`, `"Blues"`, `"Reds"`, `"RdBu"`, etc.
 
-#### 5. Box Plots
+#### 6. Box Plots
 
 Box plots showing distribution statistics (quartiles, median) with optional outliers.
 
@@ -278,7 +303,7 @@ metrics:
 
 **When to use**: Understanding distributions, detecting outliers, comparing variability across parameter values.
 
-#### 6. Violin Plots
+#### 7. Violin Plots
 
 Violin plots showing distribution with kernel density estimation and embedded box plot.
 
@@ -305,7 +330,7 @@ metrics:
 
 **When to use**: Detailed distribution analysis, comparing shapes of distributions, visualizing density patterns.
 
-#### 7. 3D Surface Plots
+#### 8. 3D Surface Plots
 
 3D surface plots showing metric values across two variables.
 
@@ -338,7 +363,7 @@ metrics:
 
 **When to use**: Visualizing smooth response surfaces, finding optimal regions in 2D parameter space, understanding interactions between two variables.
 
-#### 8. Parallel Coordinates
+#### 9. Parallel Coordinates
 
 Multi-dimensional visualization showing all numeric swept variables and the metric as parallel axes.
 

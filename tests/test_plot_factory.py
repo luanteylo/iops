@@ -15,6 +15,7 @@ from iops.reporting.plots import (
     LinePlot,
     ScatterPlot,
     HeatmapPlot,
+    ExecutionScatterPlot,
     _PLOT_REGISTRY,
 )
 
@@ -720,3 +721,133 @@ class TestPlotEdgeCases:
         # Height should be set, width can be None
         assert fig.layout.height is not None
         # Width None is allowed by Plotly (auto-sizing)
+
+
+# ============================================================================
+# Test Execution Scatter Plot
+# ============================================================================
+
+class TestExecutionScatterPlot:
+    """Test execution scatter plot generation."""
+
+    @pytest.fixture
+    def sample_df_with_exec_id(self):
+        """Create sample DataFrame with execution.execution_id column."""
+        return pd.DataFrame({
+            'execution.execution_id': [1, 2, 3, 4, 5, 6],
+            'vars.nodes': [1, 2, 4, 1, 2, 4],
+            'vars.block_size': [4, 4, 4, 8, 8, 8],
+            'metrics.bandwidth': [100, 150, 200, 120, 180, 240],
+            'metrics.latency': [10, 7, 5, 9, 6.5, 4.5],
+        })
+
+    def test_execution_scatter_is_registered(self):
+        """Test that execution_scatter plot is registered."""
+        assert "execution_scatter" in _PLOT_REGISTRY
+        assert _PLOT_REGISTRY["execution_scatter"] == ExecutionScatterPlot
+
+    def test_execution_scatter_with_exec_id(self, sample_df_with_exec_id, default_theme, var_column_fn, metric_column_fn):
+        """Test execution scatter plot with execution.execution_id column."""
+        plot_config = PlotConfig(type="execution_scatter")
+        plot = ExecutionScatterPlot(
+            df=sample_df_with_exec_id,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) == 1
+        assert isinstance(fig.data[0], go.Scatter)
+        # Check x values are execution IDs
+        assert list(fig.data[0].x) == [1, 2, 3, 4, 5, 6]
+        # Check y values are metric values
+        assert list(fig.data[0].y) == [100, 150, 200, 120, 180, 240]
+        # Check title
+        assert "bandwidth" in fig.layout.title.text.lower()
+        assert "execution" in fig.layout.title.text.lower()
+
+    def test_execution_scatter_without_exec_id(self, default_theme, var_column_fn, metric_column_fn):
+        """Test execution scatter plot falls back to index when no execution ID."""
+        df_no_exec_id = pd.DataFrame({
+            'vars.nodes': [1, 2, 4, 1, 2, 4],
+            'vars.block_size': [4, 4, 4, 8, 8, 8],
+            'metrics.bandwidth': [100, 150, 200, 120, 180, 240],
+        })
+
+        plot_config = PlotConfig(type="execution_scatter")
+        plot = ExecutionScatterPlot(
+            df=df_no_exec_id,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        assert isinstance(fig, go.Figure)
+        # Check x values are sequential indices
+        assert list(fig.data[0].x) == [0, 1, 2, 3, 4, 5]
+
+    def test_execution_scatter_hover_includes_vars(self, sample_df_with_exec_id, default_theme, var_column_fn, metric_column_fn):
+        """Test that hover text includes all variable values."""
+        plot_config = PlotConfig(type="execution_scatter")
+        plot = ExecutionScatterPlot(
+            df=sample_df_with_exec_id,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        # Check hover text contains variable information
+        hover_text = fig.data[0].text[0]  # First point
+        assert "Test ID: 1" in hover_text
+        assert "bandwidth" in hover_text
+        assert "nodes" in hover_text
+        assert "block_size" in hover_text
+
+    def test_execution_scatter_marker_color(self, sample_df_with_exec_id, default_theme, var_column_fn, metric_column_fn):
+        """Test that markers are colored by metric value."""
+        plot_config = PlotConfig(type="execution_scatter")
+        plot = ExecutionScatterPlot(
+            df=sample_df_with_exec_id,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        # Check marker coloring
+        assert fig.data[0].marker.colorscale is not None
+        assert fig.data[0].marker.showscale is True
+        assert fig.data[0].marker.colorbar is not None
+
+    def test_execution_scatter_via_factory(self, sample_df_with_exec_id, default_theme, var_column_fn, metric_column_fn):
+        """Test creating execution_scatter plot via factory function."""
+        plot_config = PlotConfig(type="execution_scatter")
+        plot = create_plot(
+            plot_type="execution_scatter",
+            df=sample_df_with_exec_id,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        assert isinstance(plot, ExecutionScatterPlot)
+        fig = plot.generate()
+        assert isinstance(fig, go.Figure)

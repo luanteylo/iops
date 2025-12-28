@@ -213,7 +213,7 @@ class ReportThemeConfig:
 @dataclass
 class PlotConfig:
     """Configuration for a single plot."""
-    type: Literal["line", "bar", "scatter", "box", "violin", "heatmap", "surface_3d", "parallel_coordinates"]
+    type: Literal["line", "bar", "scatter", "box", "violin", "heatmap", "surface_3d", "parallel_coordinates", "execution_scatter"]
 
     # Variable selection
     x_var: Optional[str] = None
