@@ -16,6 +16,7 @@ from iops.reporting.plots import (
     ScatterPlot,
     HeatmapPlot,
     ExecutionScatterPlot,
+    CoverageHeatmapPlot,
     _PLOT_REGISTRY,
 )
 
@@ -506,6 +507,48 @@ class TestScatterPlot:
         assert "nodes" in fig.layout.xaxis.title.text
         assert "block_size" in fig.layout.yaxis.title.text
 
+    def test_scatter_plot_metric_in_y_var(self, plot_kwargs):
+        """Test scatter plot with metric in y_var."""
+        plot_config = PlotConfig(type="scatter", x_var="nodes", y_var="bandwidth")
+        plot = ScatterPlot(plot_config=plot_config, **plot_kwargs)
+
+        fig = plot.generate()
+
+        # Should plot bandwidth metric on y-axis
+        assert "bandwidth" in fig.layout.yaxis.title.text
+        assert isinstance(fig.data[0], go.Scatter)
+
+    def test_scatter_plot_metric_in_color_by(self, plot_kwargs):
+        """Test scatter plot with metric in color_by (variable plot)."""
+        plot_config = PlotConfig(
+            type="scatter",
+            x_var="nodes",
+            y_var="block_size",
+            color_by="latency"
+        )
+        plot = ScatterPlot(plot_config=plot_config, **plot_kwargs)
+
+        fig = plot.generate()
+
+        scatter_trace = fig.data[0]
+        # Verify colorbar shows the metric name
+        assert scatter_trace.marker.colorbar.title.text == "latency"
+
+    def test_scatter_plot_variable_in_color_by(self, plot_kwargs):
+        """Test scatter plot with variable in color_by."""
+        plot_config = PlotConfig(
+            type="scatter",
+            x_var="nodes",
+            color_by="transfer_size"
+        )
+        plot = ScatterPlot(plot_config=plot_config, **plot_kwargs)
+
+        fig = plot.generate()
+
+        scatter_trace = fig.data[0]
+        # Verify colorbar shows the variable name
+        assert scatter_trace.marker.colorbar.title.text == "transfer_size"
+
 
 # ============================================================================
 # Test HeatmapPlot
@@ -851,3 +894,277 @@ class TestExecutionScatterPlot:
         assert isinstance(plot, ExecutionScatterPlot)
         fig = plot.generate()
         assert isinstance(fig, go.Figure)
+
+
+# ============================================================================
+# Test Coverage Heatmap Plot
+# ============================================================================
+
+class TestCoverageHeatmapPlot:
+    """Test coverage heatmap plot generation."""
+
+    def test_coverage_heatmap_is_registered(self):
+        """Test that coverage_heatmap plot is registered."""
+        assert "coverage_heatmap" in _PLOT_REGISTRY
+        assert _PLOT_REGISTRY["coverage_heatmap"] == CoverageHeatmapPlot
+
+    def test_coverage_heatmap_requires_row_col(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test coverage heatmap requires both row_vars and col_var."""
+        plot_config = PlotConfig(type="coverage_heatmap")
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        # Should raise error when row_vars and col_var are not specified
+        with pytest.raises(ValueError) as exc_info:
+            plot.generate()
+
+        assert "requires both 'row_vars' and 'col_var'" in str(exc_info.value)
+
+    def test_coverage_heatmap_manual_row_col(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test coverage heatmap with manually specified row_vars and col_var."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes", "block_size"],
+            col_var="transfer_size",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        assert isinstance(fig, go.Figure)
+        assert isinstance(fig.data[0], go.Heatmap)
+        # Check that title includes the correct variables
+        assert "nodes" in fig.layout.title.text
+        assert "transfer_size" in fig.layout.title.text
+
+    def test_coverage_heatmap_aggregation_mean(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test coverage heatmap with mean aggregation."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes"],
+            col_var="block_size",
+            aggregation="mean",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        assert isinstance(fig, go.Figure)
+        heatmap_trace = fig.data[0]
+        assert "mean" in heatmap_trace.colorbar.title.text
+
+    def test_coverage_heatmap_aggregation_count(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test coverage heatmap with count aggregation."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes"],
+            col_var="block_size",
+            aggregation="count",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        assert isinstance(fig, go.Figure)
+        heatmap_trace = fig.data[0]
+        assert "count" in heatmap_trace.colorbar.title.text
+
+    def test_coverage_heatmap_invalid_aggregation(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test that invalid aggregation raises ValueError."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes"],
+            col_var="block_size",
+            aggregation="invalid",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            plot.generate()
+
+        assert "Unknown aggregation" in str(exc_info.value)
+        assert "invalid" in str(exc_info.value)
+
+    def test_coverage_heatmap_multi_index_labels(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test that multi-index labels are formatted correctly."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes", "block_size"],
+            col_var="transfer_size",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        # Check that y-axis labels contain both variables
+        heatmap_trace = fig.data[0]
+        y_labels = heatmap_trace.y
+        # Labels should be formatted like "nodes=1, block_size=4"
+        assert any("nodes=" in str(label) for label in y_labels)
+
+    def test_coverage_heatmap_with_nan_values(self, default_theme, var_column_fn, metric_column_fn):
+        """Test coverage heatmap handles missing data (NaN)."""
+        # Create DataFrame with missing combinations
+        df_with_gaps = pd.DataFrame({
+            'vars.nodes': [1, 1, 2, 2, 4],  # Missing nodes=4, block_size=8
+            'vars.block_size': [4, 8, 4, 8, 4],
+            'metrics.bandwidth': [100, 120, 150, 180, 200],
+        })
+
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes"],
+            col_var="block_size",
+            show_missing=True,
+        )
+        plot = CoverageHeatmapPlot(
+            df=df_with_gaps,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        assert isinstance(fig, go.Figure)
+        # Should not crash with NaN values
+        heatmap_trace = fig.data[0]
+        assert heatmap_trace.z is not None
+
+    def test_coverage_heatmap_hover_text(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test that hover text includes all variable values."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes"],
+            col_var="block_size",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        fig = plot.generate()
+
+        # Check hover text format
+        heatmap_trace = fig.data[0]
+        hover_text = heatmap_trace.text
+        assert hover_text is not None
+        # Should be a 2D array of hover texts
+        assert len(hover_text) > 0
+        # First hover text should contain variable names
+        first_hover = hover_text[0][0]
+        assert "nodes" in first_hover
+        assert "block_size" in first_hover
+        assert "bandwidth" in first_hover
+
+    def test_coverage_heatmap_via_factory(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test creating coverage_heatmap via factory function."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes"],
+            col_var="block_size",
+        )
+        plot = create_plot(
+            plot_type="coverage_heatmap",
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        assert isinstance(plot, CoverageHeatmapPlot)
+        fig = plot.generate()
+        assert isinstance(fig, go.Figure)
+
+    def test_coverage_heatmap_invalid_row_var(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test that invalid row_var raises ValueError."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["invalid_var"],
+            col_var="block_size",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            plot.generate()
+
+        assert "invalid_var" in str(exc_info.value)
+        assert "not found" in str(exc_info.value)
+
+    def test_coverage_heatmap_invalid_col_var(self, sample_df, default_theme, var_column_fn, metric_column_fn):
+        """Test that invalid col_var raises ValueError."""
+        plot_config = PlotConfig(
+            type="coverage_heatmap",
+            row_vars=["nodes"],
+            col_var="invalid_var",
+        )
+        plot = CoverageHeatmapPlot(
+            df=sample_df,
+            metric="bandwidth",
+            plot_config=plot_config,
+            theme=default_theme,
+            var_column_fn=var_column_fn,
+            metric_column_fn=metric_column_fn,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            plot.generate()
+
+        assert "invalid_var" in str(exc_info.value)
+        assert "not found" in str(exc_info.value)

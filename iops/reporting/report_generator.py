@@ -261,6 +261,7 @@ class ReportGenerator:
         best_results = BestResultsConfig(
             top_n=data.get('best_results', {}).get('top_n', 5),
             show_command=data.get('best_results', {}).get('show_command', True),
+            min_samples=data.get('best_results', {}).get('min_samples', 1),
         )
 
         plot_defaults = PlotDefaultsConfig(
@@ -462,8 +463,16 @@ class ReportGenerator:
         var_cols = [self._get_var_column(v) for v in report_vars]
         metric_cols = [self._get_metric_column(m) for m in metrics]
 
+        # Filter out rows with NaN values in any of the metrics
+        df_clean = self.df.copy()
+        for metric_col in metric_cols:
+            df_clean = df_clean[df_clean[metric_col].notna()]
+
+        if len(df_clean) == 0:
+            return pd.DataFrame()
+
         # Group by parameter combination and get mean of metrics
-        df_grouped = self.df.groupby(var_cols)[metric_cols].mean().reset_index()
+        df_grouped = df_clean.groupby(var_cols)[metric_cols].mean().reset_index()
 
         # Normalize metrics based on objectives
         df_normalized = df_grouped.copy()
@@ -871,8 +880,14 @@ class ReportGenerator:
 
     def _generate_best_configs_section(self, metrics: List[str], report_vars: List[str]) -> str:
         """Generate best configurations section."""
+        top_n = self.report_config.best_results.top_n
+        min_samples = self.report_config.best_results.min_samples
+
         html = "<h2>Best Configurations</h2>\n"
-        html += "<p>Top 5 configurations for each metric:</p>\n"
+        html += f"<p>Top {top_n} configurations for each metric"
+        if min_samples > 1:
+            html += f" (minimum {min_samples} samples required)"
+        html += ":</p>\n"
 
         var_cols = [self._get_var_column(v) for v in report_vars]
 
@@ -888,9 +903,16 @@ class ReportGenerator:
             df_grouped = self.df.groupby(group_cols)[metric_col].agg(['mean', 'std', 'count']).reset_index()
             df_grouped.columns = report_vars + ['mean', 'std', 'count']
 
+            # Filter by minimum samples
+            df_filtered = df_grouped[df_grouped['count'] >= min_samples]
+
+            if len(df_filtered) == 0:
+                html += f"<p><em>No configurations with at least {min_samples} samples found.</em></p>\n"
+                continue
+
             # Sort by mean (descending for most metrics, ascending for latency/time)
             ascending = 'latency' in metric.lower() or 'time' in metric.lower()
-            df_top = df_grouped.sort_values('mean', ascending=ascending).head(5)
+            df_top = df_filtered.sort_values('mean', ascending=ascending).head(top_n)
 
             html += "<table>\n<tr><th>Rank</th>"
             for var in report_vars:
@@ -1684,8 +1706,13 @@ class ReportGenerator:
 
         var_cols = [self._get_var_column(v) for v in report_vars]
 
+        # Filter out rows with NaN values in either metric
+        df_clean = self.df[
+            self.df[metric1_col].notna() & self.df[metric2_col].notna()
+        ].copy()
+
         # Get all configurations grouped by parameters
-        df_grouped = self.df.groupby(var_cols)[[metric1_col, metric2_col]].mean().reset_index()
+        df_grouped = df_clean.groupby(var_cols)[[metric1_col, metric2_col]].mean().reset_index()
 
         # Compute Pareto frontier
         pareto_df = self._compute_pareto_frontier([metric1, metric2], objectives, report_vars)
@@ -1786,7 +1813,17 @@ class ReportGenerator:
 
         # 2. Variable impact analysis
         html += "<h3>Variable Impact on Performance</h3>\n"
-        html += "<p>Shows how much each variable affects the performance metric based on variance analysis.</p>\n"
+        html += "<div class='info-box'>\n"
+        html += "<p><strong>Statistical Method:</strong> Variance decomposition analysis</p>\n"
+        html += "<p>The impact score quantifies the proportion of total variance in the performance metric that is explained by each variable. "
+        html += "For each variable, the metric values are grouped by the variable's levels, and the between-group variance is computed. "
+        html += "The impact score is calculated as:</p>\n"
+        html += "<p style='text-align: center; font-family: monospace; background-color: #f8f8f8; padding: 10px; margin: 10px 0;'>"
+        html += "Impact = σ²_between / σ²_total</p>\n"
+        html += "<p>where σ²_between is the variance of group means (weighted by group size) and σ²_total is the overall variance of the metric. "
+        html += "This measure is analogous to the R² coefficient in regression or the eta-squared (η²) effect size in ANOVA. "
+        html += "Values range from 0 (no effect) to 1 (variable fully determines the metric).</p>\n"
+        html += "</div>\n"
 
         for metric in metrics:
             fig_impact = self._create_variable_impact_plot(metric, report_vars)
@@ -1807,6 +1844,12 @@ class ReportGenerator:
             # Get relevant columns
             cols_to_analyze = var_cols + [metric_col]
             df_corr = self.df[cols_to_analyze].copy()
+
+            # Filter out rows with NaN metric values
+            df_corr = df_corr[df_corr[metric_col].notna()]
+
+            if len(df_corr) == 0:
+                return None
 
             # Group by variables and compute mean metric
             df_grouped = df_corr.groupby(var_cols)[metric_col].mean().reset_index()
@@ -1852,8 +1895,14 @@ class ReportGenerator:
             metric_col = self._get_metric_column(metric)
             var_cols = [self._get_var_column(v) for v in report_vars]
 
+            # Filter out rows with NaN metric values
+            df_clean = self.df[self.df[metric_col].notna()].copy()
+
+            if len(df_clean) == 0:
+                return None
+
             # Group by variables and compute mean metric
-            df_grouped = self.df.groupby(var_cols)[metric_col].mean().reset_index()
+            df_grouped = df_clean.groupby(var_cols)[metric_col].mean().reset_index()
 
             # Prepare dimensions for parallel coordinates
             dimensions = []
@@ -1903,24 +1952,31 @@ class ReportGenerator:
         try:
             metric_col = self._get_metric_column(metric)
 
+            # Filter out rows with NaN metric values
+            df_clean = self.df[self.df[metric_col].notna()].copy()
+
+            if len(df_clean) == 0:
+                # No valid data points
+                return None
+
             impacts = []
             for var in report_vars:
                 var_col = self._get_var_column(var)
 
                 # Group by this variable
-                groups = self.df.groupby(var_col)[metric_col].apply(list)
+                groups = df_clean.groupby(var_col)[metric_col].apply(list)
 
                 # Calculate between-group and within-group variance
-                overall_mean = self.df[metric_col].mean()
+                overall_mean = df_clean[metric_col].mean()
 
                 # Between-group variance
                 between_var = sum(
                     len(group) * (np.mean(group) - overall_mean) ** 2
                     for group in groups
-                ) / len(self.df)
+                ) / len(df_clean)
 
                 # Total variance
-                total_var = self.df[metric_col].var()
+                total_var = df_clean[metric_col].var()
 
                 # Impact score (R-squared like measure)
                 impact = between_var / total_var if total_var > 0 else 0
@@ -1966,8 +2022,14 @@ class ReportGenerator:
             metric_col = self._get_metric_column(metric)
             var_cols = [self._get_var_column(v) for v in report_vars]
 
+            # Filter out rows with NaN metric values
+            df_clean = self.df[self.df[metric_col].notna()].copy()
+
+            if len(df_clean) == 0:
+                return None
+
             # Group by variables and compute mean metric
-            df_grouped = self.df.groupby(var_cols)[metric_col].mean().reset_index()
+            df_grouped = df_clean.groupby(var_cols)[metric_col].mean().reset_index()
 
             # Limit to first 4 variables if more exist (to keep plot manageable)
             display_vars = report_vars[:4] if len(report_vars) > 4 else report_vars

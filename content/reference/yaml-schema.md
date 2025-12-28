@@ -1508,6 +1508,7 @@ reporting:
   best_results:
     top_n: integer                  # Optional: number of top configs (default: 5)
     show_command: boolean           # Optional: include rendered command (default: true)
+    min_samples: integer            # Optional: minimum repetitions required (default: 1)
 
   # Per-metric plot definitions
   metrics:
@@ -1657,6 +1658,7 @@ reporting:
   best_results:
     top_n: 10                # Show top 10 configurations (default: 5)
     show_command: true       # Include rendered command (default: true)
+    min_samples: 3           # Require at least 3 repetitions (default: 1)
 ```
 
 #### `metrics` (optional)
@@ -1688,6 +1690,8 @@ reporting:
 6. **`violin`** - Violin plots with kernel density estimation
 7. **`surface_3d`** - 3D surface plots
 8. **`parallel_coordinates`** - Multi-dimensional parallel coordinates
+9. **`execution_scatter`** - Scatter plot showing metric per execution with full parameter details on hover
+10. **`coverage_heatmap`** - Multi-variable heatmap showing complete parameter space coverage with hierarchical indexing
 
 **Parameter Requirements by Plot Type:**
 
@@ -1701,6 +1705,8 @@ reporting:
 | `violin` | `x_var` | `title`, axis labels, sizing |
 | `surface_3d` | `x_var`, `y_var` | `z_metric`, `colorscale`, `title`, axis labels, sizing |
 | `parallel_coordinates` | None | `colorscale`, `title` |
+| `execution_scatter` | None | `title`, axis labels, `colorscale`, sizing |
+| `coverage_heatmap` | `row_vars`, `col_var` | `aggregation`, `show_missing`, `sort_rows_by`, `sort_cols_by`, `sort_ascending`, `colorscale`, `title`, axis labels, sizing |
 
 **All plot options:**
 
@@ -1714,12 +1720,21 @@ reporting:
 - **`title`**: Plot title (optional)
 - **`xaxis_label`**: X-axis label (optional)
 - **`yaxis_label`**: Y-axis label (optional)
-- **`colorscale`**: Plotly colorscale name (optional; default: "Viridis"; applies to heatmap, scatter, surface_3d, parallel_coordinates)
+- **`colorscale`**: Plotly colorscale name (optional; default: "Viridis"; applies to heatmap, scatter, surface_3d, parallel_coordinates, execution_scatter, coverage_heatmap)
 - **`show_error_bars`**: Show error bars (optional; default: true; applies to bar, line)
 - **`show_outliers`**: Show outliers beyond whiskers (optional; default: false; applies to box)
 - **`height`**: Plot height in pixels (optional; default: 500)
 - **`width`**: Plot width in pixels (optional; default: auto/responsive)
 - **`per_variable`**: Generate one plot per swept variable (optional; default: false)
+- **`row_vars`**: List of variables for row multi-index (required for coverage_heatmap)
+- **`col_var`**: Variable for column axis (required for coverage_heatmap)
+- **`aggregation`**: Aggregation function - "mean", "median", "count", "std", "min", "max" (optional; default: "mean"; applies to coverage_heatmap)
+- **`show_missing`**: Highlight missing data (NaN) with distinct color (optional; default: true; applies to coverage_heatmap)
+- **`sort_rows_by`**: Sort rows by "index" (variable values, default) or "values" (metric aggregation with hierarchical multi-level sorting) (optional; applies to coverage_heatmap)
+- **`sort_cols_by`**: Sort columns by "index" (variable values, default) or "values" (metric aggregation) (optional; applies to coverage_heatmap)
+- **`sort_ascending`**: Sort direction for "values" mode - false (highest first, default) or true (lowest first) (optional; applies to coverage_heatmap)
+
+**Note**: When using `sort_rows_by: "values"` with multi-level row indices, each level is sorted hierarchically by its group's mean performance. For example, with `row_vars: ["nodes", "processes_per_node"]`, the nodes are first sorted by their overall mean performance, then within each nodes group, the processes_per_node values are sorted by their mean performance within that specific nodes group.
 
 #### `default_plots` (optional)
 
@@ -1829,6 +1844,7 @@ reporting:
   best_results:
     top_n: 10
     show_command: true
+    min_samples: 3
 ```
 
 #### Complete Example
@@ -1856,6 +1872,7 @@ reporting:
   best_results:
     top_n: 10
     show_command: true
+    min_samples: 3
 
   metrics:
     bandwidth:

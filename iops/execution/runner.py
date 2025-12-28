@@ -526,7 +526,8 @@ class IOPSRunner(HasLogger):
                     f.write("#\n")
 
                 f.write("# Plot Types Available:\n")
-                f.write("#   - bar, line, scatter, heatmap, box, violin, surface_3d, parallel_coordinates\n")
+                f.write("#   - bar, line, scatter, heatmap, box, violin, surface_3d\n")
+                f.write("#   - parallel_coordinates, execution_scatter, coverage_heatmap\n")
                 f.write("#\n")
                 f.write("# ============================================================================\n")
                 f.write("\n")

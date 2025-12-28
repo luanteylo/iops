@@ -498,8 +498,14 @@ output:
 #     variable_impact: true
 #     custom_plots: true
 #
+#   # Optional: Best results configuration
+#   best_results:
+#     top_n: 5              # Number of top configurations to show
+#     show_command: true    # Include rendered command
+#     min_samples: 3        # Minimum repetitions required (filters unreliable results)
+#
 #   # Optional: Per-metric custom plots
-#   # Plot types: line, bar, scatter, heatmap, box, violin, surface_3d, execution_scatter
+#   # Plot types: line, bar, scatter, heatmap, box, violin, surface_3d, execution_scatter, coverage_heatmap, parallel_coordinates
 #   metrics:
 #     bwMiB:
 #       plots:
@@ -510,6 +516,10 @@ output:
 #         - type: "heatmap"
 #           x_var: "nodes"
 #           y_var: "processes_per_node"
+#         - type: "coverage_heatmap"     # Multi-variable coverage matrix
+#           row_vars: ["nodes", "processes_per_node"]  # Required: variables for rows (multi-level supported)
+#           col_var: "volume_size_gb"    # Required: variable for columns
+#           aggregation: "mean"          # Options: mean, median, count, std, min, max
 #
 #   # Optional: Default plots for metrics without custom config
 #   # execution_scatter is automatically included in legacy mode

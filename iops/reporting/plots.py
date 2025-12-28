@@ -73,6 +73,35 @@ class BasePlot(ABC):
         """Get y-axis label (custom or default)."""
         return self.config.yaxis_label or default
 
+    def _get_column(self, name: str) -> str:
+        """
+        Get column name, checking both metrics and variables.
+
+        Args:
+            name: Name to look up (could be variable or metric)
+
+        Returns:
+            Column name (e.g., "vars.nodes" or "metrics.bandwidth")
+
+        Raises:
+            ValueError: If column is not found in either vars or metrics
+        """
+        # Check if it's a metric
+        metric_col = self._get_metric_column(name)
+        if metric_col in self.df.columns:
+            return metric_col
+
+        # Check if it's a variable
+        var_col = self._get_var_column(name)
+        if var_col in self.df.columns:
+            return var_col
+
+        # Not found in either
+        raise ValueError(
+            f"'{name}' not found in variables or metrics. "
+            f"Available columns: {', '.join(self.df.columns)}"
+        )
+
 
 # ============================================================================
 # Registry Pattern
@@ -252,31 +281,48 @@ class ScatterPlot(BasePlot):
         if not x_var:
             raise ValueError("ScatterPlot requires x_var")
 
-        x_col = self._get_var_column(x_var)
+        # Get x column (can be variable or metric)
+        x_col = self._get_column(x_var)
 
         # Determine y column
         if y_var:
-            # 2D scatter of two variables
-            y_col = self._get_var_column(y_var)
+            # 2D scatter - y can be variable or metric
+            y_col = self._get_column(y_var)
             y_title = y_var
         else:
             # Scatter metric vs x_var
             y_col = self._get_metric_column(self.metric)
             y_title = self.metric
 
-        # Determine color column
-        if color_by == self.metric or (not y_var and color_by == self.config.y_var):
-            color_col = self._get_metric_column(self.metric)
+        # Determine color column (can be variable or metric)
+        color_col = self._get_column(color_by)
+
+        # Determine which columns are variables (for grouping)
+        # and which are metrics (for aggregation)
+        group_cols = []
+        agg_cols = []
+
+        for col in [x_col, y_col, color_col]:
+            if col.startswith('vars.'):
+                if col not in group_cols:
+                    group_cols.append(col)
+            elif col.startswith('metrics.'):
+                if col not in agg_cols:
+                    agg_cols.append(col)
+
+        # Aggregate: group by variables and take mean of metrics
+        if group_cols and agg_cols:
+            # Have both variables and metrics - need to group and aggregate
+            df_grouped = self.df.groupby(group_cols)[agg_cols].mean().reset_index()
+        elif group_cols:
+            # Only variables - just get unique combinations
+            df_grouped = self.df[group_cols].drop_duplicates().reset_index(drop=True)
+        elif agg_cols:
+            # Only metrics - take overall mean
+            df_grouped = pd.DataFrame({col: [self.df[col].mean()] for col in agg_cols})
         else:
-            color_col = self._get_var_column(color_by)
-
-        # Group and aggregate
-        group_cols = [x_col]
-        if y_var:
-            group_cols.append(y_col)
-
-        # Aggregate to get mean values
-        df_grouped = self.df.groupby(group_cols)[color_col].mean().reset_index()
+            # Shouldn't happen, but handle it
+            df_grouped = self.df[[x_col, y_col, color_col]].copy()
 
         # Create scatter plot
         fig = go.Figure()
@@ -622,6 +668,267 @@ class ParallelCoordinatesPlot(BasePlot):
         )
 
         return self._apply_theme(fig)
+
+
+@register_plot("coverage_heatmap")
+class CoverageHeatmapPlot(BasePlot):
+    """Multi-variable coverage heatmap showing parameter space exploration."""
+
+    def generate(self) -> go.Figure:
+        metric_col = self._get_metric_column(self.metric)
+
+        # Get all swept variable columns
+        all_var_cols = []
+        all_var_names = []
+        for col in self.df.columns:
+            if col.startswith('vars.'):
+                var_name = col.replace('vars.', '')
+                all_var_cols.append(col)
+                all_var_names.append(var_name)
+
+        if len(all_var_cols) == 0:
+            raise ValueError("No swept variables found in dataframe")
+
+        # Determine row_vars and col_var (both required)
+        row_vars = self.config.row_vars
+        col_var = self.config.col_var
+
+        if not row_vars or not col_var:
+            raise ValueError(
+                "Coverage heatmap requires both 'row_vars' and 'col_var' to be specified. "
+                f"\nAvailable variables: {', '.join(all_var_names)}"
+                f"\nExample:"
+                f"\n  row_vars: ['nodes', 'processes_per_node']"
+                f"\n  col_var: 'transfer_size_kb'"
+            )
+
+        # Validate variables exist
+        for var in row_vars:
+            if var not in all_var_names:
+                raise ValueError(f"Row variable '{var}' not found in swept variables")
+        if col_var not in all_var_names:
+            raise ValueError(f"Column variable '{col_var}' not found in swept variables")
+
+        # Get column names
+        row_cols = [self._get_var_column(v) for v in row_vars]
+        col_col = self._get_var_column(col_var)
+
+        # Group by all variables and aggregate
+        group_cols = row_cols + [col_col]
+        agg_func = self.config.aggregation
+
+        # Map aggregation string to pandas function
+        agg_map = {
+            'mean': 'mean',
+            'median': 'median',
+            'count': 'count',
+            'std': 'std',
+            'min': 'min',
+            'max': 'max',
+        }
+
+        if agg_func not in agg_map:
+            raise ValueError(
+                f"Unknown aggregation '{agg_func}'. "
+                f"Valid options: {', '.join(agg_map.keys())}"
+            )
+
+        df_grouped = self.df.groupby(group_cols)[metric_col].agg(agg_map[agg_func]).reset_index()
+
+        # Check grouped data size for debugging
+        expected_max_rows = 1
+        for col in group_cols:
+            expected_max_rows *= self.df[col].nunique()
+
+        if len(df_grouped) > expected_max_rows * 1.1:  # Allow 10% tolerance
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Unexpected groupby size: {len(df_grouped)} rows (expected ~{expected_max_rows}). "
+                f"This may indicate data issues or unexpected duplicate combinations."
+            )
+
+        # Create pivot table with multi-index
+        if len(row_cols) > 1:
+            # Multi-level row index
+            df_pivot = df_grouped.pivot_table(
+                index=row_cols,
+                columns=col_col,
+                values=metric_col,
+                dropna=False
+            )
+        else:
+            # Single-level row index
+            df_pivot = df_grouped.pivot(
+                index=row_cols[0],
+                columns=col_col,
+                values=metric_col
+            )
+
+        # Sort rows
+        if self.config.sort_rows_by == "values":
+            # Sort rows by mean of their values (across all columns)
+            row_means = df_pivot.mean(axis=1, skipna=True)
+
+            if isinstance(df_pivot.index, pd.MultiIndex):
+                # Hierarchical sorting: sort each level by its group's mean performance
+                # This creates better organization: first var sorted, then second var within each first var group, etc.
+                sort_keys = []
+
+                for level_idx in range(len(df_pivot.index.levels)):
+                    # For each level, calculate the mean performance of each group at this level
+                    # Group by all levels up to and including this one
+                    groupby_levels = list(range(level_idx + 1))
+
+                    # Calculate mean for each group (transform maintains original index)
+                    group_means = row_means.groupby(level=groupby_levels).transform('mean')
+                    sort_keys.append(group_means)
+
+                # Create DataFrame with all sort keys for stable multi-level sorting
+                sort_df = pd.DataFrame(
+                    {f'sort_key_{i}': key for i, key in enumerate(sort_keys)},
+                    index=df_pivot.index
+                )
+
+                # Sort by all keys in hierarchical order
+                sort_order = sort_df.sort_values(
+                    by=[f'sort_key_{i}' for i in range(len(sort_keys))],
+                    ascending=self.config.sort_ascending
+                ).index
+
+                df_pivot = df_pivot.loc[sort_order]
+            else:
+                # Single-level index: simple row mean sort
+                df_pivot = df_pivot.loc[row_means.sort_values(ascending=self.config.sort_ascending).index]
+        else:
+            # Sort by index (variable values)
+            df_pivot = df_pivot.sort_index()
+
+        # Sort columns
+        if self.config.sort_cols_by == "values":
+            # Sort columns by mean of their values (across all rows)
+            col_means = df_pivot.mean(axis=0, skipna=True)
+            df_pivot = df_pivot[col_means.sort_values(ascending=self.config.sort_ascending).index]
+        else:
+            # Sort by index (variable values)
+            df_pivot = df_pivot.sort_index(axis=1)
+
+        # Check pivot table size and apply safety limits
+        n_rows, n_cols = df_pivot.shape
+        pivot_size = n_rows * n_cols
+
+        # Hard limit to prevent memory issues
+        MAX_CELLS = 100000
+        if pivot_size > MAX_CELLS:
+            # Build cardinality info
+            cardinality_info = ', '.join(
+                f"{col.replace('vars.', '')}={self.df[col].nunique()}"
+                for col in group_cols
+            )
+            raise ValueError(
+                f"Coverage heatmap pivot table too large ({n_rows} rows × {n_cols} cols = {pivot_size:,} cells, max: {MAX_CELLS:,}). "
+                f"\nSpecified: row_vars={row_vars}, col_var={col_var}"
+                f"\nActual cardinalities: {cardinality_info}"
+                f"\nThis usually means:"
+                f"\n  1. Variables have more unique values than expected (check your data)"
+                f"\n  2. You need to specify fewer/different variables"
+                f"\n  3. There may be data contamination from other swept variables"
+                f"\nTry reducing to 2-3 variables total, or use multiple smaller heatmaps."
+            )
+        elif pivot_size > 10000:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Coverage heatmap creating large pivot table ({n_rows} rows × {n_cols} cols = {pivot_size:,} cells). "
+                f"Performance may be slow. Consider reducing variables."
+            )
+
+        # Build heatmap data
+        # For multi-index, we need to format the labels
+        if isinstance(df_pivot.index, pd.MultiIndex):
+            # Format multi-index as tuples for hover text (optimized list comprehension)
+            y_labels = [self._format_multiindex_label(idx, row_vars) for idx in df_pivot.index]
+        else:
+            y_labels = [str(y) for y in df_pivot.index]
+
+        x_labels = [str(x) for x in df_pivot.columns]
+        z_values = df_pivot.values
+
+        # Build hover text with variable names and values (optimized)
+        # Pre-format row variable text for each row
+        if isinstance(df_pivot.index, pd.MultiIndex):
+            row_texts = [
+                "<br>".join(f"{var_name}: {var_val}" for var_name, var_val in zip(row_vars, y_idx))
+                for y_idx in df_pivot.index
+            ]
+        else:
+            row_texts = [f"{row_vars[0]}: {y_idx}" for y_idx in df_pivot.index]
+
+        # Build hover text matrix efficiently
+        hover_texts = []
+        for i, row_text in enumerate(row_texts):
+            hover_row = [
+                f"{row_text}<br>{col_var}: {x_val}<br>{self.metric}: {'N/A' if pd.isna(z_values[i, j]) else f'{z_values[i, j]:.4f}'}"
+                for j, x_val in enumerate(df_pivot.columns)
+            ]
+            hover_texts.append(hover_row)
+
+        # Create heatmap
+        fig = go.Figure()
+
+        # Customize colorscale to handle NaN if show_missing is True
+        colorscale = self.config.colorscale
+        nan_mask = pd.isna(z_values)
+        if self.config.show_missing and nan_mask.any():
+            # Use a custom colorscale that shows NaN differently
+            # Replace NaN with a very negative value for visualization
+            z_display = z_values.copy()
+            # Set NaN to value below minimum for distinct color
+            min_val = pd.Series(z_values[~nan_mask]).min() if (~nan_mask).any() else 0
+            z_display[nan_mask] = min_val - abs(min_val) * 0.1 - 1
+        else:
+            z_display = z_values
+
+        fig.add_trace(go.Heatmap(
+            x=x_labels,
+            y=y_labels,
+            z=z_display,
+            colorscale=colorscale,
+            colorbar=dict(title=f"{self.metric}<br>({agg_func})"),
+            text=hover_texts,
+            hovertemplate='%{text}<extra></extra>',
+        ))
+
+        # Build title
+        if len(row_vars) > 1:
+            row_vars_str = ", ".join(row_vars)
+            default_title = f"{self.metric} Coverage: [{row_vars_str}] × {col_var}"
+        else:
+            default_title = f"{self.metric} Coverage: {row_vars[0]} × {col_var}"
+
+        fig.update_layout(
+            title=self._get_title(default_title),
+            xaxis_title=self._get_xaxis_label(col_var),
+            yaxis_title=self._get_yaxis_label(", ".join(row_vars)),
+            xaxis=dict(type='category', side='bottom'),
+            yaxis=dict(type='category', autorange='reversed'),  # Top to bottom
+        )
+
+        return self._apply_theme(fig)
+
+    def _format_multiindex_label(self, idx_tuple, var_names):
+        """
+        Format a multi-index tuple as a readable label.
+
+        Args:
+            idx_tuple: Tuple of index values
+            var_names: List of variable names corresponding to the tuple
+
+        Returns:
+            Formatted string label
+        """
+        parts = [f"{name}={val}" for name, val in zip(var_names, idx_tuple)]
+        return ", ".join(parts)
 
 
 # ============================================================================

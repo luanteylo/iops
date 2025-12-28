@@ -468,6 +468,7 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
         best_results_cfg = BestResultsConfig(
             top_n=br_data.get("top_n", 5),
             show_command=br_data.get("show_command", True),
+            min_samples=br_data.get("min_samples", 1),
         )
 
     # Parse plot_defaults (optional)
@@ -507,6 +508,13 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                     width=plot_data.get("width"),
                     per_variable=plot_data.get("per_variable", False),
                     include_metric=plot_data.get("include_metric", True),
+                    row_vars=plot_data.get("row_vars"),
+                    col_var=plot_data.get("col_var"),
+                    aggregation=plot_data.get("aggregation", "mean"),
+                    show_missing=plot_data.get("show_missing", True),
+                    sort_rows_by=plot_data.get("sort_rows_by", "index"),
+                    sort_cols_by=plot_data.get("sort_cols_by", "index"),
+                    sort_ascending=plot_data.get("sort_ascending", False),
                 )
                 plots.append(plot_cfg)
 
@@ -534,6 +542,13 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                 width=plot_data.get("width"),
                 per_variable=plot_data.get("per_variable", False),
                 include_metric=plot_data.get("include_metric", True),
+                row_vars=plot_data.get("row_vars"),
+                col_var=plot_data.get("col_var"),
+                aggregation=plot_data.get("aggregation", "mean"),
+                show_missing=plot_data.get("show_missing", True),
+                sort_rows_by=plot_data.get("sort_rows_by", "index"),
+                sort_cols_by=plot_data.get("sort_cols_by", "index"),
+                sort_ascending=plot_data.get("sort_ascending", False),
             )
             default_plots.append(plot_cfg)
 

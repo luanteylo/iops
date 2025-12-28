@@ -213,7 +213,7 @@ class ReportThemeConfig:
 @dataclass
 class PlotConfig:
     """Configuration for a single plot."""
-    type: Literal["line", "bar", "scatter", "box", "violin", "heatmap", "surface_3d", "parallel_coordinates", "execution_scatter"]
+    type: Literal["line", "bar", "scatter", "box", "violin", "heatmap", "surface_3d", "parallel_coordinates", "execution_scatter", "coverage_heatmap"]
 
     # Variable selection
     x_var: Optional[str] = None
@@ -243,6 +243,15 @@ class PlotConfig:
     per_variable: bool = False  # Generate one plot per swept variable
     include_metric: bool = True  # For parallel_coordinates
 
+    # Coverage heatmap options
+    row_vars: Optional[List[str]] = None  # Variables for row multi-index
+    col_var: Optional[str] = None  # Variable for columns
+    aggregation: str = "mean"  # Aggregation function: mean, median, count, std, min, max
+    show_missing: bool = True  # Highlight NaN values with distinct color
+    sort_rows_by: str = "index"  # Sort rows by: "index" (variable values) or "values" (metric values)
+    sort_cols_by: str = "index"  # Sort columns by: "index" (variable values) or "values" (metric values)
+    sort_ascending: bool = False  # Sort direction for "values" mode (False = highest values first)
+
 
 @dataclass
 class MetricPlotsConfig:
@@ -267,6 +276,7 @@ class BestResultsConfig:
     """Configuration for best results section."""
     top_n: int = 5
     show_command: bool = True
+    min_samples: int = 1  # Minimum number of samples required to consider a configuration
 
 
 @dataclass

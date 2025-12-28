@@ -94,8 +94,9 @@ Shows the top N configurations for each metric:
 
 - Top 5 configurations by default (configurable via `best_results.top_n`)
 - Parameter values for each configuration
-- Metric values
+- Metric values (mean, standard deviation, sample count)
 - Optionally includes the rendered command for reproducibility
+- Can filter by minimum sample count to ensure statistical reliability
 
 **Configuration**:
 
@@ -104,6 +105,7 @@ reporting:
   best_results:
     top_n: 10                # Show top 10 configurations
     show_command: true       # Include rendered commands
+    min_samples: 3           # Require at least 3 repetitions (filters unreliable results)
 ```
 
 ### Variable Impact Analysis
@@ -384,6 +386,90 @@ metrics:
 
 **When to use**: Visualizing relationships across many variables simultaneously, identifying parameter correlations, exploring high-dimensional parameter spaces.
 
+#### 10. Coverage Heatmap
+
+Multi-variable heatmap showing parameter space coverage with hierarchical indexing. This plot displays selected variables using multi-level row/column indices, similar to a pivot table.
+
+**Required Parameters**:
+- `row_vars` (list of strings): Variables to use as row indices (supports multi-level indexing)
+- `col_var` (string): Variable to use as column axis
+
+**Optional Parameters**:
+- `aggregation` (string): Aggregation function - "mean" (default), "median", "count", "std", "min", "max"
+- `show_missing` (boolean): Highlight missing data (NaN) with distinct color (default: true)
+- `sort_rows_by` (string): Sort rows by - "index" (variable values, default) or "values" (metric aggregation)
+- `sort_cols_by` (string): Sort columns by - "index" (variable values, default) or "values" (metric aggregation)
+- `sort_ascending` (boolean): Sort direction for "values" mode (default: false = highest values first)
+- `colorscale` (string): Plotly colorscale name (default: "Viridis")
+- `title` (string): Custom plot title
+- `xaxis_label` (string): Custom x-axis label
+- `yaxis_label` (string): Custom y-axis label
+- `height` (integer): Plot height in pixels
+- `width` (integer): Plot width in pixels
+
+```yaml
+metrics:
+  bandwidth:
+    plots:
+      # Simple heatmap with 2 variables
+      - type: "coverage_heatmap"
+        row_vars: ["nodes"]
+        col_var: "transfer_size_kb"
+        aggregation: "mean"
+        title: "Bandwidth Coverage Matrix"
+
+      # Multi-level row index with 3 variables
+      - type: "coverage_heatmap"
+        row_vars: ["nodes", "processes_per_node"]
+        col_var: "transfer_size_kb"
+        aggregation: "count"  # Show how many tests per combination
+        colorscale: "Blues"
+        title: "Test Coverage by Configuration"
+
+      # Sorted by performance (highest bandwidth configurations first)
+      - type: "coverage_heatmap"
+        row_vars: ["nodes", "processes_per_node"]
+        col_var: "transfer_size_kb"
+        aggregation: "mean"
+        sort_rows_by: "values"     # Sort rows by metric performance
+        sort_cols_by: "values"     # Sort columns by metric performance
+        sort_ascending: false      # Highest values first
+        title: "Bandwidth Sorted by Performance"
+```
+
+**When to use**:
+- Visualizing the complete parameter space and metric values across all variable combinations
+- Identifying coverage gaps in your experimental design (missing combinations show as NaN)
+- Understanding how metrics vary across multi-dimensional parameter spaces
+- Showing test repetition counts with `aggregation: "count"`
+- Creating comprehensive coverage reports similar to pivot tables
+
+**How it works**:
+- **Variable selection**: You must specify which variables to visualize using `row_vars` (1+ variables) and `col_var` (1 variable)
+- **Multi-level indices**: Multiple `row_vars` create hierarchical row labels (e.g., "nodes=4, processes_per_node=16")
+- **Aggregation**: Cell values are aggregated using the specified function (useful when multiple tests share the same parameter combination)
+- **Sorting modes**:
+  - **`"index"`** (default): Sort by variable values in natural order (e.g., nodes: 1, 2, 4, 8; transfer_size: 64, 128, 256)
+  - **`"values"`**: Hierarchical performance-based sorting - for multi-level rows, each level is sorted by its group's average performance:
+    - First, all values of the first variable are sorted by their mean performance
+    - Within each first-level group, the second variable values are sorted by their mean performance within that group
+    - This continues for all levels, creating well-organized groupings of similar-performing configurations
+- **Missing data**: NaN values (untested combinations) are visually distinct, making it easy to spot coverage gaps
+- **Interactive hover**: Shows all variable values and the metric value for each cell
+- **Performance**: Keep total variables to 2-3 for best performance (more variables = larger pivot table)
+
+**Example output**:
+```
+                     transfer_size_kb: 32    1024   8192   32768
+nodes  processes_per_node
+1      1                               150.2  145.8  142.1  138.5
+       64                              180.3  175.9  172.4  NaN
+       128                             195.1  190.7  NaN    NaN
+4      1                               245.8  242.1  238.6  235.2
+       64                              310.5  305.8  301.2  NaN
+       128                             NaN    NaN    NaN    NaN
+```
+
 ---
 
 ## Per-Variable Plots
@@ -545,6 +631,7 @@ reporting:
   best_results:
     top_n: 10
     show_command: true
+    min_samples: 3
 
   metrics:
     bandwidth:
