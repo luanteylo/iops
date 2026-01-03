@@ -1,0 +1,39 @@
+{
+  "@context": [
+    "https://doi.org/10.5063/schema/codemeta-2.0",
+    {
+      "numpex-catalog": "https://numpex.github.io/sw-catalog/terms-1.0/index.jsonld#",
+      "Role": "https://schema.org/Role",
+      "roleName": "https://schema.org/roleName",
+      "url": "https://schema.org/url"
+    }
+  ],
+  "@type": "SoftwareSourceCode",
+  "name": "IOPS",
+  "description": "A generic benchmark orchestration framework for automated parametric experiments.",
+  "version": "3.1.2",
+  "license": "https://spdx.org/licenses/BSD-3-Clause",
+  "programmingLanguage": "Python",
+  "author": {
+    "@type": "Organization",
+    "name": "TADAAM - INRIA Bordeaux"
+  },
+  "codeRepository": "https://gitlab.inria.fr/lgouveia/iops",
+  "numpex-catalog:annotatedLink": [
+    {
+      "@type": "Role",
+      "roleName": "numpex-catalog:documentation",
+      "url": "https://lgouveia.gitlabpages.inria.fr/iops/"
+    },
+    {
+      "@type": "Role",
+      "roleName": "numpex-catalog:discussion",
+      "url": "https://gitlab.inria.fr/lgouveia/iops/-/issues"
+    },
+    {
+      "@type": "Role",
+      "roleName": "numpex-catalog:spack_package",
+      "url": "https://gitlab.inria.fr/lgouveia/iops-spack"
+    }
+  ]
+}
