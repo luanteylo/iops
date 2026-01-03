@@ -32,12 +32,30 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - For benchmark execution: Required tools in PATH (e.g., `ior`, `mpirun` for I/O benchmarks)
 - For SLURM clusters: Access to a SLURM scheduler
 
-### Quick Installation (from PyPI - Coming Soon)
+### Quick Installation (from PyPI)
 
-Once published to PyPI, you'll be able to install IOPS with a single command:
+Install IOPS directly from PyPI:
 
 ```bash
 pip install iops-benchmark
+```
+
+### Installation with Spack (for HPC environments)
+
+[Spack](https://spack.io/) is a package manager designed for HPC systems. To install IOPS with Spack:
+
+```bash
+# Add the IOPS Spack repository
+spack repo add https://gitlab.inria.fr/lgouveia/iops-spack.git
+
+# Install IOPS
+spack install iops-benchmark
+
+# Load the module
+spack load iops-benchmark
+
+# Verify installation
+iops --version
 ```
 
 ### Basic Installation (from source)

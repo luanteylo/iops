@@ -19,6 +19,42 @@ Install IOPS directly from PyPI:
 pip install iops-benchmark
 ```
 
+## Installation with Spack (for HPC environments)
+
+[Spack](https://spack.io/) is a package manager designed for HPC systems. It handles complex dependency chains and integrates well with module systems commonly found on clusters.
+
+### Adding the IOPS Spack Repository
+
+```bash
+# Add the IOPS Spack repository directly
+spack repo add https://gitlab.inria.fr/lgouveia/iops-spack.git
+```
+
+### Installing IOPS
+
+```bash
+# Install IOPS and all dependencies
+spack install iops-benchmark
+
+# Load the module
+spack load iops-benchmark
+
+# Verify installation
+iops --version
+```
+
+### Tips for HPC Systems
+
+On HPC systems with older compilers, you may need to load a newer GCC module before installing:
+
+```bash
+module load gcc/12.2.0  # adjust version as needed
+spack compiler find
+spack install iops-benchmark
+```
+
+To speed up installation, you can configure Spack to use system packages (Python, OpenSSL, etc.) by editing `~/.spack/packages.yaml`. See the [Spack documentation](https://spack.readthedocs.io/en/latest/getting_started.html#system-packages) for details.
+
 ## Installation from Source
 
 ### Basic Installation
