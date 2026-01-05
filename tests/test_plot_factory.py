@@ -630,7 +630,9 @@ class TestHeatmapPlot:
         # Should have data for 2 x-values (4, 8) and 3 y-values (1, 2, 4)
         assert len(heatmap_trace.x) == 2  # block_size: 4, 8
         assert len(heatmap_trace.y) == 3  # nodes: 1, 2, 4
-        assert heatmap_trace.z.shape == (3, 2)  # 3 rows, 2 columns
+        # z is a list of lists (converted from numpy to avoid Plotly 6.x binary encoding)
+        assert len(heatmap_trace.z) == 3  # 3 rows
+        assert len(heatmap_trace.z[0]) == 2  # 2 columns
 
 
 # ============================================================================
