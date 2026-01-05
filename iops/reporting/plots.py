@@ -73,6 +73,45 @@ class BasePlot(ABC):
         """Get y-axis label (custom or default)."""
         return self.config.yaxis_label or default
 
+    @staticmethod
+    def _to_list(data):
+        """
+        Convert array-like data to Python list to avoid Plotly 6.x binary encoding.
+
+        Plotly 6.x uses binary encoding (bdata/dtype) for numpy arrays which can
+        cause blank plots in some browsers. Converting to plain Python lists with
+        native Python types ensures compatibility.
+
+        Args:
+            data: Array-like data (numpy array, pandas Series, or list)
+
+        Returns:
+            Python list with native Python types (int, float)
+        """
+        import numpy as np
+
+        # Convert to list first
+        if hasattr(data, 'values'):
+            # pandas Series or DataFrame column
+            result = data.values.tolist()
+        elif hasattr(data, 'tolist'):
+            result = data.tolist()
+        else:
+            result = list(data) if hasattr(data, '__iter__') else data
+
+        # Ensure all elements are native Python types (not numpy scalars)
+        if isinstance(result, list):
+            converted = []
+            for item in result:
+                if isinstance(item, (np.integer, np.floating)):
+                    converted.append(item.item())  # Convert numpy scalar to Python native
+                elif isinstance(item, np.ndarray):
+                    converted.append(item.tolist())
+                else:
+                    converted.append(item)
+            return converted
+        return result
+
     def _get_column(self, name: str) -> str:
         """
         Get column name, checking both metrics and variables.
@@ -175,11 +214,11 @@ class BarPlot(BasePlot):
         # Add error bars if requested
         error_y = None
         if self.config.show_error_bars and 'std' in df_grouped.columns:
-            error_y = dict(type='data', array=df_grouped['std'])
+            error_y = dict(type='data', array=self._to_list(df_grouped['std']))
 
         fig.add_trace(go.Bar(
             x=x_values,
-            y=df_grouped['mean'],
+            y=self._to_list(df_grouped['mean']),
             error_y=error_y,
             name=self.metric,
             text=[f'{v:.2f}' for v in df_grouped['mean']],
@@ -229,7 +268,7 @@ class LinePlot(BasePlot):
 
                 fig.add_trace(go.Scatter(
                     x=x_slice,
-                    y=df_slice[metric_col],
+                    y=self._to_list(df_slice[metric_col]),
                     mode='lines+markers',
                     name=f'{group_var}={val}',
                     marker=dict(size=10),
@@ -250,7 +289,7 @@ class LinePlot(BasePlot):
 
             fig.add_trace(go.Scatter(
                 x=x_values,
-                y=df_grouped[metric_col],
+                y=self._to_list(df_grouped[metric_col]),
                 mode='lines+markers',
                 marker=dict(size=10),
                 line=dict(width=2),
@@ -328,12 +367,12 @@ class ScatterPlot(BasePlot):
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
-            x=df_grouped[x_col],
-            y=df_grouped[y_col],
+            x=self._to_list(df_grouped[x_col]),
+            y=self._to_list(df_grouped[y_col]),
             mode='markers',
             marker=dict(
                 size=12,
-                color=df_grouped[color_col],
+                color=self._to_list(df_grouped[color_col]),
                 colorscale=self.config.colorscale,
                 showscale=True,
                 colorbar=dict(title=color_by),
@@ -386,7 +425,7 @@ class HeatmapPlot(BasePlot):
         fig.add_trace(go.Heatmap(
             x=[str(x) for x in df_pivot.columns],
             y=[str(y) for y in df_pivot.index],
-            z=df_pivot.values,
+            z=self._to_list(df_pivot.values),
             colorscale=self.config.colorscale,
             colorbar=dict(title=z_metric),
             hovertemplate=f'{x_var}: %{{x}}<br>{y_var}: %{{y}}<br>{z_metric}: %{{z:.4f}}<extra></extra>',
@@ -425,7 +464,7 @@ class BoxPlot(BasePlot):
             df_subset = self.df[self.df[x_col] == x_val]
 
             fig.add_trace(go.Box(
-                y=df_subset[metric_col],
+                y=self._to_list(df_subset[metric_col]),
                 name=str(x_val),
                 boxpoints='outliers' if self.config.show_outliers else False,
                 marker=dict(size=4),
@@ -464,7 +503,7 @@ class ViolinPlot(BasePlot):
             df_subset = self.df[self.df[x_col] == x_val]
 
             fig.add_trace(go.Violin(
-                y=df_subset[metric_col],
+                y=self._to_list(df_subset[metric_col]),
                 name=str(x_val),
                 box_visible=True,
                 meanline_visible=True,
@@ -509,9 +548,9 @@ class Surface3DPlot(BasePlot):
         fig = go.Figure()
 
         fig.add_trace(go.Surface(
-            x=df_pivot.columns,
-            y=df_pivot.index,
-            z=df_pivot.values,
+            x=self._to_list(df_pivot.columns),
+            y=self._to_list(df_pivot.index),
+            z=self._to_list(df_pivot.values),
             colorscale=self.config.colorscale,
             colorbar=dict(title=z_metric),
             hovertemplate=f'{x_var}: %{{x}}<br>{y_var}: %{{y}}<br>{z_metric}: %{{z:.4f}}<extra></extra>',
@@ -577,11 +616,11 @@ class ExecutionScatterPlot(BasePlot):
 
         # X values: execution ID or index
         if id_col:
-            x_values = self.df[id_col].values
+            x_values = self._to_list(self.df[id_col])
         else:
             x_values = list(range(len(self.df)))
 
-        y_values = self.df[metric_col].values
+        y_values = self._to_list(self.df[metric_col])
 
         # Create scatter plot
         fig = go.Figure()
@@ -644,18 +683,18 @@ class ParallelCoordinatesPlot(BasePlot):
         for col, name in zip(var_cols, var_names):
             dimensions.append(dict(
                 label=name,
-                values=df_grouped[col],
+                values=self._to_list(df_grouped[col]),
             ))
 
         # Add metric as final dimension
         dimensions.append(dict(
             label=self.metric,
-            values=df_grouped[metric_col],
+            values=self._to_list(df_grouped[metric_col]),
         ))
 
         fig = go.Figure(data=go.Parcoords(
             line=dict(
-                color=df_grouped[metric_col],
+                color=self._to_list(df_grouped[metric_col]),
                 colorscale=self.config.colorscale,
                 showscale=True,
                 colorbar=dict(title=self.metric),
@@ -889,10 +928,14 @@ class CoverageHeatmapPlot(BasePlot):
         else:
             z_display = z_values
 
+        # Convert z_display to list to avoid Plotly 6.x binary encoding (bdata/dtype)
+        # which can cause blank heatmaps in some browsers
+        z_list = z_display.tolist() if hasattr(z_display, 'tolist') else z_display
+
         fig.add_trace(go.Heatmap(
             x=x_labels,
             y=y_labels,
-            z=z_display,
+            z=z_list,
             colorscale=colorscale,
             colorbar=dict(title=f"{self.metric}<br>({agg_func})"),
             text=hover_texts,

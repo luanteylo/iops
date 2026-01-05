@@ -201,6 +201,38 @@ class ReportGenerator:
         """Get the column name for a metric in the dataframe."""
         return f'metrics.{metric_name}'
 
+    @staticmethod
+    def _to_python_list(data):
+        """
+        Convert array-like data to Python list with native types.
+
+        Plotly 6.x uses binary encoding (bdata/dtype) for numpy arrays which can
+        cause blank plots in some browsers. Converting to plain Python lists with
+        native Python types ensures compatibility.
+        """
+        import numpy as np
+
+        # Convert to list first
+        if hasattr(data, 'values'):
+            result = data.values.tolist()
+        elif hasattr(data, 'tolist'):
+            result = data.tolist()
+        else:
+            result = list(data) if hasattr(data, '__iter__') else data
+
+        # Ensure all elements are native Python types (not numpy scalars)
+        if isinstance(result, list):
+            converted = []
+            for item in result:
+                if isinstance(item, (np.integer, np.floating)):
+                    converted.append(item.item())
+                elif isinstance(item, np.ndarray):
+                    converted.append(item.tolist())
+                else:
+                    converted.append(item)
+            return converted
+        return result
+
     def _render_command(self, var_values: Dict[str, Any]) -> str:
         """
         Render the command template with given variable values.
@@ -240,6 +272,14 @@ class ReportGenerator:
                 width=plot_data.get('width'),
                 per_variable=plot_data.get('per_variable', False),
                 include_metric=plot_data.get('include_metric', True),
+                # Coverage heatmap options
+                row_vars=plot_data.get('row_vars'),
+                col_var=plot_data.get('col_var'),
+                aggregation=plot_data.get('aggregation', 'mean'),
+                show_missing=plot_data.get('show_missing', True),
+                sort_rows_by=plot_data.get('sort_rows_by', 'index'),
+                sort_cols_by=plot_data.get('sort_cols_by', 'index'),
+                sort_ascending=plot_data.get('sort_ascending', False),
             )
 
         theme = ReportThemeConfig(
@@ -1911,22 +1951,23 @@ class ReportGenerator:
                 var_col = self._get_var_column(var)
                 dimensions.append(dict(
                     label=var,
-                    values=df_grouped[var_col]
+                    values=self._to_python_list(df_grouped[var_col])
                 ))
 
             # Add metric as the last dimension and for coloring
+            metric_values = self._to_python_list(df_grouped[metric_col])
             dimensions.append(dict(
                 label=metric,
-                values=df_grouped[metric_col]
+                values=metric_values
             ))
 
             fig = go.Figure(data=go.Parcoords(
                 line=dict(
-                    color=df_grouped[metric_col],
+                    color=metric_values,
                     colorscale='Viridis',
                     showscale=True,
-                    cmin=df_grouped[metric_col].min(),
-                    cmax=df_grouped[metric_col].max(),
+                    cmin=min(metric_values),
+                    cmax=max(metric_values),
                     colorbar=dict(title=metric)
                 ),
                 dimensions=dimensions
