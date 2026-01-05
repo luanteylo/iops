@@ -8,6 +8,11 @@ All notable changes to IOPS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.3] - 2026-01-05
+
+### Fixed
+- Fixed blank plots in HTML reports with Plotly 6.x by converting numpy arrays to native Python lists before passing to Plotly (Plotly 6.x uses binary encoding which caused rendering issues in some browsers)
+
 ## [3.1.0] - 2025-12-23
 
 ### Added
