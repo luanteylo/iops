@@ -370,9 +370,14 @@ class IOPSRunner(HasLogger):
 
     @staticmethod
     def _json_serialize_helper(obj):
-        """Helper to serialize numpy/pandas types to JSON."""
+        """Helper to serialize numpy/pandas types and dataclasses to JSON."""
+        import dataclasses
         import numpy as np
         import pandas as pd
+
+        # Handle dataclasses (like BayesianConfig, RandomSamplingConfig)
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
 
         # Handle numpy types
         if isinstance(obj, (np.integer, np.int64, np.int32)):

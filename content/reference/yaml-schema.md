@@ -537,7 +537,7 @@ benchmark:
 - Same `random_seed` produces identical samples across runs
 
 #### `bayesian_config` (optional, required if `search_method: "bayesian"`)
-Configuration for Bayesian optimization planner. Uses Gaussian Process models to intelligently explore parameter space and find optimal configurations.
+Configuration for Bayesian optimization planner. Uses surrogate models to intelligently explore parameter space and find optimal configurations with fewer evaluations than exhaustive search.
 
 **Requires**: `scikit-optimize` package (`pip install scikit-optimize`)
 
@@ -546,19 +546,51 @@ Configuration for Bayesian optimization planner. Uses Gaussian Process models to
 benchmark:
   search_method: "bayesian"
   bayesian_config:
-    target_metric: "throughput"  # Metric to optimize
-    objective: "maximize"        # "maximize" or "minimize"
-    n_initial_points: 5          # Random exploration before optimization
-    n_iterations: 20             # Total evaluations
-    acquisition_func: "EI"       # "EI", "PI", or "LCB"
+    objective_metric: "throughput"  # Required: metric to optimize (must match parser output)
+    objective: "minimize"           # Optimization direction (default: "minimize")
+    n_initial_points: 5             # Random exploration before optimization (default: 5)
+    n_iterations: 20                # Total evaluations (default: 20)
+    acquisition_func: "EI"          # Acquisition function (default: "EI")
+    base_estimator: "RF"            # Surrogate model type (default: "RF")
+    xi: 0.01                        # Exploration trade-off for EI/PI (default: 0.01)
+    kappa: 1.96                     # Exploration parameter for LCB (default: 1.96)
 ```
 
 **Parameters**:
-- **`target_metric`** (str): Name of metric to optimize (from parser output)
-- **`objective`** (str): Optimization direction: `"maximize"` or `"minimize"`
-- **`n_initial_points`** (int): Random samples before Bayesian optimization starts
-- **`n_iterations`** (int): Total number of parameter evaluations
-- **`acquisition_func`** (str): Acquisition function (`"EI"` = Expected Improvement, `"PI"` = Probability of Improvement, `"LCB"` = Lower Confidence Bound)
+- **`objective_metric`** (str, **required**): Name of metric to optimize. Must match a metric defined in the `parser.metrics` section.
+- **`objective`** (str, default: `"minimize"`): Optimization direction: `"maximize"` or `"minimize"`
+- **`n_initial_points`** (int, default: 5): Number of random samples before Bayesian optimization starts
+- **`n_iterations`** (int, default: 20): Total number of parameter configurations to evaluate
+- **`acquisition_func`** (str, default: `"EI"`): Acquisition function to select next point:
+  - `"EI"`: Expected Improvement - balanced exploration/exploitation
+  - `"PI"`: Probability of Improvement - more exploitative
+  - `"LCB"`: Lower Confidence Bound - configurable via kappa
+- **`base_estimator`** (str, default: `"RF"`): Surrogate model type:
+  - `"RF"`: Random Forest - robust, handles categorical variables well
+  - `"GP"`: Gaussian Process - best for continuous variables, struggles with categorical
+  - `"ET"`: Extra Trees - similar to RF with more randomness
+  - `"GBRT"`: Gradient Boosted Regression Trees
+- **`xi`** (float, default: 0.01): Exploration-exploitation trade-off for EI/PI. Higher values favor exploration.
+- **`kappa`** (float, default: 1.96): Exploration parameter for LCB. Higher values favor exploration.
+
+**Example with throughput maximization**:
+```yaml
+benchmark:
+  search_method: "bayesian"
+  bayesian_config:
+    objective_metric: "bwMiB"
+    objective: "maximize"
+    n_initial_points: 10
+    n_iterations: 50
+    base_estimator: "RF"
+    acquisition_func: "EI"
+```
+
+**Notes**:
+- Bayesian optimization is most effective when evaluations are expensive and the parameter space is large
+- The optimizer reports search space coverage: how many configurations it will evaluate vs. exhaustive search
+- Random Forest (`RF`) is recommended for mixed parameter spaces (numeric + categorical)
+- Use with `exhaustive_vars` to combine intelligent search with exhaustive testing of specific variables
 
 **See**: `docs/examples/example_bayesian.yaml` for complete example
 
