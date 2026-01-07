@@ -362,6 +362,13 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
                 f"bayesian_config.n_initial_points must be a positive integer, got: {n_initial_points}"
             )
 
+        # Validate n_iterations
+        n_iterations = bc.get("n_iterations", 20)
+        if not isinstance(n_iterations, int) or n_iterations < 1:
+            raise ConfigValidationError(
+                f"bayesian_config.n_iterations must be a positive integer, got: {n_iterations}"
+            )
+
         # Validate acquisition_func
         acquisition_func = bc.get("acquisition_func", "EI")
         valid_acq_funcs = ("EI", "PI", "LCB")
@@ -410,6 +417,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
 
         bayesian_config = BayesianConfig(
             n_initial_points=n_initial_points,
+            n_iterations=n_iterations,
             acquisition_func=acquisition_func,
             base_estimator=base_estimator,
             xi=float(xi),

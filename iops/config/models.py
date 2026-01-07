@@ -80,6 +80,7 @@ class BayesianConfig:
 
     Attributes:
         n_initial_points: Number of random initial samples before optimization starts (default: 5)
+        n_iterations: Total number of parameter configurations to evaluate (default: 20)
         acquisition_func: Acquisition function to select next point:
             - "EI": Expected Improvement (default) - balanced exploration/exploitation
             - "PI": Probability of Improvement - more exploitative
@@ -94,9 +95,10 @@ class BayesianConfig:
         kappa: Exploration parameter for LCB (default: 1.96)
             Higher values favor exploration
         objective: Optimization direction - "minimize" or "maximize" (default: "minimize")
-        objective_metric: Metric name to optimize (defaults to first metric if not specified)
+        objective_metric: Metric name to optimize (required)
     """
     n_initial_points: int = 5
+    n_iterations: int = 20
     acquisition_func: Literal["EI", "PI", "LCB"] = "EI"
     base_estimator: Literal["RF", "GP", "ET", "GBRT"] = "RF"
     xi: float = 0.01

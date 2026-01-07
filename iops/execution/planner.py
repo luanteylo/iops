@@ -537,6 +537,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
           bayesian_config:
             objective_metric: "metric"  # REQUIRED: Metric to optimize (must match parser metric)
             objective: "minimize"        # "minimize" (default) or "maximize"
+            n_iterations: 20             # Total configurations to evaluate (default: 20)
             n_initial_points: 5          # Random exploration before optimization (default: 5)
             acquisition_func: "EI"       # "EI" (default), "PI", or "LCB"
             base_estimator: "RF"         # Surrogate model: "RF" (default), "GP", "ET", or "GBRT"
@@ -584,7 +585,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.target_metric = self._resolve_target_metric()
         self.objective = self.bayesian_cfg.objective
         self.n_initial_points = self.bayesian_cfg.n_initial_points
-        self.n_iterations = 20  # Default, can be added to BayesianConfig later
+        self.n_iterations = self.bayesian_cfg.n_iterations
         self.acquisition_func = self.bayesian_cfg.acquisition_func
         self.xi = self.bayesian_cfg.xi
         self.kappa = self.bayesian_cfg.kappa

@@ -66,6 +66,7 @@ benchmark:
   # bayesian_config:
   #   objective_metric: "metric"  # REQUIRED: Metric to optimize (must match a metric from parser)
   #   objective: "minimize"       # "minimize" (default) or "maximize"
+  #   n_iterations: 20            # Total number of configurations to evaluate (default: 20)
   #   n_initial_points: 5         # Random samples before optimization starts (default: 5)
   #   acquisition_func: "EI"      # "EI" (Expected Improvement, default), "PI", or "LCB"
   #   base_estimator: "RF"        # Surrogate model: "RF" (default), "GP", "ET", "GBRT"
