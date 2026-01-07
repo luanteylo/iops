@@ -99,7 +99,6 @@ Prevent exceeding compute allocations with core-hours tracking:
 benchmark:
   max_core_hours: 1000  # Stop after 1000 core-hours
   cores_expr: "{{ nodes * processes_per_node }}"
-  estimated_time_seconds: 300  # For dry-run estimates
 ```
 
 From command line:
@@ -109,7 +108,8 @@ From command line:
 iops config.yaml --max-core-hours 1000
 
 # Estimate usage before running
-iops config.yaml --dry-run --estimated-time 300
+iops config.yaml --dry-run --time-estimate 300
+iops config.yaml -n --time-estimate 300
 ```
 
 ### Job Monitoring

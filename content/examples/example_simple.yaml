@@ -10,7 +10,7 @@
 #
 # Usage:
 #   Normal run:  python -m iops.main example_simple.yaml
-#   Dry-run:     python -m iops.main example_simple.yaml --dry-run --estimated-time "60,120,300"
+#   Dry-run:     python -m iops.main example_simple.yaml --dry-run --time-estimate "60,120,300"
 #   Analysis:    python -m iops.main --analyze /path/to/workdir/run_XXX
 #
 

@@ -14,7 +14,7 @@
 # Usage:
 #   Run optimization:  iops run example_plafrim_bayesian.yaml
 #   Generate report:   iops analyze /home/lgouveia/workdir/run_XXX
-#   Debug mode:        iops run example_plafrim_bayesian.yaml --log_level DEBUG
+#   Debug mode:        iops run example_plafrim_bayesian.yaml --log-level DEBUG
 #
 # =============================================================================
 

@@ -84,7 +84,7 @@ Major overhaul transforming IOPS into a generic benchmark orchestration framewor
 
 ### Added
 - **Generic Framework**: No longer limited to I/O benchmarks - supports any parametric experiment
-- **Template Generation**: `--generate_setup` flag to create fully-commented configuration templates
+- **Template Generation**: `--generate` flag to create fully-commented configuration templates
 - **Interactive Setup Wizard**: Step-by-step guided configuration creation
 - **Pip Packaging**: Full PyPI package support with `iops-benchmark` name
 - **Bayesian Optimization**: Gaussian Process-based intelligent parameter search
@@ -92,7 +92,7 @@ Major overhaul transforming IOPS into a generic benchmark orchestration framewor
 - **Core-Hours Budget Tracking**: Prevent exceeding compute allocations on HPC clusters
 - **Dry-Run Mode**: Preview executions with resource estimates before running
 - **HTML Report Generation**: Interactive analysis reports with plots and statistics
-- **Result Caching**: SQLite-based execution caching with `--use_cache` flag
+- **Result Caching**: SQLite-based execution caching with `--use-cache` flag
 - **Multi-Round Optimization**: Progressive parameter refinement across rounds
 - **SLURM Support**: Native HPC cluster integration with automatic job management
 
@@ -189,10 +189,10 @@ IOPS 3.0 is a major rewrite with breaking changes to the configuration format.
 
 **New Features to Explore:**
 
-- Try `iops --generate_setup` to create a template
-- Enable caching with `--use_cache` for faster iterations
+- Try `iops --generate` to create a template
+- Enable caching with `--use-cache` for faster iterations
 - Use Bayesian optimization for large parameter spaces
-- Generate reports with `iops analyze <workdir/run_001>`
+- Generate reports with `iops --analyze <workdir/run_001>`
 
 ---
 

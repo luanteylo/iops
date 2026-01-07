@@ -20,54 +20,45 @@ def load_version():
         return f.read().strip()
     
 def parse_arguments():
-    parser = argparse.ArgumentParser(
-        description="IOPS Tool - Benchmark Automation Framework",
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description="IOPS Tool - Benchmark Automation Framework")
 
     # Positional argument
     parser.add_argument('setup_file', type=Path, nargs='?',
-                        help="Path to the YAML setup file (e.g., iops_config.yaml)")
+                        help="Path to the YAML setup file")
 
-    # Mode selection (mutually exclusive operations)
-    mode_group = parser.add_argument_group('modes', 'Operation modes (mutually exclusive with normal execution)')
-    mode_group.add_argument('--generate', nargs='?', const=Path("iops_config.yaml"), type=Path,
-                            metavar='PATH',
-                            help="Generate a default config template (default: iops_config.yaml)")
-    mode_group.add_argument('--check', action='store_true',
-                            help="Validate the config file and exit")
-    mode_group.add_argument('--analyze', type=Path, default=None, metavar='WORKDIR',
-                            help="Generate HTML report from a completed run")
+    # Mode options
+    parser.add_argument('--generate', nargs='?', const=Path("iops_config.yaml"), type=Path,
+                        metavar='PATH', help="Generate a default config template")
+    parser.add_argument('--check', action='store_true',
+                        help="Validate the config file and exit")
+    parser.add_argument('--analyze', type=Path, default=None, metavar='PATH',
+                        help="Generate HTML report from a completed run")
 
     # Execution options
-    exec_group = parser.add_argument_group('execution', 'Execution control options')
-    exec_group.add_argument('-n', '--dry-run', action='store_true',
-                            help="Preview execution plan without running tests")
-    exec_group.add_argument('--use-cache', action='store_true',
-                            help="Reuse cached results, skip already executed parameter sets")
-    exec_group.add_argument('--max-core-hours', type=float, default=None, metavar='HOURS',
-                            help="Maximum CPU core-hours budget for execution")
-    exec_group.add_argument('--time-estimate', type=str, default=None, metavar='SECONDS',
-                            help="Estimated time per test: '120' or '60,120,300' for scenarios")
+    parser.add_argument('-n', '--dry-run', action='store_true',
+                        help="Preview execution plan without running tests")
+    parser.add_argument('--use-cache', action='store_true',
+                        help="Reuse cached results, skip already executed tests")
+    parser.add_argument('--max-core-hours', type=float, default=None, metavar='N',
+                        help="Maximum CPU core-hours budget for execution")
+    parser.add_argument('--time-estimate', type=str, default=None, metavar='SEC',
+                        help="Estimated time per test (e.g., '120' or '60,120,300')")
 
     # Logging options
-    log_group = parser.add_argument_group('logging', 'Logging configuration')
-    log_group.add_argument('--log-file', type=Path, default=Path("iops.log"), metavar='PATH',
-                           help="Path to log file (default: iops.log)")
-    log_group.add_argument('--log-level', type=str, default='INFO', metavar='LEVEL',
-                           choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-                           help="Logging level (default: INFO)")
-    log_group.add_argument('--no-log-terminal', action='store_true',
-                           help="Disable logging to terminal (log to file only)")
-    log_group.add_argument('-v', '--verbose', action='store_true',
-                           help="Show full traceback for errors")
+    parser.add_argument('--log-file', type=Path, default=Path("iops.log"), metavar='PATH',
+                        help="Path to log file (default: iops.log)")
+    parser.add_argument('--log-level', type=str, default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help="Logging level (default: INFO)")
+    parser.add_argument('--no-log-terminal', action='store_true',
+                        help="Disable logging to terminal")
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help="Show full traceback for errors")
 
     # Report options
-    report_group = parser.add_argument_group('reporting', 'Report generation options')
-    report_group.add_argument('--report-config', type=Path, default=None, metavar='PATH',
-                              help="Custom report config YAML (use with --analyze)")
+    parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
+                        help="Custom report config YAML (use with --analyze)")
 
-    # Info
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
     return parser.parse_args()

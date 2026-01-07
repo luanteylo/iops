@@ -145,7 +145,7 @@ workdir: "$HOME/benchmarks"  # Expands to /home/user/benchmarks
 ```
 
 #### `sqlite_db` (optional)
-Path to SQLite database for caching execution results. **Required for `--use_cache` flag.**
+Path to SQLite database for caching execution results. **Required for `--use-cache` flag.**
 
 ```yaml
 sqlite_db: "/scratch/benchmarks/ior_cache.db"
@@ -427,7 +427,7 @@ benchmark:
 - If evaluation fails, defaults to 1 core with a warning
 
 #### `estimated_time_seconds` (optional)
-Estimated execution time per test in seconds. Used for core-hours estimation in dry-run mode. **Can be overridden by the `--estimated-time` CLI argument.**
+Estimated execution time per test in seconds. Used for core-hours estimation in dry-run mode. **Can be overridden by the `--time-estimate` CLI argument.**
 
 ```yaml
 estimated_time_seconds: 300.0  # Estimate 5 minutes per test
@@ -442,7 +442,8 @@ estimated_time_seconds: 300.0  # Estimate 5 minutes per test
 **Dry-run example**:
 ```bash
 # Preview execution plan
-iops config.yaml --dry-run --estimated-time 120
+iops config.yaml --dry-run --time-estimate 120
+iops config.yaml -n --time-estimate 120
 
 # Output shows:
 # - Total tests to execute

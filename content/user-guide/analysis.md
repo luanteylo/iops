@@ -93,7 +93,7 @@ benchmark:
 ```
 
 **Notes:**
-- Only affects report generation with `iops analyze`
+- Only affects report generation with `iops --analyze`
 - Does not affect execution or result storage
 - All variables are still saved in output files
 

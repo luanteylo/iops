@@ -143,10 +143,10 @@ benchmark:
   sqlite_db: "/path/to/cache.db"
 ```
 
-Enable caching with the `--use_cache` flag:
+Enable caching with the `--use-cache` flag:
 
 ```bash
-iops config.yaml --use_cache
+iops config.yaml --use-cache
 ```
 
 ## Rounds

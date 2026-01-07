@@ -37,7 +37,7 @@ cp docs/examples/example_simple.yaml my_config.yaml
 nano my_config.yaml
 
 # Validate
-iops my_config.yaml --check_setup
+iops my_config.yaml --check
 
 # Run
 iops my_config.yaml

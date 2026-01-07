@@ -12,7 +12,7 @@
 #
 # Usage:
 #   Normal run:  python -m iops.main example_plafrim.yaml
-#   Dry-run:     python -m iops.main example_plafrim.yaml --dry-run --estimated-time "300,600,900"
+#   Dry-run:     python -m iops.main example_plafrim.yaml --dry-run --time-estimate "300,600,900"
 #   Analysis:    python -m iops.main --analyze /path/to/workdir/run_XXX
 #
 

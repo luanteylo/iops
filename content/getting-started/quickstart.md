@@ -10,7 +10,7 @@ This guide will walk you through running your first benchmark with IOPS in just 
 Generate a comprehensive YAML template with all options documented:
 
 ```bash
-iops --generate_setup my_config.yaml
+iops --generate my_config.yaml
 ```
 
 This creates a fully-commented template showing all available configuration options. You can customize it for your needs.
@@ -28,9 +28,10 @@ Before running, it's good practice to preview what will be executed:
 ```bash
 # Dry-run to see what will be executed
 iops my_config.yaml --dry-run
+iops my_config.yaml -n
 
 # Check configuration validity
-iops my_config.yaml --check_setup
+iops my_config.yaml --check
 ```
 
 The dry-run will show you:
@@ -52,13 +53,20 @@ iops my_config.yaml
 
 ```bash
 # With caching (skip already-executed tests)
-iops my_config.yaml --use_cache
+iops my_config.yaml --use-cache
 
 # With budget limit (SLURM only)
 iops my_config.yaml --max-core-hours 1000
 
-# With verbose logging
-iops my_config.yaml --log_level DEBUG
+# With verbose output
+iops my_config.yaml --verbose
+iops my_config.yaml -v
+
+# With debug logging
+iops my_config.yaml --log-level DEBUG
+
+# Write logs to file
+iops my_config.yaml --log-file benchmark.log
 
 # Disable terminal logging (log to file only)
 iops my_config.yaml --no-log-terminal
@@ -70,7 +78,7 @@ After your benchmark completes, generate an interactive HTML report:
 
 ```bash
 # Generate HTML report with interactive plots
-iops analyze /path/to/workdir/run_001
+iops --analyze /path/to/workdir/run_001
 ```
 
 The report includes:

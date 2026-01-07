@@ -33,8 +33,8 @@ benchmark:
 # First run: executes all tests and caches results
 iops config.yaml
 
-# Second run with --use_cache: reuses cached results
-iops config.yaml --use_cache
+# Second run with --use-cache: reuses cached results
+iops config.yaml --use-cache
 ```
 
 ### Example Workflow
@@ -48,7 +48,7 @@ iops benchmark.yaml
 
 # Re-run with cache: only executes 2 new repetitions per test (20 total)
 # The first 3 repetitions are loaded from cache
-iops benchmark.yaml --use_cache
+iops benchmark.yaml --use-cache
 ```
 
 ### Development Workflow
@@ -68,7 +68,7 @@ iops test_config.yaml
 # Edit output.sink.path in YAML
 
 # Re-run with cache: tests are skipped, only output regenerated
-iops test_config.yaml --use_cache
+iops test_config.yaml --use-cache
 ```
 
 ## How It Works
@@ -163,7 +163,7 @@ CREATE TABLE cached_executions (
 
 ### Cache Statistics
 
-When running with `--use_cache`, you'll see:
+When running with `--use-cache`, you'll see:
 
 ```
 Cache enabled: 45 entries, 15 unique parameter sets
@@ -231,7 +231,7 @@ cache.clear_cache()
 
 ### Cache Not Working
 
-**Problem**: Tests execute even with `--use_cache`
+**Problem**: Tests execute even with `--use-cache`
 
 **Solutions**:
 1. Check `sqlite_db` is set in YAML:
@@ -247,7 +247,7 @@ cache.clear_cache()
 
 3. Enable debug logging to see cache hits/misses:
    ```bash
-   iops config.yaml --use_cache --log_level DEBUG
+   iops config.yaml --use-cache --log-level DEBUG
    ```
 
 ### Parameter Mismatch
@@ -259,7 +259,7 @@ cache.clear_cache()
 1. **Derived variables with run-specific paths**:
    ```bash
    # Enable debug logging to see what's being hashed
-   iops config.yaml --use_cache --log_level DEBUG | grep "param_hash"
+   iops config.yaml --use-cache --log-level DEBUG | grep "param_hash"
    ```
 
    If you see different hashes for identical parameters, check for variables containing:
