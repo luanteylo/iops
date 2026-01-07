@@ -34,6 +34,126 @@ from iops.config.models import (
 class ReportGenerator:
     """Generates HTML reports from IOPS benchmark results."""
 
+    # Default Plotly config for interactive plots
+    PLOTLY_CONFIG = {
+        'displayModeBar': True,
+        'scrollZoom': True,
+        'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+        'displaylogo': False,
+        'responsive': True,
+    }
+
+    # Default color palette - 24 distinguishable colors for automatic assignment
+    # Combines colors from Plotly, D3, and custom selections for good contrast
+    DEFAULT_COLOR_PALETTE = [
+        '#3498db',  # Blue
+        '#e74c3c',  # Red
+        '#2ecc71',  # Green
+        '#9b59b6',  # Purple
+        '#f39c12',  # Orange
+        '#1abc9c',  # Teal
+        '#e91e63',  # Pink
+        '#00bcd4',  # Cyan
+        '#8bc34a',  # Light Green
+        '#ff5722',  # Deep Orange
+        '#673ab7',  # Deep Purple
+        '#009688',  # Dark Teal
+        '#ffc107',  # Amber
+        '#795548',  # Brown
+        '#607d8b',  # Blue Grey
+        '#cddc39',  # Lime
+        '#ff9800',  # Orange
+        '#03a9f4',  # Light Blue
+        '#4caf50',  # Green
+        '#f44336',  # Red
+        '#9c27b0',  # Purple
+        '#00796b',  # Dark Cyan
+        '#c2185b',  # Dark Pink
+        '#5d4037',  # Dark Brown
+    ]
+
+    @classmethod
+    def get_color_palette(cls, n_colors: int, user_colors: Optional[List[str]] = None) -> List[str]:
+        """
+        Get a color palette with n colors.
+
+        If user provides colors, those are used (cycling if needed).
+        Otherwise, uses the default palette, generating additional colors if n > 24.
+
+        Args:
+            n_colors: Number of colors needed
+            user_colors: Optional user-defined color list
+
+        Returns:
+            List of n hex color strings
+        """
+        if user_colors:
+            # Use user colors, cycling if needed
+            base_colors = user_colors
+        else:
+            base_colors = cls.DEFAULT_COLOR_PALETTE
+
+        if n_colors <= len(base_colors):
+            return base_colors[:n_colors]
+
+        # Need more colors than available - cycle through and adjust lightness
+        colors = list(base_colors)
+        cycle = 1
+        while len(colors) < n_colors:
+            # Cycle through base colors with slight variation
+            for base_color in base_colors:
+                if len(colors) >= n_colors:
+                    break
+                # Adjust the color slightly for each cycle
+                adjusted = cls._adjust_color_lightness(base_color, 0.15 * cycle)
+                colors.append(adjusted)
+            cycle += 1
+
+        return colors[:n_colors]
+
+    @staticmethod
+    def _adjust_color_lightness(hex_color: str, factor: float) -> str:
+        """
+        Adjust the lightness of a hex color.
+
+        Args:
+            hex_color: Color in hex format (#RRGGBB)
+            factor: Positive = lighter, negative = darker
+
+        Returns:
+            Adjusted color in hex format
+        """
+        # Remove # if present
+        hex_color = hex_color.lstrip('#')
+
+        # Parse RGB
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+
+        # Adjust (move towards white if factor > 0, towards black if < 0)
+        if factor > 0:
+            r = min(255, int(r + (255 - r) * factor))
+            g = min(255, int(g + (255 - g) * factor))
+            b = min(255, int(b + (255 - b) * factor))
+        else:
+            r = max(0, int(r * (1 + factor)))
+            g = max(0, int(g * (1 + factor)))
+            b = max(0, int(b * (1 + factor)))
+
+        return f'#{r:02x}{g:02x}{b:02x}'
+
+    def _get_user_colors(self) -> Optional[List[str]]:
+        """
+        Get user-defined colors from report config if available.
+
+        Returns:
+            List of color hex strings if user defined them, None otherwise
+        """
+        if self.report_config and self.report_config.theme and self.report_config.theme.colors:
+            return self.report_config.theme.colors
+        return None
+
     def __init__(self, workdir: Path, report_config: Optional[ReportingConfig] = None):
         """
         Initialize report generator.
@@ -245,6 +365,26 @@ class ReportGenerator:
                     converted.append(item)
             return converted
         return result
+
+    def _fig_to_html(self, fig: go.Figure, div_id: str = None) -> str:
+        """
+        Convert a Plotly figure to HTML with standard config for interactivity.
+
+        Args:
+            fig: Plotly figure to convert
+            div_id: Optional div ID for the plot
+
+        Returns:
+            HTML string with the plot
+        """
+        kwargs = {
+            'full_html': False,
+            'include_plotlyjs': False,
+            'config': self.PLOTLY_CONFIG,
+        }
+        if div_id:
+            kwargs['div_id'] = div_id
+        return fig.to_html(**kwargs)
 
     def _render_command(self, var_values: Dict[str, Any]) -> str:
         """
@@ -718,6 +858,65 @@ class ReportGenerator:
             margin: 10px 0;
             color: #c33;
         }}
+        /* Fullscreen overlay styles */
+        .fullscreen-overlay {{
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(255, 255, 255, 0.98);
+            z-index: 9999;
+            padding: 20px;
+            box-sizing: border-box;
+        }}
+        .fullscreen-overlay.active {{
+            display: block;
+        }}
+        .fullscreen-close {{
+            position: absolute;
+            top: 15px;
+            right: 25px;
+            font-size: 32px;
+            cursor: pointer;
+            color: #333;
+            z-index: 10001;
+            background: #f0f0f0;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 15px;
+        }}
+        .fullscreen-close:hover {{
+            background: #e0e0e0;
+        }}
+        .fullscreen-plot {{
+            width: 100%;
+            height: calc(100vh - 60px);
+            margin-top: 40px;
+        }}
+        /* Fullscreen button on plots */
+        .plot-wrapper {{
+            position: relative;
+        }}
+        .fullscreen-btn {{
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            z-index: 100;
+            background: rgba(240,240,240,0.95);
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 12px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }}
+        .fullscreen-btn:hover {{
+            background: #e0e0e0;
+            opacity: 1;
+        }}
     </style>
 </head>
 <body>
@@ -1040,7 +1239,7 @@ class ReportGenerator:
         fig_metric_evolution = self._create_bayesian_metric_evolution_plot(
             target_metric, objective, n_initial_points
         )
-        html += f"<div>{fig_metric_evolution.to_html(full_html=False, include_plotlyjs=False, div_id='bayesian_metric_evolution')}</div>\n"
+        html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution')}</div>\n"
 
         # 2. Parameter evolution over iterations
         html += "<h3>Parameter Evolution</h3>\n"
@@ -1049,7 +1248,7 @@ class ReportGenerator:
         fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
             report_vars, target_metric, objective, n_initial_points
         )
-        html += f"<div>{fig_param_evolution.to_html(full_html=False, include_plotlyjs=False, div_id='bayesian_param_evolution')}</div>\n"
+        html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution')}</div>\n"
 
         return html
 
@@ -1133,14 +1332,14 @@ class ReportGenerator:
             # Create plots for first two metrics (most common case)
             fig = self._create_pareto_plot(metrics[0], metrics[1], objectives, report_vars)
             html += '<div class="plot-container">\n'
-            html += fig.to_html(full_html=False, include_plotlyjs=False)
+            html += self._fig_to_html(fig)
             html += '</div>\n'
 
             # If we have 3+ metrics, create additional pairwise plots
             if len(metrics) >= 3:
                 fig2 = self._create_pareto_plot(metrics[0], metrics[2], objectives, report_vars)
                 html += '<div class="plot-container">\n'
-                html += fig2.to_html(full_html=False, include_plotlyjs=False)
+                html += self._fig_to_html(fig2)
                 html += '</div>\n'
 
         return html
@@ -1214,7 +1413,7 @@ class ReportGenerator:
                         )
                         fig = plot.generate()
                         html += '<div class="plot-container">\n'
-                        html += fig.to_html(full_html=False, include_plotlyjs=False)
+                        html += self._fig_to_html(fig)
                         html += '</div>\n'
                     except Exception as e:
                         html += f'<p class="error">Error generating {var_config.type} plot for {var}: {str(e)}</p>\n'
@@ -1232,7 +1431,7 @@ class ReportGenerator:
                     )
                     fig = plot.generate()
                     html += '<div class="plot-container">\n'
-                    html += fig.to_html(full_html=False, include_plotlyjs=False)
+                    html += self._fig_to_html(fig)
                     html += '</div>\n'
                 except Exception as e:
                     html += f'<p class="error">Error generating {plot_config.type} plot: {str(e)}</p>\n'
@@ -1264,7 +1463,7 @@ class ReportGenerator:
             )
             fig = plot.generate()
             html += '<div class="plot-container">\n'
-            html += fig.to_html(full_html=False, include_plotlyjs=False)
+            html += self._fig_to_html(fig)
             html += '</div>\n'
         except Exception as e:
             html += f'<p class="error">Error generating execution scatter plot: {str(e)}</p>\n'
@@ -1274,7 +1473,7 @@ class ReportGenerator:
         for var in swept_vars:
             fig = self._create_bar_plot(metric, var)
             html += '<div class="plot-container">\n'
-            html += fig.to_html(full_html=False, include_plotlyjs=False)
+            html += self._fig_to_html(fig)
             html += '</div>\n'
 
         # 2. Line plots - one for each variable, grouped by others
@@ -1285,7 +1484,7 @@ class ReportGenerator:
                 group_var = swept_vars[(i + 1) % len(swept_vars)]
                 fig = self._create_line_plot(metric, var, group_var)
                 html += '<div class="plot-container">\n'
-                html += fig.to_html(full_html=False, include_plotlyjs=False)
+                html += self._fig_to_html(fig)
                 html += '</div>\n'
 
         # 3. Heatmap if we have exactly 2 swept variables
@@ -1293,7 +1492,7 @@ class ReportGenerator:
             html += "<h3>Heatmap</h3>\n"
             fig = self._create_heatmap(metric, swept_vars[0], swept_vars[1])
             html += '<div class="plot-container">\n'
-            html += fig.to_html(full_html=False, include_plotlyjs=False)
+            html += self._fig_to_html(fig)
             html += '</div>\n'
 
         return html
@@ -1626,7 +1825,12 @@ class ReportGenerator:
         all_var1_values = sorted(df_grouped[var1_col].unique())
         x_values = [str(x) for x in all_var1_values]
 
-        for val2 in sorted(df_grouped[var2_col].unique()):
+        # Get color palette for the series
+        series_values = sorted(df_grouped[var2_col].unique())
+        user_colors = self._get_user_colors()
+        colors = self.get_color_palette(len(series_values), user_colors)
+
+        for idx, val2 in enumerate(series_values):
             df_slice = df_grouped[df_grouped[var2_col] == val2].sort_values(var1_col)
 
             # Map var1 values to categorical strings
@@ -1637,7 +1841,8 @@ class ReportGenerator:
                 y=df_slice[metric_col],
                 mode='lines+markers',
                 name=f'{var2}={val2}',
-                marker=dict(size=10)
+                marker=dict(size=10, color=colors[idx]),
+                line=dict(color=colors[idx])
             ))
 
         fig.update_layout(
@@ -1861,7 +2066,7 @@ class ReportGenerator:
             fig_parallel = self._create_parallel_coordinates(metric, report_vars)
             if fig_parallel is not None:
                 html += '<div class="plot-container">\n'
-                html += fig_parallel.to_html(full_html=False, include_plotlyjs=False)
+                html += self._fig_to_html(fig_parallel)
                 html += '</div>\n'
 
         # 2. Variable impact analysis
@@ -1882,7 +2087,7 @@ class ReportGenerator:
             fig_impact = self._create_variable_impact_plot(metric, report_vars)
             if fig_impact is not None:
                 html += '<div class="plot-container">\n'
-                html += fig_impact.to_html(full_html=False, include_plotlyjs=False)
+                html += self._fig_to_html(fig_impact)
                 html += '</div>\n'
 
         html += '</div>\n'
@@ -2166,6 +2371,84 @@ class ReportGenerator:
         <p>Generated by IOPS Analysis Tool - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
     </div>
 </div>
+
+<!-- Fullscreen overlay -->
+<div id="fullscreen-overlay" class="fullscreen-overlay">
+    <button class="fullscreen-close" onclick="closeFullscreen()">&times;</button>
+    <div id="fullscreen-plot" class="fullscreen-plot"></div>
+</div>
+
+<script>
+// Fullscreen functionality for Plotly plots
+document.addEventListener('DOMContentLoaded', function() {{
+    // Find all plotly graph divs and wrap them with fullscreen button
+    const plotlyDivs = document.querySelectorAll('.plotly-graph-div');
+    plotlyDivs.forEach(function(plotDiv, index) {{
+        // Create wrapper if not already wrapped
+        if (!plotDiv.parentElement.classList.contains('plot-wrapper')) {{
+            const wrapper = document.createElement('div');
+            wrapper.className = 'plot-wrapper';
+            plotDiv.parentElement.insertBefore(wrapper, plotDiv);
+            wrapper.appendChild(plotDiv);
+
+            // Add fullscreen button
+            const btn = document.createElement('button');
+            btn.className = 'fullscreen-btn';
+            btn.innerHTML = '&#x26F6; Fullscreen';
+            btn.onclick = function() {{ openFullscreen(plotDiv); }};
+            wrapper.appendChild(btn);
+        }}
+    }});
+}});
+
+function openFullscreen(plotDiv) {{
+    const overlay = document.getElementById('fullscreen-overlay');
+    const fullscreenPlot = document.getElementById('fullscreen-plot');
+
+    // Get the original plot data and layout
+    const originalData = plotDiv.data;
+    const originalLayout = JSON.parse(JSON.stringify(plotDiv.layout));
+
+    // Adjust layout for fullscreen
+    originalLayout.autosize = true;
+    delete originalLayout.height;
+    delete originalLayout.width;
+
+    // Create the fullscreen plot
+    Plotly.newPlot(fullscreenPlot, originalData, originalLayout, {{
+        displayModeBar: true,
+        scrollZoom: true,
+        displaylogo: false,
+        responsive: true
+    }});
+
+    // Show overlay
+    overlay.classList.add('active');
+    document.body.style.overflow = 'hidden';
+
+    // Trigger resize to fit
+    Plotly.Plots.resize(fullscreenPlot);
+}}
+
+function closeFullscreen() {{
+    const overlay = document.getElementById('fullscreen-overlay');
+    const fullscreenPlot = document.getElementById('fullscreen-plot');
+
+    overlay.classList.remove('active');
+    document.body.style.overflow = '';
+
+    // Clear the fullscreen plot
+    Plotly.purge(fullscreenPlot);
+}}
+
+// Close fullscreen on Escape key
+document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') {{
+        closeFullscreen();
+    }}
+}});
+</script>
+
 </body>
 </html>
 """

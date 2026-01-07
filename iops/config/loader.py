@@ -23,6 +23,7 @@ from iops.config.models import (
     BenchmarkConfig,
     ExecutorOptionsConfig,
     RandomSamplingConfig,
+    BayesianConfig,
     VarConfig,
     SweepConfig,
     ConstraintConfig,
@@ -349,6 +350,80 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
             "random_config: must specify either 'n_samples' or 'percentage'"
         )
 
+    # Parse and validate bayesian_config if present
+    bayesian_config = None
+    if "bayesian_config" in b and b["bayesian_config"] is not None:
+        bc = b["bayesian_config"]
+
+        # Validate n_initial_points
+        n_initial_points = bc.get("n_initial_points", 5)
+        if not isinstance(n_initial_points, int) or n_initial_points < 1:
+            raise ConfigValidationError(
+                f"bayesian_config.n_initial_points must be a positive integer, got: {n_initial_points}"
+            )
+
+        # Validate acquisition_func
+        acquisition_func = bc.get("acquisition_func", "EI")
+        valid_acq_funcs = ("EI", "PI", "LCB")
+        if acquisition_func not in valid_acq_funcs:
+            raise ConfigValidationError(
+                f"bayesian_config.acquisition_func must be one of {valid_acq_funcs}, got: '{acquisition_func}'"
+            )
+
+        # Validate base_estimator
+        base_estimator = bc.get("base_estimator", "RF")
+        valid_estimators = ("RF", "GP", "ET", "GBRT")
+        if base_estimator not in valid_estimators:
+            raise ConfigValidationError(
+                f"bayesian_config.base_estimator must be one of {valid_estimators}, got: '{base_estimator}'"
+            )
+
+        # Validate xi (for EI/PI)
+        xi = bc.get("xi", 0.01)
+        if not isinstance(xi, (int, float)):
+            raise ConfigValidationError(
+                f"bayesian_config.xi must be a number, got: {type(xi).__name__}"
+            )
+
+        # Validate kappa (for LCB)
+        kappa = bc.get("kappa", 1.96)
+        if not isinstance(kappa, (int, float)):
+            raise ConfigValidationError(
+                f"bayesian_config.kappa must be a number, got: {type(kappa).__name__}"
+            )
+
+        # Validate objective
+        objective = bc.get("objective", "minimize")
+        valid_objectives = ("minimize", "maximize")
+        if objective not in valid_objectives:
+            raise ConfigValidationError(
+                f"bayesian_config.objective must be one of {valid_objectives}, got: '{objective}'"
+            )
+
+        # objective_metric is required for Bayesian optimization
+        objective_metric = bc.get("objective_metric")
+        if not objective_metric:
+            raise ConfigValidationError(
+                "bayesian_config.objective_metric is required. "
+                "Specify the metric name to optimize (e.g., 'throughput', 'latency')."
+            )
+
+        bayesian_config = BayesianConfig(
+            n_initial_points=n_initial_points,
+            acquisition_func=acquisition_func,
+            base_estimator=base_estimator,
+            xi=float(xi),
+            kappa=float(kappa),
+            objective=objective,
+            objective_metric=objective_metric,
+        )
+    elif search_method == "bayesian":
+        # bayesian search method requires bayesian_config with objective_metric
+        raise ConfigValidationError(
+            "bayesian_config is required when search_method is 'bayesian'. "
+            "You must specify at least 'objective_metric' to define which metric to optimize."
+        )
+
     benchmark = BenchmarkConfig(
         name=b["name"],
         description=b.get("description"),
@@ -365,7 +440,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         cores_expr=b.get("cores_expr"),
         estimated_time_seconds=b.get("estimated_time_seconds"),
         report_vars=b.get("report_vars"),
-        bayesian_config=b.get("bayesian_config"),
+        bayesian_config=bayesian_config,
         random_config=random_config,
     )
 

@@ -64,11 +64,19 @@ benchmark:
   # Uncomment to enable Bayesian optimization:
   #search_method: "bayesian"
   # bayesian_config:
-  #   target_metric: "bwMiB"      # Metric to optimize (from parser)
-  #   objective: "maximize"       # "maximize" or "minimize"
-  #   n_initial_points: 5         # Random samples before optimization starts
-  #   n_iterations: 20            # Total number of evaluations
-  #   acquisition_func: "EI"      # "EI" (Expected Improvement), "PI", or "LCB"
+  #   objective_metric: "metric"  # REQUIRED: Metric to optimize (must match a metric from parser)
+  #   objective: "minimize"       # "minimize" (default) or "maximize"
+  #   n_initial_points: 5         # Random samples before optimization starts (default: 5)
+  #   acquisition_func: "EI"      # "EI" (Expected Improvement, default), "PI", or "LCB"
+  #   base_estimator: "RF"        # Surrogate model: "RF" (default), "GP", "ET", "GBRT"
+  #   xi: 0.01                    # Exploration-exploitation for EI/PI (higher = more exploration)
+  #   kappa: 1.96                 # Exploration parameter for LCB (higher = more exploration)
+  #
+  # Surrogate Models:
+  #   - RF: Random Forest (default) - Best for categorical/mixed parameter spaces
+  #   - GP: Gaussian Process - Best for continuous spaces, struggles with categoricals
+  #   - ET: Extra Trees - Similar to RF with different tree construction
+  #   - GBRT: Gradient Boosted Regression Trees
   
 
 

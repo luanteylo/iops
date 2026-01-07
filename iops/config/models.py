@@ -71,6 +71,41 @@ class RandomSamplingConfig:
 
 
 @dataclass
+class BayesianConfig:
+    """
+    Configuration for Bayesian optimization search method.
+
+    Bayesian optimization uses a surrogate model to guide the search toward
+    optimal parameter configurations based on previous results.
+
+    Attributes:
+        n_initial_points: Number of random initial samples before optimization starts (default: 5)
+        acquisition_func: Acquisition function to select next point:
+            - "EI": Expected Improvement (default) - balanced exploration/exploitation
+            - "PI": Probability of Improvement - more exploitative
+            - "LCB": Lower Confidence Bound - configurable via kappa
+        base_estimator: Surrogate model type:
+            - "RF": Random Forest (default) - robust, handles categorical well
+            - "GP": Gaussian Process - best for continuous, struggles with categorical
+            - "ET": Extra Trees - similar to RF, more randomness
+            - "GBRT": Gradient Boosted Regression Trees
+        xi: Exploration-exploitation trade-off for EI/PI (default: 0.01)
+            Higher values favor exploration over exploitation
+        kappa: Exploration parameter for LCB (default: 1.96)
+            Higher values favor exploration
+        objective: Optimization direction - "minimize" or "maximize" (default: "minimize")
+        objective_metric: Metric name to optimize (defaults to first metric if not specified)
+    """
+    n_initial_points: int = 5
+    acquisition_func: Literal["EI", "PI", "LCB"] = "EI"
+    base_estimator: Literal["RF", "GP", "ET", "GBRT"] = "RF"
+    xi: float = 0.01
+    kappa: float = 1.96
+    objective: Literal["minimize", "maximize"] = "minimize"
+    objective_metric: Optional[str] = None
+
+
+@dataclass
 class BenchmarkConfig:
     name: str
     description: Optional[str]
@@ -87,7 +122,7 @@ class BenchmarkConfig:
     cores_expr: Optional[str] = None  # Jinja expression to compute cores (e.g., "{{ nodes * ppn }}")
     estimated_time_seconds: Optional[float] = None  # Estimated execution time per test (for dry-run)
     report_vars: Optional[List[str]] = None  # Variables to include in analysis reports (default: all numeric swept vars)
-    bayesian_config: Optional[Dict[str, Any]] = None  # Bayesian optimization configuration
+    bayesian_config: Optional[BayesianConfig] = None  # Bayesian optimization configuration
     random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
 
 

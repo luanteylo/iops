@@ -535,16 +535,33 @@ class BayesianPlanner(BasePlanner, HasLogger):
         benchmark:
           search_method: "bayesian"
           bayesian_config:
-            target_metric: "bwMiB"  # Metric to optimize
-            objective: "maximize"    # "maximize" or "minimize"
-            n_initial_points: 5      # Random exploration before optimization
-            n_iterations: 20         # Total number of evaluations
-            acquisition_func: "EI"   # "EI", "PI", or "LCB"
-            random_state: 42         # For reproducibility
+            objective_metric: "metric"  # REQUIRED: Metric to optimize (must match parser metric)
+            objective: "minimize"        # "minimize" (default) or "maximize"
+            n_initial_points: 5          # Random exploration before optimization (default: 5)
+            acquisition_func: "EI"       # "EI" (default), "PI", or "LCB"
+            base_estimator: "RF"         # Surrogate model: "RF" (default), "GP", "ET", or "GBRT"
+            xi: 0.01                     # Exploration-exploitation for EI/PI (higher = more exploration)
+            kappa: 1.96                  # Exploration parameter for LCB (higher = more exploration)
+
+    Surrogate Models (base_estimator):
+        - "RF": Random Forest (default) - Best for categorical/mixed spaces
+        - "GP": Gaussian Process - Best for continuous spaces, struggles with categoricals
+        - "ET": Extra Trees - Similar to RF, slightly different tree building
+        - "GBRT": Gradient Boosted Regression Trees
+
+    Acquisition Functions:
+        - "EI": Expected Improvement (default) - Balanced exploration/exploitation
+        - "PI": Probability of Improvement - More exploitative, faster convergence
+        - "LCB": Lower Confidence Bound - More explorative, controlled by kappa
+
+    Numeric List Handling:
+        For variables with list mode and numeric types (int/float), uses ordinal
+        encoding instead of categorical. This allows the model to learn that
+        higher indices correlate with higher/lower metric values.
 
     The planner will:
     1. Start with random exploration (n_initial_points)
-    2. Build a surrogate model from observed results
+    2. Build a surrogate model (Random Forest by default) from observed results
     3. Use acquisition function to suggest next promising point
     4. Iteratively improve to find optimal parameters
 
@@ -560,31 +577,41 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 "Install it with: pip install scikit-optimize"
             )
 
-        # Get Bayesian config from benchmark config
+        # Get Bayesian config from benchmark config (now a BayesianConfig dataclass)
         self.bayesian_cfg = self._get_bayesian_config()
 
-        # Optimization settings
-        self.target_metric = self.bayesian_cfg.get('target_metric', 'bwMiB')
-        self.objective = self.bayesian_cfg.get('objective', 'maximize')
-        self.n_initial_points = self.bayesian_cfg.get('n_initial_points', 5)
-        self.n_iterations = self.bayesian_cfg.get('n_iterations', 20)
-        self.acquisition_func = self.bayesian_cfg.get('acquisition_func', 'EI')
-
-        # Validate objective
-        if self.objective not in ['maximize', 'minimize']:
-            raise ValueError(f"objective must be 'maximize' or 'minimize', got: {self.objective}")
+        # Optimization settings from BayesianConfig dataclass
+        self.target_metric = self._resolve_target_metric()
+        self.objective = self.bayesian_cfg.objective
+        self.n_initial_points = self.bayesian_cfg.n_initial_points
+        self.n_iterations = 20  # Default, can be added to BayesianConfig later
+        self.acquisition_func = self.bayesian_cfg.acquisition_func
+        self.xi = self.bayesian_cfg.xi
+        self.kappa = self.bayesian_cfg.kappa
+        self.base_estimator = self.bayesian_cfg.base_estimator
 
         # Build search space from swept variables
+        # This also populates self.ordinal_mappings for index-to-value conversion
+        self.ordinal_mappings: Dict[str, List[Any]] = {}  # var_name -> list of valid values
         self.search_space, self.var_names = self._build_search_space()
 
         if not self.search_space:
             raise ValueError("No swept variables found for Bayesian optimization")
 
-        # Initialize Bayesian optimizer
+        # Build acquisition function kwargs
+        acq_func_kwargs = {}
+        if self.acquisition_func in ['EI', 'PI']:
+            acq_func_kwargs['xi'] = self.xi
+        elif self.acquisition_func == 'LCB':
+            acq_func_kwargs['kappa'] = self.kappa
+
+        # Initialize Bayesian optimizer with Random Forest (better for categorical/mixed spaces)
         self.optimizer = Optimizer(
             dimensions=self.search_space,
+            base_estimator=self.base_estimator,
             n_initial_points=self.n_initial_points,
             acq_func=self.acquisition_func,
+            acq_func_kwargs=acq_func_kwargs,
             random_state=self.cfg.benchmark.random_seed,
         )
 
@@ -613,28 +640,51 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.logger.info(
             f"Bayesian planner initialized: target={self.target_metric} "
             f"objective={self.objective} n_iterations={self.n_iterations} "
-            f"n_initial={self.n_initial_points}"
+            f"n_initial={self.n_initial_points} estimator={self.base_estimator}"
         )
         self.logger.info(f"Search space: {len(self.search_space)} dimensions: {self.var_names}")
+        if self.ordinal_mappings:
+            self.logger.info(f"Using ordinal encoding for: {list(self.ordinal_mappings.keys())}")
 
-    def _get_bayesian_config(self) -> Dict[str, Any]:
-        """Extract Bayesian optimization config from benchmark config."""
+    def _get_bayesian_config(self):
+        """Extract Bayesian optimization config from benchmark config.
+
+        Returns:
+            BayesianConfig dataclass with optimization settings
+        """
+        from iops.config.models import BayesianConfig
+
         # Check if bayesian_config exists in benchmark
         if hasattr(self.cfg.benchmark, 'bayesian_config') and self.cfg.benchmark.bayesian_config:
             return self.cfg.benchmark.bayesian_config
 
-        # Fall back to defaults
-        return {
-            'target_metric': 'bwMiB',
-            'objective': 'maximize',
-            'n_initial_points': 5,
-            'n_iterations': 20,
-            'acquisition_func': 'EI',
-        }
+        # Fall back to defaults (return default BayesianConfig)
+        return BayesianConfig()
+
+    def _resolve_target_metric(self) -> str:
+        """Get the target metric for optimization.
+
+        Returns:
+            Name of the metric to optimize (guaranteed to be set by loader validation)
+
+        Raises:
+            ValueError: If no metric is set (should not happen after loader validation)
+        """
+        if not self.bayesian_cfg.objective_metric:
+            # This should not happen since loader validates it
+            raise ValueError(
+                "objective_metric is required in bayesian_config. "
+                "This should have been caught by the configuration loader."
+            )
+        return self.bayesian_cfg.objective_metric
 
     def _build_search_space(self):
         """
         Build scikit-optimize search space from swept variables.
+
+        For numeric list variables, uses ordinal encoding (index-based) instead of
+        Categorical to allow the surrogate model to interpolate between values.
+        This is crucial for Random Forest to learn patterns like "higher values = better".
 
         Returns:
             Tuple of (dimensions, var_names)
@@ -666,32 +716,57 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 var_names.append(var_name)
 
             elif sweep_cfg.mode == "list":
-                # Categorical or discrete values
+                values = sweep_cfg.values
+
                 if var_config.type in ["int", "float"]:
-                    # Discrete numeric values
-                    dim = Categorical(
-                        categories=sweep_cfg.values,
-                        name=var_name
+                    # Numeric list: use ordinal encoding (index-based Integer dimension)
+                    # This allows the model to interpolate: index 0 < index 1 < index 2
+                    # Sort values to ensure ordering makes sense
+                    sorted_values = sorted(values)
+                    self.ordinal_mappings[var_name] = sorted_values
+
+                    dim = Integer(
+                        low=0,
+                        high=len(sorted_values) - 1,
+                        name=f"{var_name}_idx"
+                    )
+                    self.logger.debug(
+                        f"  [Bayesian] Variable '{var_name}': ordinal encoding "
+                        f"{sorted_values} -> indices [0, {len(sorted_values) - 1}]"
                     )
                 else:
-                    # Categorical (string) values
+                    # Categorical (string) values - keep as Categorical
                     dim = Categorical(
-                        categories=sweep_cfg.values,
+                        categories=values,
                         name=var_name
                     )
+
                 dimensions.append(dim)
                 var_names.append(var_name)
 
         return dimensions, var_names
 
     def _params_to_dict(self, params: List[Any]) -> Dict[str, Any]:
-        """Convert parameter list to dictionary, converting numpy types to native Python."""
+        """
+        Convert parameter list to dictionary, converting numpy types to native Python.
+
+        For ordinal-encoded variables (numeric lists), converts the index back to
+        the actual value from the sorted list.
+        """
         result = {}
         for name, value in zip(self.var_names, params):
             # Convert numpy types to native Python types
             if hasattr(value, 'item'):
                 # numpy scalar (np.int64, np.float64, etc.)
                 value = value.item()
+
+            # Convert ordinal index back to actual value
+            if name in self.ordinal_mappings:
+                idx = int(value)
+                # Clamp to valid range (shouldn't be needed, but safety check)
+                idx = max(0, min(idx, len(self.ordinal_mappings[name]) - 1))
+                value = self.ordinal_mappings[name][idx]
+
             result[name] = value
         return result
 
