@@ -13,6 +13,13 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from jinja2 import Template
 
+# Optional pyarrow for parquet support
+try:
+    import pyarrow
+    PYARROW_AVAILABLE = True
+except ImportError:
+    PYARROW_AVAILABLE = False
+
 from iops.config.models import (
     ReportingConfig,
     ReportThemeConfig,
@@ -78,6 +85,12 @@ class ReportGenerator:
         if output_info['type'] == 'csv':
             self.df = pd.read_csv(output_path)
         elif output_info['type'] == 'parquet':
+            if not PYARROW_AVAILABLE:
+                raise ImportError(
+                    "pyarrow is required for parquet output. "
+                    "Install it with: pip install pyarrow\n"
+                    "Or install iops with parquet support: pip install iops-benchmark[parquet]"
+                )
             self.df = pd.read_parquet(output_path)
         elif output_info['type'] == 'sqlite':
             import sqlite3

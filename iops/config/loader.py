@@ -10,6 +10,13 @@ import ast
 import yaml
 import os
 
+# Optional pyarrow for parquet support
+try:
+    import pyarrow
+    PYARROW_AVAILABLE = True
+except ImportError:
+    PYARROW_AVAILABLE = False
+
 from iops.config.models import (
     ConfigValidationError,
     GenericBenchmarkConfig,
@@ -940,6 +947,11 @@ def validate_yaml_config(config_path: Path) -> List[str]:
                     errors.append("output.sink.type is required")
                 elif sink["type"] not in ("csv", "parquet", "sqlite"):
                     errors.append(f"output.sink.type must be one of: csv, parquet, sqlite (got '{sink['type']}')")
+                elif sink["type"] == "parquet" and not PYARROW_AVAILABLE:
+                    errors.append(
+                        "pyarrow is required for parquet output. "
+                        "Install with: pip install pyarrow or pip install iops-benchmark[parquet]"
+                    )
 
                 if "path" not in sink or not sink["path"] or not str(sink["path"]).strip():
                     errors.append("output.sink.path is required and must not be empty")
@@ -1069,6 +1081,13 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
 
     if sink.type not in ("csv", "parquet", "sqlite"):
         raise ConfigValidationError("output.sink.type must be one of: csv, parquet, sqlite")
+
+    if sink.type == "parquet" and not PYARROW_AVAILABLE:
+        raise ConfigValidationError(
+            "pyarrow is required for parquet output. "
+            "Install it with: pip install pyarrow\n"
+            "Or install iops with parquet support: pip install iops-benchmark[parquet]"
+        )
 
     if not sink.path or not str(sink.path).strip():
         raise ConfigValidationError("output.sink.path must not be empty")

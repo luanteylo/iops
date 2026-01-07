@@ -28,17 +28,14 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml",
-    "ruamel.yaml",
-    "psutil",
-    "sqlmodel",
-    "smt",
     "scikit-optimize",
     "pandas>=2.1.0",
     "jinja2>=3.0.0",
     "plotly",
-    "pyarrow",
-    "fastparquet",
 ]
+
+[project.optional-dependencies]
+parquet = ["pyarrow"]
 
 [project.urls]
 Homepage = "https://gitlab.inria.fr/lgouveia/iops"

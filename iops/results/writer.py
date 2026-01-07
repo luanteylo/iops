@@ -7,6 +7,23 @@ import sqlite3
 
 import pandas as pd
 
+# Optional pyarrow for parquet support
+try:
+    import pyarrow
+    PYARROW_AVAILABLE = True
+except ImportError:
+    PYARROW_AVAILABLE = False
+
+
+def _check_pyarrow():
+    """Raise helpful error if pyarrow is not installed."""
+    if not PYARROW_AVAILABLE:
+        raise ImportError(
+            "pyarrow is required for parquet output. "
+            "Install it with: pip install pyarrow\n"
+            "Or install iops with parquet support: pip install iops-benchmark[parquet]"
+        )
+
 
 # -------------------------
 # flattening + filtering
@@ -170,6 +187,7 @@ def _write_parquet(path: Path, df: pd.DataFrame, mode: str) -> None:
     - overwrite OR missing: write
     - append: read+concat+rewrite, unioning columns
     """
+    _check_pyarrow()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if mode == "overwrite" or not path.exists():
