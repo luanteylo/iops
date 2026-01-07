@@ -578,11 +578,11 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 "Install it with: pip install scikit-optimize"
             )
 
-        # Get Bayesian config from benchmark config (now a BayesianConfig dataclass)
-        self.bayesian_cfg = self._get_bayesian_config()
+        # Bayesian config is guaranteed by loader to be set when search_method is "bayesian"
+        self.bayesian_cfg = self.cfg.benchmark.bayesian_config
 
         # Optimization settings from BayesianConfig dataclass
-        self.target_metric = self._resolve_target_metric()
+        self.target_metric = self.bayesian_cfg.objective_metric
         self.objective = self.bayesian_cfg.objective
         self.n_initial_points = self.bayesian_cfg.n_initial_points
         self.n_iterations = self.bayesian_cfg.n_iterations
@@ -626,6 +626,9 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self._attempt_count: int = 0
         self._attempt_total: int = self.n_iterations * (cfg.benchmark.repetitions or 1)
 
+        # Total search space size (for comparison with exhaustive search)
+        self.total_space_size = self._compute_total_space_size()
+
         # Best found so far
         self.best_params: Optional[Dict[str, Any]] = None
         self.best_value: Optional[float] = None
@@ -647,37 +650,28 @@ class BayesianPlanner(BasePlanner, HasLogger):
         if self.ordinal_mappings:
             self.logger.info(f"Using ordinal encoding for: {list(self.ordinal_mappings.keys())}")
 
-    def _get_bayesian_config(self):
-        """Extract Bayesian optimization config from benchmark config.
-
-        Returns:
-            BayesianConfig dataclass with optimization settings
-        """
-        from iops.config.models import BayesianConfig
-
-        # Check if bayesian_config exists in benchmark
-        if hasattr(self.cfg.benchmark, 'bayesian_config') and self.cfg.benchmark.bayesian_config:
-            return self.cfg.benchmark.bayesian_config
-
-        # Fall back to defaults (return default BayesianConfig)
-        return BayesianConfig()
-
-    def _resolve_target_metric(self) -> str:
-        """Get the target metric for optimization.
-
-        Returns:
-            Name of the metric to optimize (guaranteed to be set by loader validation)
-
-        Raises:
-            ValueError: If no metric is set (should not happen after loader validation)
-        """
-        if not self.bayesian_cfg.objective_metric:
-            # This should not happen since loader validates it
-            raise ValueError(
-                "objective_metric is required in bayesian_config. "
-                "This should have been caught by the configuration loader."
+        # Log search space coverage
+        if self.total_space_size > 0:
+            coverage_pct = (self.n_iterations / self.total_space_size) * 100
+            savings_pct = 100 - coverage_pct
+            self.logger.info(
+                f"Total search space: {self.total_space_size} configurations. "
+                f"Bayesian will explore {self.n_iterations} ({coverage_pct:.1f}%), "
+                f"saving {savings_pct:.1f}% vs exhaustive search."
             )
-        return self.bayesian_cfg.objective_metric
+
+    def _compute_total_space_size(self) -> int:
+        """
+        Compute the total number of configurations in the search space.
+
+        Uses build_execution_matrix to get the exact count of all possible
+        parameter combinations.
+
+        Returns:
+            Total number of possible configurations
+        """
+        full_matrix = build_execution_matrix(self.cfg, start_execution_id=0)
+        return len(full_matrix)
 
     def _build_search_space(self):
         """
@@ -836,12 +830,13 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 break
 
             # Constraint violated - tell optimizer this is a bad point
-            # Use a large penalty value (for minimization)
             self.logger.debug(
                 f"  [Bayesian] Suggested point violates constraints, asking for another "
                 f"(retry {retry + 1}/{max_constraint_retries})"
             )
             # Tell optimizer this point is infeasible with a large penalty
+            # Note: scikit-optimize always minimizes internally, so inf is always "worst"
+            # (for maximization, actual values are negated before telling the optimizer)
             self.optimizer.tell(next_params, float('inf'))
         else:
             self.logger.warning(

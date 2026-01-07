@@ -400,7 +400,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
             )
 
         # Validate objective
-        objective = bc.get("objective", "minimize")
+        objective = bc.get("objective", "maximize")
         valid_objectives = ("minimize", "maximize")
         if objective not in valid_objectives:
             raise ConfigValidationError(
@@ -1190,3 +1190,19 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if sink.type == "sqlite":
         if not sink.table or not str(sink.table).strip():
             raise ConfigValidationError("output.sink.table must not be empty when type=sqlite")
+
+    # ---- bayesian_config validation ----
+    if cfg.benchmark.bayesian_config and cfg.benchmark.bayesian_config.objective_metric:
+        # Collect all valid metric names from scripts' parser sections
+        valid_metrics = set()
+        for script in cfg.scripts:
+            if script.parser and script.parser.metrics:
+                for metric in script.parser.metrics:
+                    valid_metrics.add(metric.name)
+
+        objective_metric = cfg.benchmark.bayesian_config.objective_metric
+        if objective_metric not in valid_metrics:
+            raise ConfigValidationError(
+                f"bayesian_config.objective_metric '{objective_metric}' is not a valid metric. "
+                f"Available metrics from parser: {sorted(valid_metrics)}"
+            )
