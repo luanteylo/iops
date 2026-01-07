@@ -81,12 +81,12 @@ class IOPSRunner(HasLogger):
 
         # Determine estimated time scenarios (CLI overrides config)
         self.estimated_time_scenarios: List[float] = []
-        if hasattr(args, 'estimated_time') and args.estimated_time is not None and isinstance(args.estimated_time, str):
+        if hasattr(args, 'time_estimate') and args.time_estimate is not None and isinstance(args.time_estimate, str):
             # Parse comma-separated values: "120" or "60,120,300"
             try:
-                self.estimated_time_scenarios = [float(x.strip()) for x in args.estimated_time.split(',')]
+                self.estimated_time_scenarios = [float(x.strip()) for x in args.time_estimate.split(',')]
             except ValueError:
-                self.logger.warning(f"Invalid --estimated-time format: {args.estimated_time}. Expected number or comma-separated numbers.")
+                self.logger.warning(f"Invalid --time-estimate format: {args.time_estimate}. Expected number or comma-separated numbers.")
         elif cfg.benchmark.estimated_time_seconds is not None:
             self.estimated_time_scenarios = [cfg.benchmark.estimated_time_seconds]
 

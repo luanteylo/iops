@@ -20,28 +20,54 @@ def load_version():
         return f.read().strip()
     
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="IOPS Tool")
+    parser = argparse.ArgumentParser(
+        description="IOPS Tool - Benchmark Automation Framework",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
 
-    parser.add_argument('setup_file', type=Path, nargs='?', help="Path to the YAML setup file (e.g., iops_config.yaml)")
-    parser.add_argument('--generate_setup', nargs='?', const=Path("iops_config.yaml"), type=Path,
-                        help="Generate a default setup YAML file. Optionally specify a path (default: iops_config.yaml)")
-    parser.add_argument('--check_setup', action='store_true', help="Validate the setup YAML file and exit")
-    parser.add_argument('--log_file', type=Path, default=Path("iops.log"), help="Path to the log file")
-    parser.add_argument('--no-log-terminal', action='store_true', help="Disable logging to terminal (logs only to file)")
-    parser.add_argument('--log_level', type=str, default='INFO', help="Logging level (default: INFO)")
-    parser.add_argument('--verbose', action='store_true', help="Show full traceback for errors")
-    parser.add_argument('--use_cache', action='store_true',
-                        help="Reuse cached results if available, skipping already executed parameter sets")
-    parser.add_argument('--max-core-hours', type=float, default=None,
-                        help="Maximum CPU core-hours budget for execution. Stops scheduling new tests when exceeded.")
-    parser.add_argument('--dry-run', action='store_true',
-                        help="Preview execution plan without running tests. Generates scripts and creates analysis report.")
-    parser.add_argument('--estimated-time', type=str, default=None,
-                        help="Estimated execution time per test in seconds. Supports single value or comma-separated scenarios: '120' or '60,120,300'")
-    parser.add_argument('--analyze', type=Path, default=None,
-                        help="Generate HTML analysis report from a completed benchmark run. Provide path to workdir (e.g., /path/to/run_001)")
-    parser.add_argument('--report-config', type=Path, default=None,
-                        help="Path to custom report configuration YAML (use with --analyze to override report settings)")
+    # Positional argument
+    parser.add_argument('setup_file', type=Path, nargs='?',
+                        help="Path to the YAML setup file (e.g., iops_config.yaml)")
+
+    # Mode selection (mutually exclusive operations)
+    mode_group = parser.add_argument_group('modes', 'Operation modes (mutually exclusive with normal execution)')
+    mode_group.add_argument('--generate', nargs='?', const=Path("iops_config.yaml"), type=Path,
+                            metavar='PATH',
+                            help="Generate a default config template (default: iops_config.yaml)")
+    mode_group.add_argument('--check', action='store_true',
+                            help="Validate the config file and exit")
+    mode_group.add_argument('--analyze', type=Path, default=None, metavar='WORKDIR',
+                            help="Generate HTML report from a completed run")
+
+    # Execution options
+    exec_group = parser.add_argument_group('execution', 'Execution control options')
+    exec_group.add_argument('-n', '--dry-run', action='store_true',
+                            help="Preview execution plan without running tests")
+    exec_group.add_argument('--use-cache', action='store_true',
+                            help="Reuse cached results, skip already executed parameter sets")
+    exec_group.add_argument('--max-core-hours', type=float, default=None, metavar='HOURS',
+                            help="Maximum CPU core-hours budget for execution")
+    exec_group.add_argument('--time-estimate', type=str, default=None, metavar='SECONDS',
+                            help="Estimated time per test: '120' or '60,120,300' for scenarios")
+
+    # Logging options
+    log_group = parser.add_argument_group('logging', 'Logging configuration')
+    log_group.add_argument('--log-file', type=Path, default=Path("iops.log"), metavar='PATH',
+                           help="Path to log file (default: iops.log)")
+    log_group.add_argument('--log-level', type=str, default='INFO', metavar='LEVEL',
+                           choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                           help="Logging level (default: INFO)")
+    log_group.add_argument('--no-log-terminal', action='store_true',
+                           help="Disable logging to terminal (log to file only)")
+    log_group.add_argument('-v', '--verbose', action='store_true',
+                           help="Show full traceback for errors")
+
+    # Report options
+    report_group = parser.add_argument_group('reporting', 'Report generation options')
+    report_group.add_argument('--report-config', type=Path, default=None, metavar='PATH',
+                              help="Custom report config YAML (use with --analyze)")
+
+    # Info
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
     return parser.parse_args()
@@ -238,14 +264,14 @@ def main():
     args = parse_arguments()
     logger = initialize_logger(args)
 
-    # Handle --generate_setup mode (template generator)
-    if args.generate_setup:
+    # Handle --generate mode (template generator)
+    if args.generate:
         from iops.setup import BenchmarkWizard
 
         try:
             wizard = BenchmarkWizard()
             # Pass the output path if specified
-            output_path = str(args.generate_setup) if args.generate_setup else None
+            output_path = str(args.generate) if args.generate else None
             output_file = wizard.run(output_path=output_path)
 
             if output_file:
@@ -297,8 +323,8 @@ def main():
         logger.error("No setup file provided for validation or execution.")
         return
 
-    # Handle --check_setup mode (validate only)
-    if args.check_setup:
+    # Handle --check mode (validate only)
+    if args.check:
         from iops.config.loader import validate_yaml_config
         errors = validate_yaml_config(Path(args.setup_file))
         if errors:
