@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from collections import defaultdict
 import random
+import warnings
 
 # Optional imports for Bayesian optimization
 try:
@@ -25,6 +26,8 @@ try:
     from skopt.space import Integer, Real, Categorical
     import numpy as np
     SKOPT_AVAILABLE = True
+    # Suppress skopt warning about duplicate points - it handles this by using random points
+    warnings.filterwarnings('ignore', message='.*objective has been evaluated at point.*', category=UserWarning)
 except ImportError:
     SKOPT_AVAILABLE = False
 
@@ -682,8 +685,15 @@ class BayesianPlanner(BasePlanner, HasLogger):
         return dimensions, var_names
 
     def _params_to_dict(self, params: List[Any]) -> Dict[str, Any]:
-        """Convert parameter list to dictionary."""
-        return {name: value for name, value in zip(self.var_names, params)}
+        """Convert parameter list to dictionary, converting numpy types to native Python."""
+        result = {}
+        for name, value in zip(self.var_names, params):
+            # Convert numpy types to native Python types
+            if hasattr(value, 'item'):
+                # numpy scalar (np.int64, np.float64, etc.)
+                value = value.item()
+            result[name] = value
+        return result
 
     def _check_constraints(self, params: List[Any]) -> bool:
         """

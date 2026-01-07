@@ -1040,7 +1040,7 @@ class ReportGenerator:
         fig_metric_evolution = self._create_bayesian_metric_evolution_plot(
             target_metric, objective, n_initial_points
         )
-        html += f"<div>{fig_metric_evolution.to_html(include_plotlyjs=False, div_id='bayesian_metric_evolution')}</div>\n"
+        html += f"<div>{fig_metric_evolution.to_html(full_html=False, include_plotlyjs=False, div_id='bayesian_metric_evolution')}</div>\n"
 
         # 2. Parameter evolution over iterations
         html += "<h3>Parameter Evolution</h3>\n"
@@ -1049,7 +1049,7 @@ class ReportGenerator:
         fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
             report_vars, target_metric, objective, n_initial_points
         )
-        html += f"<div>{fig_param_evolution.to_html(include_plotlyjs=False, div_id='bayesian_param_evolution')}</div>\n"
+        html += f"<div>{fig_param_evolution.to_html(full_html=False, include_plotlyjs=False, div_id='bayesian_param_evolution')}</div>\n"
 
         return html
 
@@ -1317,14 +1317,14 @@ class ReportGenerator:
         }).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
-        iterations = df_grouped['execution.execution_id'].values
-        metric_values = df_grouped[metric_col].values
+        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        metric_values = self._to_python_list(df_grouped[metric_col].values)
 
         # Compute running best
         if objective == 'maximize':
-            running_best = pd.Series(metric_values).cummax().values
+            running_best = self._to_python_list(pd.Series(metric_values).cummax().values)
         else:
-            running_best = pd.Series(metric_values).cummin().values
+            running_best = self._to_python_list(pd.Series(metric_values).cummin().values)
 
         # Create figure with two traces
         fig = go.Figure()
@@ -1393,8 +1393,8 @@ class ReportGenerator:
         df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
-        iterations = df_grouped['execution.execution_id'].values
-        metric_values = df_grouped[metric_col].values
+        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        metric_values = self._to_python_list(df_grouped[metric_col].values)
 
         # Create subplots - one per parameter
         n_params = len(report_vars)
@@ -1406,10 +1406,10 @@ class ReportGenerator:
 
         for idx, var in enumerate(report_vars, 1):
             var_col = self._get_var_column(var)
-            param_values = df_grouped[var_col].values
+            param_values = self._to_python_list(df_grouped[var_col].values)
 
             # Get unique sorted values for this parameter
-            unique_values = sorted(df_grouped[var_col].unique())
+            unique_values = self._to_python_list(sorted(df_grouped[var_col].unique()))
 
             fig.add_trace(
                 go.Scatter(
