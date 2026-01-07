@@ -59,14 +59,12 @@ Shared fixtures for all tests:
 - `tmp_workdir`: Temporary working directory
 - `sample_config_dict`: Basic config dictionary
 - `sample_config_file`: YAML config file
-- `sample_round_config_dict`: Multi-round config
 
 ### `test_config.py`
 Configuration loading and validation:
 - Valid config loading
 - Missing fields detection
 - Variable configuration (sweep, derived)
-- Round configuration
 - Parser validation
 - Output settings
 
@@ -76,7 +74,6 @@ Execution matrix generation:
 - Variable expansion
 - Derived variable computation
 - Execution ID assignment
-- Round-specific matrices
 - Lazy template rendering
 - Cartesian product generation
 
@@ -86,7 +83,6 @@ Execution caching:
 - Store and retrieve operations
 - Cache misses
 - Repetition isolation
-- Round isolation
 - Parameter normalization
 - Variable exclusion
 - Cache updates
@@ -105,7 +101,6 @@ Executor implementations:
 End-to-end workflows:
 - Complete execution workflow
 - Cache integration
-- Multi-round optimization
 - Post-script processing
 - Result verification
 
@@ -118,7 +113,6 @@ Current test coverage includes:
 - ✅ Cache operations (store, retrieve, update)
 - ✅ Executor functionality (local, SLURM)
 - ✅ Post-script execution
-- ✅ Multi-round optimization
 - ✅ End-to-end integration
 
 ## Adding New Tests

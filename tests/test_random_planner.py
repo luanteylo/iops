@@ -4,8 +4,8 @@ import pytest
 import yaml
 from pathlib import Path
 
-from iops.execution.planner import BasePlanner
-from iops.execution.random_planner import RandomSamplingPlanner
+from iops.execution.planner import BasePlanner, RandomSamplingPlanner
+from iops.config.models import ConfigValidationError
 from conftest import load_config
 
 
@@ -68,10 +68,8 @@ def test_random_config_validation_both_params(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-
-    with pytest.raises(ValueError, match="cannot specify both 'n_samples' and 'percentage'"):
-        BasePlanner.build(config)
+    with pytest.raises(ConfigValidationError, match="cannot specify both 'n_samples' and 'percentage'"):
+        load_config(config_file)
 
 
 def test_random_config_validation_neither_param(tmp_path, sample_config_dict):
@@ -83,10 +81,8 @@ def test_random_config_validation_neither_param(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-
-    with pytest.raises(ValueError, match="must specify either 'n_samples' or 'percentage'"):
-        BasePlanner.build(config)
+    with pytest.raises(ConfigValidationError, match="must specify either 'n_samples' or 'percentage'"):
+        load_config(config_file)
 
 
 def test_random_config_invalid_n_samples_negative(tmp_path, sample_config_dict):
@@ -100,10 +96,8 @@ def test_random_config_invalid_n_samples_negative(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-
-    with pytest.raises(ValueError, match="must be a positive integer"):
-        BasePlanner.build(config)
+    with pytest.raises(ConfigValidationError, match="must be a positive integer"):
+        load_config(config_file)
 
 
 def test_random_config_invalid_n_samples_zero(tmp_path, sample_config_dict):
@@ -117,10 +111,8 @@ def test_random_config_invalid_n_samples_zero(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-
-    with pytest.raises(ValueError, match="must be a positive integer"):
-        BasePlanner.build(config)
+    with pytest.raises(ConfigValidationError, match="must be a positive integer"):
+        load_config(config_file)
 
 
 def test_random_config_invalid_percentage_negative(tmp_path, sample_config_dict):
@@ -134,10 +126,8 @@ def test_random_config_invalid_percentage_negative(tmp_path, sample_config_dict)
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-
-    with pytest.raises(ValueError, match="must be positive"):
-        BasePlanner.build(config)
+    with pytest.raises(ConfigValidationError, match="must be positive"):
+        load_config(config_file)
 
 
 def test_random_config_invalid_percentage_zero(tmp_path, sample_config_dict):
@@ -151,10 +141,8 @@ def test_random_config_invalid_percentage_zero(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-
-    with pytest.raises(ValueError, match="must be positive"):
-        BasePlanner.build(config)
+    with pytest.raises(ConfigValidationError, match="must be positive"):
+        load_config(config_file)
 
 
 def test_random_config_percentage_over_one_clamped(tmp_path, sample_config_dict):
@@ -409,37 +397,6 @@ def test_random_planner_repetition_interleaving(tmp_path, sample_config_dict):
         assert count == 3
 
 
-def test_random_planner_with_rounds_no_config(tmp_path, sample_round_config_dict):
-    """Test multi-round random sampling planner."""
-    # Modify sample_round_config_dict to use random planner
-    sample_round_config_dict["benchmark"]["search_method"] = "random"
-    sample_round_config_dict["benchmark"]["random_config"] = {
-        "n_samples": 2  # Sample 2 out of 3 nodes in first round
-    }
-
-    config_file = tmp_path / "random_rounds.yaml"
-    with open(config_file, "w") as f:
-        yaml.dump(sample_round_config_dict, f)
-
-    config = load_config(config_file)
-    planner = BasePlanner.build(config)
-
-    assert planner.multiple_rounds is True
-    assert len(planner.round_queue) == 2
-
-    # Execute first round
-    round1_tests = []
-    while planner.current_round == "optimize_nodes" or planner.current_round is None:
-        test = planner.next_test()
-        if test is None or (planner.current_round and planner.current_round != "optimize_nodes"):
-            break
-        round1_tests.append(test)
-
-    # First round should sample 2 out of 3 nodes
-    # But we need to check the matrix after it's built
-    # The planner should have sampled 2 configs in round 1
-
-
 def test_random_planner_default_config(tmp_path, sample_config_dict):
     """Test that planner requires random_config when search_method is random."""
     sample_config_dict["benchmark"]["search_method"] = "random"
@@ -449,8 +406,6 @@ def test_random_planner_default_config(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-
     # Should raise error because random_config is required
-    with pytest.raises(ValueError, match="must specify either 'n_samples' or 'percentage'"):
-        BasePlanner.build(config)
+    with pytest.raises(ConfigValidationError, match="must specify either 'n_samples' or 'percentage'"):
+        load_config(config_file)

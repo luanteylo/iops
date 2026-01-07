@@ -84,6 +84,53 @@ def evaluate_constraint(
         ) from e
 
 
+def check_constraints_for_vars(
+    vars_dict: Dict[str, Any],
+    constraints: List[ConstraintConfig],
+) -> Tuple[bool, List[Tuple[ConstraintConfig, str]]]:
+    """
+    Check if a variable dict satisfies all constraints.
+
+    This is useful for checking constraints before creating an ExecutionInstance,
+    e.g., in Bayesian optimization where we want to validate suggested points.
+
+    Args:
+        vars_dict: Dictionary of variable values to check
+        constraints: List of constraints to evaluate
+
+    Returns:
+        (is_valid, violations):
+            - is_valid: True if all constraints pass (or only have "warn" policy)
+            - violations: List of (constraint, error_message) tuples for failed constraints
+
+    Note:
+        - "skip" violations make is_valid=False
+        - "error" violations raise ConfigValidationError immediately
+        - "warn" violations are recorded but don't affect is_valid
+    """
+    if not constraints:
+        return True, []
+
+    violations = []
+    is_valid = True
+
+    for constraint in constraints:
+        passed, error_msg = evaluate_constraint(constraint, vars_dict)
+
+        if not passed:
+            violations.append((constraint, error_msg or f"Constraint {constraint.name} failed"))
+
+            if constraint.violation_policy == "error":
+                raise ConfigValidationError(
+                    f"{error_msg}\nVariables: {vars_dict}"
+                )
+            elif constraint.violation_policy == "skip":
+                is_valid = False
+            # "warn" doesn't affect is_valid
+
+    return is_valid, violations
+
+
 def filter_execution_matrix(
     instances: List["ExecutionInstance"],
     constraints: List[ConstraintConfig],
@@ -174,15 +221,5 @@ def filter_execution_matrix(
         if keep_instance:
             filtered_instances.append(instance)
 
-    # Log summary
-    if all_violations:
-        skipped_count = sum(1 for v in all_violations if v.violation_policy == "skip")
-        warned_count = sum(1 for v in all_violations if v.violation_policy == "warn")
-
-        logger.info(
-            f"Constraint filtering complete: "
-            f"{len(filtered_instances)}/{len(instances)} instances passed. "
-            f"Filtered: {skipped_count} skipped, {warned_count} warned."
-        )
 
     return filtered_instances, all_violations

@@ -54,6 +54,23 @@ class ExecutorOptionsConfig:
 
 
 @dataclass
+class RandomSamplingConfig:
+    """
+    Configuration for random sampling search method.
+
+    Must specify exactly one of n_samples or percentage.
+
+    Attributes:
+        n_samples: Explicit number of samples to take from parameter space
+        percentage: Fraction of parameter space to sample (0.0-1.0)
+        fallback_to_exhaustive: If True and n_samples >= total space, use exhaustive search
+    """
+    n_samples: Optional[int] = None
+    percentage: Optional[float] = None
+    fallback_to_exhaustive: bool = True
+
+
+@dataclass
 class BenchmarkConfig:
     name: str
     description: Optional[str]
@@ -71,7 +88,7 @@ class BenchmarkConfig:
     estimated_time_seconds: Optional[float] = None  # Estimated execution time per test (for dry-run)
     report_vars: Optional[List[str]] = None  # Variables to include in analysis reports (default: all numeric swept vars)
     bayesian_config: Optional[Dict[str, Any]] = None  # Bayesian optimization configuration
-    random_config: Optional[Dict[str, Any]] = None  # Random sampling configuration
+    random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
 
 
 @dataclass
@@ -153,51 +170,6 @@ class OutputSinkConfig:
 @dataclass
 class OutputConfig:
     sink: OutputSinkConfig
-
-
-# ----------------- Rounds blocks ----------------- #
-
-@dataclass
-class RoundSearchConfig:
-    """
-    Search definition inside a round.
-
-    Example in YAML:
-
-      search:
-        metric: "write_bandwidth"
-        objective: "max"   # max | min
-        # select: "best"   # optional, future extension
-    """
-    metric: str
-    objective: Literal["max", "min"]
-    select: Optional[str] = None  # e.g., "best", "top_k", etc. (optional / future use)
-
-
-@dataclass
-class RoundConfig:
-    """
-    One optimization / search round.
-
-    YAML example:
-
-      - name: "nodes_sweep"
-        description: "Find best nodes by write bandwidth."
-        sweep_vars: ["nodes"]
-        fixed_overrides:
-          block_size_mb: 16
-          processes_per_node: 16
-        search:
-          metric: "write_bandwidth"
-          objective: "max"
-
-    Note: repetitions are global (benchmark.repetitions), not per-round.
-    """
-    name: str
-    description: Optional[str]
-    sweep_vars: List[str] = field(default_factory=list)
-    fixed_overrides: Dict[str, Any] = field(default_factory=dict)
-    search: RoundSearchConfig | None = None
 
 
 # ----------------- Reporting blocks ----------------- #
@@ -312,5 +284,4 @@ class GenericBenchmarkConfig:
     scripts: List[ScriptConfig]
     output: OutputConfig
     constraints: List[ConstraintConfig] = field(default_factory=list)
-    rounds: List[RoundConfig] = field(default_factory=list)
     reporting: Optional[ReportingConfig] = None

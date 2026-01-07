@@ -79,36 +79,6 @@ def test_cache_repetition_isolation(cache_db):
     assert result2["metrics"]["value"] == 200
 
 
-def test_cache_round_isolation(cache_db):
-    """Test that different rounds are cached separately."""
-    cache = ExecutionCache(cache_db)
-
-    params = {"nodes": 2}
-
-    # Store same params in different rounds
-    cache.store_result(
-        params=params,
-        repetition=1,
-        metrics={"value": 100},
-        metadata={},
-        round_name="round1"
-    )
-    cache.store_result(
-        params=params,
-        repetition=1,
-        metrics={"value": 200},
-        metadata={},
-        round_name="round2"
-    )
-
-    # Retrieve both
-    result1 = cache.get_cached_result(params=params, repetition=1, round_name="round1")
-    result2 = cache.get_cached_result(params=params, repetition=1, round_name="round2")
-
-    assert result1["metrics"]["value"] == 100
-    assert result2["metrics"]["value"] == 200
-
-
 def test_cache_parameter_normalization(cache_db):
     """Test that parameter types are normalized."""
     cache = ExecutionCache(cache_db)

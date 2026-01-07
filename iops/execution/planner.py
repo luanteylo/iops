@@ -1,14 +1,45 @@
+"""
+Planners for IOPS benchmark execution.
+
+This module contains all planner implementations:
+- BasePlanner: Abstract base class with registry pattern
+- ExhaustivePlanner: Brute-force search of entire parameter space
+- RandomSamplingPlanner: Random sampling of parameter space
+- BayesianPlanner: Bayesian optimization for intelligent search
+"""
+
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance
+from iops.constraints.evaluator import check_constraints_for_vars
 
-from typing import List, Any
+from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
+from collections import defaultdict
 import random
 
+# Optional imports for Bayesian optimization
+try:
+    from skopt import Optimizer
+    from skopt.space import Integer, Real, Categorical
+    import numpy as np
+    SKOPT_AVAILABLE = True
+except ImportError:
+    SKOPT_AVAILABLE = False
+
+
+# ============================================================================ #
+# Base Planner
+# ============================================================================ #
 
 class BasePlanner(ABC, HasLogger):
+    """
+    Abstract base class for all planners.
+
+    Uses a registry pattern to allow dynamic selection of planners by name.
+    """
+
     _registry = {}
 
     def __init__(self, cfg: GenericBenchmarkConfig):
@@ -46,7 +77,7 @@ class BasePlanner(ABC, HasLogger):
         pass
 
     @abstractmethod
-    def record_completed_test(self, test: Any)  -> None:
+    def record_completed_test(self, test: Any) -> None:
         pass
 
     def get_progress(self) -> dict:
@@ -71,59 +102,101 @@ class BasePlanner(ABC, HasLogger):
             'remaining': attempt_total - attempt_count
         }
 
+    def _prepare_execution_artifacts(self, test: Any, repetition: int) -> None:
+        """
+        Create folders + scripts for one test execution and one repetition.
+
+        This method is shared by all planners. It:
+        - Creates the execution directory structure
+        - Sets test.repetition and metadata["repetition"]
+        - Writes the main script file
+        - Writes the post script file (if present)
+
+        Layout:
+        <workdir>/runs/
+            └── exec_0001/
+                └── repetition_001/
+                    ├── run_<script>.sh
+                    └── post_<script>.sh (optional)
+
+        Args:
+            test: ExecutionInstance to prepare
+            repetition: 1-based repetition number
+        """
+        # Set repetition
+        test.repetition = repetition
+        if not hasattr(test, "metadata") or test.metadata is None:
+            test.metadata = {}
+        test.metadata["repetition"] = repetition
+
+        run_root = Path(self.cfg.benchmark.workdir)
+        runs_root = run_root / "runs"
+        runs_root.mkdir(parents=True, exist_ok=True)
+
+        # Create execution dir
+        exec_dir = (
+            runs_root
+            / f"exec_{test.execution_id:04d}"
+            / f"repetition_{repetition:03d}"
+        )
+        exec_dir.mkdir(parents=True, exist_ok=True)
+
+        # Point to repetition dir (useful for templates like {{ execution_dir }})
+        test.execution_dir = exec_dir
+
+        # Write script files inside repetition dir
+        test.script_file = exec_dir / f"run_{test.script_name}.sh"
+        with open(test.script_file, "w") as f:
+            f.write(test.script_text)
+
+        script_info = f"main={test.script_file.name}"
+
+        if getattr(test, "post_script", None):
+            test.post_script_file = exec_dir / f"post_{test.script_name}.sh"
+            with open(test.post_script_file, "w") as f:
+                f.write(test.post_script)
+            script_info += f", post={test.post_script_file.name}"
+
+        self.logger.debug(f"  [Prepare] Scripts written: {script_info}")
+
+
+# ============================================================================ #
+# Exhaustive Planner
+# ============================================================================ #
 
 @BasePlanner.register("exhaustive")
-class Exhaustive(BasePlanner, HasLogger):
+class ExhaustivePlanner(BasePlanner, HasLogger):
     """
-    A brute-force planner that exhaustively searches the parameter space,
-    supports multiple rounds and repetitions.
+    A brute-force planner that exhaustively searches the parameter space.
 
-    Idea B (implemented): random interleaving of repetitions within each execution_matrix.
+    Uses random interleaving of repetitions within the execution matrix.
     """
 
     def __init__(self, cfg: GenericBenchmarkConfig):
         super().__init__(cfg)
 
-        # Queue of round names (empty list if no rounds were defined)
-        self.round_queue: list[str] = [r.name for r in cfg.rounds] if cfg.rounds else []
-        self.multiple_rounds: bool = len(self.round_queue) > 0
-
-        self.current_round: str | None = None
         self.execution_matrix: list[Any] | None = None
         self.current_index: int = 0
         self.total_tests: int = 0
 
-        # Single-round control flag
-        self._single_round_built: bool = False
+        # Control flag to ensure we only build the matrix once
+        self._matrix_built: bool = False
 
-        # Defaults to be used for the *next* round
-        self._defaults_for_next_round: dict[str, Any] = {}
-
-        # Track completed tests for search (includes all repetitions)
-        self._completed_tests: list[Any] = []
-
-        # ------------------------------------------------------------------
-        # Idea B state (per execution_matrix): random interleaving of reps
-        # ------------------------------------------------------------------
+        # State for random interleaving of repetitions
         self._active_indices: list[int] = []          # tests with reps remaining
         self._next_rep_by_idx: dict[int, int] = {}    # next rep (0-based) per test index
         self._total_reps_by_idx: dict[int, int] = {}  # total reps per test index
         self._attempt_count: int = 0                  # attempts emitted in current matrix
         self._attempt_total: int = 0                  # sum(repetitions) in current matrix
 
-        self.logger.info(
-            "Exhaustive planner initialized. "
-            "Multiple rounds: %s; rounds=%s",
-            self.multiple_rounds,
-            self.round_queue if self.round_queue else "single round",
-        )
+        self.logger.info("Exhaustive planner initialized.")
 
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
     def _init_interleaving_state(self) -> None:
         """
-        Initialize the Idea B bookkeeping for the current execution_matrix.
+        Initialize the bookkeeping for the current execution_matrix.
         """
         assert self.execution_matrix is not None
 
@@ -147,68 +220,27 @@ class Exhaustive(BasePlanner, HasLogger):
             f"{self._attempt_total} total attempts (with repetitions)"
         )
 
-    def _build_next_execution_matrix(self) -> bool:
+    def _build_execution_matrix(self) -> bool:
         """
-        Build the next execution_matrix.
+        Build the execution matrix.
 
         Returns:
             True if a new matrix with at least one test was built.
-            False if there are no more matrices (no more rounds / tests).
+            False if the matrix was already built (no more tests).
         """
-
-        # Case 1: multiple rounds
-        if self.multiple_rounds:
-            # reset per-matrix state
-            self.current_index = 0
-            self.execution_matrix = None
-            self.total_tests = 0
-            self._completed_tests = []  # Clear completed tests for new round
-
-            if not self.round_queue:
-                self.logger.info("All rounds have been exhausted. No more tests.")
-                return False
-
-            # Take next round from the queue
-            self.current_round = self.round_queue.pop(0)
-            self.logger.info("Building execution matrix for round: %s", self.current_round)
-
-            # Assumes build_execution_matrix supports a `defaults=` kwarg
-            self.execution_matrix = self.random_sample(
-                build_execution_matrix(
-                    self.cfg,
-                    round_name=self.current_round,
-                    defaults=self._defaults_for_next_round or None,
-                )
-            )
-
-            self.total_tests = len(self.execution_matrix)
-
-            self.logger.info(
-                "Total tests in execution matrix for round '%s': %d",
-                self.current_round,
-                self.total_tests,
-            )
-
-            if self.total_tests > 0:
-                self._init_interleaving_state()
-
-            return self.total_tests > 0
-
-        # Case 2: single round (no cfg.rounds)
-        if self._single_round_built:
-            self.logger.info("Single-round execution matrix already built. No more tests.")
+        if self._matrix_built:
+            self.logger.info("Execution matrix already built. No more tests.")
             return False
 
-        self.logger.info("Building execution matrix for single round...")
+        self.logger.info("Building execution matrix...")
 
-        # reset per-matrix state
+        # Reset per-matrix state
         self.current_index = 0
-        self.current_round = None
 
         self.execution_matrix = self.random_sample(build_execution_matrix(self.cfg))
         self.total_tests = len(self.execution_matrix)
 
-        self._single_round_built = True  # mark as built
+        self._matrix_built = True  # mark as built
 
         self.logger.info("Total tests in execution matrix: %d", self.total_tests)
 
@@ -219,179 +251,12 @@ class Exhaustive(BasePlanner, HasLogger):
 
     def record_completed_test(self, test: Any) -> None:
         """
-        Record a completed test for later search.
+        Record a completed test.
 
-        This captures the test state after execution, including all metrics.
-        We need to make a copy because the test object gets reused for different repetitions.
+        For the Exhaustive planner, this is a no-op since we don't need to track
+        completed tests (no optimization/search happening).
         """
-        import copy
-        # Deep copy to preserve metrics and metadata from this specific execution
-        test_snapshot = copy.deepcopy(test)
-        self._completed_tests.append(test_snapshot)
-
-    def _select_best_execution(self) -> Any:
-        """
-        Select the best execution from the *previous* round based on search metric.
-
-        When repetitions > 1, groups tests by parameter combination and computes
-        average metric values across repetitions before selecting the best.
-
-        The search configuration is stored in each test:
-        - test.search_metric: metric name to optimize
-        - test.search_objective: "max" or "min"
-
-        Returns one test from the parameter group with the best average metric.
-        """
-        if not self._completed_tests:
-            self.logger.warning("No completed tests to select from. Using last from matrix as fallback.")
-            assert self.execution_matrix, "No executions to select from."
-            return self.execution_matrix[-1]
-
-        # Get search config from first test (all tests in round share same config)
-        first_test = self._completed_tests[0]
-        metric_name = getattr(first_test, "search_metric", None)
-        objective = getattr(first_test, "search_objective", None)
-
-        if not metric_name or not objective:
-            self.logger.warning(
-                "No search configuration found for round. Using last completed test as default."
-            )
-            return self._completed_tests[-1]
-
-        self.logger.info(
-            f"Searching for best execution: {objective} {metric_name}"
-        )
-
-        # Group tests by parameter combination (base_vars = params without repetition)
-        # Map: param_signature -> [(test, metric_value), ...]
-        from collections import defaultdict
-        import json
-
-        param_groups = defaultdict(list)
-
-        for test in self._completed_tests:
-            metrics = test.metadata.get("metrics", {})
-            if metric_name in metrics:
-                try:
-                    metric_value = float(metrics[metric_name])
-
-                    # Create unique signature from base_vars (excludes repetition)
-                    base_vars = getattr(test, "base_vars", {})
-                    param_sig = json.dumps(base_vars, sort_keys=True, default=str)
-
-                    param_groups[param_sig].append((test, metric_value))
-                except (ValueError, TypeError):
-                    self.logger.warning(
-                        f"  [Search] Skipping test {test.execution_id}: "
-                        f"invalid metric '{metric_name}'={metrics[metric_name]}"
-                    )
-            else:
-                self.logger.debug(
-                    f"  [Search] Skipping test {test.execution_id}: metric '{metric_name}' not found"
-                )
-
-        if not param_groups:
-            self.logger.warning(
-                f"No tests with valid '{metric_name}' metric found. Using last completed test as fallback."
-            )
-            return self._completed_tests[-1]
-
-        # Compute average metric for each parameter combination
-        group_averages = []
-        for param_sig, tests_and_values in param_groups.items():
-            values = [v for _, v in tests_and_values]
-            avg_value = sum(values) / len(values)
-            representative_test = tests_and_values[0][0]  # Use first test as representative
-
-            group_averages.append((representative_test, avg_value, len(values)))
-
-        # Find best group based on objective
-        if objective == "max":
-            best_test, best_avg, num_reps = max(group_averages, key=lambda x: x[1])
-        elif objective == "min":
-            best_test, best_avg, num_reps = min(group_averages, key=lambda x: x[1])
-        else:
-            self.logger.warning(
-                f"Unknown objective '{objective}'. Using last completed test as fallback."
-            )
-            return self._completed_tests[-1]
-
-        self.logger.info(
-            f"Selected best parameter combination: execution_id={best_test.execution_id} "
-            f"with {metric_name}_avg={best_avg:.4f} (averaged over {num_reps} repetitions, "
-            f"from {len(group_averages)} unique parameter combinations)"
-        )
-
-        return best_test
-
-    def _prepare_execution_artifacts(
-        self,
-        test: Any,
-        rep_idx: int,
-        test_idx_for_log: int,
-    ) -> None:
-        """
-        Create folders + scripts for one test execution and one repetition.
-
-        Layout:
-        <workdir>/runs/
-            ├── round_01_<round_name>/           (if rounds)
-            │   └── exec_0001/
-            │       └── repetition_001/
-            │           ├── run_<script>.sh
-            │           └── post_<script>.sh (optional)
-            └── exec_0001/                       (if no rounds)
-                └── repetition_001/
-        """
-        # 1-based repetition number
-        test.repetition = rep_idx + 1
-        if not hasattr(test, "metadata") or test.metadata is None:
-            test.metadata = {}
-        test.metadata["repetition"] = test.repetition
-
-        run_root = Path(self.cfg.benchmark.workdir)
-        runs_root = run_root / "runs"
-        runs_root.mkdir(parents=True, exist_ok=True)
-
-        # ---- round dir ----
-        if self.current_round:
-            round_idx = getattr(test, "round_index", None)
-            if round_idx is None:
-                round_idx = next(
-                    (i for i, r in enumerate(self.cfg.rounds) if r.name == self.current_round),
-                    0,
-                )
-            round_dir = runs_root / f"round_{round_idx + 1:02d}_{self.current_round}"
-        else:
-            round_dir = runs_root
-
-        round_dir.mkdir(parents=True, exist_ok=True)
-
-        # ---- execution dir ----
-        exec_dir = (
-            round_dir
-            / f"exec_{test.execution_id:04d}"
-            / f"repetition_{test.repetition:03d}"
-        )
-        exec_dir.mkdir(parents=True, exist_ok=True)
-
-        # Point to repetition dir (useful for templates like {{ execution_dir }})
-        test.execution_dir = exec_dir
-
-        # ---- script files live inside repetition dir ----
-        test.script_file = exec_dir / f"run_{test.script_name}.sh"
-        with open(test.script_file, "w") as f:
-            f.write(test.script_text)
-
-        script_info = f"main={test.script_file.name}"
-
-        if getattr(test, "post_script", None):
-            test.post_script_file = exec_dir / f"post_{test.script_name}.sh"
-            with open(test.post_script_file, "w") as f:
-                f.write(test.post_script)
-            script_info += f", post={test.post_script_file.name}"
-
-        self.logger.debug(f"  [Prepare] Scripts written: {script_info}")
+        pass
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -399,9 +264,9 @@ class Exhaustive(BasePlanner, HasLogger):
     def next_test(self) -> Any:
         """
         Returns the next test to run (including repetitions),
-        or None when all tests in all rounds are done.
+        or None when all tests are done.
 
-        Idea B: random interleaving of repetitions.
+        Uses random interleaving of repetitions.
         """
         while True:
             matrix_finished = (
@@ -410,29 +275,10 @@ class Exhaustive(BasePlanner, HasLogger):
                 and len(self._active_indices) == 0
             )
 
-            # Need a matrix (first time) OR we finished the current one -> build next
+            # Need a matrix (first time) OR we finished the current one
             if self.execution_matrix is None or matrix_finished:
-                # If we just finished a round in a multi-round setup,
-                # pick best_exec and prepare defaults for the next round.
-                if self.multiple_rounds and matrix_finished:
-                    best_exec = self._select_best_execution()
-                    best_vars = getattr(best_exec, "vars", {}) or {}
-                    self._defaults_for_next_round = dict(best_vars)
-
-                    # Log propagated values for visibility
-                    if self._defaults_for_next_round:
-                        propagated_str = ", ".join(
-                            f"{k}={v}" for k, v in sorted(self._defaults_for_next_round.items())
-                        )
-                        self.logger.info(
-                            f"Round '{self.current_round}' completed. "
-                            f"Propagating {len(self._defaults_for_next_round)} values to next round: {propagated_str}"
-                        )
-                    else:
-                        self.logger.warning(f"Round '{self.current_round}' completed but no variables to propagate")
-
-                # Attempt to build the next matrix (round or single)
-                if not self._build_next_execution_matrix():
+                # Attempt to build the matrix
+                if not self._build_execution_matrix():
                     return None
 
                 # The new matrix might be empty (weird config), so loop again if so
@@ -453,36 +299,586 @@ class Exhaustive(BasePlanner, HasLogger):
                 # remove by value (list is small; fine)
                 self._active_indices.remove(idx)
 
-            # Logging: attempt-oriented (more meaningful now)
-            round_tag = f" [{self.current_round}]" if self.current_round else ""
+            # Logging: attempt-oriented
             self.logger.debug(
                 f"  [Planner] Selected test (attempt {self._attempt_count}/{self._attempt_total}): "
                 f"exec_id={getattr(test, 'execution_id', '?')} "
-                f"rep={rep_idx + 1}/{getattr(test, 'repetitions', 1)}{round_tag}"
+                f"rep={rep_idx + 1}/{getattr(test, 'repetitions', 1)}"
             )
 
             # Prepare filesystem artifacts (dirs + scripts) for this test+repetition
-            # test_idx_for_log is informational; we keep idx+1 as "matrix position"
-            self._prepare_execution_artifacts(test, rep_idx, test_idx_for_log=idx + 1)
+            # rep_idx is 0-based, _prepare_execution_artifacts expects 1-based
+            self._prepare_execution_artifacts(test, rep_idx + 1)
             return test
 
 
-# Import Bayesian planner to register it (must be after BasePlanner is fully defined)
-try:
-    from iops.execution.bayesian_planner import BayesianPlanner
-except ImportError:
-    # scikit-optimize not installed, Bayesian planner not available
-    pass
-except Exception as e:
-    # Other import error - log it for debugging
-    import warnings
-    warnings.warn(f"Failed to import BayesianPlanner: {e}")
+# ============================================================================ #
+# Random Sampling Planner
+# ============================================================================ #
 
-# Import Random planner to register it
-try:
-    from iops.execution.random_planner import RandomSamplingPlanner
-except ImportError:
-    pass
-except Exception as e:
-    import warnings
-    warnings.warn(f"Failed to import RandomSamplingPlanner: {e}")
+@BasePlanner.register("random")
+class RandomSamplingPlanner(ExhaustivePlanner):
+    """
+    Random sampling planner that randomly samples N configurations from the
+    full parameter space.
+
+    Inherits from ExhaustivePlanner and overrides _build_execution_matrix to
+    add random sampling before the standard matrix processing.
+
+    Configuration (YAML):
+        benchmark:
+          search_method: "random"
+          random_config:
+            # Option 1: Explicit number of samples
+            n_samples: 20
+
+            # Option 2: Percentage of total space (mutually exclusive with n_samples)
+            # percentage: 0.1  # 10% of parameter space
+
+            # Optional: behavior when n_samples >= total_space
+            fallback_to_exhaustive: true  # default: true
+
+    Features:
+    - Random sampling without replacement
+    - Repetition interleaving for statistical robustness (inherited)
+    - Reproducible sampling with random_seed
+    - Two sampling modes: explicit n_samples or percentage
+    """
+
+    def __init__(self, cfg: GenericBenchmarkConfig):
+        # Call parent __init__ first (sets up execution_matrix, interleaving state, etc.)
+        super().__init__(cfg)
+
+        # Sampling configuration (already validated by loader)
+        rc = cfg.benchmark.random_config
+        self.n_samples: Optional[int] = rc.n_samples
+        self.percentage: Optional[float] = rc.percentage
+        self.fallback_to_exhaustive: bool = rc.fallback_to_exhaustive
+
+        # Random-specific attributes
+        self.total_space_size: int = 0  # Full parameter space size
+        self.sampled_size: int = 0  # Actual sample size used
+
+        # Log sampling mode
+        sampling_mode = f"n_samples={self.n_samples}" if self.n_samples is not None else f"percentage={self.percentage}"
+        self.logger.info("Random sampling mode: %s", sampling_mode)
+
+    def _compute_sample_size(self, total_space: int) -> int:
+        """
+        Compute the actual sample size based on configuration.
+
+        Args:
+            total_space: Total size of parameter space
+
+        Returns:
+            Sample size (clamped to valid range [1, total_space])
+        """
+        if self.n_samples is not None:
+            # Explicit number of samples
+            if self.n_samples >= total_space:
+                if self.fallback_to_exhaustive:
+                    self.logger.warning(
+                        f"Requested n_samples={self.n_samples} >= total_space={total_space}. "
+                        f"Using full exhaustive search."
+                    )
+                    return total_space
+                else:
+                    self.logger.warning(
+                        f"Requested n_samples={self.n_samples} >= total_space={total_space}. "
+                        f"Clamping to total_space."
+                    )
+                    return total_space
+            return self.n_samples
+
+        else:
+            # Percentage-based sampling
+            sample_size = max(1, int(total_space * self.percentage))
+            self.logger.info(
+                f"Sampling {self.percentage*100:.1f}% of parameter space: "
+                f"{sample_size}/{total_space} configurations"
+            )
+            return sample_size
+
+    def _sample_execution_matrix(self, full_matrix: list[Any]) -> list[Any]:
+        """
+        Randomly sample configurations from the full execution matrix.
+
+        If exhaustive_vars is configured, groups instances by search point
+        and samples search points (not individual instances), then returns
+        all instances from selected search points.
+
+        Args:
+            full_matrix: Full execution matrix (all parameter combinations)
+
+        Returns:
+            Sampled subset of execution matrix
+        """
+        if not full_matrix:
+            return full_matrix
+
+        # Check if exhaustive_vars is being used
+        has_exhaustive_vars = bool(full_matrix[0].exhaustive_var_names)
+
+        if has_exhaustive_vars:
+            # Group instances by search point
+            search_point_groups = defaultdict(list)
+
+            for instance in full_matrix:
+                search_point = instance.get_search_point()
+                search_point_groups[search_point].append(instance)
+
+            # Total space size is the number of unique search points
+            self.total_space_size = len(search_point_groups)
+            self.sampled_size = self._compute_sample_size(self.total_space_size)
+
+            if self.sampled_size >= self.total_space_size:
+                # Use all search points (exhaustive)
+                self.logger.info(
+                    f"Using all {self.total_space_size} search points "
+                    f"(each expanded with {len(full_matrix[0].exhaustive_var_names)} exhaustive vars)"
+                )
+                return full_matrix
+
+            # Sample random search points
+            search_points = list(search_point_groups.keys())
+            sampled_search_points = self.random.sample(search_points, self.sampled_size)
+
+            # Collect all instances from sampled search points
+            sampled_matrix = []
+            for sp in sampled_search_points:
+                sampled_matrix.extend(search_point_groups[sp])
+
+            exhaustive_count = len(search_point_groups[sampled_search_points[0]])
+            self.logger.info(
+                f"Randomly sampled {self.sampled_size}/{self.total_space_size} search points "
+                f"({self.sampled_size/self.total_space_size*100:.1f}%), "
+                f"each with {exhaustive_count} exhaustive var combinations. "
+                f"Total instances: {len(sampled_matrix)}"
+            )
+
+            return sampled_matrix
+
+        else:
+            # Original behavior: no exhaustive vars, sample individual instances
+            self.total_space_size = len(full_matrix)
+            self.sampled_size = self._compute_sample_size(self.total_space_size)
+
+            if self.sampled_size >= self.total_space_size:
+                # Use full matrix (exhaustive)
+                self.logger.info(
+                    f"Using full parameter space: {self.total_space_size} configurations"
+                )
+                return full_matrix
+
+            # Random sampling without replacement
+            sampled_matrix = self.random.sample(full_matrix, self.sampled_size)
+
+            self.logger.info(
+                f"Randomly sampled {self.sampled_size}/{self.total_space_size} configurations "
+                f"({self.sampled_size/self.total_space_size*100:.1f}%)"
+            )
+
+            return sampled_matrix
+
+    def _build_execution_matrix(self) -> bool:
+        """
+        Build the execution matrix with random sampling.
+
+        Returns:
+            True if a new matrix with at least one test was built.
+            False if the matrix was already built (no more tests).
+        """
+        if self._matrix_built:
+            self.logger.info("Execution matrix already built. No more tests.")
+            return False
+
+        self.logger.info("Building execution matrix...")
+
+        # Reset per-matrix state
+        self.current_index = 0
+
+        # Build full matrix, then sample
+        full_matrix = build_execution_matrix(self.cfg)
+        sampled_matrix = self._sample_execution_matrix(full_matrix)
+        self.execution_matrix = self.random_sample(sampled_matrix)
+
+        self.total_tests = len(self.execution_matrix)
+
+        self._matrix_built = True  # mark as built
+
+        self.logger.info(
+            "Total tests in execution matrix: %d (sampled from %d)",
+            self.total_tests,
+            self.total_space_size,
+        )
+
+        if self.total_tests > 0:
+            self._init_interleaving_state()
+
+        return self.total_tests > 0
+
+
+# ============================================================================ #
+# Bayesian Optimization Planner
+# ============================================================================ #
+
+@BasePlanner.register("bayesian")
+class BayesianPlanner(BasePlanner, HasLogger):
+    """
+    Bayesian optimization planner that intelligently explores parameter space
+    to find optimal configurations for a target metric.
+
+    Configuration (YAML):
+        benchmark:
+          search_method: "bayesian"
+          bayesian_config:
+            target_metric: "bwMiB"  # Metric to optimize
+            objective: "maximize"    # "maximize" or "minimize"
+            n_initial_points: 5      # Random exploration before optimization
+            n_iterations: 20         # Total number of evaluations
+            acquisition_func: "EI"   # "EI", "PI", or "LCB"
+            random_state: 42         # For reproducibility
+
+    The planner will:
+    1. Start with random exploration (n_initial_points)
+    2. Build a surrogate model from observed results
+    3. Use acquisition function to suggest next promising point
+    4. Iteratively improve to find optimal parameters
+
+    Requires scikit-optimize: pip install scikit-optimize
+    """
+
+    def __init__(self, cfg: GenericBenchmarkConfig):
+        super().__init__(cfg)
+
+        if not SKOPT_AVAILABLE:
+            raise ImportError(
+                "scikit-optimize is required for Bayesian optimization. "
+                "Install it with: pip install scikit-optimize"
+            )
+
+        # Get Bayesian config from benchmark config
+        self.bayesian_cfg = self._get_bayesian_config()
+
+        # Optimization settings
+        self.target_metric = self.bayesian_cfg.get('target_metric', 'bwMiB')
+        self.objective = self.bayesian_cfg.get('objective', 'maximize')
+        self.n_initial_points = self.bayesian_cfg.get('n_initial_points', 5)
+        self.n_iterations = self.bayesian_cfg.get('n_iterations', 20)
+        self.acquisition_func = self.bayesian_cfg.get('acquisition_func', 'EI')
+
+        # Validate objective
+        if self.objective not in ['maximize', 'minimize']:
+            raise ValueError(f"objective must be 'maximize' or 'minimize', got: {self.objective}")
+
+        # Build search space from swept variables
+        self.search_space, self.var_names = self._build_search_space()
+
+        if not self.search_space:
+            raise ValueError("No swept variables found for Bayesian optimization")
+
+        # Initialize Bayesian optimizer
+        self.optimizer = Optimizer(
+            dimensions=self.search_space,
+            n_initial_points=self.n_initial_points,
+            acq_func=self.acquisition_func,
+            random_state=self.cfg.benchmark.random_seed,
+        )
+
+        # Execution tracking
+        self.iteration = 0
+        self.completed_tests: List[ExecutionInstance] = []
+        self.X_observed: List[List[Any]] = []  # Parameter combinations tried
+        self.y_observed: List[float] = []      # Observed metric values
+
+        # Progress tracking for get_progress()
+        self._attempt_count: int = 0
+        self._attempt_total: int = self.n_iterations * (cfg.benchmark.repetitions or 1)
+
+        # Best found so far
+        self.best_params: Optional[Dict[str, Any]] = None
+        self.best_value: Optional[float] = None
+
+        # Repetitions per configuration
+        self.repetitions = cfg.benchmark.repetitions or 1
+
+        # Current test being evaluated
+        self.current_test: Optional[ExecutionInstance] = None
+        self.current_params: Optional[List[Any]] = None
+        self.current_rep = 0
+
+        self.logger.info(
+            f"Bayesian planner initialized: target={self.target_metric} "
+            f"objective={self.objective} n_iterations={self.n_iterations} "
+            f"n_initial={self.n_initial_points}"
+        )
+        self.logger.info(f"Search space: {len(self.search_space)} dimensions: {self.var_names}")
+
+    def _get_bayesian_config(self) -> Dict[str, Any]:
+        """Extract Bayesian optimization config from benchmark config."""
+        # Check if bayesian_config exists in benchmark
+        if hasattr(self.cfg.benchmark, 'bayesian_config') and self.cfg.benchmark.bayesian_config:
+            return self.cfg.benchmark.bayesian_config
+
+        # Fall back to defaults
+        return {
+            'target_metric': 'bwMiB',
+            'objective': 'maximize',
+            'n_initial_points': 5,
+            'n_iterations': 20,
+            'acquisition_func': 'EI',
+        }
+
+    def _build_search_space(self):
+        """
+        Build scikit-optimize search space from swept variables.
+
+        Returns:
+            Tuple of (dimensions, var_names)
+        """
+        dimensions = []
+        var_names = []
+
+        for var_name, var_config in self.cfg.vars.items():
+            if not var_config.sweep:
+                continue  # Skip non-swept variables
+
+            sweep_cfg = var_config.sweep
+
+            if sweep_cfg.mode == "range":
+                # Continuous or integer range
+                if var_config.type == "int":
+                    dim = Integer(
+                        low=sweep_cfg.start,
+                        high=sweep_cfg.end,
+                        name=var_name
+                    )
+                else:  # float
+                    dim = Real(
+                        low=float(sweep_cfg.start),
+                        high=float(sweep_cfg.end),
+                        name=var_name
+                    )
+                dimensions.append(dim)
+                var_names.append(var_name)
+
+            elif sweep_cfg.mode == "list":
+                # Categorical or discrete values
+                if var_config.type in ["int", "float"]:
+                    # Discrete numeric values
+                    dim = Categorical(
+                        categories=sweep_cfg.values,
+                        name=var_name
+                    )
+                else:
+                    # Categorical (string) values
+                    dim = Categorical(
+                        categories=sweep_cfg.values,
+                        name=var_name
+                    )
+                dimensions.append(dim)
+                var_names.append(var_name)
+
+        return dimensions, var_names
+
+    def _params_to_dict(self, params: List[Any]) -> Dict[str, Any]:
+        """Convert parameter list to dictionary."""
+        return {name: value for name, value in zip(self.var_names, params)}
+
+    def _check_constraints(self, params: List[Any]) -> bool:
+        """
+        Check if parameters satisfy all constraints.
+
+        Args:
+            params: List of parameter values
+
+        Returns:
+            True if all constraints pass (or only have "warn" policy)
+        """
+        if not self.cfg.constraints:
+            return True
+
+        vars_dict = self._params_to_dict(params)
+        is_valid, violations = check_constraints_for_vars(vars_dict, self.cfg.constraints)
+
+        if violations:
+            for constraint, msg in violations:
+                if constraint.violation_policy == "warn":
+                    self.logger.warning(f"  [Bayesian] {msg} (proceeding anyway)")
+                else:
+                    self.logger.debug(f"  [Bayesian] Constraint violated: {msg}")
+
+        return is_valid
+
+    def next_test(self) -> Optional[ExecutionInstance]:
+        """
+        Return the next test to execute.
+
+        Returns:
+            ExecutionInstance or None when optimization is complete
+        """
+        # Check if we've completed all iterations
+        if self.iteration >= self.n_iterations:
+            self.logger.info("=" * 70)
+            self.logger.info("BAYESIAN OPTIMIZATION COMPLETE")
+            self.logger.info("=" * 70)
+            if self.best_params:
+                self.logger.info(f"Best parameters found: {self.best_params}")
+                self.logger.info(f"Best {self.target_metric}: {self.best_value:.4f}")
+            self.logger.info(f"Total evaluations: {len(self.y_observed)}")
+            self.logger.info("=" * 70)
+            return None
+
+        # Handle repetitions for current test
+        if self.current_test and self.current_rep < self.repetitions:
+            # Continue with repetitions of current configuration
+            self.current_rep += 1
+            self._attempt_count += 1
+            test = self._create_test_instance(self.current_params, self.current_rep)
+            self.logger.debug(
+                f"  [Bayesian] Repetition {self.current_rep}/{self.repetitions} "
+                f"of iteration {self.iteration + 1}"
+            )
+            return test
+
+        # Get next point from optimizer, checking constraints
+        max_constraint_retries = 100  # Avoid infinite loop if space is heavily constrained
+        for retry in range(max_constraint_retries):
+            next_params = self.optimizer.ask()
+
+            if self._check_constraints(next_params):
+                break
+
+            # Constraint violated - tell optimizer this is a bad point
+            # Use a large penalty value (for minimization)
+            self.logger.debug(
+                f"  [Bayesian] Suggested point violates constraints, asking for another "
+                f"(retry {retry + 1}/{max_constraint_retries})"
+            )
+            # Tell optimizer this point is infeasible with a large penalty
+            self.optimizer.tell(next_params, float('inf'))
+        else:
+            self.logger.warning(
+                f"  [Bayesian] Could not find valid point after {max_constraint_retries} retries. "
+                f"Using last suggested point anyway."
+            )
+
+        self.current_params = next_params
+        self.current_rep = 1
+        self.iteration += 1
+        self._attempt_count += 1
+
+        # Create test instance
+        test = self._create_test_instance(next_params, self.current_rep)
+        self.current_test = test
+
+        params_dict = self._params_to_dict(next_params)
+        self.logger.info(
+            f"[Bayesian] Iteration {self.iteration}/{self.n_iterations}: "
+            f"Testing {params_dict}"
+        )
+
+        return test
+
+    def _create_test_instance(self, params: List[Any], repetition: int) -> ExecutionInstance:
+        """
+        Create an ExecutionInstance from parameters.
+
+        Uses create_execution_instance from matrix.py for clean instance creation.
+
+        Args:
+            params: List of parameter values
+            repetition: Repetition number (1-based)
+
+        Returns:
+            ExecutionInstance
+        """
+        vars_dict = self._params_to_dict(params)
+
+        # Create instance directly using the matrix helper
+        test = create_execution_instance(
+            cfg=self.cfg,
+            base_vars=vars_dict,
+            execution_id=self.iteration,
+            script_index=0,  # Use first script
+            search_var_names=self.var_names,
+        )
+
+        test.repetition = repetition
+        test.repetitions = self.repetitions
+
+        # Prepare execution artifacts (folders and scripts)
+        self._prepare_execution_artifacts(test, repetition)
+
+        return test
+
+    def record_completed_test(self, test: ExecutionInstance) -> None:
+        """
+        Record a completed test and update the Bayesian model.
+
+        This is essential for Bayesian optimization - the optimizer needs
+        to learn from completed tests to suggest better parameters.
+
+        Args:
+            test: Completed ExecutionInstance with metrics
+        """
+        self.completed_tests.append(test)
+
+        # Only update optimizer after all repetitions are complete
+        if test.repetition == self.repetitions:
+            # Extract target metric value
+            metrics = test.metadata.get('metrics', {})
+            metric_value = metrics.get(self.target_metric)
+
+            if metric_value is None:
+                self.logger.warning(
+                    f"Target metric '{self.target_metric}' not found in results. "
+                    f"Available metrics: {list(metrics.keys())}"
+                )
+                return
+
+            # Aggregate metric across repetitions (use mean)
+            rep_values = []
+            for completed_test in self.completed_tests:
+                if (completed_test.execution_id == test.execution_id and
+                    completed_test.metadata.get('metrics', {}).get(self.target_metric) is not None):
+                    rep_values.append(completed_test.metadata['metrics'][self.target_metric])
+
+            if not rep_values:
+                return
+
+            aggregated_value = float(np.mean(rep_values))
+
+            # For maximization, negate the value (scikit-optimize minimizes)
+            if self.objective == 'maximize':
+                y_value = -aggregated_value
+            else:
+                y_value = aggregated_value
+
+            # Update optimizer with observation
+            self.X_observed.append(self.current_params)
+            self.y_observed.append(y_value)
+
+            self.optimizer.tell(self.current_params, y_value)
+
+            # Update best found
+            if self.best_value is None or aggregated_value > (self.best_value if self.objective == 'maximize' else -self.best_value):
+                self.best_params = self._params_to_dict(self.current_params)
+                self.best_value = aggregated_value
+
+            self.logger.info(
+                f"  [Bayesian] Iteration {self.iteration} complete: "
+                f"{self.target_metric}={aggregated_value:.4f} (mean of {len(rep_values)} reps)"
+            )
+            self.logger.info(
+                f"  [Bayesian] Best so far: {self.best_value:.4f} at {self.best_params}"
+            )
+
+            # Reset for next iteration
+            self.current_test = None
+            self.current_params = None
+            self.current_rep = 0
+
+
+# Backwards compatibility alias
+Exhaustive = ExhaustivePlanner

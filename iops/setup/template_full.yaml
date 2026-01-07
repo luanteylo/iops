@@ -35,7 +35,6 @@ benchmark:
   sqlite_db: "/path/to/your/cache.db"
 
   # Optional: Number of repetitions for each test case (default: 1)
-  # Can be overridden per round. Higher values improve statistical validity
   repetitions: 3
 
   # Required: Test selection strategy
@@ -263,7 +262,6 @@ vars:
 #   - {{ repetition }} - current repetition number (1-based)
 #   - {{ execution_dir }} - per-execution working directory
 #   - {{ workdir }} - base working directory
-#   - {{ round_name }}, {{ round_index }} - round information (if using rounds)
 # =============================================================================
 command:
   # The command template - can be multiline using YAML '>' or '|' syntax
@@ -530,41 +528,6 @@ output:
 #       show_error_bars: true
 
 
-# =============================================================================
-# ADVANCED: ROUNDS CONFIGURATION (optional)
-# =============================================================================
-# Multi-stage optimization workflow: optimize different parameters sequentially
-# Each round tests a subset of variables, and the best result propagates forward
-#
-# Uncomment to enable rounds:
-# =============================================================================
-# rounds:
-#   # Round 1: Optimize node count
-#   - name: "optimize_nodes"
-#
-#     # Variables to sweep in this round (others use global defaults)
-#     sweep_vars: ["nodes"]
-#
-#     # Optional: Override specific variables with fixed values for this round
-#     fixed_overrides:
-#       processes_per_node: 16
-#       volume_size_gb: 32
-#
-#     # Search configuration for this round
-#     search:
-#       metric: "bwMiB"        # Metric to optimize
-#       objective: "max"        # "max" or "min"
-#
-#     # Optional: Override repetitions for this round
-#     repetitions: 3
-#
-#   # Round 2: Optimize processes per node using best node count from Round 1
-#   - name: "optimize_processes"
-#     sweep_vars: ["processes_per_node"]
-#     search:
-#       metric: "bwMiB"
-#       objective: "max"
-#     repetitions: 5
 
 
 # =============================================================================
@@ -576,8 +539,6 @@ output:
 #   - {{ repetition }}            - Current repetition number (1-based)
 #   - {{ execution_dir }}         - Per-execution working directory
 #   - {{ workdir }}               - Base working directory
-#   - {{ round_name }}            - Round name (if using rounds)
-#   - {{ round_index }}           - Round index (if using rounds)
 #   - {{ vars.variable_name }}    - Any variable from 'vars' section
 #   - {{ metadata.key }}          - Any metadata from 'command.metadata'
 #   - {{ command.template }}      - The rendered command

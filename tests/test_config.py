@@ -81,23 +81,6 @@ def test_config_sweep_variables(sample_config_file):
     assert nodes_var.sweep.values == [1, 2]
 
 
-def test_config_with_rounds(tmp_path, sample_round_config_dict):
-    """Test loading config with multiple rounds."""
-    config_file = tmp_path / "rounds_config.yaml"
-    with open(config_file, "w") as f:
-        yaml.dump(sample_round_config_dict, f)
-
-    config = load_config(config_file)
-
-    assert config.rounds is not None
-    assert len(config.rounds) == 2
-    assert config.rounds[0].name == "optimize_nodes"
-    assert config.rounds[0].sweep_vars == ["nodes"]
-    assert config.rounds[0].fixed_overrides == {"ppn": 2}
-    assert config.rounds[0].search.metric == "bandwidth"
-    assert config.rounds[0].search.objective == "max"
-
-
 def test_config_parser_validation(sample_config_file):
     """Test that parser script is validated."""
     config = load_config(sample_config_file)

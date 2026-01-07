@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Tuple, Optional
 from pathlib import Path
+import ast
 import yaml
 import os
 
@@ -14,6 +15,7 @@ from iops.config.models import (
     GenericBenchmarkConfig,
     BenchmarkConfig,
     ExecutorOptionsConfig,
+    RandomSamplingConfig,
     VarConfig,
     SweepConfig,
     ConstraintConfig,
@@ -24,8 +26,6 @@ from iops.config.models import (
     MetricConfig,
     OutputConfig,
     OutputSinkConfig,
-    RoundConfig,
-    RoundSearchConfig,
     ReportingConfig,
     ReportThemeConfig,
     PlotConfig,
@@ -34,7 +34,6 @@ from iops.config.models import (
     BestResultsConfig,
     PlotDefaultsConfig,
 )
-from iops.results.validation import validate_parser_script
 
 
 # ----------------- Helper functions ----------------- #
@@ -42,6 +41,53 @@ from iops.results.validation import validate_parser_script
 def _expand_path(p: str) -> Path:
     """Expand environment variables and user paths, then resolve to absolute path."""
     return Path(os.path.expandvars(p)).expanduser().resolve()
+
+
+def validate_parser_script(
+    script: str,
+    *,
+    require_parse_fn: bool = True,
+    parse_fn_name: str = "parse",
+) -> Tuple[bool, Optional[str]]:
+    """
+    Validate a parser_script using AST parsing (no execution).
+
+    Returns:
+        (True, None) if valid
+        (False, error_message) if invalid
+    """
+    if not isinstance(script, str) or not script.strip():
+        return False, "parser_script is empty or not a string"
+
+    try:
+        tree = ast.parse(script, filename="<parser_script>", mode="exec")
+    except SyntaxError as e:
+        line = (e.text or "").rstrip("\n")
+        caret = ""
+        if e.offset and e.offset > 0:
+            caret = " " * (e.offset - 1) + "^"
+
+        msg = (
+            f"Syntax error in parser_script:\n"
+            f"  Line {e.lineno}, column {e.offset}\n"
+            f"  {line}\n"
+            f"  {caret}\n"
+            f"  {e.msg}"
+        )
+        return False, msg
+
+    if require_parse_fn:
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == parse_fn_name:
+                return True, None
+
+        return (
+            False,
+            f"parser_script must define a top-level function "
+            f"`def {parse_fn_name}(file_path):`"
+        )
+
+    return True, None
 
 
 def _load_script_content(content: str, config_dir: Path) -> str:
@@ -112,15 +158,6 @@ def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
         "execution.repetitions",
         "execution.workdir",
         "execution.execution_dir",
-        "execution.round_name",
-        "execution.round_index",
-    })
-
-    # --- round.* ---
-    allowed.update({
-        "round.name",
-        "round.index",
-        "round.repetitions",
     })
 
     # --- vars.<name> ---
@@ -258,13 +295,60 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
             commands=eo.get("commands")
         )
 
+    # Parse and validate random_config if present
+    random_config = None
+    search_method = b.get("search_method", "exhaustive")
+    if "random_config" in b and b["random_config"] is not None:
+        rc = b["random_config"]
+        n_samples = rc.get("n_samples")
+        percentage = rc.get("percentage")
+        fallback = rc.get("fallback_to_exhaustive", True)
+
+        # Validation: must have exactly one of n_samples or percentage
+        if n_samples is not None and percentage is not None:
+            raise ConfigValidationError(
+                "random_config: cannot specify both 'n_samples' and 'percentage'. Choose one."
+            )
+        if n_samples is None and percentage is None:
+            raise ConfigValidationError(
+                "random_config: must specify either 'n_samples' or 'percentage'"
+            )
+
+        # Validate n_samples
+        if n_samples is not None:
+            if not isinstance(n_samples, int) or n_samples < 1:
+                raise ConfigValidationError(
+                    f"random_config.n_samples must be a positive integer, got: {n_samples}"
+                )
+
+        # Validate percentage
+        if percentage is not None:
+            if not isinstance(percentage, (int, float)) or percentage <= 0:
+                raise ConfigValidationError(
+                    f"random_config.percentage must be positive, got: {percentage}"
+                )
+            # Clamp percentage > 1.0 to 1.0 (with warning logged later in planner)
+            if percentage > 1.0:
+                percentage = 1.0
+
+        random_config = RandomSamplingConfig(
+            n_samples=n_samples,
+            percentage=percentage,
+            fallback_to_exhaustive=fallback,
+        )
+    elif search_method == "random":
+        # random search method requires random_config
+        raise ConfigValidationError(
+            "random_config: must specify either 'n_samples' or 'percentage'"
+        )
+
     benchmark = BenchmarkConfig(
         name=b["name"],
         description=b.get("description"),
         workdir=_expand_path(b["workdir"]),
         repetitions=b.get("repetitions", 1),
         sqlite_db=_expand_path(b["sqlite_db"]) if "sqlite_db" in b else None,
-        search_method=b.get("search_method", "exhaustive"),
+        search_method=search_method,
         executor=b.get("executor", "slurm"),
         executor_options=executor_options,
         random_seed=b.get("random_seed", 42),
@@ -275,7 +359,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         estimated_time_seconds=b.get("estimated_time_seconds"),
         report_vars=b.get("report_vars"),
         bayesian_config=b.get("bayesian_config"),
-        random_config=b.get("random_config")
+        random_config=random_config,
     )
 
     # ---- vars ----
@@ -366,29 +450,6 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         )
     )
 
-    # ---- rounds (optional) ----
-    rounds_cfg: List[RoundConfig] = []
-    for r in data.get("rounds", []):
-        # search block (required for each round)
-        search_block = r.get("search")
-        search_cfg: RoundSearchConfig | None = None
-        if search_block is not None:
-            search_cfg = RoundSearchConfig(
-                metric=search_block["metric"],
-                objective=search_block["objective"],
-                select=search_block.get("select"),
-            )
-
-        rounds_cfg.append(
-            RoundConfig(
-                name=r["name"],
-                description=r.get("description"),
-                sweep_vars=r.get("sweep_vars", []),
-                fixed_overrides=r.get("fixed_overrides", {}),
-                search=search_cfg,
-            )
-        )
-
     # Parse constraints (optional section)
     constraints_data = data.get("constraints", [])
     constraints = []
@@ -415,7 +476,6 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         command=command,
         scripts=scripts,
         output=output,
-        rounds=rounds_cfg,
         reporting=reporting_cfg,
     )
 
@@ -897,53 +957,6 @@ def validate_yaml_config(config_path: Path) -> List[str]:
     except Exception as e:
         errors.append(f"Error validating output section: {e}")
 
-    # ---- rounds (optional) ----
-    try:
-        rounds_data = data.get("rounds", [])
-        if rounds_data:
-            if not isinstance(rounds_data, list):
-                errors.append("'rounds' section must be a list")
-            else:
-                for idx, rnd in enumerate(rounds_data):
-                    if not isinstance(rnd, dict):
-                        errors.append(f"rounds[{idx}] must be a dictionary")
-                        continue
-
-                    round_name = rnd.get("name", f"round[{idx}]")
-
-                    if "name" not in rnd or not rnd["name"]:
-                        errors.append(f"rounds[{idx}] must have a non-empty 'name'")
-
-                    if "sweep_vars" not in rnd or not rnd["sweep_vars"]:
-                        errors.append(f"round '{round_name}' must define a non-empty 'sweep_vars' list")
-                    elif isinstance(rnd["sweep_vars"], list):
-                        # Check if sweep_vars reference valid vars
-                        vars_data = data.get("vars", {})
-                        for vname in rnd["sweep_vars"]:
-                            if vname not in vars_data:
-                                errors.append(f"round '{round_name}' references unknown sweep var '{vname}'")
-
-                    if "fixed_overrides" in rnd and isinstance(rnd["fixed_overrides"], dict):
-                        vars_data = data.get("vars", {})
-                        for vname in rnd["fixed_overrides"].keys():
-                            if vname not in vars_data:
-                                errors.append(f"round '{round_name}' fixed_overrides references unknown var '{vname}'")
-
-                    if "search" not in rnd or rnd["search"] is None:
-                        errors.append(f"round '{round_name}' must define a 'search' block")
-                    elif isinstance(rnd["search"], dict):
-                        search = rnd["search"]
-                        if "metric" not in search or not search["metric"]:
-                            errors.append(f"round '{round_name}' search.metric is required and must not be empty")
-
-                        if "objective" not in search:
-                            errors.append(f"round '{round_name}' search.objective is required")
-                        elif search["objective"] not in ("max", "min"):
-                            errors.append(f"round '{round_name}' search.objective must be 'max' or 'min' (got '{search['objective']}')")
-
-    except Exception as e:
-        errors.append(f"Error validating rounds section: {e}")
-
     return errors
 
 
@@ -1075,45 +1088,3 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if sink.type == "sqlite":
         if not sink.table or not str(sink.table).strip():
             raise ConfigValidationError("output.sink.table must not be empty when type=sqlite")
-
-    # ---- rounds (optional) ----
-    # If no rounds: that's fine, you can keep current "single global matrix" behaviour.
-    for rnd in cfg.rounds:
-        if not rnd.name:
-            raise ConfigValidationError("Each round must have a non-empty 'name'")
-
-        # sweep_vars: at least one var if you define the round
-        if not rnd.sweep_vars:
-            raise ConfigValidationError(
-                f"round '{rnd.name}' must define a non-empty 'sweep_vars' list"
-            )
-
-        # sweep_vars must all exist in cfg.vars
-        for vname in rnd.sweep_vars:
-            if vname not in cfg.vars:
-                raise ConfigValidationError(
-                    f"round '{rnd.name}' references unknown sweep var '{vname}'"
-                )
-
-        # fixed_overrides vars must exist in cfg.vars as well
-        for vname in rnd.fixed_overrides.keys():
-            if vname not in cfg.vars:
-                raise ConfigValidationError(
-                    f"round '{rnd.name}' fixed_overrides references unknown var '{vname}'"
-                )
-
-        # search block is required for multi-round optimization
-        if rnd.search is None:
-            raise ConfigValidationError(
-                f"round '{rnd.name}' must define a 'search' block"
-            )
-
-        if not rnd.search.metric:
-            raise ConfigValidationError(
-                f"round '{rnd.name}' search.metric must not be empty"
-            )
-
-        if rnd.search.objective not in ("max", "min"):
-            raise ConfigValidationError(
-                f"round '{rnd.name}' search.objective must be 'max' or 'min'"
-            )

@@ -29,8 +29,6 @@ class ExecutionCache(HasLogger):
             - repetition: INTEGER (which repetition: 1, 2, 3, etc.)
             - metrics_json: TEXT (cached metrics)
             - metadata_json: TEXT (execution metadata: status, timestamps, etc.)
-            - round_name: TEXT (optional, for multi-round workflows)
-            - round_index: INTEGER (optional)
             - created_at: TEXT (timestamp)
     """
 
@@ -68,10 +66,8 @@ class ExecutionCache(HasLogger):
                     repetition INTEGER NOT NULL,
                     metrics_json TEXT,
                     metadata_json TEXT,
-                    round_name TEXT,
-                    round_index INTEGER,
                     created_at TEXT NOT NULL,
-                    UNIQUE(param_hash, repetition, round_name)
+                    UNIQUE(param_hash, repetition)
                 )
             """)
 
@@ -141,7 +137,6 @@ class ExecutionCache(HasLogger):
         self,
         params: Dict[str, Any],
         repetition: int,
-        round_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Retrieve cached result for given parameters and repetition.
@@ -149,7 +144,6 @@ class ExecutionCache(HasLogger):
         Args:
             params: Execution parameters
             repetition: Repetition number (1-based)
-            round_name: Optional round name for multi-round workflows
 
         Returns:
             Dict with 'metrics' and 'metadata' if found, None otherwise
@@ -161,30 +155,20 @@ class ExecutionCache(HasLogger):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            # Query for exact match
-            if round_name is not None:
-                cursor.execute("""
-                    SELECT metrics_json, metadata_json, created_at
-                    FROM cached_executions
-                    WHERE param_hash = ? AND repetition = ? AND round_name = ?
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, (param_hash, repetition, round_name))
-            else:
-                cursor.execute("""
-                    SELECT metrics_json, metadata_json, created_at
-                    FROM cached_executions
-                    WHERE param_hash = ? AND repetition = ? AND round_name IS NULL
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, (param_hash, repetition))
+            cursor.execute("""
+                SELECT metrics_json, metadata_json, created_at
+                FROM cached_executions
+                WHERE param_hash = ? AND repetition = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (param_hash, repetition))
 
             row = cursor.fetchone()
 
             if row:
                 self.logger.debug(
                     f"  [Cache] HIT: hash={param_hash[:8]} rep={repetition} "
-                    f"round={round_name or 'N/A'} (cached_at={row['created_at']})"
+                    f"(cached_at={row['created_at']})"
                 )
 
                 return {
@@ -194,7 +178,7 @@ class ExecutionCache(HasLogger):
                 }
 
             self.logger.debug(
-                f"  [Cache] MISS: hash={param_hash[:8]} rep={repetition} round={round_name or 'N/A'}"
+                f"  [Cache] MISS: hash={param_hash[:8]} rep={repetition}"
             )
             return None
 
@@ -204,8 +188,6 @@ class ExecutionCache(HasLogger):
         repetition: int,
         metrics: Dict[str, Any],
         metadata: Dict[str, Any],
-        round_name: Optional[str] = None,
-        round_index: Optional[int] = None,
     ):
         """
         Store execution result in cache.
@@ -215,8 +197,6 @@ class ExecutionCache(HasLogger):
             repetition: Repetition number (1-based)
             metrics: Execution metrics
             metadata: Execution metadata
-            round_name: Optional round name
-            round_index: Optional round index
         """
         normalized = self._normalize_params(params)
         param_hash = self._hash_params(normalized)
@@ -230,50 +210,45 @@ class ExecutionCache(HasLogger):
             try:
                 conn.execute("""
                     INSERT INTO cached_executions
-                    (param_hash, params_json, repetition, metrics_json, metadata_json,
-                     round_name, round_index, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (param_hash, params_json, repetition, metrics_json, metadata_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """, (
-                    param_hash, params_json, repetition, metrics_json, metadata_json,
-                    round_name, round_index, created_at
+                    param_hash, params_json, repetition, metrics_json, metadata_json, created_at
                 ))
                 conn.commit()
 
                 self.logger.debug(
                     f"  [Cache] STORE: hash={param_hash[:8]} rep={repetition} "
-                    f"round={round_name or 'N/A'} metrics={len(metrics)} keys"
+                    f"metrics={len(metrics)} keys"
                 )
 
             except sqlite3.IntegrityError:
-                # Already exists (same param_hash, repetition, round_name)
+                # Already exists (same param_hash, repetition)
                 # Update with latest result
                 conn.execute("""
                     UPDATE cached_executions
                     SET metrics_json = ?, metadata_json = ?, created_at = ?
                     WHERE param_hash = ? AND repetition = ?
-                    AND (round_name = ? OR (round_name IS NULL AND ? IS NULL))
                 """, (
                     metrics_json, metadata_json, created_at,
-                    param_hash, repetition, round_name, round_name
+                    param_hash, repetition
                 ))
                 conn.commit()
 
                 self.logger.debug(
                     f"  [Cache] UPDATE: hash={param_hash[:8]} rep={repetition} "
-                    f"round={round_name or 'N/A'} metrics={len(metrics)} keys"
+                    f"metrics={len(metrics)} keys"
                 )
 
     def get_cached_repetitions_count(
         self,
         params: Dict[str, Any],
-        round_name: Optional[str] = None,
     ) -> int:
         """
         Count how many repetitions are cached for given parameters.
 
         Args:
             params: Execution parameters
-            round_name: Optional round name
 
         Returns:
             Number of cached repetitions
@@ -284,16 +259,10 @@ class ExecutionCache(HasLogger):
         with sqlite3.connect(str(self.db_path)) as conn:
             cursor = conn.cursor()
 
-            if round_name is not None:
-                cursor.execute("""
-                    SELECT COUNT(*) FROM cached_executions
-                    WHERE param_hash = ? AND round_name = ?
-                """, (param_hash, round_name))
-            else:
-                cursor.execute("""
-                    SELECT COUNT(*) FROM cached_executions
-                    WHERE param_hash = ? AND round_name IS NULL
-                """, (param_hash,))
+            cursor.execute("""
+                SELECT COUNT(*) FROM cached_executions
+                WHERE param_hash = ?
+            """, (param_hash,))
 
             count = cursor.fetchone()[0]
             return count

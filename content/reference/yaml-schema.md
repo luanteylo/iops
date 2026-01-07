@@ -17,10 +17,9 @@ title: "IOPS YAML Format Reference"
 6. [Section: `command`](#section-command)
 7. [Section: `scripts`](#section-scripts)
 8. [Section: `output`](#section-output)
-9. [Section: `rounds` (Optional)](#section-rounds-optional)
-10. [Section: `reporting` (Optional)](#section-reporting-optional)
-11. [Jinja2 Templating](#jinja2-templating)
-12. [Complete Examples](#complete-examples)
+9. [Section: `reporting` (Optional)](#section-reporting-optional)
+10. [Jinja2 Templating](#jinja2-templating)
+11. [Complete Examples](#complete-examples)
 
 ---
 
@@ -68,14 +67,11 @@ scripts:         # Execution scripts and parsers
 output:          # Output configuration (CSV, Parquet, SQLite)
   ...
 
-rounds:          # (Optional) Multi-round optimization workflow
-  ...
-
 reporting:       # (Optional) Custom report generation
   ...
 ```
 
-**All sections are required except `constraints`, `rounds`, and `reporting`.**
+**All sections are required except `constraints` and `reporting`.**
 
 ---
 
@@ -161,8 +157,6 @@ Number of times each test should be repeated. Each repetition gets a unique ID.
 ```yaml
 repetitions: 3  # Each test runs 3 times
 ```
-
-**Note**: Round-level `repetitions` override this global value.
 
 #### `search_method` (optional, default: "exhaustive")
 Test selection strategy:
@@ -525,31 +519,6 @@ benchmark:
   random_seed: 42    # Ensures reproducible sampling
 ```
 
-**Multi-round support**:
-Random sampling works with multi-round optimization. Each round independently samples from its parameter space and propagates best results to the next round:
-
-```yaml
-benchmark:
-  search_method: "random"
-  random_config:
-    n_samples: 10
-
-rounds:
-  - name: "optimize_processes"
-    sweep_vars: ["processes"]
-    search:
-      metric: "throughput"
-      objective: "max"
-    # Samples 10 random 'processes' values
-
-  - name: "optimize_volume"
-    sweep_vars: ["volume"]
-    search:
-      metric: "throughput"
-      objective: "max"
-    # Uses best 'processes' from round 1, samples 10 random 'volume' values
-```
-
 **Reproducibility**:
 Use `random_seed` in the benchmark config to ensure consistent sampling across runs:
 ```yaml
@@ -724,8 +693,6 @@ Available in all expressions:
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory |
-| `round_name` | str | Current round name (if using rounds) |
-| `round_index` | int | Current round index (if using rounds) |
 
 ### Complete Example
 
@@ -1209,7 +1176,7 @@ Output file path. Can use templates:
 
 ```yaml
 path: "{{ workdir }}/results.csv"
-path: "{{ workdir }}/results_{{ round_name }}.parquet"
+path: "{{ workdir }}/results.parquet"
 path: "/scratch/benchmark_results.db"
 ```
 
@@ -1235,7 +1202,6 @@ Field filtering using dot notation.
 |--------|--------|
 | `benchmark.*` | `name`, `description`, `workdir`, etc. |
 | `execution.*` | `execution_id`, `repetition`, `execution_dir`, etc. |
-| `round.*` | `name`, `index`, `repetitions` |
 | `vars.*` | All variable names (e.g., `vars.nodes`) |
 | `metadata.*` | All command metadata keys |
 | `metrics.*` | All parser metric names |
@@ -1300,7 +1266,7 @@ output:
 output:
   sink:
     type: parquet
-    path: "{{ workdir }}/results_{{ round_name }}.parquet"
+    path: "{{ workdir }}/results.parquet"
     mode: append
     include:
       - "execution.*"
@@ -1318,141 +1284,6 @@ output:
     table: "ior_benchmark"
     mode: append
 ```
-
----
-
-## Section: `rounds` (Optional)
-
-Enables multi-round optimization workflows where results from one round inform the next.
-
-### Use Cases
-
-- **Progressive parameter refinement**: Find best nodes first, then optimize block size
-- **Multi-stage optimization**: Coarse search → fine search
-- **Adaptive workflows**: Adjust parameters based on previous results
-
-### Schema
-
-```yaml
-rounds:
-  - name: string                  # Required: round identifier
-    description: string           # Optional: human-readable description
-    sweep_vars: list              # Required: which vars to sweep in this round
-    fixed_overrides: dict         # Optional: override var values for this round
-    repetitions: integer          # Optional: round-specific repetitions
-    search:                       # Required: optimization criteria
-      metric: string              # Required: metric name to optimize
-      objective: string           # Required: "max" | "min"
-      select: string              # Optional: future use
-```
-
-### Workflow
-
-1. **Round 1**: Sweep specified variables, others use defaults
-2. **Select best**: Choose best execution based on search metric
-3. **Propagate**: Best parameters become defaults for next round
-4. **Round 2**: Sweep new variables with propagated defaults
-5. Repeat...
-
-### `name` (required)
-
-Round identifier. Used in logs and output.
-
-```yaml
-name: "optimize_nodes"
-```
-
-### `sweep_vars` (required)
-
-List of variables to sweep in this round. Other swept variables use their default (first) value.
-
-```yaml
-sweep_vars: ["nodes"]          # Only sweep nodes
-sweep_vars: ["nodes", "processes_per_node"]  # Sweep both
-```
-
-### `fixed_overrides` (optional)
-
-Override specific variable values for this round:
-
-```yaml
-fixed_overrides:
-  block_size_mb: 16           # Force this value
-  processes_per_node: 32      # Force this value
-```
-
-### `repetitions` (optional)
-
-Override global repetitions for this round:
-
-```yaml
-repetitions: 5                # Run 5 times per test in this round
-```
-
-### `search` (required)
-
-Optimization criteria for selecting best result.
-
-#### `metric` (required)
-
-Metric name from parser output:
-
-```yaml
-search:
-  metric: "bwMiB"
-```
-
-#### `objective` (required)
-
-Optimization goal:
-- `max`: Maximize metric
-- `min`: Minimize metric
-
-```yaml
-search:
-  objective: "max"
-```
-
-### Complete Example
-
-```yaml
-rounds:
-  # Round 1: Find optimal number of nodes
-  - name: "optimize_nodes"
-    description: "Find best node count for maximum bandwidth"
-    sweep_vars: ["nodes"]
-    fixed_overrides:
-      processes_per_node: 16
-      volume_size_gb: 4
-    repetitions: 3
-    search:
-      metric: "bwMiB"
-      objective: "max"
-
-  # Round 2: With best nodes, optimize processes per node
-  - name: "optimize_processes"
-    description: "Find best process count using optimal nodes from round 1"
-    sweep_vars: ["processes_per_node"]
-    repetitions: 3
-    search:
-      metric: "bwMiB"
-      objective: "max"
-
-  # Round 3: Fine-tune block size
-  - name: "optimize_block_size"
-    description: "Fine-tune block size with optimal nodes and processes"
-    sweep_vars: ["block_size_mb"]
-    repetitions: 5
-    search:
-      metric: "bwMiB"
-      objective: "max"
-```
-
-### Behavior
-
-- Results are saved per round: `runs/round_01_optimize_nodes/`
-- Best execution from each round propagates to next
-- Cache is round-aware when using `--use_cache`
 
 ---
 
@@ -1991,7 +1822,6 @@ All string fields support Jinja2 templating with `{{ variable }}` syntax.
 |----------|-----------|
 | **Execution** | `execution_id`, `repetition`, `repetitions` |
 | **Benchmark** | `workdir`, `execution_dir` |
-| **Rounds** | `round_name`, `round_index` |
 | **Variables** | All vars (swept and derived) |
 | **Metadata** | All command.metadata keys |
 | **Command** | `command.template` |
@@ -2071,7 +1901,7 @@ output:
     path: "{{ workdir }}/results.csv"
 ```
 
-### Example 2: SLURM with Rounds
+### Example 2: SLURM Execution
 
 ```yaml
 benchmark:
@@ -2079,6 +1909,7 @@ benchmark:
   workdir: "/scratch/$USER/ior_benchmark"
   sqlite_db: "/scratch/$USER/ior_cache.db"
   executor: "slurm"
+  repetitions: 3
 
 vars:
   nodes:
@@ -2152,24 +1983,6 @@ output:
     path: "{{ workdir }}/results.parquet"
     exclude:
       - "benchmark.description"
-
-rounds:
-  - name: "optimize_nodes"
-    sweep_vars: ["nodes"]
-    fixed_overrides:
-      processes_per_node: 16
-      volume_size_gb: 8
-    repetitions: 3
-    search:
-      metric: "bwMiB"
-      objective: "max"
-
-  - name: "optimize_processes"
-    sweep_vars: ["processes_per_node"]
-    repetitions: 3
-    search:
-      metric: "bwMiB"
-      objective: "max"
 ```
 
 ### Example 3: Caching and Custom Metadata

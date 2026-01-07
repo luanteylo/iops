@@ -149,39 +149,6 @@ def _build_sweep_values(name: str, vcfg: VarConfig) -> List[Any]:
         )
 
 
-def _choose_default_value(name: str, vcfg: VarConfig) -> Any:
-    """
-    Choose a 'default' scalar value for a swept variable when it is not swept
-    in the current round. Heuristic:
-
-    - if sweep.mode == 'list': use first element
-    - if sweep.mode == 'range': use 'start'
-    """
-    if vcfg.sweep is None:
-        raise ConfigValidationError(
-            f"Variable '{name}' has no sweep; cannot choose default."
-        )
-
-    mode = vcfg.sweep.mode
-    if mode == "list":
-        if not vcfg.sweep.values:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'list' has empty 'values'; cannot choose default."
-            )
-        return _cast_value(vcfg.type, vcfg.sweep.values[0])
-
-    if mode == "range":
-        if vcfg.sweep.start is None:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'range' has no 'start'; cannot choose default."
-            )
-        return _cast_value(vcfg.type, vcfg.sweep.start)
-
-    raise ConfigValidationError(
-        f"Variable '{name}' has invalid sweep mode '{mode}' when choosing default."
-    )
-
-
 # ----------------- Execution instance ----------------- #
 
 @dataclass
@@ -205,16 +172,8 @@ class ExecutionInstance:
     # The planner can still override via metadata["repetition"].
     repetition: int = 0
 
-    # Round-level metadata
-    round_name: Optional[str] = None
-    round_index: Optional[int] = None
     repetitions: int = 1
-    execution_dir : Optional[Path] = None
-    
-    
-
-    search_metric: Optional[str] = None
-    search_objective: Optional[str] = None
+    execution_dir: Optional[Path] = None
 
     # Benchmark-level
     benchmark_name: str = ""
@@ -281,15 +240,12 @@ class ExecutionInstance:
                 "name": self.benchmark_name,
                 "description": self.benchmark_description,
                 "workdir": str(self.workdir),
-                "execution_dir": str(self.execution_dir) 
-                
+                "execution_dir": str(self.execution_dir)
             },
             "workdir": str(self.workdir),
             "execution_dir": str(self.execution_dir),
             "execution_id": self.execution_id,
             "repetitions": self.repetitions,
-            "round_name": self.round_name,
-            "round_index": self.round_index,
         }
 
         # metadata (dynamic, including repetition, results, etc.)
@@ -337,7 +293,6 @@ class ExecutionInstance:
         - workdir
         - execution_id
         - repetitions
-        - round_name / round_index
         - flattened vars ({{ my_var }})
         - vars mapping ({{ vars.my_var }})
         - metadata
@@ -528,8 +483,6 @@ class ExecutionInstance:
         """
         Small helper for logging/debugging.
         """
-        if self.round_name:
-            return f"{self.benchmark_name}[{self.round_name}]#{self.execution_id}"
         return f"{self.benchmark_name}#{self.execution_id}"
 
     def __str__(self) -> str:
@@ -542,14 +495,7 @@ class ExecutionInstance:
         lines.append(70 * "-")
 
         # Header
-        if self.round_name is not None:
-            lines.append(
-                f"Execution #{self.execution_id} — {self.benchmark_name} "
-                f"(round={self.round_name})"
-                f"(repetition={self.repetition})"
-            )
-        else:
-            lines.append(f"Execution #{self.execution_id}/{self.repetition} — {self.benchmark_name}")
+        lines.append(f"Execution #{self.execution_id}/{self.repetition} — {self.benchmark_name}")
         
         lines.append(f"Workdir  : {self.workdir}")
         lines.append(f"Execution Dir : {self.execution_dir}")
@@ -579,10 +525,8 @@ class ExecutionInstance:
             lines.append(f"Post-script: {self.post_script_file}")
             
 
-        # Repetitions / search
+        # Repetitions
         lines.append(f"Repeats: {self.repetitions}")
-        if self.search_metric and self.search_objective:
-            lines.append(f"Search: {self.search_objective} {self.search_metric}")
 
         # Metadata (rendered)
         effective_metadata = self.command_metadata
@@ -628,7 +572,6 @@ class ExecutionInstance:
             sep_start,
             f"Execution #{self.execution_id}",
             f"Benchmark : {self.benchmark_name}",
-            f"Round     : {self.round_name} (idx={self.round_index})",
             f"Workdir   : {self.workdir}",
             f"Exeucution Dir: {self.execution_dir}",
             f"Repetitions: {self.repetition}/{self.repetitions}",            
@@ -701,47 +644,131 @@ class ExecutionInstance:
         return "\n".join(lines)
 
 
-# ----------------- Round selection ----------------- #
+# ----------------- Single instance creator ----------------- #
 
-def _select_round(
+def create_execution_instance(
     cfg: GenericBenchmarkConfig,
-    round_name: Optional[str],
-) -> Tuple[Optional[Any], Optional[int]]:
+    base_vars: Dict[str, Any],
+    execution_id: int,
+    script_index: int = 0,
+    search_var_names: Optional[List[str]] = None,
+    exhaustive_var_names: Optional[List[str]] = None,
+) -> ExecutionInstance:
     """
-    Helper to pick a round from cfg.rounds.
+    Create a single ExecutionInstance from explicit variable values.
+
+    This is useful for:
+    - Bayesian optimization (create instance for optimizer-suggested parameters)
+    - Testing specific parameter combinations
+    - Any case where you want to create an instance without building the full matrix
+
+    Args:
+        cfg: The benchmark configuration
+        base_vars: Dictionary of base variable values (swept variables)
+        execution_id: The execution ID to assign
+        script_index: Which script to use (default 0, first script)
+        search_var_names: Names of search variables (for grouping). If None, all base_vars are search vars.
+        exhaustive_var_names: Names of exhaustive variables. If None, empty list.
 
     Returns:
-        (round_cfg, round_index) or (None, None) if no rounds are defined.
-    """
-    rounds = getattr(cfg, "rounds", None)
-    if not rounds:
-        return None, None
+        ExecutionInstance with all templates set up for lazy rendering
 
-    if round_name is None:
-        if len(rounds) == 1:
-            return rounds[0], 0
-        raise ConfigValidationError(
-            f"{len(rounds)} rounds defined in YAML; please specify round_name"
+    Raises:
+        IndexError: If script_index is out of range
+        ConfigValidationError: If configuration is invalid
+    """
+    if script_index >= len(cfg.scripts):
+        raise IndexError(
+            f"script_index {script_index} out of range (only {len(cfg.scripts)} scripts defined)"
         )
 
-    for idx, r in enumerate(rounds):
-        if r.name == round_name:
-            return r, idx
+    script_cfg = cfg.scripts[script_index]
+    repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
 
-    raise ConfigValidationError(f"Round '{round_name}' not found in configuration")
+    # Build derived var configs from cfg.vars
+    derived_var_cfgs: Dict[str, Tuple[str, str]] = {}
+    for name, vcfg in cfg.vars.items():
+        if vcfg.sweep is None and vcfg.expr is not None:
+            if not vcfg.expr:
+                raise ConfigValidationError(
+                    f"Derived variable '{name}' must define 'expr'."
+                )
+            derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
+
+    # Command/env/metadata templates from cfg
+    command_template = cfg.command.template
+    env_templates = dict(cfg.command.env) if cfg.command.env else {}
+    metadata_templates = dict(cfg.command.metadata) if cfg.command.metadata else {}
+
+    # Output sink templates
+    output_path_template = cfg.output.sink.path
+    output_type = cfg.output.sink.type
+    output_mode = cfg.output.sink.mode
+    output_table = cfg.output.sink.table
+    output_include = list(cfg.output.sink.include)
+    output_exclude = list(cfg.output.sink.exclude)
+
+    # Script templates
+    script_template = script_cfg.script_template
+    submit_cmd_template = script_cfg.submit
+
+    # Optional post script template
+    post_script_template = None
+    if script_cfg.post and script_cfg.post.script:
+        post_script_template = script_cfg.post.script
+
+    # Parser template (store as-is; we'll render .file lazily)
+    parser_template: ParserConfig | None = None
+    if script_cfg.parser is not None:
+        metrics: List[MetricConfig] = []
+        for m in script_cfg.parser.metrics:
+            metrics.append(MetricConfig(name=m.name, path=m.path))
+
+        parser_template = ParserConfig(
+            file=script_cfg.parser.file,
+            metrics=metrics,
+            parser_script=script_cfg.parser.parser_script,
+        )
+
+    return ExecutionInstance(
+        execution_id=execution_id,
+        repetition=0,  # planner will set metadata["repetition"] per run
+        repetitions=repetitions,
+        benchmark_name=cfg.benchmark.name,
+        benchmark_description=cfg.benchmark.description,
+        workdir=cfg.benchmark.workdir,
+        sqlite_db=getattr(cfg.benchmark, "sqlite_db", None),
+        base_vars=base_vars,
+        derived_var_cfgs=derived_var_cfgs,
+        exhaustive_var_names=exhaustive_var_names or [],
+        search_var_names=search_var_names or list(base_vars.keys()),
+        metadata={},
+        command_template=command_template,
+        env_templates=env_templates,
+        metadata_templates=metadata_templates,
+        script_name=script_cfg.name,
+        script_template=script_template,
+        submit_cmd_template=submit_cmd_template,
+        post_script_template=post_script_template,
+        parser_template=parser_template,
+        output_path_template=output_path_template,
+        output_type=output_type,
+        output_mode=output_mode,
+        output_table=output_table,
+        output_include=output_include,
+        output_exclude=output_exclude,
+    )
 
 
 # ----------------- Main builder ----------------- #
 
 def build_execution_matrix(
     cfg: GenericBenchmarkConfig,
-    round_name: Optional[str] = None,
-    defaults: Optional[Dict[str, Any]] = None,
     start_execution_id: int = 0,
 ) -> List[ExecutionInstance]:
     """
-    Build the Cartesian product of swept variables for a given round
-    and return a list of ExecutionInstance objects.
+    Build the Cartesian product of swept variables and return a list of
+    ExecutionInstance objects.
 
     IMPORTANT:
     - No Jinja rendering is done here.
@@ -750,44 +777,15 @@ def build_execution_matrix(
       and rendered lazily via @property.
 
     Behaviour:
-
-    - If cfg.rounds is defined:
-        * You MUST specify round_name if there is more than one round.
-        * Only variables listed in that round's `sweep_vars` are swept.
-        * Non-swept vars:
-            - if in round.fixed_overrides -> use that value;
-            - elif in `defaults` (from previous rounds) -> use that;
-            - else -> use a default taken from the var sweep
-                    (first list element or start of range).
-        * repetitions for each ExecutionInstance is taken from round.repetitions.
-
-    - If cfg.rounds is NOT defined:
-        * Legacy behaviour: sweep over all vars that have a `sweep` defined.
-        * All sweeps are done in a single implicit "round".
-        * repetitions is 1 by default (or benchmark.repetitions if present).
+    - Sweep over all vars that have a `sweep` defined.
+    - repetitions is 1 by default (or benchmark.repetitions if present).
     """
-
-    # ----------------- choose round (if any) ----------------- #
-    round_cfg, round_idx = _select_round(cfg, round_name)
-
-    if defaults is None:
-        defaults = {}
 
     # ----------------- split vars ----------------- #
     swept_vars: List[Tuple[str, VarConfig]] = []
     derived_vars: List[Tuple[str, VarConfig]] = []
-    fixed_scalars: Dict[str, Any] = {}
 
-    # Always use global repetitions (not per-round)
     repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
-
-    # Round-specific parameters
-    if round_cfg is not None:
-        sweep_names_round = set(round_cfg.sweep_vars or [])
-        fixed_overrides = getattr(round_cfg, "fixed_overrides", {}) or {}
-    else:
-        sweep_names_round = None
-        fixed_overrides = {}
 
     # Get exhaustive vars from benchmark config
     exhaustive_var_names = set(cfg.benchmark.exhaustive_vars or [])
@@ -799,33 +797,14 @@ def build_execution_matrix(
             derived_vars.append((name, v))
             continue
 
-        # Swept in this round:
-        if sweep_names_round is None or name in sweep_names_round:
-            if v.sweep is None:
-                raise ConfigValidationError(
-                    f"Variable '{name}' is in sweep_vars but has no 'sweep' defined."
-                )
+        # Swept variable: has sweep defined
+        if v.sweep is not None:
             swept_vars.append((name, v))
-        else:
-            # Not swept this round: choose a scalar value
-            if name in fixed_overrides:
-                val = _cast_value(v.type, fixed_overrides[name])
-            elif name in defaults:
-                val = _cast_value(v.type, defaults[name])
-            else:
-                # Use a default from the sweep definition
-                if v.sweep is None:
-                    raise ConfigValidationError(
-                        f"Variable '{name}' is neither swept nor derived; "
-                        "must have either 'sweep' or 'expr' in YAML."
-                    )
-                val = _choose_default_value(name, v)
-            fixed_scalars[name] = val
 
     if not swept_vars:
         raise ConfigValidationError(
-            "No swept variables defined for this round – at least one "
-            "'vars.*.sweep' and membership in sweep_vars is required."
+            "No swept variables defined – at least one "
+            "'vars.*.sweep' is required."
         )
 
     # ----------------- partition swept vars into search and exhaustive ----------------- #
@@ -843,7 +822,7 @@ def build_execution_matrix(
     for name in exhaustive_var_names:
         if name not in [n for n, _ in swept_vars]:
             raise ConfigValidationError(
-                f"Variable '{name}' is listed in exhaustive_vars but is not swept in this round."
+                f"Variable '{name}' is listed in exhaustive_vars but is not swept."
             )
 
     # If no search vars (all swept vars are exhaustive), treat as normal exhaustive search
@@ -889,36 +868,6 @@ def build_execution_matrix(
     executions: List[ExecutionInstance] = []
     exec_id = start_execution_id
 
-    # Search metadata (per round)
-    search_metric: Optional[str] = None
-    search_objective: Optional[str] = None
-    if round_cfg is not None and getattr(round_cfg, "search", None) is not None:
-        search_metric = round_cfg.search.metric
-        search_objective = round_cfg.search.objective
-
-    # Pre-pack derived var cfgs as name -> (expr, type)
-    derived_var_cfgs: Dict[str, Tuple[str, str]] = {}
-    for name, vcfg in derived_vars:
-        if not vcfg.expr:
-            raise ConfigValidationError(
-                f"Derived variable '{name}' must define 'expr'."
-            )
-        derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
-
-    # Command/env/metadata templates from cfg
-    command_template = cfg.command.template
-    env_templates = dict(cfg.command.env) if cfg.command.env else {}
-    metadata_templates = dict(cfg.command.metadata) if cfg.command.metadata else {}
-
-
-    # Output sink templates
-    output_path_template = cfg.output.sink.path
-    output_type = cfg.output.sink.type
-    output_mode = cfg.output.sink.mode
-    output_table = cfg.output.sink.table
-    output_include = list(cfg.output.sink.include)
-    output_exclude = list(cfg.output.sink.exclude)
-
     # Build execution instances as cross-product of search and exhaustive spaces
     for search_combo in search_values_product:
         # Search vars assignment
@@ -929,67 +878,20 @@ def build_execution_matrix(
             # Exhaustive vars assignment (empty dict if no exhaustive vars)
             exhaustive_assignment = dict(zip(exhaustive_names, exhaustive_combo)) if exhaustive_names else {}
 
-            # Combine: fixed scalars + search vars + exhaustive vars
-            base_vars = {**fixed_scalars, **search_assignment, **exhaustive_assignment}
+            # Combine: search vars + exhaustive vars
+            base_vars = {**search_assignment, **exhaustive_assignment}
 
-            # For each script, build an ExecutionInstance with templates and var configs
-            for script_cfg in cfg.scripts:
+            # For each script, build an ExecutionInstance
+            for script_idx in range(len(cfg.scripts)):
                 exec_id += 1
 
-                # Script templates
-                script_template = script_cfg.script_template
-                submit_cmd_template = script_cfg.submit
-
-                # Optional post script template
-                post_script_template = None
-                if script_cfg.post and script_cfg.post.script:
-                    post_script_template = script_cfg.post.script
-
-                # Parser template (store as-is; we'll render .file lazily)
-                parser_template: ParserConfig | None = None
-                if script_cfg.parser is not None:
-                    metrics: List[MetricConfig] = []
-                    for m in script_cfg.parser.metrics:
-                        metrics.append(MetricConfig(name=m.name, path=m.path))
-
-                    parser_template = ParserConfig(
-                        file=script_cfg.parser.file,
-                        metrics=metrics,
-                        parser_script=script_cfg.parser.parser_script,
-                    )
-
-                exec_instance = ExecutionInstance(
-                    execution_id=exec_id,
-                    repetition=0,  # planner will set metadata["repetition"] per run
-                    round_name=getattr(round_cfg, "name", None) if round_cfg else None,
-                    round_index=round_idx,
-                    repetitions=repetitions,
-                    search_metric=search_metric,
-                    search_objective=search_objective,
-                    benchmark_name=cfg.benchmark.name,
-                    benchmark_description=cfg.benchmark.description,
-                    workdir=cfg.benchmark.workdir,
-                    sqlite_db=getattr(cfg.benchmark, "sqlite_db", None),
+                exec_instance = create_execution_instance(
+                    cfg=cfg,
                     base_vars=base_vars,
-                    derived_var_cfgs=derived_var_cfgs,
-                    exhaustive_var_names=exhaustive_names,
+                    execution_id=exec_id,
+                    script_index=script_idx,
                     search_var_names=search_names,
-                    # runtime metadata starts empty; planner may fill it (e.g., repetition, metrics)
-                    metadata={},
-                    command_template=command_template,
-                    env_templates=env_templates,
-                    metadata_templates=metadata_templates,
-                    script_name=script_cfg.name,
-                    script_template=script_template,
-                    submit_cmd_template=submit_cmd_template,
-                    post_script_template=post_script_template,
-                    parser_template=parser_template,
-                    output_path_template=output_path_template,
-                    output_type=output_type,
-                    output_mode=output_mode,
-                    output_table=output_table,
-                    output_include=output_include,
-                    output_exclude=output_exclude,
+                    exhaustive_var_names=exhaustive_names,
                 )
 
                 executions.append(exec_instance)

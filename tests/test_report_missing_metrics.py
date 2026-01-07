@@ -300,58 +300,6 @@ class TestMissingMetricsHandling:
         assert "file_read_rate" not in reporting_metrics  # Filtered out
 
 
-class TestRealWorldScenario:
-    """
-    Test using actual data from the bug discovery.
-
-    This uses files from /home/luan/workdir/mdtest/run_004 if available.
-    """
-
-    @pytest.fixture
-    def real_workdir(self):
-        """Check if real bug data is available."""
-        real_path = Path("/home/luan/workdir/mdtest/run_004")
-        if not real_path.exists():
-            pytest.skip("Real workdir not available")
-        return real_path
-
-    def test_real_bug_scenario(self, real_workdir):
-        """
-        Test the actual bug scenario that was discovered.
-
-        This test uses the real data from the mdtest run where the bug occurred.
-        Note: This test may pass if the metadata has been manually fixed.
-        """
-        metadata_path = real_workdir / "run_metadata.json"
-        results_path = real_workdir / "results.csv"
-
-        # Load real data
-        with open(metadata_path) as f:
-            metadata = json.load(f)
-
-        df = pd.read_csv(results_path)
-
-        # Verify the bug scenario
-        declared_metrics = set([m["name"] for m in metadata["metrics"]])
-        available_metrics = set(
-            [
-                col.replace("metrics.", "")
-                for col in df.columns
-                if col.startswith("metrics.")
-            ]
-        )
-
-        missing = declared_metrics - available_metrics
-
-        # In the real scenario, file_read_rate should be missing
-        # If the metadata was already fixed, skip this test
-        if len(missing) == 0:
-            pytest.skip("Metadata was already fixed - no missing metrics to test")
-
-        # Otherwise verify we can detect the missing metrics
-        assert len(missing) > 0
-
-
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v"])

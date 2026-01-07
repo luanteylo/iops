@@ -229,7 +229,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
         for field in sink.exclude:
             logger.debug(f"    - {field}")
     else:
-        logger.debug("  Selection: default (all vars, metadata, metrics, and benchmark/round/execution fields will be saved)")
+        logger.debug("  Selection: default (all vars, metadata, metrics, and benchmark/execution fields will be saved)")
 
 
 

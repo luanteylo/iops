@@ -59,27 +59,6 @@ def test_matrix_repetitions(sample_config_file):
         assert test.repetitions == 2
 
 
-def test_matrix_with_rounds(tmp_path, sample_round_config_dict):
-    """Test matrix generation for specific rounds."""
-    import yaml
-    config_file = tmp_path / "rounds.yaml"
-    with open(config_file, "w") as f:
-        yaml.dump(sample_round_config_dict, f)
-
-    config = load_config(config_file)
-
-    # Build matrix for first round (sweep only nodes)
-    matrix_round1 = build_execution_matrix(config, round_name="optimize_nodes")
-
-    # Should have 3 tests (nodes=[1,2,4])
-    assert len(matrix_round1) == 3
-
-    # All should have ppn=2 (fixed override)
-    for test in matrix_round1:
-        assert test.vars["ppn"] == 2
-        assert test.vars["nodes"] in [1, 2, 4]
-
-
 def test_matrix_lazy_rendering(sample_config_file):
     """Test that templates are rendered lazily."""
     config = load_config(sample_config_file)

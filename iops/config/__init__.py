@@ -14,8 +14,6 @@ from iops.config.models import (
     ScriptConfig,
     OutputSinkConfig,
     OutputConfig,
-    RoundSearchConfig,
-    RoundConfig,
     GenericBenchmarkConfig,
 )
 from iops.config.loader import (
@@ -36,8 +34,6 @@ __all__ = [
     'ScriptConfig',
     'OutputSinkConfig',
     'OutputConfig',
-    'RoundSearchConfig',
-    'RoundConfig',
     'GenericBenchmarkConfig',
     'load_generic_config',
     'validate_generic_config',
