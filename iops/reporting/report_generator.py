@@ -1777,7 +1777,7 @@ class ReportGenerator:
             on=merge_cols,
             how='left'
         )
-        df_with_pareto['_is_pareto'] = df_with_pareto['_is_pareto'].fillna(False)
+        df_with_pareto['_is_pareto'] = df_with_pareto['_is_pareto'].notna()
 
         # Create hover text with parameter values
         hover_text = []
