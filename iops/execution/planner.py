@@ -375,7 +375,8 @@ class BasePlanner(ABC, HasLogger):
         exec_key = f"exec_{test.execution_id:04d}"
         index["executions"][exec_key] = {
             "path": str(exec_rel_path),
-            "params": params
+            "params": params,
+            "command": test.command
         }
 
         # Write updated index

@@ -1151,3 +1151,95 @@ class TestFindCommand:
             assert '-' in output
             # Should have column headers
             assert 'Path' in output or 'path' in output
+
+    def test_parse_show_command_argument(self):
+        """Test --show-command argument parsing."""
+        test_args = ['--find', '/path/to/workdir', '--show-command']
+        with patch.object(sys, 'argv', ['iops'] + test_args):
+            args = parse_arguments()
+            assert args.find == Path('/path/to/workdir')
+            assert args.show_command is True
+
+    def test_find_with_show_command(self, tmp_path):
+        """Test find_executions with --show-command displays command column."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {
+                    "path": "runs/exec_0001",
+                    "params": {"nodes": 1, "ppn": 4},
+                    "command": "mpirun -np 4 ./benchmark"
+                },
+                "exec_0002": {
+                    "path": "runs/exec_0002",
+                    "params": {"nodes": 2, "ppn": 8},
+                    "command": "mpirun -np 16 ./benchmark"
+                },
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Without --show-command, command should not appear
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, show_command=False)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'mpirun' not in output
+
+        # With --show-command, command should appear
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, show_command=True)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'Command' in output
+            assert 'mpirun -np 4 ./benchmark' in output
+            assert 'mpirun -np 16 ./benchmark' in output
+
+    def test_find_show_command_with_filter(self, tmp_path):
+        """Test --show-command works with filters."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {
+                    "path": "runs/exec_0001",
+                    "params": {"nodes": 1},
+                    "command": "cmd1"
+                },
+                "exec_0002": {
+                    "path": "runs/exec_0002",
+                    "params": {"nodes": 2},
+                    "command": "cmd2"
+                },
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['nodes=2'], show_command=True)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'cmd2' in output
+            assert 'cmd1' not in output
+
+    def test_find_show_command_missing_command(self, tmp_path):
+        """Test --show-command handles missing command field gracefully."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {
+                    "path": "runs/exec_0001",
+                    "params": {"nodes": 1},
+                    # No command field
+                },
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Should not crash
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, show_command=True)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'runs/exec_0001' in output

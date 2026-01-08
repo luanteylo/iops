@@ -737,3 +737,34 @@ class TestMetadataFileEdgeCases:
         assert "exec_0001" in index["executions"]
         # Timestamp should be converted to string
         assert isinstance(index["executions"]["exec_0001"]["params"]["timestamp"], str)
+
+    def test_update_index_stores_command(self, sample_config_file):
+        """Test that rendered command is stored in index file."""
+        from conftest import load_config
+        cfg = load_config(sample_config_file)
+        planner = ExhaustivePlanner(cfg)
+        workdir = Path(cfg.benchmark.workdir)
+
+        test = ExecutionInstance(
+            execution_id=1,
+            base_vars={"nodes": 4, "ppn": 8},
+            command_template="mpirun -np {{ nodes * ppn }} ./benchmark",
+            script_name="test_script",
+            script_template="#!/bin/bash\necho test",
+            repetitions=1,
+        )
+
+        exec_dir = workdir / "runs" / "exec_0001"
+        exec_dir.mkdir(parents=True)
+
+        params = {"nodes": 4, "ppn": 8}
+        planner._update_index_file(test, params, exec_dir)
+
+        index_file = workdir / INDEX_FILENAME
+        with open(index_file, 'r') as f:
+            index = json.load(f)
+
+        # Command should be stored and rendered
+        exec_entry = index["executions"]["exec_0001"]
+        assert "command" in exec_entry
+        assert exec_entry["command"] == "mpirun -np 32 ./benchmark"

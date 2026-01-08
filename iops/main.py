@@ -15,13 +15,14 @@ INDEX_FILENAME = "__iops_index.json"
 PARAMS_FILENAME = "__iops_params.json"
 
 
-def find_executions(path: Path, filters: Optional[List[str]] = None) -> None:
+def find_executions(path: Path, filters: Optional[List[str]] = None, show_command: bool = False) -> None:
     """
     Find and display execution folders in a workdir.
 
     Args:
         path: Path to workdir (run root) or exec folder
         filters: Optional list of VAR=VALUE filters
+        show_command: If True, display the command column
     """
     path = path.resolve()
 
@@ -38,13 +39,13 @@ def find_executions(path: Path, filters: Optional[List[str]] = None) -> None:
     # Check if path is an exec folder (has __iops_params.json)
     params_file = path / PARAMS_FILENAME
     if params_file.exists():
-        _show_single_execution(path, params_file)
+        _show_single_execution(path, params_file, show_command)
         return
 
     # Check if path is a run root (has __iops_index.json)
     index_file = path / INDEX_FILENAME
     if index_file.exists():
-        _show_executions_from_index(path, index_file, filter_dict)
+        _show_executions_from_index(path, index_file, filter_dict, show_command)
         return
 
     # Try to find index in subdirectories (user might point to workdir containing run_XXX)
@@ -54,14 +55,14 @@ def find_executions(path: Path, filters: Optional[List[str]] = None) -> None:
             index_file = run_dir / INDEX_FILENAME
             if index_file.exists():
                 print(f"\n=== {run_dir.name} ===")
-                _show_executions_from_index(run_dir, index_file, filter_dict)
+                _show_executions_from_index(run_dir, index_file, filter_dict, show_command)
         return
 
     print(f"No IOPS execution data found in: {path}")
     print(f"Expected either {INDEX_FILENAME} (in run root) or {PARAMS_FILENAME} (in exec folder)")
 
 
-def _show_single_execution(exec_dir: Path, params_file: Path) -> None:
+def _show_single_execution(exec_dir: Path, params_file: Path, show_command: bool = False) -> None:
     """Show details for a single execution folder."""
     try:
         with open(params_file, 'r') as f:
@@ -78,8 +79,24 @@ def _show_single_execution(exec_dir: Path, params_file: Path) -> None:
     if rep_dirs:
         print(f"Repetitions: {len(rep_dirs)}")
 
+    # Show command from index file if requested
+    if show_command:
+        # Try to find command in parent's index file
+        index_file = exec_dir.parent.parent / INDEX_FILENAME
+        if index_file.exists():
+            try:
+                with open(index_file, 'r') as f:
+                    index = json.load(f)
+                exec_name = exec_dir.name
+                if exec_name in index.get("executions", {}):
+                    command = index["executions"][exec_name].get("command", "")
+                    if command:
+                        print(f"\nCommand:\n  {command}")
+            except (json.JSONDecodeError, OSError):
+                pass
 
-def _show_executions_from_index(run_root: Path, index_file: Path, filter_dict: Dict[str, str]) -> None:
+
+def _show_executions_from_index(run_root: Path, index_file: Path, filter_dict: Dict[str, str], show_command: bool = False) -> None:
     """Show executions from the index file, optionally filtered."""
     try:
         with open(index_file, 'r') as f:
@@ -106,6 +123,7 @@ def _show_executions_from_index(run_root: Path, index_file: Path, filter_dict: D
     for exec_key, exec_data in sorted(executions.items()):
         params = exec_data.get("params", {})
         rel_path = exec_data.get("path", "")
+        command = exec_data.get("command", "")
 
         # Apply filters (partial match - only check specified vars)
         if filter_dict:
@@ -121,7 +139,7 @@ def _show_executions_from_index(run_root: Path, index_file: Path, filter_dict: D
             if not match:
                 continue
 
-        matches.append((exec_key, rel_path, params))
+        matches.append((exec_key, rel_path, params, command))
 
     if not matches:
         if filter_dict:
@@ -137,21 +155,27 @@ def _show_executions_from_index(run_root: Path, index_file: Path, filter_dict: D
     for var in var_names:
         var_values = [str(m[2].get(var, "")) for m in matches]
         col_widths[var] = max(len(var), max(len(v) for v in var_values) if var_values else 0)
+    if show_command:
+        col_widths["command"] = max(len("Command"), max(len(m[3]) for m in matches) if matches else 0)
 
     # Print header
     header = "Path".ljust(col_widths["path"])
     for var in var_names:
         header += "  " + var.ljust(col_widths[var])
+    if show_command:
+        header += "  " + "Command"
     print("\n")
     print(header)
     print("-" * len(header))
 
     # Print rows
-    for exec_key, rel_path, params in matches:
+    for exec_key, rel_path, params, command in matches:
         row = rel_path.ljust(col_widths["path"])
         for var in var_names:
             val = str(params.get(var, ""))
             row += "  " + val.ljust(col_widths[var])
+        if show_command:
+            row += "  " + command
         print(row)
 
 
@@ -184,6 +208,8 @@ def parse_arguments():
                         help="Find execution folders in a workdir (use VAR=VALUE to filter)")
     parser.add_argument('--filter', type=str, nargs='*', default=None, metavar='VAR=VALUE',
                         help="Filter executions by variable values (use with --find)")
+    parser.add_argument('--show-command', action='store_true',
+                        help="Show the command column (use with --find)")
 
     # Execution options
     parser.add_argument('-n', '--dry-run', action='store_true',
@@ -431,7 +457,7 @@ def main():
 
     # Handle --find mode (find execution folders)
     if args.find:
-        find_executions(args.find, args.filter)
+        find_executions(args.find, args.filter, args.show_command)
         return
 
     # Handle --analyze mode (generate report from existing results)
