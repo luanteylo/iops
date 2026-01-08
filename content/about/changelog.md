@@ -8,6 +8,27 @@ All notable changes to IOPS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-01-09
+
+### Added
+- Subcommand-based CLI structure (`run`, `check`, `generate`, `analyze`, `find`) with context-sensitive help
+- `find` command to explore execution folders with parameter filtering (`iops find ./workdir nodes=4`)
+- `--show-command` flag to display rendered commands in find output
+- Auto-detection of `report_config.yaml` in analyze mode
+- Bash compatibility check for system probe
+- Accurate execution duration tracking for core-hours calculation
+- System info collection and comprehensive config validation
+- Portable workdir metadata with relative paths in `__iops_run_metadata.json`
+
+### Changed
+- CLI syntax changed from flags to subcommands (e.g., `iops run config.yaml` instead of `iops config.yaml`)
+- System probe moved to separate file for cleaner user scripts
+- System probe moved to end of script to preserve SLURM directives
+
+### Fixed
+- Exclude NFS from parallel filesystem detection
+- Improved filesystem detection and benchmark config logging
+
 ## [3.2.2] - 2026-01-08
 
 ### Fixed
@@ -223,10 +244,11 @@ IOPS 3.0 is a major rewrite with breaking changes to the configuration format.
 
 **New Features to Explore:**
 
-- Try `iops --generate` to create a template
-- Enable caching with `--use-cache` for faster iterations
+- Try `iops generate` to create a template
+- Enable caching with `iops run config.yaml --use-cache` for faster iterations
 - Use Bayesian optimization for large parameter spaces
-- Generate reports with `iops --analyze <workdir/run_001>`
+- Generate reports with `iops analyze ./workdir/run_001`
+- Explore executions with `iops find ./workdir nodes=4`
 
 ---
 
