@@ -128,6 +128,15 @@ benchmark:
   # Example: ["summary_file", "output_path"] - paths vary but don't affect results
   cache_exclude_vars: ["summary_file"]
 
+  # Optional: Collect system information from compute nodes (default: true)
+  # When enabled, IOPS automatically injects a system probe into generated scripts that collects:
+  #   - hostname, cpu_model, cpu_cores, memory_kb, kernel, os
+  #   - InfiniBand devices (ib_devices)
+  #   - Parallel filesystems (Lustre, GPFS, BeeGFS, etc.)
+  # System info is aggregated in run_metadata.json and displayed in HTML reports
+  # Set to false to disable if system probing causes issues or is unnecessary
+  collect_system_info: true
+
   # Optional: Variables to test exhaustively at each search point
   # For Bayesian/random search: these variables are fully expanded for each selected point
   # Use case: Analyze the impact of specific variables (e.g., ost_num) across all values

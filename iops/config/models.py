@@ -126,6 +126,7 @@ class BenchmarkConfig:
     report_vars: Optional[List[str]] = None  # Variables to include in analysis reports (default: all numeric swept vars)
     bayesian_config: Optional[BayesianConfig] = None  # Bayesian optimization configuration
     random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
+    collect_system_info: bool = True  # Collect system info (hostname, CPU, memory, etc.) from compute nodes
 
 
 @dataclass

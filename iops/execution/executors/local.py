@@ -135,6 +135,9 @@ class LocalExecutor(BaseExecutor):
             f"{list(metrics.keys())[:3]}{'...' if len(metrics) > 3 else ''}"
         )
 
+        # Collect system info from compute node (if probe was enabled)
+        self._store_system_info(test)
+
     def _run_post_script(self, test: ExecutionInstance) -> bool:
         """
         Execute post-processing script after main script succeeds.

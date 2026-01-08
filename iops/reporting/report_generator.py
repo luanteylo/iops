@@ -738,6 +738,11 @@ class ReportGenerator:
         # Summary statistics first
         html_parts.append(self._generate_summary_section(report_vars, metrics))
 
+        # System environment (if collected from compute nodes)
+        sys_env_html = self._generate_system_environment_section()
+        if sys_env_html:
+            html_parts.append(sys_env_html)
+
         # Best configurations immediately after summary
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
@@ -1127,6 +1132,92 @@ class ReportGenerator:
                 html += f"<td>{stats['std']:.4f}</td></tr>\n"
 
         html += "</table>\n"
+
+        return html
+
+    def _generate_system_environment_section(self) -> str:
+        """
+        Generate System Environment section showing compute node information.
+
+        Displays information collected from compute nodes by the system probe:
+        - Node hostnames
+        - CPU model and core counts
+        - Memory
+        - Operating system
+        - Parallel filesystems (Lustre, GPFS, BeeGFS, etc.)
+        - InfiniBand/interconnect devices
+
+        Returns:
+            HTML string for the system environment section, or empty string if no data
+        """
+        sys_env = self.metadata.get('system_environment', {})
+        if not sys_env:
+            return ""
+
+        html = "<h2>System Environment</h2>\n"
+        html += "<p>Information collected from compute nodes during benchmark execution:</p>\n"
+
+        # Summary table
+        html += "<h3>Hardware Summary</h3>\n<table>\n"
+        html += "<tr><th>Property</th><th>Value</th></tr>\n"
+
+        # Node count
+        node_count = sys_env.get('node_count', 0)
+        nodes = sys_env.get('nodes', [])
+        if node_count > 0:
+            if node_count <= 5:
+                nodes_str = ', '.join(nodes)
+            else:
+                nodes_str = f"{nodes[0]}, {nodes[1]}, ... ({node_count} total)"
+            html += f"<tr><td><strong>Compute Nodes</strong></td><td>{nodes_str}</td></tr>\n"
+
+        # CPU info
+        cpu_model = sys_env.get('cpu_model')
+        if cpu_model:
+            if isinstance(cpu_model, list):
+                cpu_model = ', '.join(cpu_model)
+            html += f"<tr><td><strong>CPU Model</strong></td><td>{cpu_model}</td></tr>\n"
+
+        cpu_cores = sys_env.get('cpu_cores_per_node')
+        if cpu_cores:
+            html += f"<tr><td><strong>CPU Cores/Node</strong></td><td>{cpu_cores}</td></tr>\n"
+
+        # Memory
+        memory = sys_env.get('memory_gb_per_node')
+        if memory:
+            html += f"<tr><td><strong>Memory/Node</strong></td><td>{memory} GB</td></tr>\n"
+
+        # OS and Kernel
+        os_name = sys_env.get('os')
+        if os_name:
+            if isinstance(os_name, list):
+                os_name = ', '.join(os_name)
+            html += f"<tr><td><strong>Operating System</strong></td><td>{os_name}</td></tr>\n"
+
+        kernel = sys_env.get('kernel')
+        if kernel:
+            if isinstance(kernel, list):
+                kernel = ', '.join(kernel)
+            html += f"<tr><td><strong>Kernel</strong></td><td>{kernel}</td></tr>\n"
+
+        html += "</table>\n"
+
+        # Parallel Filesystems
+        filesystems = sys_env.get('filesystems', [])
+        if filesystems:
+            html += "<h3>Parallel Filesystems</h3>\n<table>\n"
+            html += "<tr><th>Type</th><th>Mount Point</th></tr>\n"
+            for fs in filesystems:
+                if ':' in fs:
+                    fs_type, mount = fs.split(':', 1)
+                    html += f"<tr><td>{fs_type}</td><td>{mount}</td></tr>\n"
+            html += "</table>\n"
+
+        # Interconnect
+        interconnect = sys_env.get('interconnect', [])
+        if interconnect:
+            html += "<h3>Interconnect</h3>\n"
+            html += f"<p><strong>InfiniBand Devices:</strong> {', '.join(interconnect)}</p>\n"
 
         return html
 

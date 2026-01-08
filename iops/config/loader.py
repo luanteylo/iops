@@ -450,6 +450,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         report_vars=b.get("report_vars"),
         bayesian_config=bayesian_config,
         random_config=random_config,
+        collect_system_info=b.get("collect_system_info", True),
     )
 
     # ---- vars ----
@@ -830,6 +831,16 @@ def validate_yaml_config(config_path: Path) -> List[str]:
             except Exception as e:
                 errors.append(f"Invalid benchmark.workdir path: {e}")
 
+        # Validate sqlite_db path if present
+        if "sqlite_db" in b and b["sqlite_db"] is not None:
+            try:
+                db_path = _expand_path(b["sqlite_db"])
+                # Check parent directory exists (file may not exist yet)
+                if not db_path.parent.exists():
+                    errors.append(f"benchmark.sqlite_db parent directory does not exist: {db_path.parent}")
+            except Exception as e:
+                errors.append(f"Invalid benchmark.sqlite_db path: {e}")
+
         # Validate repetitions
         if "repetitions" in b:
             reps = b["repetitions"]
@@ -837,16 +848,130 @@ def validate_yaml_config(config_path: Path) -> List[str]:
                 errors.append("benchmark.repetitions must be an integer >= 1")
 
         # Validate search_method
-        if "search_method" in b:
-            method = b["search_method"]
-            if method not in ("greedy", "bayesian", "exhaustive"):
-                errors.append(f"benchmark.search_method must be one of: greedy, bayesian, exhaustive (got '{method}')")
+        search_method = b.get("search_method", "exhaustive")
+        if search_method not in ("exhaustive", "random", "bayesian"):
+            errors.append(f"benchmark.search_method must be one of: exhaustive, random, bayesian (got '{search_method}')")
 
         # Validate executor
         if "executor" in b:
             executor = b["executor"]
             if executor not in ("slurm", "local"):
                 errors.append(f"benchmark.executor must be one of: slurm, local (got '{executor}')")
+
+        # Validate random_seed
+        if "random_seed" in b and b["random_seed"] is not None:
+            if not isinstance(b["random_seed"], int):
+                errors.append(f"benchmark.random_seed must be an integer (got '{type(b['random_seed']).__name__}')")
+
+        # Validate collect_system_info
+        if "collect_system_info" in b and b["collect_system_info"] is not None:
+            if not isinstance(b["collect_system_info"], bool):
+                errors.append(f"benchmark.collect_system_info must be a boolean (got '{type(b['collect_system_info']).__name__}')")
+
+        # Validate max_core_hours
+        if "max_core_hours" in b and b["max_core_hours"] is not None:
+            if not isinstance(b["max_core_hours"], (int, float)) or b["max_core_hours"] <= 0:
+                errors.append("benchmark.max_core_hours must be a positive number")
+
+        # Validate estimated_time_seconds
+        if "estimated_time_seconds" in b and b["estimated_time_seconds"] is not None:
+            if not isinstance(b["estimated_time_seconds"], (int, float)) or b["estimated_time_seconds"] <= 0:
+                errors.append("benchmark.estimated_time_seconds must be a positive number")
+
+        # Validate executor_options
+        if "executor_options" in b and b["executor_options"] is not None:
+            eo = b["executor_options"]
+            if not isinstance(eo, dict):
+                errors.append("benchmark.executor_options must be a dictionary")
+            else:
+                if "commands" in eo and eo["commands"] is not None:
+                    if not isinstance(eo["commands"], dict):
+                        errors.append("benchmark.executor_options.commands must be a dictionary")
+                    else:
+                        valid_commands = ("submit", "status", "info", "cancel")
+                        for cmd_name in eo["commands"].keys():
+                            if cmd_name not in valid_commands:
+                                errors.append(
+                                    f"benchmark.executor_options.commands contains unknown command '{cmd_name}'. "
+                                    f"Valid commands: {valid_commands}"
+                                )
+                if "poll_interval" in eo and eo["poll_interval"] is not None:
+                    if not isinstance(eo["poll_interval"], (int, float)) or eo["poll_interval"] <= 0:
+                        errors.append("benchmark.executor_options.poll_interval must be a positive number")
+
+        # Validate random_config (required when search_method is "random")
+        if "random_config" in b and b["random_config"] is not None:
+            rc = b["random_config"]
+            if not isinstance(rc, dict):
+                errors.append("benchmark.random_config must be a dictionary")
+            else:
+                n_samples = rc.get("n_samples")
+                percentage = rc.get("percentage")
+
+                if n_samples is not None and percentage is not None:
+                    errors.append("random_config: cannot specify both 'n_samples' and 'percentage'. Choose one.")
+                if n_samples is None and percentage is None:
+                    errors.append("random_config: must specify either 'n_samples' or 'percentage'")
+
+                if n_samples is not None:
+                    if not isinstance(n_samples, int) or n_samples < 1:
+                        errors.append(f"random_config.n_samples must be a positive integer (got '{n_samples}')")
+
+                if percentage is not None:
+                    if not isinstance(percentage, (int, float)) or percentage <= 0:
+                        errors.append(f"random_config.percentage must be a positive number (got '{percentage}')")
+        elif search_method == "random":
+            errors.append("random_config is required when search_method is 'random'")
+
+        # Validate bayesian_config (required when search_method is "bayesian")
+        if "bayesian_config" in b and b["bayesian_config"] is not None:
+            bc = b["bayesian_config"]
+            if not isinstance(bc, dict):
+                errors.append("benchmark.bayesian_config must be a dictionary")
+            else:
+                # objective_metric is required
+                if "objective_metric" not in bc or not bc["objective_metric"]:
+                    errors.append("bayesian_config.objective_metric is required")
+
+                # Validate n_initial_points
+                if "n_initial_points" in bc:
+                    n_init = bc["n_initial_points"]
+                    if not isinstance(n_init, int) or n_init < 1:
+                        errors.append(f"bayesian_config.n_initial_points must be a positive integer (got '{n_init}')")
+
+                # Validate n_iterations
+                if "n_iterations" in bc:
+                    n_iter = bc["n_iterations"]
+                    if not isinstance(n_iter, int) or n_iter < 1:
+                        errors.append(f"bayesian_config.n_iterations must be a positive integer (got '{n_iter}')")
+
+                # Validate acquisition_func
+                if "acquisition_func" in bc:
+                    acq = bc["acquisition_func"]
+                    if acq not in ("EI", "PI", "LCB"):
+                        errors.append(f"bayesian_config.acquisition_func must be one of: EI, PI, LCB (got '{acq}')")
+
+                # Validate base_estimator
+                if "base_estimator" in bc:
+                    est = bc["base_estimator"]
+                    if est not in ("RF", "GP", "ET", "GBRT"):
+                        errors.append(f"bayesian_config.base_estimator must be one of: RF, GP, ET, GBRT (got '{est}')")
+
+                # Validate objective
+                if "objective" in bc:
+                    obj = bc["objective"]
+                    if obj not in ("minimize", "maximize"):
+                        errors.append(f"bayesian_config.objective must be one of: minimize, maximize (got '{obj}')")
+
+                # Validate xi
+                if "xi" in bc and not isinstance(bc["xi"], (int, float)):
+                    errors.append(f"bayesian_config.xi must be a number (got '{type(bc['xi']).__name__}')")
+
+                # Validate kappa
+                if "kappa" in bc and not isinstance(bc["kappa"], (int, float)):
+                    errors.append(f"bayesian_config.kappa must be a number (got '{type(bc['kappa']).__name__}')")
+        elif search_method == "bayesian":
+            errors.append("bayesian_config is required when search_method is 'bayesian'")
 
     except KeyError as e:
         errors.append(f"Missing required benchmark field: {e}")
@@ -859,6 +984,7 @@ def validate_yaml_config(config_path: Path) -> List[str]:
         if not vars_data:
             errors.append("At least one variable must be defined in 'vars'")
 
+        valid_var_types = ("int", "float", "str")
         for name, cfg in vars_data.items():
             if not isinstance(cfg, dict):
                 errors.append(f"var '{name}' must be a dictionary")
@@ -866,6 +992,11 @@ def validate_yaml_config(config_path: Path) -> List[str]:
 
             if "type" not in cfg:
                 errors.append(f"var '{name}' is missing required field 'type'")
+            elif cfg["type"] not in valid_var_types:
+                errors.append(
+                    f"var '{name}' has invalid type '{cfg['type']}'. "
+                    f"Must be one of: {valid_var_types}"
+                )
 
             has_sweep = "sweep" in cfg and cfg["sweep"] is not None
             has_expr = "expr" in cfg and cfg["expr"] is not None
@@ -908,6 +1039,37 @@ def validate_yaml_config(config_path: Path) -> List[str]:
 
     except Exception as e:
         errors.append(f"Error validating vars section: {e}")
+
+    # ---- variable reference lists validation (depends on vars being loaded) ----
+    try:
+        b = data.get("benchmark", {})
+        vars_data = data.get("vars", {})
+
+        # Helper to validate a list of variable references
+        def validate_var_list(field_name: str, var_list) -> None:
+            if var_list is None:
+                return
+            if not isinstance(var_list, list):
+                errors.append(f"benchmark.{field_name} must be a list of variable names")
+                return
+            invalid_vars = [v for v in var_list if v not in vars_data]
+            if invalid_vars:
+                errors.append(
+                    f"benchmark.{field_name} contains undefined variables: {invalid_vars}. "
+                    f"Available variables: {sorted(vars_data.keys())}"
+                )
+
+        # Validate report_vars
+        validate_var_list("report_vars", b.get("report_vars"))
+
+        # Validate cache_exclude_vars
+        validate_var_list("cache_exclude_vars", b.get("cache_exclude_vars"))
+
+        # Validate exhaustive_vars
+        validate_var_list("exhaustive_vars", b.get("exhaustive_vars"))
+
+    except Exception as e:
+        errors.append(f"Error validating variable reference lists: {e}")
 
     # ---- constraints ----
     try:
@@ -1070,18 +1232,26 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError("benchmark.workdir must be a directory")
     if cfg.benchmark.repetitions is not None and cfg.benchmark.repetitions < 1:
         raise ConfigValidationError("benchmark.repetitions must be >= 1")
-    # search_method: exhaustive, random, bayesian, or greedy (optional)
+
+    # search_method: exhaustive, random, or bayesian
     if cfg.benchmark.search_method is not None:
-        if cfg.benchmark.search_method not in ("exhaustive", "random", "bayesian", "greedy"):
+        if cfg.benchmark.search_method not in ("exhaustive", "random", "bayesian"):
             raise ConfigValidationError(
-                "benchmark.search_method must be one of: exhaustive, random, bayesian, greedy"
+                "benchmark.search_method must be one of: exhaustive, random, bayesian"
             )
 
     # ---- vars ----
     if not cfg.vars:
         raise ConfigValidationError("At least one variable must be defined in 'vars'")
 
+    valid_var_types = ("int", "float", "str")
     for name, v in cfg.vars.items():
+        # Validate var type
+        if v.type not in valid_var_types:
+            raise ConfigValidationError(
+                f"var '{name}' has invalid type '{v.type}'. Must be one of: {valid_var_types}"
+            )
+
         if v.sweep is None and v.expr is None:
             raise ConfigValidationError(
                 f"var '{name}' must define either a 'sweep' or an 'expr'"
@@ -1114,6 +1284,20 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 raise ConfigValidationError(
                     f"var '{name}' has invalid sweep.mode='{v.sweep.mode}'"
                 )
+
+    # ---- variable reference lists ----
+    def validate_var_list(field_name: str, var_list) -> None:
+        if var_list is None:
+            return
+        invalid_vars = [v for v in var_list if v not in cfg.vars]
+        if invalid_vars:
+            raise ConfigValidationError(
+                f"benchmark.{field_name} contains undefined variables: {invalid_vars}. "
+                f"Available variables: {sorted(cfg.vars.keys())}"
+            )
+
+    validate_var_list("cache_exclude_vars", cfg.benchmark.cache_exclude_vars)
+    validate_var_list("exhaustive_vars", cfg.benchmark.exhaustive_vars)
 
     # ---- command ----
     if not cfg.command.template.strip():
@@ -1190,6 +1374,15 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if sink.type == "sqlite":
         if not sink.table or not str(sink.table).strip():
             raise ConfigValidationError("output.sink.table must not be empty when type=sqlite")
+
+    # ---- report_vars validation ----
+    if cfg.benchmark.report_vars:
+        invalid_vars = [v for v in cfg.benchmark.report_vars if v not in cfg.vars]
+        if invalid_vars:
+            raise ConfigValidationError(
+                f"benchmark.report_vars contains undefined variables: {invalid_vars}. "
+                f"Available variables: {sorted(cfg.vars.keys())}"
+            )
 
     # ---- bayesian_config validation ----
     if cfg.benchmark.bayesian_config and cfg.benchmark.bayesian_config.objective_metric:

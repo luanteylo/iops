@@ -178,10 +178,30 @@ def test_matrix_exhaustive_vars_validation(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
+    # Should raise validation error during config loading (undefined variable)
+    with pytest.raises(ConfigValidationError) as excinfo:
+        load_config(config_file)
+
+    assert "nonexistent_var" in str(excinfo.value)
+    assert "exhaustive_vars" in str(excinfo.value)
+
+
+def test_matrix_exhaustive_vars_not_swept_validation(tmp_path, sample_config_dict):
+    """Test that exhaustive_vars validation catches non-swept variables."""
+    from iops.config.models import ConfigValidationError
+
+    # Add a derived (not swept) variable to exhaustive_vars
+    sample_config_dict["benchmark"]["exhaustive_vars"] = ["total_procs"]
+
+    config_file = tmp_path / "invalid.yaml"
+    import yaml
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
     config = load_config(config_file)
 
-    # Should raise validation error when building matrix
+    # Should raise validation error when building matrix (variable exists but is not swept)
     with pytest.raises(ConfigValidationError) as excinfo:
         build_execution_matrix(config)
 
-    assert "nonexistent_var" in str(excinfo.value) and "not swept" in str(excinfo.value)
+    assert "total_procs" in str(excinfo.value) and "not swept" in str(excinfo.value)

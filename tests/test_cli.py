@@ -503,19 +503,21 @@ class TestErrorHandling:
                 main()
 
     def test_missing_setup_file(self, tmp_path):
-        """Test error when setup file doesn't exist."""
+        """Test error when setup file doesn't exist - should handle gracefully."""
         missing_file = tmp_path / 'missing.yaml'
 
         test_args = [str(missing_file)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
-            with patch('iops.main.initialize_logger'):
-                # load_generic_config will raise error
-                with pytest.raises(FileNotFoundError):
-                    main()
+            mock_logger = MagicMock()
+            with patch('iops.main.initialize_logger', return_value=mock_logger):
+                # Should handle error gracefully and return (not raise)
+                main()
+                # Verify error was logged
+                assert mock_logger.error.called
 
     def test_invalid_yaml_syntax(self, tmp_path):
-        """Test error with invalid YAML syntax."""
+        """Test error with invalid YAML syntax - should handle gracefully."""
         bad_yaml = tmp_path / 'bad.yaml'
         with open(bad_yaml, 'w') as f:
             f.write("invalid: yaml: syntax:\n  - bad\n  indentation")
@@ -523,9 +525,12 @@ class TestErrorHandling:
         test_args = [str(bad_yaml)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
-            with patch('iops.main.initialize_logger'):
-                with pytest.raises(Exception):  # YAML parsing error
-                    main()
+            mock_logger = MagicMock()
+            with patch('iops.main.initialize_logger', return_value=mock_logger):
+                # Should handle error gracefully and return (not raise)
+                main()
+                # Verify error was logged
+                assert mock_logger.error.called
 
 
 class TestCommandCombinations:

@@ -98,6 +98,7 @@ benchmark:
       cancel: string              # Optional: cancel template (default: "scancel {job_id}")
     poll_interval: integer        # Optional: status polling interval in seconds (default: 30)
   random_seed: integer            # Optional: seed for randomization (default: 42)
+  collect_system_info: boolean    # Optional: collect system info from compute nodes (default: true)
   cache_exclude_vars: list        # Optional: variables to exclude from cache hash
   exhaustive_vars: list           # Optional: variables to test exhaustively at each search point
   report_vars: list               # Optional: variables to include in analysis reports
@@ -224,6 +225,69 @@ Seed for random operations (e.g., repetition interleaving).
 ```yaml
 random_seed: 12345
 ```
+
+#### `collect_system_info` (optional, default: true)
+
+Enables automatic collection of system information from compute nodes during benchmark execution. When enabled, IOPS injects a lightweight system probe into generated scripts that gathers hardware and environment details.
+
+**Collected Information:**
+- **Basic System**: `hostname`, `cpu_model`, `cpu_cores`, `memory_kb`, `kernel`, `os`
+- **InfiniBand Devices**: Detected IB adapters and their status (`ib_devices`)
+- **Parallel Filesystems**: Detected filesystems like Lustre, GPFS, BeeGFS, WekaFS, CephFS, and OrangeFS (`filesystems`)
+
+**How It Works:**
+- The probe runs at the **end of each script** (via EXIT trap) to minimize impact on benchmark timing
+- System information is aggregated in `run_metadata.json` under the `system_environment` section
+- HTML reports automatically include a "System Environment" section displaying this data
+- Information is collected per hostname, allowing multi-node heterogeneity analysis
+
+**When to Enable:**
+- Tracking hardware changes across runs
+- Multi-cluster or multi-environment benchmarks
+- Documenting test environments for reproducibility
+- Analyzing performance variations across different compute nodes
+
+**When to Disable:**
+- System probing causes permission errors on restricted nodes
+- Benchmarking environments where hardware is guaranteed uniform and documented elsewhere
+- Minimal overhead is critical (though probe runs after main benchmark)
+
+```yaml
+benchmark:
+  collect_system_info: true   # Default: enabled
+```
+
+**Disable if unnecessary:**
+```yaml
+benchmark:
+  collect_system_info: false  # Skip system probing
+```
+
+**Example Output in `run_metadata.json`:**
+```json
+{
+  "system_environment": {
+    "node01.cluster.example.com": {
+      "hostname": "node01.cluster.example.com",
+      "cpu_model": "Intel(R) Xeon(R) Gold 6248R CPU @ 3.00GHz",
+      "cpu_cores": 96,
+      "memory_kb": 528482304,
+      "kernel": "5.4.0-135-generic",
+      "os": "Ubuntu 20.04.5 LTS",
+      "ib_devices": ["mlx5_0", "mlx5_1"],
+      "filesystems": ["lustre", "gpfs"]
+    },
+    "node02.cluster.example.com": {
+      ...
+    }
+  }
+}
+```
+
+**Notes:**
+- The probe uses standard Linux commands (`lscpu`, `ibstat`, `lsmod`, `mount`)
+- Failures are graceful: missing tools or permissions result in empty/null fields
+- System info is deduplicated by hostname across all executions in a run
 
 #### `cache_exclude_vars` (optional)
 List of variable names to exclude from cache hash calculation. **Use this when variables contain run-specific values that change between executions but shouldn't invalidate the cache.**
@@ -605,8 +669,9 @@ benchmark:
   repetitions: 3
   search_method: "exhaustive"
   executor: "local"
-  cache_exclude_vars: ["summary_file"]  # Exclude path-based derived vars
   random_seed: 42
+  collect_system_info: true               # Collect system info from nodes
+  cache_exclude_vars: ["summary_file"]    # Exclude path-based derived vars
 ```
 
 ---

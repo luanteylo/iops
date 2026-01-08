@@ -20,6 +20,48 @@ from collections import defaultdict
 import random
 import warnings
 
+
+# ============================================================================ #
+# System Probe Constants
+# ============================================================================ #
+
+# System probe script injected at the start of each generated script.
+# Uses a trap to execute at script exit, ensuring it runs after the user's
+# benchmark completes. The probe collects system information from the compute
+# node and writes it to a JSON file.
+#
+# Key design decisions:
+# - Uses EXIT trap to run after user's script (doesn't affect timing)
+# - All commands have fallbacks and 2>/dev/null to never fail
+# - Runs in subshell with || true to never affect script exit code
+# - Writes structured JSON for easy parsing by IOPS
+
+SYSTEM_PROBE_TEMPLATE = '''
+# === IOPS System Probe (auto-injected) ===
+# Collects system information from compute node after benchmark completes.
+# This runs at script EXIT and never affects the benchmark or its exit code.
+_iops_collect_sysinfo() {{
+  (
+    _iops_sysinfo="{execution_dir}/iops_sysinfo.json"
+    {{
+      echo "{{"
+      echo "  \\"hostname\\": \\"$(hostname 2>/dev/null || echo 'unknown')\\","
+      echo "  \\"cpu_model\\": \\"$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^[ \\t]*//' | sed 's/"/\\\\"/g' || echo 'unknown')\\","
+      echo "  \\"cpu_cores\\": $(nproc 2>/dev/null || echo 0),"
+      echo "  \\"memory_kb\\": $(awk '/MemTotal/{{print $2}}' /proc/meminfo 2>/dev/null || echo 0),"
+      echo "  \\"kernel\\": \\"$(uname -r 2>/dev/null || echo 'unknown')\\","
+      echo "  \\"os\\": \\"$(grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\\"' || uname -s 2>/dev/null || echo 'unknown')\\","
+      echo "  \\"ib_devices\\": \\"$(ls /sys/class/infiniband/ 2>/dev/null | tr '\\n' ',' | sed 's/,$//' || echo '')\\","
+      echo "  \\"filesystems\\": \\"$(df -T 2>/dev/null | grep -E 'lustre|gpfs|beegfs|nfs|cephfs|panfs|wekafs' | awk '{{print $2\\":\\"$7}}' | tr '\\n' ',' | sed 's/,$//' || echo '').\\""
+      echo "}}"
+    }} > "$_iops_sysinfo"
+  ) 2>/dev/null || true
+}}
+trap '_iops_collect_sysinfo' EXIT
+# === End IOPS System Probe ===
+
+'''
+
 # Optional imports for Bayesian optimization
 try:
     from skopt import Optimizer
@@ -112,7 +154,7 @@ class BasePlanner(ABC, HasLogger):
         This method is shared by all planners. It:
         - Creates the execution directory structure
         - Sets test.repetition and metadata["repetition"]
-        - Writes the main script file
+        - Writes the main script file (with optional system probe injection)
         - Writes the post script file (if present)
 
         Layout:
@@ -120,7 +162,8 @@ class BasePlanner(ABC, HasLogger):
             └── exec_0001/
                 └── repetition_001/
                     ├── run_<script>.sh
-                    └── post_<script>.sh (optional)
+                    ├── post_<script>.sh (optional)
+                    └── iops_sysinfo.json (generated at runtime by system probe)
 
         Args:
             test: ExecutionInstance to prepare
@@ -147,10 +190,18 @@ class BasePlanner(ABC, HasLogger):
         # Point to repetition dir (useful for templates like {{ execution_dir }})
         test.execution_dir = exec_dir
 
+        # Get the rendered script text
+        script_text = test.script_text
+
+        # Inject system probe if enabled (default: True)
+        # The probe uses an EXIT trap to collect system info after the script completes
+        if getattr(self.cfg.benchmark, 'collect_system_info', True):
+            script_text = self._inject_system_probe(script_text, exec_dir)
+
         # Write script files inside repetition dir
         test.script_file = exec_dir / f"run_{test.script_name}.sh"
         with open(test.script_file, "w") as f:
-            f.write(test.script_text)
+            f.write(script_text)
 
         script_info = f"main={test.script_file.name}"
 
@@ -161,6 +212,36 @@ class BasePlanner(ABC, HasLogger):
             script_info += f", post={test.post_script_file.name}"
 
         self.logger.debug(f"  [Prepare] Scripts written: {script_info}")
+
+    def _inject_system_probe(self, script_text: str, exec_dir: Path) -> str:
+        """
+        Inject the system probe into a script.
+
+        The probe is inserted after the shebang line (if present) so that
+        it sets up an EXIT trap before the user's script runs. The trap
+        executes the probe function after the script completes.
+
+        Args:
+            script_text: Original script content
+            exec_dir: Execution directory where sysinfo JSON will be written
+
+        Returns:
+            Script text with system probe injected
+        """
+        # Format the probe template with the execution directory
+        probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
+
+        # Find the shebang line (if present) and insert probe after it
+        lines = script_text.split('\n', 1)
+
+        if lines and lines[0].startswith('#!'):
+            # Has shebang - insert probe after it
+            shebang = lines[0]
+            rest = lines[1] if len(lines) > 1 else ''
+            return shebang + '\n' + probe_script + rest
+        else:
+            # No shebang - prepend probe
+            return probe_script + script_text
 
 
 # ============================================================================ #

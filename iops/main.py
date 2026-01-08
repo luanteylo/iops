@@ -327,7 +327,19 @@ def main():
             logger.info("Configuration is valid.")
             return
 
-    cfg = load_generic_config(Path(args.setup_file), logger=logger)
+    try:
+        cfg = load_generic_config(Path(args.setup_file), logger=logger)
+    except ConfigValidationError as e:
+        logger.error(f"Configuration error: {e}")
+        if args.verbose:
+            raise
+        return
+    except Exception as e:
+        logger.error(f"Failed to load configuration: {e}")
+        if args.verbose:
+            raise
+        return
+
     log_execution_context(cfg, args, logger)
 
     runner = IOPSRunner(cfg=cfg, args=args)

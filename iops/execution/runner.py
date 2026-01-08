@@ -106,6 +106,10 @@ class IOPSRunner(HasLogger):
         self.submitted_job_ids: Set[str] = set()
         self.interrupted = False
 
+        # Track system info collected from compute nodes
+        # Key: hostname, Value: full sysinfo dict
+        self.collected_system_info: Dict[str, Dict[str, Any]] = {}
+
         # Register signal handler for Ctrl+C (SIGINT) if using SLURM executor
         if cfg.benchmark.executor == "slurm":
             signal.signal(signal.SIGINT, self._signal_handler)
@@ -118,6 +122,123 @@ class IOPSRunner(HasLogger):
                 for metric in script.parser.metrics:
                     expected.add(metric.name)
         return expected
+
+    def _track_system_info(self, test) -> None:
+        """
+        Track system info from a completed test.
+
+        Collects unique system configurations by hostname. If multiple nodes
+        are used, each unique configuration is stored.
+
+        Args:
+            test: Completed ExecutionInstance with potential __sysinfo in metadata
+        """
+        sysinfo = test.metadata.get("__sysinfo")
+        if not sysinfo:
+            return
+
+        hostname = sysinfo.get("hostname", "unknown")
+        if hostname not in self.collected_system_info:
+            self.collected_system_info[hostname] = sysinfo
+            self.logger.debug(
+                f"  [SysInfo] New node discovered: {hostname} "
+                f"({sysinfo.get('cpu_model', 'unknown CPU')}, "
+                f"{sysinfo.get('cpu_cores', '?')} cores)"
+            )
+
+    def _aggregate_system_info(self) -> Dict[str, Any]:
+        """
+        Aggregate collected system info into a summary for the report.
+
+        Returns a dictionary with:
+        - nodes: List of unique hostnames
+        - node_count: Number of unique nodes used
+        - hardware: Summarized hardware info (if consistent across nodes)
+        - filesystems: All parallel filesystems discovered
+        - interconnect: InfiniBand devices (if any)
+        - nodes_detail: Full details per node
+
+        Returns:
+            Dictionary with aggregated system environment info
+        """
+        if not self.collected_system_info:
+            return {}
+
+        nodes = list(self.collected_system_info.keys())
+        node_count = len(nodes)
+
+        # Collect unique values for each field
+        cpu_models = set()
+        total_cores = []
+        total_memory = []
+        kernels = set()
+        os_names = set()
+        all_filesystems = set()
+        all_ib_devices = set()
+
+        for info in self.collected_system_info.values():
+            if info.get('cpu_model'):
+                cpu_models.add(info['cpu_model'])
+            if info.get('cpu_cores'):
+                total_cores.append(info['cpu_cores'])
+            if info.get('memory_kb'):
+                total_memory.append(info['memory_kb'])
+            if info.get('kernel'):
+                kernels.add(info['kernel'])
+            if info.get('os'):
+                os_names.add(info['os'])
+            if info.get('filesystems'):
+                # Parse "type:mount,type:mount" format
+                for fs in info['filesystems'].split(','):
+                    fs = fs.strip()
+                    if fs and ':' in fs:
+                        all_filesystems.add(fs)
+            if info.get('ib_devices'):
+                for dev in info['ib_devices'].split(','):
+                    dev = dev.strip()
+                    if dev:
+                        all_ib_devices.add(dev)
+
+        # Build summary
+        result = {
+            "nodes": nodes,
+            "node_count": node_count,
+        }
+
+        # Hardware summary (show range if values differ)
+        if cpu_models:
+            result["cpu_model"] = list(cpu_models)[0] if len(cpu_models) == 1 else list(cpu_models)
+
+        if total_cores:
+            if len(set(total_cores)) == 1:
+                result["cpu_cores_per_node"] = total_cores[0]
+            else:
+                result["cpu_cores_per_node"] = f"{min(total_cores)}-{max(total_cores)}"
+
+        if total_memory:
+            # Convert KB to GB for readability
+            memory_gb = [m / (1024 * 1024) for m in total_memory]
+            if len(set(total_memory)) == 1:
+                result["memory_gb_per_node"] = round(memory_gb[0], 1)
+            else:
+                result["memory_gb_per_node"] = f"{round(min(memory_gb), 1)}-{round(max(memory_gb), 1)}"
+
+        if kernels:
+            result["kernel"] = list(kernels)[0] if len(kernels) == 1 else list(kernels)
+
+        if os_names:
+            result["os"] = list(os_names)[0] if len(os_names) == 1 else list(os_names)
+
+        if all_filesystems:
+            result["filesystems"] = sorted(list(all_filesystems))
+
+        if all_ib_devices:
+            result["interconnect"] = sorted(list(all_ib_devices))
+
+        # Include full per-node details for comprehensive reports
+        result["nodes_detail"] = self.collected_system_info
+
+        return result
 
     def _signal_handler(self, signum, frame):
         """Handle Ctrl+C (SIGINT) to cancel all submitted SLURM jobs."""
@@ -318,6 +439,9 @@ class IOPSRunner(HasLogger):
             except Exception:
                 pass  # Hostname unavailable, continue without it
 
+            # Build system environment from collected system info
+            system_environment = self._aggregate_system_info()
+
             metadata = {
                 "benchmark": {
                     "name": self.cfg.benchmark.name,
@@ -336,6 +460,7 @@ class IOPSRunner(HasLogger):
                     "planner_stats": planner_stats,  # Search space statistics from planner
                     **timing_metadata,  # Add timing information if available
                 },
+                "system_environment": system_environment,  # Aggregated system info from compute nodes
                 "variables": {},
                 "metrics": [],
                 "output": {
@@ -836,6 +961,9 @@ class IOPSRunner(HasLogger):
 
             # Add test to output file
             save_test_execution(test)
+
+            # Track system info from compute node (if collected)
+            self._track_system_info(test)
 
             # Track actual output path from first test (for final summary)
             if self.actual_output_path is None:

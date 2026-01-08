@@ -298,6 +298,9 @@ class SlurmExecutor(BaseExecutor):
             f"{list(metrics.keys())[:3]}{'...' if len(metrics) > 3 else ''}"
         )
 
+        # Collect system info from compute node (if probe was enabled)
+        self._store_system_info(test)
+
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #

@@ -99,3 +99,38 @@ def test_config_output_settings(sample_config_file):
     assert config.output.sink.type == "csv"
     assert config.output.sink.mode == "append"
     assert "workdir" in config.output.sink.path
+
+
+def test_config_report_vars_valid(tmp_path, sample_config_dict):
+    """Test that valid report_vars is accepted."""
+    from iops.config.models import ConfigValidationError
+
+    config_file = tmp_path / "valid_report_vars.yaml"
+
+    # Add valid report_vars (using existing variables)
+    sample_config_dict["benchmark"]["report_vars"] = ["nodes", "ppn"]
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert config.benchmark.report_vars == ["nodes", "ppn"]
+
+
+def test_config_report_vars_invalid(tmp_path, sample_config_dict):
+    """Test that invalid report_vars raises an error."""
+    from iops.config.models import ConfigValidationError
+
+    config_file = tmp_path / "invalid_report_vars.yaml"
+
+    # Add invalid report_vars (non-existent variable)
+    sample_config_dict["benchmark"]["report_vars"] = ["nodes", "nonexistent_var"]
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_config(config_file)
+
+    assert "report_vars" in str(exc_info.value)
+    assert "nonexistent_var" in str(exc_info.value)
