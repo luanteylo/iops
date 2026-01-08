@@ -50,7 +50,7 @@ _iops_detect_pfs() {{
     [ -z "$_mount" ] && continue
     [[ "$_fs" == "Filesystem" ]] && continue
     # Match by filesystem type
-    if [[ "$_type" =~ ^(lustre|gpfs|beegfs|nfs[0-9]*|cephfs|panfs|wekafs|pvfs2|orangefs|glusterfs)$ ]]; then
+    if [[ "$_type" =~ ^(lustre|gpfs|beegfs|cephfs|panfs|wekafs|pvfs2|orangefs|glusterfs)$ ]]; then
       [ -n "$_pfs_result" ] && _pfs_result="$_pfs_result,"
       _pfs_result="${{_pfs_result}}${{_type}}:${{_mount}}"
     # Match FUSE mounts by mount path (BeeGFS often shows as just 'fuse')
