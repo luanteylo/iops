@@ -1,7 +1,7 @@
 """
 Test case for bug: Reporting fails when metrics in metadata don't exist in results.
 
-This test reproduces the issue where run_metadata.json contains metrics that
+This test reproduces the issue where __iops_run_metadata.json contains metrics that
 don't have corresponding columns in the results CSV, causing report generation
 to fail with "Columns not found" error.
 
@@ -116,7 +116,7 @@ class TestMissingMetricsHandling:
             },
         }
 
-        metadata_path = workdir / "run_metadata.json"
+        metadata_path = workdir / "__iops_run_metadata.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 

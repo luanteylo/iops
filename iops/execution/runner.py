@@ -18,6 +18,9 @@ import subprocess
 import shlex
 import socket
 
+# IOPS metadata filename
+METADATA_FILENAME = "__iops_run_metadata.json"
+
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
         super().__init__()
@@ -473,11 +476,19 @@ class IOPSRunner(HasLogger):
             # Build system environment from collected system info
             system_environment = self._aggregate_system_info()
 
+            # Get relative output path (relative to workdir for portability)
+            output_path = Path(self.actual_output_path or self.cfg.output.sink.path)
+            workdir = Path(self.cfg.benchmark.workdir)
+            try:
+                relative_output_path = str(output_path.relative_to(workdir))
+            except ValueError:
+                # Output path is outside workdir, keep absolute
+                relative_output_path = str(output_path)
+
             metadata = {
                 "benchmark": {
                     "name": self.cfg.benchmark.name,
                     "description": self.cfg.benchmark.description or "",
-                    "workdir": str(self.cfg.benchmark.workdir),
                     "executor": self.cfg.benchmark.executor,
                     "repetitions": self.cfg.benchmark.repetitions,
                     "timestamp": datetime.now().isoformat(),
@@ -496,7 +507,7 @@ class IOPSRunner(HasLogger):
                 "metrics": [],
                 "output": {
                     "type": self.cfg.output.sink.type,
-                    "path": str(self.actual_output_path or self.cfg.output.sink.path),
+                    "path": relative_output_path,  # Relative path for portability
                     "table": self.cfg.output.sink.table if self.cfg.output.sink.type == "sqlite" else None,
                 },
                 "command": {
@@ -537,7 +548,7 @@ class IOPSRunner(HasLogger):
                         })
 
             # Save to file with custom encoder for numpy types
-            metadata_path = self.cfg.benchmark.workdir / "run_metadata.json"
+            metadata_path = self.cfg.benchmark.workdir / METADATA_FILENAME
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
 
@@ -867,7 +878,7 @@ class IOPSRunner(HasLogger):
         self.logger.info("DRY-RUN COMPLETE - No tests were executed")
         self.logger.info(f"  • {total_tests} scripts generated")
         self.logger.info(f"  • Report: {report_path}")
-        self.logger.info(f"  • Metadata: {self.cfg.benchmark.workdir / 'run_metadata.json'}")
+        self.logger.info(f"  • Metadata: {self.cfg.benchmark.workdir / METADATA_FILENAME}")
         self.logger.info("=" * 70)
 
     def run(self):

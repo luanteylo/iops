@@ -133,7 +133,7 @@ benchmark:
   #   - hostname, cpu_model, cpu_cores, memory_kb, kernel, os
   #   - InfiniBand devices (ib_devices)
   #   - Parallel filesystems (Lustre, GPFS, BeeGFS, etc.)
-  # System info is aggregated in run_metadata.json and displayed in HTML reports
+  # System info is aggregated in __iops_run_metadata.json and displayed in HTML reports
   # Set to false to disable if system probing causes issues or is unnecessary
   collect_system_info: true
 
@@ -582,7 +582,7 @@ output:
 #   │   │   └── ...
 #   │   ├── logs/
 #   │   │   └── iops.log                 # IOPS framework log
-#   │   └── run_metadata.json            # Run metadata for reports
+#   │   └── __iops_run_metadata.json            # Run metadata for reports
 #   └── results.csv                      # Results output
 #
 # =============================================================================

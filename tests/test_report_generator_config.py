@@ -185,7 +185,7 @@ class TestReportGeneratorInit:
         generator = ReportGenerator(workdir=temp_workdir)
 
         assert generator.workdir == temp_workdir
-        assert generator.metadata_path == temp_workdir / "run_metadata.json"
+        assert generator.metadata_path == temp_workdir / "__iops_run_metadata.json"
         assert generator.metadata is None
         assert generator.df is None
         assert generator.report_config is None
@@ -220,7 +220,7 @@ class TestLoadMetadata:
 
     def test_load_metadata_legacy_without_reporting(self, temp_workdir, sample_metadata):
         """Test loading legacy metadata without reporting config."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(sample_metadata, f)
 
@@ -237,7 +237,7 @@ class TestLoadMetadata:
 
     def test_load_metadata_with_reporting(self, temp_workdir, metadata_with_reporting):
         """Test loading metadata with reporting config."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(metadata_with_reporting, f)
 
@@ -254,7 +254,7 @@ class TestLoadMetadata:
         self, temp_workdir, metadata_with_reporting, override_reporting_config
     ):
         """Test that override config takes priority over metadata."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(metadata_with_reporting, f)
 
@@ -477,7 +477,7 @@ class TestConfigPriority:
         self, temp_workdir, metadata_with_reporting, override_reporting_config
     ):
         """Test that override config takes priority over metadata."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(metadata_with_reporting, f)
 
@@ -494,7 +494,7 @@ class TestConfigPriority:
 
     def test_priority_metadata_over_legacy(self, temp_workdir, metadata_with_reporting):
         """Test that metadata config takes priority over legacy defaults."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(metadata_with_reporting, f)
 
@@ -509,7 +509,7 @@ class TestConfigPriority:
 
     def test_priority_legacy_when_no_metadata(self, temp_workdir, sample_metadata):
         """Test that legacy defaults are used when no reporting in metadata."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(sample_metadata, f)
 
@@ -532,7 +532,7 @@ class TestBackwardCompatibility:
     def test_old_workdir_without_reporting_metadata(self, temp_workdir, sample_metadata):
         """Test handling of workdirs created before reporting feature."""
         # Simulate old metadata without 'reporting' key
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(sample_metadata, f)
 
@@ -547,7 +547,7 @@ class TestBackwardCompatibility:
     def test_old_workdir_with_null_reporting(self, temp_workdir, sample_metadata):
         """Test handling of metadata with reporting: null."""
         sample_metadata["reporting"] = None
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(sample_metadata, f)
 
@@ -560,7 +560,7 @@ class TestBackwardCompatibility:
 
     def test_new_workdir_with_reporting(self, temp_workdir, metadata_with_reporting):
         """Test handling of new workdirs with full reporting config."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(metadata_with_reporting, f)
 
@@ -659,7 +659,7 @@ class TestEdgeCases:
 
     def test_multiple_initializations(self, temp_workdir, metadata_with_reporting):
         """Test multiple load_metadata calls don't break state."""
-        metadata_file = temp_workdir / "run_metadata.json"
+        metadata_file = temp_workdir / "__iops_run_metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(metadata_with_reporting, f)
 

@@ -163,7 +163,12 @@ class ReportGenerator:
             report_config: Optional reporting configuration (overrides metadata config)
         """
         self.workdir = Path(workdir)
-        self.metadata_path = self.workdir / "run_metadata.json"
+        # Try new filename first, fall back to legacy for backward compatibility
+        self.metadata_path = self.workdir / "__iops_run_metadata.json"
+        if not self.metadata_path.exists():
+            legacy_path = self.workdir / "run_metadata.json"
+            if legacy_path.exists():
+                self.metadata_path = legacy_path
         self.metadata: Optional[Dict[str, Any]] = None
         self.df: Optional[pd.DataFrame] = None
         self.report_config: Optional[ReportingConfig] = report_config
@@ -197,6 +202,10 @@ class ReportGenerator:
 
         output_info = self.metadata['output']
         output_path = Path(output_info['path'])
+
+        # Resolve relative paths against workdir (for portable workdirs)
+        if not output_path.is_absolute():
+            output_path = self.workdir / output_path
 
         if not output_path.exists():
             raise FileNotFoundError(f"Results file not found: {output_path}")
