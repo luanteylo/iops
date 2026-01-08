@@ -130,7 +130,12 @@ def build_output_row(test) -> Dict[str, Any]:
     _flatten("vars", dict(getattr(test, "vars", {}) or {}), row)
 
     # metadata (exclude metrics to avoid duplicating columns)
-    metadata = dict(meta)
+    # Use command_metadata property if available (includes rendered metadata_templates)
+    # Fall back to raw metadata dict for backward compatibility
+    if hasattr(test, "command_metadata"):
+        metadata = dict(test.command_metadata)
+    else:
+        metadata = dict(meta)
     metrics_obj = metadata.pop("metrics", None)  # keep separate
     _flatten("metadata", metadata, row)
 
