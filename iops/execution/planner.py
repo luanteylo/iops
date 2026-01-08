@@ -40,6 +40,28 @@ SYSTEM_PROBE_TEMPLATE = '''
 # === IOPS System Probe (auto-injected) ===
 # Collects system information from compute node after benchmark completes.
 # This runs at script EXIT and never affects the benchmark or its exit code.
+
+# Detect parallel filesystems (handles FUSE-mounted BeeGFS, etc.)
+_iops_detect_pfs() {{
+  _pfs_result=""
+  # Check df -T output for known PFS types and FUSE mounts with PFS paths
+  while read -r _fs _type _size _used _avail _pct _mount; do
+    # Skip header and non-filesystem lines
+    [ -z "$_mount" ] && continue
+    [[ "$_fs" == "Filesystem" ]] && continue
+    # Match by filesystem type
+    if [[ "$_type" =~ ^(lustre|gpfs|beegfs|nfs[0-9]*|cephfs|panfs|wekafs|pvfs2|orangefs|glusterfs)$ ]]; then
+      [ -n "$_pfs_result" ] && _pfs_result="$_pfs_result,"
+      _pfs_result="${{_pfs_result}}${{_type}}:${{_mount}}"
+    # Match FUSE mounts by mount path (BeeGFS often shows as just 'fuse')
+    elif [[ "$_type" == "fuse" ]] && [[ "$_mount" =~ (beegfs|lustre|gpfs|ceph|panfs|weka|pvfs|orangefs|gluster) ]]; then
+      [ -n "$_pfs_result" ] && _pfs_result="$_pfs_result,"
+      _pfs_result="${{_pfs_result}}fuse:${{_mount}}"
+    fi
+  done < <(df -T 2>/dev/null)
+  echo "$_pfs_result"
+}}
+
 _iops_collect_sysinfo() {{
   (
     _iops_sysinfo="{execution_dir}/iops_sysinfo.json"
@@ -52,7 +74,7 @@ _iops_collect_sysinfo() {{
       echo "  \\"kernel\\": \\"$(uname -r 2>/dev/null || echo 'unknown')\\","
       echo "  \\"os\\": \\"$(grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\\"' || uname -s 2>/dev/null || echo 'unknown')\\","
       echo "  \\"ib_devices\\": \\"$(ls /sys/class/infiniband/ 2>/dev/null | tr '\\n' ',' | sed 's/,$//' || echo '')\\","
-      echo "  \\"filesystems\\": \\"$(df -T 2>/dev/null | grep -E 'lustre|gpfs|beegfs|nfs|cephfs|panfs|wekafs' | awk '{{print $2\\":\\"$7}}' | tr '\\n' ',' | sed 's/,$//' || echo '')\\","
+      echo "  \\"filesystems\\": \\"$(_iops_detect_pfs)\\","
       echo "  \\"duration_seconds\\": ${{SECONDS}}"
       echo "}}"
     }} > "$_iops_sysinfo"
@@ -92,8 +114,40 @@ class BasePlanner(ABC, HasLogger):
         self.cfg = cfg
         # create a random generator with a fixed seed for reproducibility
         self.random = random.Random(cfg.benchmark.random_seed)
-        self.logger.info("Planner initialized with benchmark config: %s", cfg.benchmark)
-        self.logger.info("Using random seed: %s", cfg.benchmark.random_seed)
+        self._log_benchmark_config(cfg.benchmark)
+
+    def _log_benchmark_config(self, bench) -> None:
+        """Log benchmark configuration in a readable format."""
+        self.logger.info("Planner initialized with benchmark config:")
+        self.logger.info("  name: %s", bench.name)
+        if bench.description:
+            self.logger.info("  description: %s", bench.description)
+        self.logger.info("  workdir: %s", bench.workdir)
+        self.logger.info("  executor: %s", bench.executor)
+        self.logger.info("  search_method: %s", bench.search_method)
+        self.logger.info("  repetitions: %s", bench.repetitions)
+        self.logger.info("  random_seed: %s", bench.random_seed)
+        if bench.sqlite_db:
+            self.logger.info("  sqlite_db: %s", bench.sqlite_db)
+        if bench.cache_exclude_vars:
+            self.logger.info("  cache_exclude_vars: %s", bench.cache_exclude_vars)
+        if bench.exhaustive_vars:
+            self.logger.info("  exhaustive_vars: %s", bench.exhaustive_vars)
+        if bench.max_core_hours:
+            self.logger.info("  max_core_hours: %s", bench.max_core_hours)
+        if bench.cores_expr:
+            self.logger.info("  cores_expr: %s", bench.cores_expr)
+        if bench.estimated_time_seconds:
+            self.logger.info("  estimated_time_seconds: %s", bench.estimated_time_seconds)
+        if bench.report_vars:
+            self.logger.info("  report_vars: %s", bench.report_vars)
+        if bench.executor_options:
+            self.logger.info("  executor_options: %s", bench.executor_options)
+        if bench.bayesian_config:
+            self.logger.info("  bayesian_config: %s", bench.bayesian_config)
+        if bench.random_config:
+            self.logger.info("  random_config: %s", bench.random_config)
+        self.logger.info("  collect_system_info: %s", bench.collect_system_info)
 
     @classmethod
     def register(cls, name):
