@@ -4,7 +4,7 @@ from pathlib import Path
 
 from iops.logger import setup_logger
 from iops.execution.runner import IOPSRunner
-from iops.config.loader import load_generic_config, validate_generic_config
+from iops.config.loader import load_generic_config, validate_generic_config, check_system_probe_compatibility
 from iops.config.models import ConfigValidationError, GenericBenchmarkConfig
 from iops.execution.matrix import build_execution_matrix
 
@@ -341,6 +341,9 @@ def main():
         return
 
     log_execution_context(cfg, args, logger)
+
+    # Check system probe compatibility (warns and disables if non-bash shell detected)
+    check_system_probe_compatibility(cfg, logger)
 
     runner = IOPSRunner(cfg=cfg, args=args)
 

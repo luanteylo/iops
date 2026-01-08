@@ -248,6 +248,7 @@ class BasePlanner(ABC, HasLogger):
 
         # Inject system probe if enabled (default: True)
         # The probe uses an EXIT trap to collect system info after the script completes
+        # Note: bash compatibility is checked once at config load time in loader.py
         if getattr(self.cfg.benchmark, 'collect_system_info', True):
             script_text = self._inject_system_probe(script_text, exec_dir)
 
@@ -291,7 +292,7 @@ class BasePlanner(ABC, HasLogger):
         if script_text and not script_text.endswith('\n'):
             script_text += '\n'
 
-        script_text += f'\n# Source IOPS system probe (collects node info on exit)\nsource "{probe_file}"\n'
+        script_text += f'\n# Source IOPS system probe (collects node info on exit)\n# To disable, set collect_system_info: false in benchmark config\nsource "{probe_file}"\n'
 
         return script_text
 

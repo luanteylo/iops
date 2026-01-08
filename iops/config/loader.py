@@ -269,6 +269,70 @@ def create_workdir(cfg: GenericBenchmarkConfig, logger) -> None:
     cfg.benchmark.workdir = run_root
 
 
+def _is_bash_compatible(script_template: str, submit_cmd: str) -> bool:
+    """
+    Check if the script execution environment is bash-compatible.
+
+    The system probe requires bash features (e.g., [[ ]], =~, process substitution).
+    This method checks if the submit command and/or shebang indicate bash will be used.
+
+    Args:
+        script_template: The script content (to check shebang)
+        submit_cmd: The command used to submit/run the script
+
+    Returns:
+        True if bash-compatible, False otherwise
+    """
+    submit_lower = submit_cmd.lower().strip()
+
+    # Explicit bash in submit command → always OK (bash ignores shebang)
+    if 'bash' in submit_lower:
+        return True
+
+    # Explicit sh as submit command → never OK
+    if submit_lower == 'sh':
+        return False
+
+    # For other commands (sbatch, srun, wrappers), check the shebang
+    first_line = script_template.split('\n')[0].strip() if script_template else ''
+    if first_line.startswith('#!'):
+        # Has shebang - check if it explicitly uses non-bash shell
+        if '/sh' in first_line or 'env sh' in first_line:
+            if 'bash' not in first_line:
+                return False
+
+    # No shebang or bash shebang → assume OK
+    return True
+
+
+def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> None:
+    """
+    Check if system probe is compatible with the configured scripts.
+
+    If any script uses a non-bash shell and collect_system_info is enabled,
+    disable it and warn the user.
+
+    Args:
+        cfg: The configuration object (may be modified)
+        logger: Logger instance for warnings
+    """
+    if not cfg.benchmark.collect_system_info:
+        return  # Already disabled, nothing to check
+
+    incompatible_scripts = []
+    for script in cfg.scripts:
+        if not _is_bash_compatible(script.script_template, script.submit):
+            incompatible_scripts.append(script.name)
+
+    if incompatible_scripts:
+        cfg.benchmark.collect_system_info = False
+        if logger:
+            logger.warning(
+                f"System probe disabled: non-bash shell detected in script(s): {incompatible_scripts}. "
+                f"The probe requires bash features. Set collect_system_info: false to silence this warning."
+            )
+
+
 # ----------------- Main loading function ----------------- #
 
 def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
