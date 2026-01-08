@@ -5,75 +5,167 @@ title: "Command Line Interface"
 
 Complete reference for the IOPS command-line interface.
 
+## Overview
+
+IOPS uses a subcommand-based CLI structure similar to git, docker, and other modern tools. Each subcommand has its own set of options and help documentation.
+
 ## Basic Usage
 
 ```bash
-iops <config.yaml> [options]
+iops <subcommand> [arguments] [options]
 ```
 
-## Commands
+## Available Subcommands
 
-### Run Benchmark
+### run - Execute Benchmark
+
+Execute a benchmark configuration:
 
 ```bash
-iops config.yaml
+iops run <config.yaml> [options]
 ```
 
-Executes the benchmark defined in the configuration file.
+Runs the benchmark defined in the configuration file.
 
-### Generate Configuration Template
+**Options:**
+- `--dry-run, -n` - Preview execution plan without running
+- `--use-cache` - Skip tests with cached results
+- `--max-core-hours N` - Set core-hours budget limit (SLURM only)
+- `--time-estimate SEC` - Estimated test duration in seconds
+- `--log-file PATH` - Write logs to file
+- `--log-level LEVEL` - Set log verbosity (DEBUG, INFO, WARNING, ERROR)
+- `--no-log-terminal` - Disable terminal logging (log to file only)
+- `-v, --verbose` - Enable verbose output
+
+**Examples:**
 
 ```bash
-iops --generate [output.yaml]
+# Basic execution
+iops run benchmark.yaml
+
+# Dry-run to preview
+iops run benchmark.yaml --dry-run
+iops run benchmark.yaml -n
+
+# With caching and verbose logging
+iops run benchmark.yaml --use-cache --log-level DEBUG
+
+# With budget limit and time estimate
+iops run benchmark.yaml --max-core-hours 1000 --time-estimate 300
 ```
 
-Generates a comprehensive YAML template with all options documented.
+### check - Validate Configuration
 
-### Analyze Results
+Validate a configuration file without executing:
 
 ```bash
-iops --analyze <workdir/run_NNN>
+iops check <config.yaml>
 ```
 
-Generates an interactive HTML report from completed benchmark results.
+Checks the YAML syntax and validates all configuration settings.
 
-### Find Executions
+**Examples:**
 
 ```bash
-iops --find <path>
+# Validate configuration
+iops check benchmark.yaml
 ```
 
-Finds and displays execution folders in a workdir with their parameters. The path can be:
+### generate - Create Config Template
+
+Generate a configuration template:
+
+```bash
+iops generate [output.yaml]
+```
+
+Creates a comprehensive YAML template with all options documented. If no path is provided, the command is interactive.
+
+**Examples:**
+
+```bash
+# Interactive generation
+iops generate
+
+# Generate at specific path
+iops generate my_config.yaml
+```
+
+### analyze - Generate Report
+
+Generate an interactive HTML report from results:
+
+```bash
+iops analyze <workdir/run_NNN> [options]
+```
+
+Creates visualization reports with plots and statistical analysis.
+
+**Options:**
+- `--report-config PATH` - Use custom report configuration
+
+**Examples:**
+
+```bash
+# Generate report
+iops analyze ./workdir/run_001
+
+# With custom report config
+iops analyze ./workdir/run_001 --report-config custom_report.yaml
+```
+
+### find - Explore Executions
+
+Find and display execution folders with their parameters:
+
+```bash
+iops find <path> [filters...] [options]
+```
+
+The path can be:
 - A run root directory (containing `__iops_index.json`)
 - A workdir containing multiple `run_XXX` folders
 - A specific execution folder (containing `__iops_params.json`)
 
-**Filter by parameters:**
+**Filters:**
+
+Filters are specified as positional arguments in the format `VAR=VALUE`:
 
 ```bash
-iops --find <path> --filter VAR=VALUE [VAR2=VALUE2 ...]
+iops find <path> VAR1=VALUE1 VAR2=VALUE2
 ```
 
-Filter executions by variable values. Only executions matching all specified filters will be displayed.
+Only executions matching all specified filters will be displayed.
+
+**Options:**
+- `--show-command` - Display the command column in output
 
 **Examples:**
 
 ```bash
 # List all executions in a run
-iops --find ./workdir/run_001
+iops find ./workdir/run_001
 
 # List all runs in a workdir
-iops --find ./workdir
+iops find ./workdir
 
 # Show details for specific execution
-iops --find ./workdir/run_001/exec_0042
+iops find ./workdir/run_001/exec_0042
 
-# Filter by variable values
-iops --find ./workdir/run_001 --filter nodes=4 ppn=8
-iops --find ./workdir --filter block_size=1024
+# Filter by single variable
+iops find ./workdir/run_001 nodes=4
+
+# Filter by multiple variables
+iops find ./workdir/run_001 nodes=4 ppn=8
+
+# Show command column
+iops find ./workdir/run_001 --show-command
+
+# Complex filter
+iops find ./workdir block_size=1024 threads=8
 ```
 
-### Show Version
+### --version - Show Version
 
 ```bash
 iops --version
@@ -81,126 +173,71 @@ iops --version
 
 Displays the installed IOPS version.
 
-## Common Options
-
-### Mode Options
+### --help - Show Help
 
 ```bash
-# Generate configuration template
-iops --generate [output.yaml]
-
-# Check configuration validity
-iops config.yaml --check
-
-# Analyze results
-iops --analyze <workdir/run_NNN>
-
-# Find and filter executions
-iops --find <path>
-iops --find <path> --filter VAR=VALUE
+iops --help
 ```
 
-### Execution Options
+Shows general help information.
+
+For subcommand-specific help:
 
 ```bash
-# Dry-run (preview without executing)
-iops config.yaml --dry-run
-iops config.yaml -n
-
-# Use cached results
-iops config.yaml --use-cache
-
-# Set core-hours budget (SLURM)
-iops config.yaml --max-core-hours 1000
-
-# Provide time estimates (seconds)
-iops config.yaml --time-estimate 120
+iops run --help
+iops check --help
+iops generate --help
+iops analyze --help
+iops find --help
 ```
 
-### Logging Options
+## Command Summary
+
+| Command | Purpose |
+|---------|---------|
+| `iops run <config.yaml>` | Execute benchmark |
+| `iops check <config.yaml>` | Validate configuration |
+| `iops generate [path]` | Create config template |
+| `iops analyze <path>` | Generate HTML report |
+| `iops find <path> [filters...]` | Explore executions |
+| `iops --version` | Show version |
+| `iops --help` | Show help |
+
+## Context-Sensitive Help
+
+Each subcommand provides its own help documentation:
 
 ```bash
-# Set log level
-iops config.yaml --log-level DEBUG
-
-# Enable verbose output
-iops config.yaml --verbose
-iops config.yaml -v
-
-# Write logs to file
-iops config.yaml --log-file benchmark.log
-
-# Disable terminal logging (log to file only)
-iops config.yaml --no-log-terminal
+iops run --help      # Shows run-specific options
+iops check --help    # Shows check-specific options
+iops generate --help # Shows generate-specific options
+iops analyze --help  # Shows analyze-specific options
+iops find --help     # Shows find-specific options
 ```
 
-### Reporting Options
+This is more convenient than the old flag-based system where all options were shown together.
 
-```bash
-# Use custom report configuration
-iops --analyze <workdir/run_NNN> --report-config custom_report.yaml
-```
+## Benefits of Subcommand Structure
 
-## Complete Options Reference
+The new subcommand-based CLI offers several advantages:
 
-```
-Usage: iops [OPTIONS] [CONFIG_PATH]
+1. **Clearer Intent** - `iops run config.yaml` is more explicit than `iops config.yaml`
+2. **Context-Sensitive Help** - Each subcommand shows only relevant options
+3. **Familiar Pattern** - Matches git, docker, kubectl, and other modern tools
+4. **Better Organization** - Related options are grouped under their subcommand
+5. **Easier Discovery** - Users can explore available commands with `iops --help`
 
-Arguments:
-  config_path              Path to YAML configuration file
+## Migration from Old Syntax
 
-Mode Options:
-  --generate [PATH]        Generate configuration template
-  --check                  Validate configuration
-  --analyze PATH           Generate analysis report from results
-  --find PATH              Find execution folders in workdir
-  --filter VAR=VALUE       Filter executions by variable values (use with --find)
+If you're updating from an older version of IOPS, here's how the commands have changed:
 
-Execution Options:
-  -n, --dry-run           Preview without executing
-  --use-cache             Skip cached tests
-  --max-core-hours N      Budget limit (SLURM)
-  --time-estimate SEC     Estimated test duration (seconds)
-
-Logging Options:
-  --log-file PATH         Write logs to file
-  --log-level LEVEL       Log verbosity (DEBUG, INFO, WARNING, ERROR)
-  --no-log-terminal       Disable terminal logging
-  -v, --verbose           Enable verbose output
-
-Reporting Options:
-  --report-config PATH    Custom report configuration file
-
-General Options:
-  --version               Show version
-  --help                  Show help message
-```
-
-## Examples
-
-```bash
-# Basic execution
-iops benchmark.yaml
-
-# With caching and verbose logging
-iops benchmark.yaml --use-cache --log-level DEBUG
-
-# With verbose output and log file
-iops benchmark.yaml -v --log-file benchmark.log
-
-# Dry-run with budget estimation
-iops benchmark.yaml --dry-run --time-estimate 300 --max-core-hours 1000
-iops benchmark.yaml -n --time-estimate 300
-
-# Validate configuration
-iops benchmark.yaml --check
-
-# Generate report with custom configuration
-iops --analyze workdir/run_001 --report-config custom_report.yaml
-
-# Find and explore executions
-iops --find workdir/run_001
-iops --find workdir/run_001 --filter nodes=4
-iops --find workdir/run_001 --filter nodes=4 ppn=8
-iops --find workdir/run_001/exec_0023
-```
+| Old Syntax | New Syntax |
+|------------|------------|
+| `iops config.yaml` | `iops run config.yaml` |
+| `iops config.yaml --dry-run` | `iops run config.yaml --dry-run` |
+| `iops config.yaml --check` | `iops check config.yaml` |
+| `iops --generate` | `iops generate` |
+| `iops --generate output.yaml` | `iops generate output.yaml` |
+| `iops --analyze /path` | `iops analyze /path` |
+| `iops --find /path` | `iops find /path` |
+| `iops --find /path --filter nodes=4` | `iops find /path nodes=4` |

@@ -40,9 +40,9 @@ scripts:
 
 ```bash
 # Dry-run to estimate resource usage
-iops config.yaml --dry-run --time-estimate 300
-iops config.yaml -n --time-estimate 300
+iops run config.yaml --dry-run --time-estimate 300
+iops run config.yaml -n --time-estimate 300
 
 # Execute
-iops config.yaml --max-core-hours 1000
+iops run config.yaml --max-core-hours 1000
 ```

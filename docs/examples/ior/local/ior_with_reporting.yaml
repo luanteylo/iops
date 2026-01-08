@@ -12,10 +12,10 @@
 # - Best results configuration
 #
 # To run this example:
-#   iops example_with_reporting.yaml
+#   iops run example_with_reporting.yaml
 #
 # To regenerate report with custom settings:
-#   iops --analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+#   iops analyze /path/to/workdir/run_001 --report-config custom_report.yaml
 
 benchmark:
   name: "IOR Benchmark with Custom Reporting"
@@ -288,7 +288,7 @@ reporting:
 # ==================== USAGE NOTES ====================
 #
 # 1. Run the benchmark:
-#      iops example_with_reporting.yaml
+#      iops run example_with_reporting.yaml
 #
 #    This will execute the benchmark and automatically generate a report at:
 #      /tmp/iops_reporting_demo/run_001/ior_performance_report.html
@@ -312,7 +312,7 @@ reporting:
 #                colorscale: "Plasma"
 #
 #      Then run:
-#      iops --analyze /tmp/iops_reporting_demo/run_001 --report-config custom_report.yaml
+#      iops analyze /tmp/iops_reporting_demo/run_001 --report-config custom_report.yaml
 #
 # 4. The report includes:
 #    - Test Summary: Execution statistics, cache hits, parameter space coverage

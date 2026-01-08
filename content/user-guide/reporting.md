@@ -38,7 +38,7 @@ With this minimal configuration, IOPS will automatically generate a report after
 Generate a report from an existing run:
 
 ```bash
-iops --analyze /path/to/workdir/run_001
+iops analyze /path/to/workdir/run_001
 ```
 
 This works with any completed run, regardless of whether `reporting` was configured during execution.
@@ -48,7 +48,7 @@ This works with any completed run, regardless of whether `reporting` was configu
 Generate a report with custom visualization settings:
 
 ```bash
-iops --analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+iops analyze /path/to/workdir/run_001 --report-config custom_report.yaml
 ```
 
 The `--report-config` file contains only the `reporting` section, allowing you to experiment with different visualizations without re-running benchmarks.
@@ -735,7 +735,7 @@ When using `--report-config`, the configuration priority is:
 
 The reporting feature is **fully backward compatible**:
 
-- Old workdirs without `reporting` configuration can still be analyzed with `iops --analyze`
+- Old workdirs without `reporting` configuration can still be analyzed with `iops analyze`
 - Reports are **opt-in** (disabled by default with `enabled: false`)
 - Existing configurations continue to work without modification
 
@@ -760,11 +760,11 @@ After running your benchmark once, experiment with visualizations using `--repor
 
 ```bash
 # Run benchmark once
-iops config.yaml
+iops run config.yaml
 
 # Try different visualizations
-iops --analyze /workdir/run_001 --report-config viz_v1.yaml
-iops --analyze /workdir/run_001 --report-config viz_v2.yaml
+iops analyze /workdir/run_001 --report-config viz_v1.yaml
+iops analyze /workdir/run_001 --report-config viz_v2.yaml
 ```
 
 ### 3. Match Plot Types to Data
@@ -824,7 +824,7 @@ reporting:
 
 **Problem**: Plots show errors about missing variables.
 
-**Solution**: Use `iops --analyze /workdir/run_001 --dry-run` to see available variables and metrics (feature request).
+**Solution**: Use `iops analyze /workdir/run_001 --dry-run` to see available variables and metrics (feature request).
 
 Verify variable names match those in your `vars` section.
 

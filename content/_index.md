@@ -15,7 +15,7 @@ IOPS is a framework that transforms benchmark experiments from manual scripting 
 
 **Without IOPS**: Write bash scripts → Parse outputs → Aggregate data → Generate plots → Repeat for each parameter change
 
-**With IOPS**: Write one YAML config → Run `iops config.yaml` → Get interactive HTML reports
+**With IOPS**: Write one YAML config → Run `iops run config.yaml` → Get interactive HTML reports
 
 Originally designed for I/O performance studies (see [our 2022 paper](https://inria.hal.science/hal-03753813/)), IOPS has evolved into a generic framework for any parametric benchmark workflow.
 
@@ -83,7 +83,7 @@ output:
 Run it with:
 
 ```bash
-iops config.yaml
+iops run config.yaml
 ```
 
 ## Links

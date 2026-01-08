@@ -485,8 +485,8 @@ output:
 # =============================================================================
 # Automatic HTML report generation with interactive plots
 # Reports include performance analysis, best configurations, and custom visualizations
-# Manual: iops --analyze /path/to/workdir/run_NNN
-# Custom: iops --analyze /path/to/workdir/run_NNN --report-config report.yaml
+# Manual: iops analyze /path/to/workdir/run_NNN
+# Custom: iops analyze /path/to/workdir/run_NNN --report-config report.yaml
 # Docs: https://lgouveia.gitlabpages.inria.fr/iops/user-guide/reporting/
 # =============================================================================
 reporting:

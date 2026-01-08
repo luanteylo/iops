@@ -190,38 +190,8 @@ def load_version():
     with version_file.open() as f:
         return f.read().strip()
     
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="IOPS Tool - Benchmark Automation Framework")
-
-    # Positional argument
-    parser.add_argument('setup_file', type=Path, nargs='?',
-                        help="Path to the YAML setup file")
-
-    # Mode options
-    parser.add_argument('--generate', nargs='?', const=Path("iops_config.yaml"), type=Path,
-                        metavar='PATH', help="Generate a default config template")
-    parser.add_argument('--check', action='store_true',
-                        help="Validate the config file and exit")
-    parser.add_argument('--analyze', type=Path, default=None, metavar='PATH',
-                        help="Generate HTML report from a completed run")
-    parser.add_argument('--find', type=Path, default=None, metavar='PATH',
-                        help="Find execution folders in a workdir (use VAR=VALUE to filter)")
-    parser.add_argument('--filter', type=str, nargs='*', default=None, metavar='VAR=VALUE',
-                        help="Filter executions by variable values (use with --find)")
-    parser.add_argument('--show-command', action='store_true',
-                        help="Show the command column (use with --find)")
-
-    # Execution options
-    parser.add_argument('-n', '--dry-run', action='store_true',
-                        help="Preview execution plan without running tests")
-    parser.add_argument('--use-cache', action='store_true',
-                        help="Reuse cached results, skip already executed tests")
-    parser.add_argument('--max-core-hours', type=float, default=None, metavar='N',
-                        help="Maximum CPU core-hours budget for execution")
-    parser.add_argument('--time-estimate', type=str, default=None, metavar='SEC',
-                        help="Estimated time per test (e.g., '120' or '60,120,300')")
-
-    # Logging options
+def _add_common_args(parser):
+    """Add common arguments shared across subcommands."""
     parser.add_argument('--log-file', type=Path, default=Path("iops.log"), metavar='PATH',
                         help="Path to log file (default: iops.log)")
     parser.add_argument('--log-level', type=str, default='INFO',
@@ -232,13 +202,79 @@ def parse_arguments():
     parser.add_argument('-v', '--verbose', action='store_true',
                         help="Show full traceback for errors")
 
-    # Report options
-    parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
-                        help="Custom report config YAML (use with --analyze)")
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="IOPS - A generic benchmark orchestration framework for automated parametric experiments.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  iops run config.yaml              Execute benchmark
+  iops run config.yaml --dry-run    Preview execution plan
+  iops check config.yaml            Validate configuration
+  iops find ./workdir               List all executions
+  iops find ./workdir nodes=4       Filter by parameter
+  iops analyze ./run_001            Generate HTML report
+  iops generate                     Create config template
+"""
+    )
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
 
-    return parser.parse_args()
+    subparsers = parser.add_subparsers(dest='command', title='commands', metavar='<command>')
+
+    # ---- run command ----
+    run_parser = subparsers.add_parser('run', help='Execute a benchmark configuration',
+                                        description='Execute a benchmark from a YAML configuration file.')
+    run_parser.add_argument('config_file', type=Path, help="Path to the YAML configuration file")
+    run_parser.add_argument('-n', '--dry-run', action='store_true',
+                            help="Preview execution plan without running tests")
+    run_parser.add_argument('--use-cache', action='store_true',
+                            help="Reuse cached results, skip already executed tests")
+    run_parser.add_argument('--max-core-hours', type=float, default=None, metavar='N',
+                            help="Maximum CPU core-hours budget for execution")
+    run_parser.add_argument('--time-estimate', type=str, default=None, metavar='SEC',
+                            help="Estimated time per test (e.g., '120' or '60,120,300')")
+    _add_common_args(run_parser)
+
+    # ---- find command ----
+    find_parser = subparsers.add_parser('find', help='Find and explore execution folders',
+                                         description='Find execution folders in a workdir and display their parameters.')
+    find_parser.add_argument('path', type=Path, help="Path to workdir or execution folder")
+    find_parser.add_argument('filter', type=str, nargs='*', metavar='VAR=VALUE',
+                             help="Filter executions by variable values (e.g., nodes=4 ppn=8)")
+    find_parser.add_argument('--show-command', action='store_true',
+                             help="Show the command column")
+    _add_common_args(find_parser)
+
+    # ---- analyze command ----
+    analyze_parser = subparsers.add_parser('analyze', help='Generate HTML report from completed run',
+                                            description='Generate an interactive HTML report from benchmark results.')
+    analyze_parser.add_argument('path', type=Path, help="Path to the run directory (e.g., ./workdir/run_001)")
+    analyze_parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
+                                help="Custom report config YAML (auto-detects report_config.yaml in workdir)")
+    _add_common_args(analyze_parser)
+
+    # ---- generate command ----
+    generate_parser = subparsers.add_parser('generate', help='Generate a default config template',
+                                             description='Generate a YAML configuration template to get started.')
+    generate_parser.add_argument('output', type=Path, nargs='?', default=Path("iops_config.yaml"),
+                                 help="Output file path (default: iops_config.yaml)")
+    _add_common_args(generate_parser)
+
+    # ---- check command ----
+    check_parser = subparsers.add_parser('check', help='Validate a configuration file',
+                                          description='Validate a YAML configuration file without executing.')
+    check_parser.add_argument('config_file', type=Path, help="Path to the YAML configuration file")
+    _add_common_args(check_parser)
+
+    args = parser.parse_args()
+
+    # Show help if no command provided
+    if args.command is None:
+        parser.print_help()
+        parser.exit()
+
+    return args
 
 
 def initialize_logger(args):
@@ -280,7 +316,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.info("")
     logger.info("  IOPS")
     logger.info(f"  Version: {IOPS_VERSION}")
-    logger.info(f"  Setup File: {args.setup_file}")    
+    logger.info(f"  Config File: {args.config_file}")    
     logger.info("")
     logger.info(sep)
     logger.debug("Execution Context")
@@ -432,14 +468,13 @@ def main():
     args = parse_arguments()
     logger = initialize_logger(args)
 
-    # Handle --generate mode (template generator)
-    if args.generate:
+    # ---- generate command ----
+    if args.command == 'generate':
         from iops.setup import BenchmarkWizard
 
         try:
             wizard = BenchmarkWizard()
-            # Pass the output path if specified
-            output_path = str(args.generate) if args.generate else None
+            output_path = str(args.output) if args.output else None
             output_file = wizard.run(output_path=output_path)
 
             if output_file:
@@ -455,20 +490,20 @@ def main():
                 raise
         return
 
-    # Handle --find mode (find execution folders)
-    if args.find:
-        find_executions(args.find, args.filter, args.show_command)
+    # ---- find command ----
+    if args.command == 'find':
+        find_executions(args.path, args.filter, args.show_command)
         return
 
-    # Handle --analyze mode (generate report from existing results)
-    if args.analyze:
+    # ---- analyze command ----
+    if args.command == 'analyze':
         from iops.reporting.report_generator import generate_report_from_workdir
         from iops.config.loader import load_report_config
 
         logger.info("=" * 70)
         logger.info("ANALYSIS MODE: Generating HTML report")
         logger.info("=" * 70)
-        logger.info(f"Reading results from: {args.analyze}")
+        logger.info(f"Reading results from: {args.path}")
 
         # Load report config: explicit flag > auto-detect in workdir > metadata defaults
         report_config = None
@@ -476,7 +511,7 @@ def main():
 
         # Auto-detect report_config.yaml in workdir if not explicitly provided
         if config_path is None:
-            default_config = args.analyze / "report_config.yaml"
+            default_config = args.path / "report_config.yaml"
             if default_config.exists():
                 config_path = default_config
                 logger.info(f"Auto-detected report config: {config_path}")
@@ -492,7 +527,7 @@ def main():
                 return
 
         try:
-            report_path = generate_report_from_workdir(args.analyze, report_config=report_config)
+            report_path = generate_report_from_workdir(args.path, report_config=report_config)
             logger.info(f"✓ Report generated: {report_path}")
             logger.info("=" * 70)
         except Exception as e:
@@ -501,14 +536,10 @@ def main():
                 raise
         return
 
-    if not args.setup_file:
-        logger.error("No setup file provided for validation or execution.")
-        return
-
-    # Handle --check mode (validate only)
-    if args.check:
+    # ---- check command ----
+    if args.command == 'check':
         from iops.config.loader import validate_yaml_config
-        errors = validate_yaml_config(Path(args.setup_file))
+        errors = validate_yaml_config(args.config_file)
         if errors:
             logger.error(f"Configuration validation failed with {len(errors)} error(s):")
             for i, err in enumerate(errors, 1):
@@ -518,31 +549,33 @@ def main():
             logger.info("Configuration is valid.")
             return
 
-    try:
-        cfg = load_generic_config(Path(args.setup_file), logger=logger)
-    except ConfigValidationError as e:
-        logger.error(f"Configuration error: {e}")
-        if args.verbose:
-            raise
-        return
-    except Exception as e:
-        logger.error(f"Failed to load configuration: {e}")
-        if args.verbose:
-            raise
-        return
+    # ---- run command ----
+    if args.command == 'run':
+        try:
+            cfg = load_generic_config(args.config_file, logger=logger)
+        except ConfigValidationError as e:
+            logger.error(f"Configuration error: {e}")
+            if args.verbose:
+                raise
+            return
+        except Exception as e:
+            logger.error(f"Failed to load configuration: {e}")
+            if args.verbose:
+                raise
+            return
 
-    log_execution_context(cfg, args, logger)
+        log_execution_context(cfg, args, logger)
 
-    # Check system probe compatibility (warns and disables if non-bash shell detected)
-    check_system_probe_compatibility(cfg, logger)
+        # Check system probe compatibility (warns and disables if non-bash shell detected)
+        check_system_probe_compatibility(cfg, logger)
 
-    runner = IOPSRunner(cfg=cfg, args=args)
+        runner = IOPSRunner(cfg=cfg, args=args)
 
-    # Run in dry-run mode or normal mode
-    if args.dry_run:
-        runner.run_dry()
-    else:
-        runner.run()
+        # Run in dry-run mode or normal mode
+        if args.dry_run:
+            runner.run_dry()
+        else:
+            runner.run()
 
 
 

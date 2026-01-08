@@ -7,13 +7,13 @@ IOPS provides tools to explore, search, and inspect execution folders after runn
 
 ## Finding Executions
 
-Use the `--find` command to locate and display execution folders with their parameters:
+Use the `find` command to locate and display execution folders with their parameters:
 
 ```bash
-iops --find /path/to/workdir
+iops find /path/to/workdir
 ```
 
-The `--find` command works with three types of paths:
+The `find` command works with three types of paths:
 
 1. **Run root directory** - Contains `__iops_index.json`
 2. **Workdir with multiple runs** - Contains `run_001/`, `run_002/`, etc.
@@ -22,7 +22,7 @@ The `--find` command works with three types of paths:
 ### List All Executions in a Run
 
 ```bash
-iops --find ./workdir/run_001
+iops find ./workdir/run_001
 ```
 
 Output example:
@@ -43,7 +43,7 @@ exec_004       1      8    4096
 If you point to a workdir containing multiple `run_XXX` folders, IOPS displays executions from all runs:
 
 ```bash
-iops --find ./workdir
+iops find ./workdir
 ```
 
 Output:
@@ -62,7 +62,7 @@ Found 8 execution(s)
 ### Show Details for Specific Execution
 
 ```bash
-iops --find ./workdir/run_001/exec_042
+iops find ./workdir/run_001/exec_042
 ```
 
 Output:
@@ -83,10 +83,10 @@ Repetitions: 3
 
 ## Filtering Executions
 
-Use `--filter` to find executions matching specific parameter values:
+Filters are specified as positional arguments to find executions matching specific parameter values:
 
 ```bash
-iops --find ./workdir/run_001 --filter VAR=VALUE [VAR2=VALUE2 ...]
+iops find ./workdir/run_001 VAR=VALUE [VAR2=VALUE2 ...]
 ```
 
 ### Filter by Single Variable
@@ -94,7 +94,7 @@ iops --find ./workdir/run_001 --filter VAR=VALUE [VAR2=VALUE2 ...]
 Find all executions with `nodes=4`:
 
 ```bash
-iops --find ./workdir/run_001 --filter nodes=4
+iops find ./workdir/run_001 nodes=4
 ```
 
 Output:
@@ -114,7 +114,7 @@ exec_009       4      8    1024
 Find executions matching multiple conditions:
 
 ```bash
-iops --find ./workdir/run_001 --filter nodes=4 ppn=8
+iops find ./workdir/run_001 nodes=4 ppn=8
 ```
 
 Only executions where **both** `nodes=4` AND `ppn=8` will be shown.
@@ -123,13 +123,13 @@ Only executions where **both** `nodes=4` AND `ppn=8` will be shown.
 
 ```bash
 # Find large block size experiments
-iops --find ./workdir/run_001 --filter block_size=16384
+iops find ./workdir/run_001 block_size=16384
 
 # Find specific configuration
-iops --find ./workdir/run_001 --filter nodes=8 ppn=16 block_size=4096
+iops find ./workdir/run_001 nodes=8 ppn=16 block_size=4096
 
 # Search across all runs in workdir
-iops --find ./workdir --filter nodes=4
+iops find ./workdir nodes=4
 ```
 
 ## IOPS Metadata Files
@@ -153,7 +153,8 @@ Created in the run root directory. Contains an index of all executions with thei
         "nodes": 1,
         "ppn": 4,
         "block_size": 1024
-      }
+      },
+      "command": "mpirun -np 4 ./benchmark --nodes 1"
     },
     "exec_002": {
       "path": "exec_002",
@@ -161,7 +162,8 @@ Created in the run root directory. Contains an index of all executions with thei
         "nodes": 1,
         "ppn": 4,
         "block_size": 4096
-      }
+      },
+      "command": "mpirun -np 4 ./benchmark --nodes 1"
     }
   }
 }
@@ -200,10 +202,10 @@ After a benchmark run, you might want to investigate failures:
 
 ```bash
 # List all executions to see which ones exist
-iops --find ./workdir/run_001
+iops find ./workdir/run_001
 
 # Check specific execution folder for error logs
-iops --find ./workdir/run_001/exec_042
+iops find ./workdir/run_001/exec_042
 cd ./workdir/run_001/exec_042/repetition_1
 cat stderr.txt
 ```
@@ -214,7 +216,7 @@ Find a specific parameter combination for manual inspection:
 
 ```bash
 # Find the execution with nodes=8, ppn=16
-iops --find ./workdir/run_001 --filter nodes=8 ppn=16
+iops find ./workdir/run_001 nodes=8 ppn=16
 
 # Navigate to that execution folder
 cd ./workdir/run_001/exec_XXX/repetition_1
@@ -227,19 +229,19 @@ For experiments with many variables, use filters to narrow down results:
 
 ```bash
 # How many executions used block_size=4096?
-iops --find ./workdir/run_001 --filter block_size=4096 | grep "Found"
+iops find ./workdir/run_001 block_size=4096 | grep "Found"
 
 # What parameter values were tested?
-iops --find ./workdir/run_001
+iops find ./workdir/run_001
 ```
 
 ### Extract Results for Specific Tests
 
-Combine `--find` with manual result extraction:
+Combine `find` with manual result extraction:
 
 ```bash
 # Find matching executions
-iops --find ./workdir/run_001 --filter nodes=4
+iops find ./workdir/run_001 nodes=4
 
 # Navigate to execution folder
 cd ./workdir/run_001/exec_007/repetition_1
@@ -257,7 +259,7 @@ All paths in `__iops_index.json` are stored as relative paths. This means you ca
 - **Share results** with collaborators
 - **Access workdirs** from different mount points
 
-The `--find` command will work correctly regardless of where the workdir is located.
+The `find` command will work correctly regardless of where the workdir is located.
 
 ## Next Steps
 

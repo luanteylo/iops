@@ -31,44 +31,44 @@ benchmark:
 
 ```bash
 # First run: executes all tests and caches results
-iops config.yaml
+iops run config.yaml
 
 # Second run with --use-cache: reuses cached results
-iops config.yaml --use-cache
+iops run config.yaml --use-cache
 ```
 
 ### Example Workflow
 
 ```bash
 # Run with 10 parameter combinations, 3 repetitions each = 30 executions
-iops benchmark.yaml
+iops run benchmark.yaml
 
 # Oops, let's change the number of repetitions to 5
 # Edit YAML: repetitions: 3 -> repetitions: 5
 
 # Re-run with cache: only executes 2 new repetitions per test (20 total)
 # The first 3 repetitions are loaded from cache
-iops benchmark.yaml --use-cache
+iops run benchmark.yaml --use-cache
 ```
 
 ### Development Workflow
 
 ```bash
 # Test run with small parameter space
-iops test_config.yaml
+iops run test_config.yaml
 
 # Fix a bug in your benchmark script
 # Edit scripts[].script_template in YAML
 
 # Re-run: cache is parameter-based, not script-based
 # All tests execute again (scripts changed)
-iops test_config.yaml
+iops run test_config.yaml
 
 # But if you only change output settings...
 # Edit output.sink.path in YAML
 
 # Re-run with cache: tests are skipped, only output regenerated
-iops test_config.yaml --use-cache
+iops run test_config.yaml --use-cache
 ```
 
 ## How It Works
@@ -247,7 +247,7 @@ cache.clear_cache()
 
 3. Enable debug logging to see cache hits/misses:
    ```bash
-   iops config.yaml --use-cache --log-level DEBUG
+   iops run config.yaml --use-cache --log-level DEBUG
    ```
 
 ### Parameter Mismatch
@@ -259,7 +259,7 @@ cache.clear_cache()
 1. **Derived variables with run-specific paths**:
    ```bash
    # Enable debug logging to see what's being hashed
-   iops config.yaml --use-cache --log-level DEBUG | grep "param_hash"
+   iops run config.yaml --use-cache --log-level DEBUG | grep "param_hash"
    ```
 
    If you see different hashes for identical parameters, check for variables containing:

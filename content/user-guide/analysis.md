@@ -10,7 +10,7 @@ IOPS can generate interactive HTML reports with plots and statistical analysis f
 After your benchmark completes, generate a report:
 
 ```bash
-iops --analyze /path/to/workdir/run_001
+iops analyze /path/to/workdir/run_001
 ```
 
 The report includes:
@@ -39,7 +39,7 @@ With this setting, reports are automatically generated after benchmark execution
 Regenerate reports with custom visualization settings using `--report-config`:
 
 ```bash
-iops --analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+iops analyze /path/to/workdir/run_001 --report-config custom_report.yaml
 ```
 
 This allows you to experiment with different plot types, themes, and layouts without re-running your benchmarks.
@@ -93,7 +93,7 @@ benchmark:
 ```
 
 **Notes:**
-- Only affects report generation with `iops --analyze`
+- Only affects report generation with `iops analyze`
 - Does not affect execution or result storage
 - All variables are still saved in output files
 

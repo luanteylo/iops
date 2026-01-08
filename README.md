@@ -10,7 +10,7 @@ IOPS is a framework that transforms benchmark experiments from manual scripting 
 
 **Without IOPS**: Write bash scripts → Parse outputs → Aggregate data → Generate plots → Repeat for each parameter change
 
-**With IOPS**: Write one YAML config → Run `iops config.yaml` → Get interactive HTML reports
+**With IOPS**: Write one YAML config → Run `iops run config.yaml` → Get interactive HTML reports
 
 Originally designed for I/O performance studies (see [our 2022 paper](https://inria.hal.science/hal-03753813/)), IOPS has evolved into a generic framework for any parametric benchmark workflow.
 
@@ -135,7 +135,7 @@ iops --version
 Generate a comprehensive YAML template with all options documented:
 
 ```bash
-iops --generate my_config.yaml
+iops generate my_config.yaml
 ```
 
 This creates a fully-commented template showing all available configuration options. Customize it for your needs.
@@ -150,46 +150,46 @@ cp docs/examples/ior/local/ior_simple.yaml my_config.yaml
 
 ```bash
 # Dry-run to see what will be executed
-iops my_config.yaml --dry-run
+iops run my_config.yaml --dry-run
 
 # Check configuration validity
-iops my_config.yaml --check
+iops check my_config.yaml
 ```
 
 ### 3. Run the Benchmark
 
 ```bash
 # Basic execution
-iops my_config.yaml
+iops run my_config.yaml
 
 # With caching (skip already-executed tests)
-iops my_config.yaml --use-cache
+iops run my_config.yaml --use-cache
 
 # With budget limit (SLURM only)
-iops my_config.yaml --max-core-hours 1000
+iops run my_config.yaml --max-core-hours 1000
 
 # With verbose logging
-iops my_config.yaml --log-level DEBUG
+iops run my_config.yaml --log-level DEBUG
 ```
 
 ### 4. Explore Executions
 
 ```bash
 # List all executions with their parameters
-iops --find /path/to/workdir/run_001
+iops find /path/to/workdir/run_001
 
 # Filter executions by variable values
-iops --find /path/to/workdir/run_001 --filter nodes=4 ppn=8
+iops find /path/to/workdir/run_001 nodes=4 ppn=8
 
 # Show details for specific execution
-iops --find /path/to/workdir/run_001/exec_042
+iops find /path/to/workdir/run_001/exec_042
 ```
 
 ### 5. Generate Analysis Report
 
 ```bash
 # Generate HTML report with interactive plots
-iops --analyze /path/to/workdir/run_001
+iops analyze /path/to/workdir/run_001
 ```
 
 ## How It Works
@@ -316,10 +316,10 @@ benchmark:
   sqlite_db: "/path/to/cache.db"
 ```
 
-Then use `--use_cache` to skip tests with identical parameters:
+Then use `--use-cache` to skip tests with identical parameters:
 
 ```bash
-iops config.yaml --use_cache
+iops run config.yaml --use-cache
 ```
 
 ### Multi-Round Execution
@@ -345,7 +345,7 @@ Prevent exceeding compute allocations:
 
 ```bash
 # Set budget limit from command line
-iops config.yaml --max-core-hours 1000
+iops run config.yaml --max-core-hours 1000
 
 # Or in YAML config
 benchmark:
@@ -377,30 +377,37 @@ Check `docs/examples/` for working configuration examples:
 
 ## Command Reference
 
+IOPS uses a subcommand-based CLI similar to git and docker:
+
 ```bash
 # Run benchmark
-iops <config.yaml> [options]
-
-# Common options:
+iops run <config.yaml> [options]
   --dry-run              Preview without executing
   --use-cache            Skip cached tests
   --max-core-hours N     Budget limit (SLURM)
   --log-level LEVEL      Verbosity (DEBUG, INFO, WARNING)
   --no-log-terminal      Disable terminal logging (log to file only)
-  --check                Validate configuration
+
+# Validate configuration
+iops check <config.yaml>
 
 # Find and explore executions
-iops --find <path>
-iops --find <path> --filter VAR=VALUE [VAR2=VALUE2 ...]
+iops find <path> [filters...]
+iops find <path> nodes=4 ppn=8    # Filter by parameters
+iops find <path> --show-command   # Show command column
 
 # Generate analysis report
-iops --analyze <workdir/run_NNN>
+iops analyze <workdir/run_NNN> [--report-config report.yaml]
 
 # Generate configuration template
-iops --generate [output.yaml]
+iops generate [output.yaml]
 
 # Show version
 iops --version
+
+# Show help
+iops --help
+iops run --help      # Subcommand-specific help
 ```
 
 ## License

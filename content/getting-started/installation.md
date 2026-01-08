@@ -140,10 +140,10 @@ After installation, verify that IOPS is correctly installed:
 iops --version
 
 # Generate a configuration template
-iops --generate test_config.yaml
+iops generate test_config.yaml
 
 # Check the configuration
-iops test_config.yaml --check
+iops check test_config.yaml
 ```
 
 ## Dependencies

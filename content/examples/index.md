@@ -37,10 +37,10 @@ cp docs/examples/example_simple.yaml my_config.yaml
 nano my_config.yaml
 
 # Validate
-iops my_config.yaml --check
+iops check my_config.yaml
 
 # Run
-iops my_config.yaml
+iops run my_config.yaml
 ```
 
 ## Next Steps

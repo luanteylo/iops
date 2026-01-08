@@ -10,7 +10,7 @@ This guide will walk you through running your first benchmark with IOPS in just 
 Generate a comprehensive YAML template with all options documented:
 
 ```bash
-iops --generate my_config.yaml
+iops generate my_config.yaml
 ```
 
 This creates a fully-commented template showing all available configuration options. You can customize it for your needs.
@@ -27,11 +27,11 @@ Before running, it's good practice to preview what will be executed:
 
 ```bash
 # Dry-run to see what will be executed
-iops my_config.yaml --dry-run
-iops my_config.yaml -n
+iops run my_config.yaml --dry-run
+iops run my_config.yaml -n
 
 # Check configuration validity
-iops my_config.yaml --check
+iops check my_config.yaml
 ```
 
 The dry-run will show you:
@@ -46,45 +46,45 @@ Run your benchmark with the basic command:
 
 ```bash
 # Basic execution
-iops my_config.yaml
+iops run my_config.yaml
 ```
 
 ### Common Options
 
 ```bash
 # With caching (skip already-executed tests)
-iops my_config.yaml --use-cache
+iops run my_config.yaml --use-cache
 
 # With budget limit (SLURM only)
-iops my_config.yaml --max-core-hours 1000
+iops run my_config.yaml --max-core-hours 1000
 
 # With verbose output
-iops my_config.yaml --verbose
-iops my_config.yaml -v
+iops run my_config.yaml --verbose
+iops run my_config.yaml -v
 
 # With debug logging
-iops my_config.yaml --log-level DEBUG
+iops run my_config.yaml --log-level DEBUG
 
 # Write logs to file
-iops my_config.yaml --log-file benchmark.log
+iops run my_config.yaml --log-file benchmark.log
 
 # Disable terminal logging (log to file only)
-iops my_config.yaml --no-log-terminal
+iops run my_config.yaml --no-log-terminal
 ```
 
 ## Step 4: Explore Executions
 
-You can explore and filter your benchmark executions using the `--find` command:
+You can explore and filter your benchmark executions using the `find` command:
 
 ```bash
 # List all executions with their parameters
-iops --find /path/to/workdir/run_001
+iops find /path/to/workdir/run_001
 
 # Filter executions by variable values
-iops --find /path/to/workdir/run_001 --filter size=1000
+iops find /path/to/workdir/run_001 size=1000
 
 # Show details for a specific execution
-iops --find /path/to/workdir/run_001/exec_023
+iops find /path/to/workdir/run_001/exec_023
 ```
 
 This is useful for:
@@ -99,7 +99,7 @@ After your benchmark completes, generate an interactive HTML report:
 
 ```bash
 # Generate HTML report with interactive plots
-iops --analyze /path/to/workdir/run_001
+iops analyze /path/to/workdir/run_001
 ```
 
 The report includes:
@@ -141,7 +141,7 @@ IOPS creates metadata files with the `__iops_` prefix to enable execution tracki
 - `__iops_params.json` - Parameter values for each execution folder
 - `__iops_sysinfo.json` - System information (if system probe is enabled)
 
-These files enable the `--find` command to quickly locate and filter executions by their parameters.
+These files enable the `find` command to quickly locate and filter executions by their parameters.
 
 ## Simple Example
 
@@ -189,7 +189,7 @@ output:
 Run it:
 
 ```bash
-iops simple_benchmark.yaml
+iops run simple_benchmark.yaml
 ```
 
 ## Next Steps

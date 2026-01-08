@@ -55,7 +55,7 @@ output:
 ## Running
 
 ```bash
-iops example_simple.yaml
+iops run example_simple.yaml
 ```
 
 ## What It Does

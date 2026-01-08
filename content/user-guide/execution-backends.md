@@ -105,11 +105,11 @@ From command line:
 
 ```bash
 # Set budget limit
-iops config.yaml --max-core-hours 1000
+iops run config.yaml --max-core-hours 1000
 
 # Estimate usage before running
-iops config.yaml --dry-run --time-estimate 300
-iops config.yaml -n --time-estimate 300
+iops run config.yaml --dry-run --time-estimate 300
+iops run config.yaml -n --time-estimate 300
 ```
 
 ### Job Monitoring

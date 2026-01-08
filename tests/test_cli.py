@@ -46,113 +46,124 @@ class TestLoadVersion:
 
 
 class TestParseArguments:
-    """Test command-line argument parsing."""
+    """Test command-line argument parsing with subcommands."""
 
-    def test_parse_minimal_args(self):
-        """Test parsing with just setup file."""
-        test_args = ['test_config.yaml']
+    def test_parse_run_minimal(self):
+        """Test parsing 'run' command with just config file."""
+        test_args = ['run', 'test_config.yaml']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.setup_file == Path('test_config.yaml')
-            assert not args.check
+            assert args.command == 'run'
+            assert args.config_file == Path('test_config.yaml')
             assert not args.dry_run
             assert not args.use_cache
             assert args.log_level == 'INFO'
 
     def test_parse_check(self):
-        """Test --check flag."""
-        test_args = ['config.yaml', '--check']
+        """Test 'check' command."""
+        test_args = ['check', 'config.yaml']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.check is True
+            assert args.command == 'check'
+            assert args.config_file == Path('config.yaml')
 
     def test_parse_dry_run(self):
-        """Test --dry-run flag."""
-        test_args = ['config.yaml', '--dry-run']
+        """Test --dry-run flag with run command."""
+        test_args = ['run', 'config.yaml', '--dry-run']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
+            assert args.command == 'run'
             assert args.dry_run is True
 
     def test_parse_use_cache(self):
-        """Test --use-cache flag."""
-        test_args = ['config.yaml', '--use-cache']
+        """Test --use-cache flag with run command."""
+        test_args = ['run', 'config.yaml', '--use-cache']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.use_cache is True
 
     def test_parse_max_core_hours(self):
-        """Test --max-core-hours argument."""
-        test_args = ['config.yaml', '--max-core-hours', '1000']
+        """Test --max-core-hours argument with run command."""
+        test_args = ['run', 'config.yaml', '--max-core-hours', '1000']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.max_core_hours == 1000.0
 
     def test_parse_log_level(self):
         """Test --log-level argument."""
-        test_args = ['config.yaml', '--log-level', 'DEBUG']
+        test_args = ['run', 'config.yaml', '--log-level', 'DEBUG']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.log_level == 'DEBUG'
 
     def test_parse_log_file(self):
         """Test --log-file argument."""
-        test_args = ['config.yaml', '--log-file', 'custom.log']
+        test_args = ['run', 'config.yaml', '--log-file', 'custom.log']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.log_file == Path('custom.log')
 
     def test_parse_no_log_terminal(self):
         """Test --no-log-terminal flag."""
-        test_args = ['config.yaml', '--no-log-terminal']
+        test_args = ['run', 'config.yaml', '--no-log-terminal']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.no_log_terminal is True
 
     def test_parse_verbose(self):
         """Test --verbose flag."""
-        test_args = ['config.yaml', '--verbose']
+        test_args = ['run', 'config.yaml', '--verbose']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.verbose is True
 
     def test_parse_time_estimate(self):
         """Test --time-estimate argument."""
-        test_args = ['config.yaml', '--time-estimate', '120']
+        test_args = ['run', 'config.yaml', '--time-estimate', '120']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.time_estimate == '120'
 
     def test_parse_analyze(self):
-        """Test --analyze argument."""
-        test_args = ['--analyze', '/path/to/workdir']
+        """Test 'analyze' command."""
+        test_args = ['analyze', '/path/to/workdir']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.analyze == Path('/path/to/workdir')
+            assert args.command == 'analyze'
+            assert args.path == Path('/path/to/workdir')
 
     def test_parse_report_config(self):
-        """Test --report-config argument."""
-        test_args = ['--analyze', '/path/to/workdir', '--report-config', 'report.yaml']
+        """Test --report-config argument with analyze command."""
+        test_args = ['analyze', '/path/to/workdir', '--report-config', 'report.yaml']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.report_config == Path('report.yaml')
 
     def test_parse_generate_default(self):
-        """Test --generate with default filename."""
-        test_args = ['--generate']
+        """Test 'generate' command with default filename."""
+        test_args = ['generate']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.generate == Path('iops_config.yaml')
+            assert args.command == 'generate'
+            assert args.output == Path('iops_config.yaml')
 
     def test_parse_generate_custom(self):
-        """Test --generate with custom filename."""
-        test_args = ['--generate', 'my_config.yaml']
+        """Test 'generate' command with custom filename."""
+        test_args = ['generate', 'my_config.yaml']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.generate == Path('my_config.yaml')
+            assert args.output == Path('my_config.yaml')
 
     def test_parse_version(self):
         """Test --version flag exits with version info."""
         test_args = ['--version']
+        with patch.object(sys, 'argv', ['iops'] + test_args):
+            with pytest.raises(SystemExit):
+                parse_arguments()
+
+    def test_parse_no_command_shows_help(self):
+        """Test that running without command shows help and exits."""
+        test_args = []
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with pytest.raises(SystemExit):
                 parse_arguments()
@@ -212,7 +223,7 @@ class TestLogExecutionContext:
         cfg = load_config(sample_config_file)
 
         args = Mock()
-        args.setup_file = sample_config_file
+        args.config_file = sample_config_file
         args.use_cache = False
         args.max_core_hours = None
 
@@ -227,7 +238,7 @@ class TestLogExecutionContext:
 
 
 class TestGenerate:
-    """Test --generate mode (template generation)."""
+    """Test 'generate' command (template generation)."""
 
     def test_generate_success(self):
         """Test successful template generation."""
@@ -237,7 +248,7 @@ class TestGenerate:
             mock_wizard.run.return_value = 'iops_config.yaml'
             mock_wizard_class.return_value = mock_wizard
 
-            test_args = ['--generate']
+            test_args = ['generate']
             with patch.object(sys, 'argv', ['iops'] + test_args):
                 with patch('iops.main.initialize_logger'):
                     main()
@@ -253,7 +264,7 @@ class TestGenerate:
             mock_wizard.run.return_value = 'custom.yaml'
             mock_wizard_class.return_value = mock_wizard
 
-            test_args = ['--generate', 'custom.yaml']
+            test_args = ['generate', 'custom.yaml']
             with patch.object(sys, 'argv', ['iops'] + test_args):
                 with patch('iops.main.initialize_logger'):
                     main()
@@ -268,7 +279,7 @@ class TestGenerate:
             mock_wizard.run.return_value = None
             mock_wizard_class.return_value = mock_wizard
 
-            test_args = ['--generate']
+            test_args = ['generate']
             with patch.object(sys, 'argv', ['iops'] + test_args):
                 with patch('iops.main.initialize_logger'):
                     main()
@@ -283,7 +294,7 @@ class TestGenerate:
             mock_wizard.run.side_effect = KeyboardInterrupt()
             mock_wizard_class.return_value = mock_wizard
 
-            test_args = ['--generate']
+            test_args = ['generate']
             with patch.object(sys, 'argv', ['iops'] + test_args):
                 with patch('iops.main.initialize_logger'):
                     # Should not raise, just log
@@ -296,7 +307,7 @@ class TestGenerate:
             mock_wizard.run.side_effect = ValueError("Test error")
             mock_wizard_class.return_value = mock_wizard
 
-            test_args = ['--generate', '--verbose']
+            test_args = ['generate', '--verbose']
             with patch.object(sys, 'argv', ['iops'] + test_args):
                 with patch('iops.main.initialize_logger'):
                     with pytest.raises(ValueError, match="Test error"):
@@ -309,7 +320,7 @@ class TestGenerate:
             mock_wizard.run.side_effect = ValueError("Test error")
             mock_wizard_class.return_value = mock_wizard
 
-            test_args = ['--generate']
+            test_args = ['generate']
             with patch.object(sys, 'argv', ['iops'] + test_args):
                 with patch('iops.main.initialize_logger'):
                     # Should not raise, just log
@@ -317,11 +328,11 @@ class TestGenerate:
 
 
 class TestCheck:
-    """Test --check mode (validation only)."""
+    """Test 'check' command (validation only)."""
 
     def test_check_valid_config(self, sample_config_file):
         """Test validation with valid config file."""
-        test_args = [str(sample_config_file), '--check']
+        test_args = ['check', str(sample_config_file)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -335,7 +346,7 @@ class TestCheck:
         with open(invalid_config, 'w') as f:
             yaml.dump({'benchmark': {'name': 'Test'}}, f)  # Missing vars, command, etc.
 
-        test_args = [str(invalid_config), '--check']
+        test_args = ['check', str(invalid_config)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -346,7 +357,7 @@ class TestCheck:
         """Test validation with missing config file."""
         missing_file = tmp_path / 'nonexistent.yaml'
 
-        test_args = [str(missing_file), '--check']
+        test_args = ['check', str(missing_file)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -361,7 +372,7 @@ class TestCheck:
             "Error 2: Invalid value type"
         ]
 
-        test_args = [str(sample_config_file), '--check']
+        test_args = ['check', str(sample_config_file)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -371,14 +382,14 @@ class TestCheck:
 
 
 class TestAnalyze:
-    """Test --analyze mode (report generation from workdir)."""
+    """Test 'analyze' command (report generation from workdir)."""
 
     @patch('iops.reporting.report_generator.generate_report_from_workdir')
     def test_analyze_success(self, mock_generate):
         """Test successful report generation."""
         mock_generate.return_value = Path('/workdir/report.html')
 
-        test_args = ['--analyze', '/path/to/workdir']
+        test_args = ['analyze', '/path/to/workdir']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -397,7 +408,7 @@ class TestAnalyze:
         mock_load_config.return_value = mock_report_config
         mock_generate.return_value = Path('/workdir/report.html')
 
-        test_args = ['--analyze', '/path/to/workdir', '--report-config', 'report.yaml']
+        test_args = ['analyze', '/path/to/workdir', '--report-config', 'report.yaml']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -414,7 +425,7 @@ class TestAnalyze:
         """Test analyze with invalid report config file."""
         mock_load_config.side_effect = ConfigValidationError("Invalid config")
 
-        test_args = ['--analyze', '/path/to/workdir', '--report-config', 'bad.yaml']
+        test_args = ['analyze', '/path/to/workdir', '--report-config', 'bad.yaml']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -426,7 +437,7 @@ class TestAnalyze:
         """Test analyze with invalid report config and --verbose."""
         mock_load_config.side_effect = ConfigValidationError("Invalid config")
 
-        test_args = ['--analyze', '/path/to/workdir', '--report-config', 'bad.yaml', '--verbose']
+        test_args = ['analyze', '/path/to/workdir', '--report-config', 'bad.yaml', '--verbose']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -438,7 +449,7 @@ class TestAnalyze:
         """Test analyze when report generation fails."""
         mock_generate.side_effect = FileNotFoundError("Missing metadata")
 
-        test_args = ['--analyze', '/path/to/workdir']
+        test_args = ['analyze', '/path/to/workdir']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -450,7 +461,7 @@ class TestAnalyze:
         """Test analyze error with --verbose shows traceback."""
         mock_generate.side_effect = FileNotFoundError("Missing metadata")
 
-        test_args = ['--analyze', '/path/to/workdir', '--verbose']
+        test_args = ['analyze', '/path/to/workdir', '--verbose']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -467,7 +478,7 @@ class TestDryRun:
         mock_runner = MagicMock()
         mock_runner_class.return_value = mock_runner
 
-        test_args = [str(sample_config_file), '--dry-run']
+        test_args = ['run', str(sample_config_file), '--dry-run']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -483,7 +494,7 @@ class TestDryRun:
         mock_runner = MagicMock()
         mock_runner_class.return_value = mock_runner
 
-        test_args = [str(sample_config_file)]
+        test_args = ['run', str(sample_config_file)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -497,20 +508,20 @@ class TestDryRun:
 class TestErrorHandling:
     """Test CLI error handling."""
 
-    def test_no_setup_file_provided(self):
-        """Test error when no setup file is provided for execution."""
+    def test_no_command_provided(self):
+        """Test error when no command is provided."""
         test_args = []
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
-            with patch('iops.main.initialize_logger'):
-                # Should log error and return
-                main()
+            # Should exit with error (shows help)
+            with pytest.raises(SystemExit):
+                parse_arguments()
 
     def test_missing_setup_file(self, tmp_path):
         """Test error when setup file doesn't exist - should handle gracefully."""
         missing_file = tmp_path / 'missing.yaml'
 
-        test_args = [str(missing_file)]
+        test_args = ['run', str(missing_file)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             mock_logger = MagicMock()
@@ -526,7 +537,7 @@ class TestErrorHandling:
         with open(bad_yaml, 'w') as f:
             f.write("invalid: yaml: syntax:\n  - bad\n  indentation")
 
-        test_args = [str(bad_yaml)]
+        test_args = ['run', str(bad_yaml)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             mock_logger = MagicMock()
@@ -547,7 +558,7 @@ class TestCommandCombinations:
         mock_runner_class.return_value = mock_runner
 
         test_args = [
-            str(sample_config_file),
+            'run', str(sample_config_file),
             '--use-cache',
             '--max-core-hours', '500'
         ]
@@ -568,7 +579,7 @@ class TestCommandCombinations:
         mock_runner_class.return_value = mock_runner
 
         test_args = [
-            str(sample_config_file),
+            'run', str(sample_config_file),
             '--dry-run',
             '--use-cache'
         ]
@@ -590,7 +601,7 @@ class TestCommandCombinations:
         mock_runner_class.return_value = mock_runner
 
         test_args = [
-            str(sample_config_file),
+            'run', str(sample_config_file),
             '--log-level', 'DEBUG',
             '--log-file', 'custom.log',
             '--no-log-terminal',
@@ -618,7 +629,7 @@ class TestIntegrationWithRunner:
         mock_runner = MagicMock()
         mock_runner_class.return_value = mock_runner
 
-        test_args = [str(sample_config_file)]
+        test_args = ['run', str(sample_config_file)]
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -636,7 +647,7 @@ class TestIntegrationWithRunner:
         mock_runner_class.return_value = mock_runner
 
         test_args = [
-            str(sample_config_file),
+            'run', str(sample_config_file),
             '--use-cache',
             '--max-core-hours', '1000'
         ]
@@ -660,7 +671,7 @@ class TestTimeEstimate:
         mock_runner = MagicMock()
         mock_runner_class.return_value = mock_runner
 
-        test_args = [str(sample_config_file), '--time-estimate', '120']
+        test_args = ['run', str(sample_config_file), '--time-estimate', '120']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -675,7 +686,7 @@ class TestTimeEstimate:
         mock_runner = MagicMock()
         mock_runner_class.return_value = mock_runner
 
-        test_args = [str(sample_config_file), '--time-estimate', '60,120,300']
+        test_args = ['run', str(sample_config_file), '--time-estimate', '60,120,300']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -689,8 +700,8 @@ class TestSpecialModes:
     """Test special CLI modes that exit early."""
 
     def test_generate_exits_early(self):
-        """Test that --generate doesn't require setup_file."""
-        test_args = ['--generate']
+        """Test that 'generate' command doesn't require config_file."""
+        test_args = ['generate']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -698,11 +709,11 @@ class TestSpecialModes:
                     mock_wizard.return_value.run.return_value = 'config.yaml'
                     main()
 
-        # Should complete without error about missing setup_file
+        # Should complete without error about missing config_file
 
     def test_analyze_exits_early(self):
-        """Test that --analyze doesn't require setup_file."""
-        test_args = ['--analyze', '/workdir']
+        """Test that 'analyze' command doesn't require config_file."""
+        test_args = ['analyze', '/workdir']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -710,34 +721,36 @@ class TestSpecialModes:
                     mock_gen.return_value = Path('/workdir/report.html')
                     main()
 
-        # Should complete without error about missing setup_file
+        # Should complete without error about missing config_file
 
-    def test_check_requires_setup_file(self):
-        """Test that --check still requires setup_file."""
-        test_args = ['--check']
+    def test_check_requires_config_file(self):
+        """Test that 'check' requires config_file argument."""
+        test_args = ['check']
 
-        # This should work but not crash (will log error about missing file)
+        # This should fail because check requires config_file argument
         with patch.object(sys, 'argv', ['iops'] + test_args):
-            with patch('iops.main.initialize_logger'):
-                main()
+            with pytest.raises(SystemExit):
+                parse_arguments()
 
 
 class TestFindCommand:
-    """Test --find mode (execution folder lookup)."""
+    """Test 'find' command (execution folder lookup)."""
 
     def test_parse_find_argument(self):
-        """Test --find argument parsing."""
-        test_args = ['--find', '/path/to/workdir']
+        """Test 'find' command parsing."""
+        test_args = ['find', '/path/to/workdir']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.find == Path('/path/to/workdir')
+            assert args.command == 'find'
+            assert args.path == Path('/path/to/workdir')
 
     def test_parse_find_with_filter(self):
-        """Test --find with --filter arguments."""
-        test_args = ['--find', '/path/to/workdir', '--filter', 'nodes=4', 'ppn=8']
+        """Test 'find' with filter arguments."""
+        test_args = ['find', '/path/to/workdir', 'nodes=4', 'ppn=8']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.find == Path('/path/to/workdir')
+            assert args.command == 'find'
+            assert args.path == Path('/path/to/workdir')
             assert args.filter == ['nodes=4', 'ppn=8']
 
     def test_find_with_index_file(self, tmp_path):
@@ -859,7 +872,7 @@ class TestFindCommand:
             assert 'No executions match' in output
 
     def test_find_main_integration(self, tmp_path):
-        """Test --find mode through main()."""
+        """Test 'find' command through main()."""
         index = {
             "benchmark": "Test",
             "executions": {"exec_0001": {"path": "runs/exec_0001", "params": {"x": 1}}}
@@ -868,7 +881,7 @@ class TestFindCommand:
         with open(index_file, 'w') as f:
             json.dump(index, f)
 
-        test_args = ['--find', str(tmp_path)]
+        test_args = ['find', str(tmp_path)]
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
                 # Should complete without error
@@ -1154,10 +1167,11 @@ class TestFindCommand:
 
     def test_parse_show_command_argument(self):
         """Test --show-command argument parsing."""
-        test_args = ['--find', '/path/to/workdir', '--show-command']
+        test_args = ['find', '/path/to/workdir', '--show-command']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.find == Path('/path/to/workdir')
+            assert args.command == 'find'
+            assert args.path == Path('/path/to/workdir')
             assert args.show_command is True
 
     def test_find_with_show_command(self, tmp_path):

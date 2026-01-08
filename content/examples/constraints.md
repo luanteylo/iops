@@ -85,10 +85,10 @@ output:
 
 ```bash
 # Dry-run to see constraint filtering
-iops content/examples/example_with_constraints.yaml --dry-run
+iops run content/examples/example_with_constraints.yaml --dry-run
 
 # Execute
-iops content/examples/example_with_constraints.yaml
+iops run content/examples/example_with_constraints.yaml
 ```
 
 ## What It Does

@@ -21,7 +21,7 @@ IOPS uses YAML files to define benchmark experiments. The configuration file has
 The easiest way to start is to generate a template:
 
 ```bash
-iops --generate my_config.yaml
+iops generate my_config.yaml
 ```
 
 This creates a fully-commented template with all available options.
@@ -158,11 +158,11 @@ Always validate your configuration before running:
 
 ```bash
 # Check configuration validity
-iops my_config.yaml --check
+iops check my_config.yaml
 
 # Preview what will be executed
-iops my_config.yaml --dry-run
-iops my_config.yaml -n
+iops run my_config.yaml --dry-run
+iops run my_config.yaml -n
 ```
 
 ## Next Steps

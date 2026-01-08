@@ -8,9 +8,9 @@
 # Quick Start:
 #   1. Update the workdir and test_dir paths below
 #   2. Ensure mdtest and MPI are installed and available
-#   3. Validate: iops examples/mdtest_config_local.yaml --check_setup
-#   4. Dry run: iops examples/mdtest_config_local.yaml --dry-run
-#   5. Execute: iops examples/mdtest_config_local.yaml
+#   3. Validate: iops check examples/mdtest_config_local.yaml
+#   4. Dry run: iops run examples/mdtest_config_local.yaml --dry-run
+#   5. Execute: iops run examples/mdtest_config_local.yaml
 #
 # Documentation: https://lgouveia.gitlabpages.inria.fr/iops/reference/yaml-schema/
 # =============================================================================
@@ -320,9 +320,9 @@ reporting:
 #   - The test directory will be created and cleaned up automatically
 #
 # To Run:
-#   iops examples/mdtest_config_local.yaml
+#   iops run examples/mdtest_config_local.yaml
 #
 # With Caching:
-#   iops examples/mdtest_config_local.yaml --use_cache
+#   iops run examples/mdtest_config_local.yaml --use-cache
 #
 # =============================================================================
