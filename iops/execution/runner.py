@@ -350,24 +350,55 @@ class IOPSRunner(HasLogger):
             return 1
 
     def _compute_core_hours(self, test) -> float:
-        """Compute core-hours used by a test."""
-        # Get execution time from metadata
-        start = test.metadata.get("__start")
-        end = test.metadata.get("__end")
+        """
+        Compute core-hours used by a test.
 
-        if not start or not end:
-            self.logger.debug(f"Missing start/end times for test {test.execution_id}, cannot compute core-hours")
-            return 0.0
+        Prefers duration_seconds from sysinfo (actual script execution time on compute node)
+        over __start/__end timestamps (which include queue wait time for SLURM jobs).
+        Falls back to __start/__end if sysinfo is not available (e.g., local executor
+        or collect_system_info disabled).
+        """
+        duration_seconds = None
+
+        # Try to get actual execution time from sysinfo (preferred - accurate execution time)
+        sysinfo = test.metadata.get("__sysinfo")
+        if sysinfo and "duration_seconds" in sysinfo:
+            try:
+                duration_seconds = float(sysinfo["duration_seconds"])
+                self.logger.debug(
+                    f"Using sysinfo duration_seconds ({duration_seconds:.1f}s) for test {test.execution_id}"
+                )
+            except (ValueError, TypeError):
+                self.logger.debug(
+                    f"Invalid sysinfo duration_seconds for test {test.execution_id}, falling back to timestamps"
+                )
+
+        # Fall back to __start/__end timestamps if sysinfo not available
+        if duration_seconds is None:
+            start = test.metadata.get("__start")
+            end = test.metadata.get("__end")
+
+            if not start or not end:
+                self.logger.debug(f"Missing timing info for test {test.execution_id}, cannot compute core-hours")
+                return 0.0
+
+            try:
+                # Parse timestamps
+                if isinstance(start, str):
+                    start = datetime.fromisoformat(start)
+                if isinstance(end, str):
+                    end = datetime.fromisoformat(end)
+
+                duration_seconds = (end - start).total_seconds()
+                self.logger.debug(
+                    f"Using __start/__end timestamps ({duration_seconds:.1f}s) for test {test.execution_id}"
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to parse timestamps for test {test.execution_id}: {e}")
+                return 0.0
 
         try:
-            # Parse timestamps
-            if isinstance(start, str):
-                start = datetime.fromisoformat(start)
-            if isinstance(end, str):
-                end = datetime.fromisoformat(end)
-
             # Compute hours
-            duration_seconds = (end - start).total_seconds()
             duration_hours = duration_seconds / 3600.0
 
             # Get cores

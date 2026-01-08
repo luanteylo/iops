@@ -89,6 +89,10 @@ def test_system_probe_template_structure():
     assert "os" in SYSTEM_PROBE_TEMPLATE
     assert "ib_devices" in SYSTEM_PROBE_TEMPLATE
     assert "filesystems" in SYSTEM_PROBE_TEMPLATE
+    assert "duration_seconds" in SYSTEM_PROBE_TEMPLATE
+    # Verify duration_seconds uses $SECONDS (bash built-in)
+    # Note: Template uses ${{SECONDS}} to escape Python string formatting
+    assert "${{SECONDS}}" in SYSTEM_PROBE_TEMPLATE
     # Verify it uses EXIT trap
     assert "EXIT" in SYSTEM_PROBE_TEMPLATE
     # Verify error handling (never fail)
@@ -263,7 +267,8 @@ def sample_sysinfo_data():
         "kernel": "5.4.0-42-generic",
         "os": "Ubuntu 20.04.1 LTS",
         "ib_devices": "mlx5_0,mlx5_1",
-        "filesystems": "lustre:/scratch,gpfs:/projects"
+        "filesystems": "lustre:/scratch,gpfs:/projects",
+        "duration_seconds": 120
     }
 
 
@@ -846,3 +851,132 @@ def test_system_probe_with_path_containing_spaces(sample_config_file):
 
     # Should contain the path (spaces included in Python format, bash will handle)
     assert "test dir with spaces" in result or "test%20dir%20with%20spaces" in result
+
+
+# ============================================================================ #
+# Core-Hours Calculation Tests - _compute_core_hours with duration_seconds
+# ============================================================================ #
+
+def test_compute_core_hours_uses_sysinfo_duration(mock_runner, sample_sysinfo_data):
+    """Test that _compute_core_hours prefers duration_seconds from sysinfo."""
+    test = Mock(spec=ExecutionInstance)
+    test.execution_id = 1
+    test.vars = {"nodes": 1, "ppn": 4}  # For cores calculation (will use default 1)
+    test.metadata = {
+        "__sysinfo": sample_sysinfo_data,  # duration_seconds = 120
+        "__start": "2024-01-01T00:00:00",
+        "__end": "2024-01-01T00:10:00",  # 10 minutes = 600 seconds
+    }
+
+    # With default cores_expr = "1", 120 seconds = 120/3600 hours = 0.0333... core-hours
+    result = mock_runner._compute_core_hours(test)
+
+    # Should use sysinfo duration (120s), not timestamps (600s)
+    expected = 1 * (120 / 3600.0)  # cores * hours
+    assert result == pytest.approx(expected, abs=0.001)
+
+
+def test_compute_core_hours_falls_back_to_timestamps(mock_runner):
+    """Test that _compute_core_hours falls back to timestamps when sysinfo unavailable."""
+    test = Mock(spec=ExecutionInstance)
+    test.execution_id = 1
+    test.vars = {"nodes": 1}
+    test.metadata = {
+        "__start": "2024-01-01T00:00:00",
+        "__end": "2024-01-01T00:10:00",  # 10 minutes = 600 seconds
+        # No __sysinfo
+    }
+
+    result = mock_runner._compute_core_hours(test)
+
+    # Should use timestamps (600 seconds)
+    expected = 1 * (600 / 3600.0)  # cores * hours
+    assert result == pytest.approx(expected, abs=0.001)
+
+
+def test_compute_core_hours_falls_back_when_sysinfo_missing_duration(mock_runner):
+    """Test fallback when sysinfo exists but lacks duration_seconds."""
+    test = Mock(spec=ExecutionInstance)
+    test.execution_id = 1
+    test.vars = {"nodes": 1}
+    test.metadata = {
+        "__sysinfo": {
+            "hostname": "test-node",
+            "cpu_cores": 32,
+            # No duration_seconds field
+        },
+        "__start": "2024-01-01T00:00:00",
+        "__end": "2024-01-01T00:05:00",  # 5 minutes = 300 seconds
+    }
+
+    result = mock_runner._compute_core_hours(test)
+
+    # Should use timestamps (300 seconds)
+    expected = 1 * (300 / 3600.0)  # cores * hours
+    assert result == pytest.approx(expected, abs=0.001)
+
+
+def test_compute_core_hours_returns_zero_when_no_timing_info(mock_runner):
+    """Test that _compute_core_hours returns 0 when no timing info available."""
+    test = Mock(spec=ExecutionInstance)
+    test.execution_id = 1
+    test.vars = {"nodes": 1}
+    test.metadata = {}  # No sysinfo, no timestamps
+
+    result = mock_runner._compute_core_hours(test)
+
+    assert result == 0.0
+
+
+def test_compute_core_hours_handles_invalid_sysinfo_duration(mock_runner):
+    """Test fallback when sysinfo has invalid duration_seconds value."""
+    test = Mock(spec=ExecutionInstance)
+    test.execution_id = 1
+    test.vars = {"nodes": 1}
+    test.metadata = {
+        "__sysinfo": {
+            "hostname": "test-node",
+            "duration_seconds": "invalid",  # Not a number
+        },
+        "__start": "2024-01-01T00:00:00",
+        "__end": "2024-01-01T00:02:00",  # 2 minutes = 120 seconds
+    }
+
+    result = mock_runner._compute_core_hours(test)
+
+    # Should fall back to timestamps (120 seconds)
+    expected = 1 * (120 / 3600.0)
+    assert result == pytest.approx(expected, abs=0.001)
+
+
+def test_compute_core_hours_accurate_for_slurm_jobs(mock_runner, sample_sysinfo_data):
+    """Test that core-hours are accurate for SLURM jobs (using actual execution time).
+
+    This test demonstrates the fix for the queue wait time issue. Previously,
+    _compute_core_hours used __start (job submission) to __end (job completion),
+    which included queue wait time. Now it uses duration_seconds from sysinfo
+    which captures only the actual script execution time.
+    """
+    test = Mock(spec=ExecutionInstance)
+    test.execution_id = 1
+    test.vars = {"nodes": 1}
+
+    # Simulate a job that was queued for 10 minutes, then ran for 2 minutes
+    # __start is when we submitted, __end is when we detected completion
+    test.metadata = {
+        "__sysinfo": {
+            "hostname": "compute-node",
+            "duration_seconds": 120,  # Actual execution: 2 minutes
+        },
+        "__start": "2024-01-01T00:00:00",  # Submitted at 00:00
+        "__end": "2024-01-01T00:12:00",    # Completed at 00:12 (10min queue + 2min run)
+    }
+
+    result = mock_runner._compute_core_hours(test)
+
+    # Should use 120 seconds (actual execution), NOT 720 seconds (total including queue)
+    expected = 1 * (120 / 3600.0)  # 0.0333... core-hours
+    wrong_value = 1 * (720 / 3600.0)  # 0.2 core-hours (what it would be with queue time)
+
+    assert result == pytest.approx(expected, abs=0.001)
+    assert result != pytest.approx(wrong_value, abs=0.001)

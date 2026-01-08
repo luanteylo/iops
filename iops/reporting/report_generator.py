@@ -556,6 +556,9 @@ class ReportGenerator:
         """
         Calculate total core-hours consumed by all tests.
 
+        Prefers duration_seconds from sysinfo (actual script execution time) over
+        __start/__end timestamps (which include queue wait time for SLURM jobs).
+
         Returns:
             Total core-hours or None if cannot be calculated
         """
@@ -564,15 +567,28 @@ class ReportGenerator:
             if not cores_expr:
                 return None
 
-            # Parse timestamps
+            # Check for sysinfo duration_seconds column (preferred - accurate execution time)
+            sysinfo_duration_col = 'metadata.__sysinfo.duration_seconds'
+            has_sysinfo_duration = sysinfo_duration_col in self.df.columns
+
+            # Parse timestamps as fallback
             start_times = pd.to_datetime(self.df['metadata.__start'], errors='coerce')
             end_times = pd.to_datetime(self.df['metadata.__end'], errors='coerce')
 
-            if start_times.isna().all() or end_times.isna().all():
-                return None
-
-            # Calculate duration for each test
-            durations_hours = (end_times - start_times).dt.total_seconds() / 3600.0
+            # Calculate duration for each test in hours
+            # Prefer sysinfo duration_seconds, fall back to timestamps
+            if has_sysinfo_duration:
+                # Use sysinfo duration_seconds where available, fall back to timestamps
+                sysinfo_durations = pd.to_numeric(self.df[sysinfo_duration_col], errors='coerce')
+                timestamp_durations = (end_times - start_times).dt.total_seconds()
+                # Use sysinfo where valid, otherwise use timestamp duration
+                durations_seconds = sysinfo_durations.fillna(timestamp_durations)
+                durations_hours = durations_seconds / 3600.0
+            else:
+                # No sysinfo available, use timestamps
+                if start_times.isna().all() or end_times.isna().all():
+                    return None
+                durations_hours = (end_times - start_times).dt.total_seconds() / 3600.0
 
             # Calculate cores for each test using cores_expr
             template = Template(cores_expr)
@@ -590,8 +606,10 @@ class ReportGenerator:
                 try:
                     cores_str = template.render(**var_values)
                     cores = eval(cores_str)  # Safe here as we control the template
-                    core_hours = cores * durations_hours.iloc[idx]
-                    total_core_hours += core_hours
+                    duration_hours = durations_hours.iloc[idx]
+                    if pd.notna(duration_hours):
+                        core_hours = cores * duration_hours
+                        total_core_hours += core_hours
                 except Exception:
                     continue
 
@@ -1051,7 +1069,15 @@ class ReportGenerator:
                 # Calculate wait times and walltimes
                 wait_times = (job_start_times - submit_times).dt.total_seconds()
                 walltimes = (end_times - submit_times).dt.total_seconds()
-                runtimes = (end_times - job_start_times).dt.total_seconds()
+
+                # Calculate runtimes - prefer sysinfo duration_seconds (most accurate)
+                sysinfo_duration_col = 'metadata.__sysinfo.duration_seconds'
+                if sysinfo_duration_col in df_executed.columns:
+                    sysinfo_runtimes = pd.to_numeric(df_executed[sysinfo_duration_col], errors='coerce')
+                    fallback_runtimes = (end_times - job_start_times).dt.total_seconds()
+                    runtimes = sysinfo_runtimes.fillna(fallback_runtimes)
+                else:
+                    runtimes = (end_times - job_start_times).dt.total_seconds()
 
                 # Filter out NaN values
                 valid_wait = wait_times[~wait_times.isna()]

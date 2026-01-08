@@ -52,7 +52,8 @@ _iops_collect_sysinfo() {{
       echo "  \\"kernel\\": \\"$(uname -r 2>/dev/null || echo 'unknown')\\","
       echo "  \\"os\\": \\"$(grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\\"' || uname -s 2>/dev/null || echo 'unknown')\\","
       echo "  \\"ib_devices\\": \\"$(ls /sys/class/infiniband/ 2>/dev/null | tr '\\n' ',' | sed 's/,$//' || echo '')\\","
-      echo "  \\"filesystems\\": \\"$(df -T 2>/dev/null | grep -E 'lustre|gpfs|beegfs|nfs|cephfs|panfs|wekafs' | awk '{{print $2\\":\\"$7}}' | tr '\\n' ',' | sed 's/,$//' || echo '').\\""
+      echo "  \\"filesystems\\": \\"$(df -T 2>/dev/null | grep -E 'lustre|gpfs|beegfs|nfs|cephfs|panfs|wekafs' | awk '{{print $2\\":\\"$7}}' | tr '\\n' ',' | sed 's/,$//' || echo '')\\","
+      echo "  \\"duration_seconds\\": ${{SECONDS}}"
       echo "}}"
     }} > "$_iops_sysinfo"
   ) 2>/dev/null || true
