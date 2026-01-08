@@ -8,6 +8,30 @@ All notable changes to IOPS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-01-08
+
+### Added
+- BayesianConfig dataclass with typed validation for all Bayesian optimization parameters
+- New Bayesian config options: `base_estimator`, `xi`, `kappa` for fine-tuned optimization control
+- Search space efficiency statistics in Bayesian reports (total space, iterations, tests saved)
+- Variable values shown on hover in Bayesian metric evolution plot
+- JSON serialization tests for dataclasses and numpy types
+
+### Changed
+- Renamed `target_metric` to `objective_metric` in Bayesian config (backward compatible)
+- Simplified CLI arguments into logical groups
+- Removed rounds feature and simplified planner architecture
+- Made pyarrow an optional dependency for parquet support
+
+### Fixed
+- Bayesian optimization plots not rendering in reports
+- Pareto point detection in report generator
+- Dataclass JSON serialization for runtime metadata
+
+### Documentation
+- Updated yaml-schema.md with complete Bayesian config documentation
+- Updated all example YAML files with new `objective_metric` field name
+
 ## [3.1.3] - 2026-01-05
 
 ### Fixed
