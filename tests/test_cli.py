@@ -1,5 +1,6 @@
 """Unit tests for IOPS CLI (Command Line Interface)."""
 
+import json
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
@@ -13,6 +14,9 @@ from iops.main import (
     initialize_logger,
     log_execution_context,
     main,
+    find_executions,
+    INDEX_FILENAME,
+    PARAMS_FILENAME,
 )
 from iops.config.models import ConfigValidationError
 
@@ -716,3 +720,434 @@ class TestSpecialModes:
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
                 main()
+
+
+class TestFindCommand:
+    """Test --find mode (execution folder lookup)."""
+
+    def test_parse_find_argument(self):
+        """Test --find argument parsing."""
+        test_args = ['--find', '/path/to/workdir']
+        with patch.object(sys, 'argv', ['iops'] + test_args):
+            args = parse_arguments()
+            assert args.find == Path('/path/to/workdir')
+
+    def test_parse_find_with_filter(self):
+        """Test --find with --filter arguments."""
+        test_args = ['--find', '/path/to/workdir', '--filter', 'nodes=4', 'ppn=8']
+        with patch.object(sys, 'argv', ['iops'] + test_args):
+            args = parse_arguments()
+            assert args.find == Path('/path/to/workdir')
+            assert args.filter == ['nodes=4', 'ppn=8']
+
+    def test_find_with_index_file(self, tmp_path):
+        """Test find_executions with index file."""
+        # Create index file
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1, "ppn": 4}},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"nodes": 2, "ppn": 4}},
+                "exec_0003": {"path": "runs/exec_0003", "params": {"nodes": 4, "ppn": 8}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Test without filter (shows all)
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'runs/exec_0001' in output
+            assert 'runs/exec_0002' in output
+            assert 'runs/exec_0003' in output
+
+    def test_find_with_filter(self, tmp_path):
+        """Test find_executions with filter."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1, "ppn": 4}},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"nodes": 2, "ppn": 4}},
+                "exec_0003": {"path": "runs/exec_0003", "params": {"nodes": 4, "ppn": 8}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Filter by nodes=2
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['nodes=2'])
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'runs/exec_0002' in output
+            assert 'exec_0001' not in output
+            assert 'exec_0003' not in output
+
+    def test_find_with_params_file(self, tmp_path):
+        """Test find_executions with params file (exec folder)."""
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir()
+
+        params = {"nodes": 4, "ppn": 8, "block_size": "1M"}
+        params_file = exec_dir / PARAMS_FILENAME
+        with open(params_file, 'w') as f:
+            json.dump(params, f)
+
+        # Create repetition folders
+        (exec_dir / "repetition_001").mkdir()
+        (exec_dir / "repetition_002").mkdir()
+
+        with patch('builtins.print') as mock_print:
+            find_executions(exec_dir)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'nodes: 4' in output
+            assert 'ppn: 8' in output
+            assert 'Repetitions: 2' in output
+
+    def test_find_no_data(self, tmp_path):
+        """Test find_executions with no IOPS data."""
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'No IOPS execution data found' in output
+
+    def test_find_with_run_dirs(self, tmp_path):
+        """Test find_executions in workdir containing run_XXX folders."""
+        # Create run_001 with index
+        run_dir = tmp_path / "run_001"
+        run_dir.mkdir()
+
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1}},
+            }
+        }
+        index_file = run_dir / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'run_001' in output
+
+    def test_find_invalid_filter_format(self, tmp_path):
+        """Test find_executions with invalid filter format."""
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['invalid_filter'])
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'Invalid filter format' in output
+
+    def test_find_no_matches(self, tmp_path):
+        """Test find_executions when filter matches nothing."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['nodes=999'])
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'No executions match' in output
+
+    def test_find_main_integration(self, tmp_path):
+        """Test --find mode through main()."""
+        index = {
+            "benchmark": "Test",
+            "executions": {"exec_0001": {"path": "runs/exec_0001", "params": {"x": 1}}}
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        test_args = ['--find', str(tmp_path)]
+        with patch.object(sys, 'argv', ['iops'] + test_args):
+            with patch('iops.main.initialize_logger'):
+                # Should complete without error
+                main()
+
+    def test_find_multiple_filters(self, tmp_path):
+        """Test find_executions with multiple filters (AND logic)."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1, "ppn": 4, "threads": 2}},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"nodes": 2, "ppn": 4, "threads": 2}},
+                "exec_0003": {"path": "runs/exec_0003", "params": {"nodes": 2, "ppn": 8, "threads": 4}},
+                "exec_0004": {"path": "runs/exec_0004", "params": {"nodes": 2, "ppn": 4, "threads": 4}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Filter by nodes=2 AND ppn=4 (should match exec_0002 and exec_0004)
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['nodes=2', 'ppn=4'])
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'runs/exec_0002' in output
+            assert 'runs/exec_0004' in output
+            assert 'exec_0001' not in output
+            assert 'exec_0003' not in output
+
+    def test_find_filter_type_coercion(self, tmp_path):
+        """Test that filters compare values as strings (e.g., '4' matches 4)."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1, "ppn": 4}},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"nodes": 2, "ppn": 8}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Filter with string value should match integer in params
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['ppn=8'])
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'runs/exec_0002' in output
+            assert 'exec_0001' not in output
+
+    def test_find_filter_missing_variable(self, tmp_path):
+        """Test filter for variable that doesn't exist in some executions."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1, "ppn": 4}},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"nodes": 2, "ppn": 8, "threads": 16}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Filter by variable that only exists in exec_0002
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['threads=16'])
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'runs/exec_0002' in output
+            assert 'exec_0001' not in output
+
+    def test_find_empty_executions(self, tmp_path):
+        """Test find with index containing no executions."""
+        index = {
+            "benchmark": "Empty Benchmark",
+            "executions": {}
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'No executions found' in output
+
+    def test_find_malformed_index_json(self, tmp_path):
+        """Test find handles malformed JSON in index file gracefully."""
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            f.write("{ invalid json }")
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'Error reading' in output
+
+    def test_find_malformed_params_json(self, tmp_path):
+        """Test find handles malformed JSON in params file gracefully."""
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir()
+
+        params_file = exec_dir / PARAMS_FILENAME
+        with open(params_file, 'w') as f:
+            f.write("{ malformed: json }")
+
+        with patch('builtins.print') as mock_print:
+            find_executions(exec_dir)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'Error reading' in output
+
+    def test_find_params_file_no_repetitions(self, tmp_path):
+        """Test find with params file but no repetition folders."""
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir()
+
+        params = {"nodes": 4, "ppn": 8}
+        params_file = exec_dir / PARAMS_FILENAME
+        with open(params_file, 'w') as f:
+            json.dump(params, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(exec_dir)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            assert 'nodes: 4' in output
+            # Should not show repetitions section if none exist
+            assert 'Repetitions' not in output
+
+    def test_find_multiple_run_dirs(self, tmp_path):
+        """Test find in workdir with multiple run_XXX folders."""
+        # Create run_001 with index
+        run_dir1 = tmp_path / "run_001"
+        run_dir1.mkdir()
+        index1 = {
+            "benchmark": "Benchmark Run 1",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1}},
+            }
+        }
+        with open(run_dir1 / INDEX_FILENAME, 'w') as f:
+            json.dump(index1, f)
+
+        # Create run_002 with index
+        run_dir2 = tmp_path / "run_002"
+        run_dir2.mkdir()
+        index2 = {
+            "benchmark": "Benchmark Run 2",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 2}},
+            }
+        }
+        with open(run_dir2 / INDEX_FILENAME, 'w') as f:
+            json.dump(index2, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            # Should show both run directories
+            assert 'run_001' in output
+            assert 'run_002' in output
+
+    def test_find_with_string_and_numeric_params(self, tmp_path):
+        """Test find displays string and numeric parameters correctly."""
+        index = {
+            "benchmark": "Mixed Types Benchmark",
+            "executions": {
+                "exec_0001": {
+                    "path": "runs/exec_0001",
+                    "params": {
+                        "nodes": 4,
+                        "block_size": "1M",
+                        "io_pattern": "sequential",
+                        "threads": 16
+                    }
+                },
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            # All parameter names should appear in header or data
+            assert 'nodes' in output
+            assert 'block_size' in output
+            assert 'io_pattern' in output
+            assert 'threads' in output
+
+    def test_find_filter_with_equals_in_value(self, tmp_path):
+        """Test filter parsing when value contains '=' character."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"equation": "x=y+z"}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        # Filter with value containing '=' should use split maxsplit=1
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path, filters=['equation=x=y+z'])
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+            # Should find the execution since split(maxsplit=1) handles this
+            assert 'runs/exec_0001' in output
+
+    def test_find_sorted_output(self, tmp_path):
+        """Test that executions are displayed in sorted order."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0003": {"path": "runs/exec_0003", "params": {"nodes": 3}},
+                "exec_0001": {"path": "runs/exec_0001", "params": {"nodes": 1}},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"nodes": 2}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            # Get all print calls as list
+            calls = [str(call) for call in mock_print.call_args_list]
+            output = '\n'.join(calls)
+
+            # Find positions of executions in output
+            pos_1 = output.find('exec_0001')
+            pos_2 = output.find('exec_0002')
+            pos_3 = output.find('exec_0003')
+
+            # Should appear in sorted order (if they appear)
+            if pos_1 != -1 and pos_2 != -1 and pos_3 != -1:
+                assert pos_1 < pos_2 < pos_3
+
+    def test_find_params_file_sorted_params(self, tmp_path):
+        """Test that parameters are displayed in sorted order for single execution."""
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir()
+
+        params = {
+            "z_var": 1,
+            "a_var": 2,
+            "m_var": 3,
+        }
+        params_file = exec_dir / PARAMS_FILENAME
+        with open(params_file, 'w') as f:
+            json.dump(params, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(exec_dir)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+
+            # Parameters should be displayed in sorted order
+            pos_a = output.find('a_var')
+            pos_m = output.find('m_var')
+            pos_z = output.find('z_var')
+
+            assert pos_a < pos_m < pos_z
+
+    def test_find_column_alignment(self, tmp_path):
+        """Test that output columns are properly aligned."""
+        index = {
+            "benchmark": "Test Benchmark",
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"short": 1, "very_long_variable_name": 2}},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"short": 99999, "very_long_variable_name": 1}},
+            }
+        }
+        index_file = tmp_path / INDEX_FILENAME
+        with open(index_file, 'w') as f:
+            json.dump(index, f)
+
+        with patch('builtins.print') as mock_print:
+            find_executions(tmp_path)
+            output = '\n'.join(str(call) for call in mock_print.call_args_list)
+
+            # Should contain header separator (dashes)
+            assert '-' in output
+            # Should have column headers
+            assert 'Path' in output or 'path' in output

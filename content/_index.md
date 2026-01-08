@@ -24,6 +24,7 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - **Parameter Sweeping**: Automatically generate and execute tests for all parameter combinations
 - **Multiple Search Strategies**: Exhaustive, Bayesian optimization, or random sampling
 - **Execution Backends**: Run locally or submit to SLURM clusters
+- **Execution Exploration**: Find and filter execution folders by parameter values
 - **Smart Caching**: Skip redundant tests with parameter-aware result caching
 - **Budget Control**: Set core-hour limits to avoid exceeding compute allocations
 - **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis

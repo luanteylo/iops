@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from collections import defaultdict
 import random
+import json
 import warnings
 
 
@@ -38,6 +39,12 @@ import warnings
 
 # Filename for the system probe script (written to execution directory)
 PROBE_FILENAME = "__iops_probe.sh"
+
+# Filename for the execution parameters (written to exec_XXXX directory)
+PARAMS_FILENAME = "__iops_params.json"
+
+# Filename for the execution index (written to run root)
+INDEX_FILENAME = "__iops_index.json"
 
 # System probe script template - written as a separate file and sourced by user script
 SYSTEM_PROBE_TEMPLATE = '''#!/bin/bash
@@ -63,7 +70,7 @@ _iops_detect_pfs() {{
 
 _iops_collect_sysinfo() {{
   (
-    _iops_sysinfo="{execution_dir}/iops_sysinfo.json"
+    _iops_sysinfo="{execution_dir}/__iops_sysinfo.json"
     {{
       echo "{{"
       echo "  \\"hostname\\": \\"$(hostname 2>/dev/null || echo 'unknown')\\","
@@ -211,12 +218,16 @@ class BasePlanner(ABC, HasLogger):
         - Writes the post script file (if present)
 
         Layout:
-        <workdir>/runs/
-            └── exec_0001/
-                └── repetition_001/
-                    ├── run_<script>.sh
-                    ├── post_<script>.sh (optional)
-                    └── iops_sysinfo.json (generated at runtime by system probe)
+        <workdir>/
+            ├── __iops_index.json (execution index for --find)
+            └── runs/
+                └── exec_0001/
+                    ├── __iops_params.json (parameters for this execution)
+                    └── repetition_001/
+                        ├── run_<script>.sh (user script)
+                        ├── post_<script>.sh (optional user post-script)
+                        ├── __iops_probe.sh (system probe script)
+                        └── __iops_sysinfo.json (generated at runtime by probe)
 
         Args:
             test: ExecutionInstance to prepare
@@ -232,16 +243,18 @@ class BasePlanner(ABC, HasLogger):
         runs_root = run_root / "runs"
         runs_root.mkdir(parents=True, exist_ok=True)
 
-        # Create execution dir
-        exec_dir = (
-            runs_root
-            / f"exec_{test.execution_id:04d}"
-            / f"repetition_{repetition:03d}"
-        )
+        # Create execution dir (exec_XXXX is parent, repetition_XXX is child)
+        exec_parent_dir = runs_root / f"exec_{test.execution_id:04d}"
+        exec_dir = exec_parent_dir / f"repetition_{repetition:03d}"
         exec_dir.mkdir(parents=True, exist_ok=True)
 
         # Point to repetition dir (useful for templates like {{ execution_dir }})
+        # Must be set before _write_params_file so derived variables render correctly
         test.execution_dir = exec_dir
+
+        # Write params file in exec folder (only on first repetition)
+        if repetition == 1:
+            self._write_params_file(test, exec_parent_dir)
 
         # Get the rendered script text
         script_text = test.script_text
@@ -295,6 +308,79 @@ class BasePlanner(ABC, HasLogger):
         script_text += f'\n# Source IOPS system probe (collects node info on exit)\n# To disable, set collect_system_info: false in benchmark config\nsource "{probe_file}"\n'
 
         return script_text
+
+    def _write_params_file(self, test: ExecutionInstance, exec_parent_dir: Path) -> None:
+        """
+        Write the parameters file for this execution.
+
+        Creates __iops_params.json in the exec_XXXX folder containing the
+        variable values for this execution. This makes each execution folder
+        self-documenting and enables the --find command.
+
+        Also updates the global index file (__iops_index.json) in the run root.
+
+        Args:
+            test: ExecutionInstance with vars to save
+            exec_parent_dir: The exec_XXXX directory (parent of repetition dirs)
+        """
+        # Filter out internal keys (starting with __)
+        params = {
+            k: v for k, v in test.vars.items()
+            if not k.startswith("__")
+        }
+
+        # Write params file in exec folder
+        params_file = exec_parent_dir / PARAMS_FILENAME
+        with open(params_file, "w") as f:
+            json.dump(params, f, indent=2, default=str)
+
+        # Update global index
+        self._update_index_file(test, params, exec_parent_dir)
+
+    def _update_index_file(
+        self,
+        test: ExecutionInstance,
+        params: Dict[str, Any],
+        exec_parent_dir: Path
+    ) -> None:
+        """
+        Update the global execution index file.
+
+        Creates or updates __iops_index.json in the run root. The index maps
+        execution IDs to their parameters and relative paths, enabling the
+        --find command to quickly search executions.
+
+        Args:
+            test: ExecutionInstance being prepared
+            params: Filtered parameters (without __ prefixed keys)
+            exec_parent_dir: The exec_XXXX directory
+        """
+        run_root = Path(self.cfg.benchmark.workdir)
+        index_file = run_root / INDEX_FILENAME
+
+        # Load existing index or create new one
+        if index_file.exists():
+            with open(index_file, "r") as f:
+                index = json.load(f)
+        else:
+            index = {
+                "benchmark": self.cfg.benchmark.name,
+                "executions": {}
+            }
+
+        # Get relative path from run_root to exec_parent_dir
+        exec_rel_path = exec_parent_dir.relative_to(run_root)
+
+        # Add this execution to the index
+        exec_key = f"exec_{test.execution_id:04d}"
+        index["executions"][exec_key] = {
+            "path": str(exec_rel_path),
+            "params": params
+        }
+
+        # Write updated index
+        with open(index_file, "w") as f:
+            json.dump(index, f, indent=2, default=str)
 
 
 # ============================================================================ #

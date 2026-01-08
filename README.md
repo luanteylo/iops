@@ -135,7 +135,7 @@ iops --version
 Generate a comprehensive YAML template with all options documented:
 
 ```bash
-iops --generate_setup my_config.yaml
+iops --generate my_config.yaml
 ```
 
 This creates a fully-commented template showing all available configuration options. Customize it for your needs.
@@ -143,7 +143,7 @@ This creates a fully-commented template showing all available configuration opti
 Or start from an example:
 
 ```bash
-cp docs/examples/example_simple.yaml my_config.yaml
+cp docs/examples/ior/local/ior_simple.yaml my_config.yaml
 ```
 
 ### 2. Preview Your Benchmark
@@ -153,7 +153,7 @@ cp docs/examples/example_simple.yaml my_config.yaml
 iops my_config.yaml --dry-run
 
 # Check configuration validity
-iops my_config.yaml --check_setup
+iops my_config.yaml --check
 ```
 
 ### 3. Run the Benchmark
@@ -163,20 +163,33 @@ iops my_config.yaml --check_setup
 iops my_config.yaml
 
 # With caching (skip already-executed tests)
-iops my_config.yaml --use_cache
+iops my_config.yaml --use-cache
 
 # With budget limit (SLURM only)
 iops my_config.yaml --max-core-hours 1000
 
 # With verbose logging
-iops my_config.yaml --log_level DEBUG
+iops my_config.yaml --log-level DEBUG
 ```
 
-### 4. Generate Analysis Report
+### 4. Explore Executions
+
+```bash
+# List all executions with their parameters
+iops --find /path/to/workdir/run_001
+
+# Filter executions by variable values
+iops --find /path/to/workdir/run_001 --filter nodes=4 ppn=8
+
+# Show details for specific execution
+iops --find /path/to/workdir/run_001/exec_042
+```
+
+### 5. Generate Analysis Report
 
 ```bash
 # Generate HTML report with interactive plots
-iops analyze /path/to/workdir/run_001
+iops --analyze /path/to/workdir/run_001
 ```
 
 ## How It Works
@@ -356,10 +369,11 @@ The documentation includes:
 
 Check `docs/examples/` for working configuration examples:
 
-- `example_simple.yaml` - Basic local execution
-- `example_bayesian.yaml` - Bayesian optimization
-- `example_plafrim.yaml` - SLURM cluster deployment
-- `example_plafrim_bayesian.yaml` - Cluster with Bayesian search
+- `ior/local/ior_simple.yaml` - Basic local IOR benchmark
+- `ior/local/ior_bayesian.yaml` - IOR with Bayesian optimization
+- `ior/slurm/ior_simple_slurm.yaml` - SLURM cluster deployment
+- `ior/slurm/ior_bayesian_slurm.yaml` - Cluster with Bayesian search
+- `mdtest/local/mdtest_local.yaml` - Metadata operations benchmark
 
 ## Command Reference
 
@@ -369,17 +383,21 @@ iops <config.yaml> [options]
 
 # Common options:
   --dry-run              Preview without executing
-  --use_cache            Skip cached tests
+  --use-cache            Skip cached tests
   --max-core-hours N     Budget limit (SLURM)
-  --log_level LEVEL      Verbosity (DEBUG, INFO, WARNING)
+  --log-level LEVEL      Verbosity (DEBUG, INFO, WARNING)
   --no-log-terminal      Disable terminal logging (log to file only)
-  --check_setup          Validate configuration
+  --check                Validate configuration
+
+# Find and explore executions
+iops --find <path>
+iops --find <path> --filter VAR=VALUE [VAR2=VALUE2 ...]
 
 # Generate analysis report
-iops analyze <workdir/run_NNN>
+iops --analyze <workdir/run_NNN>
 
 # Generate configuration template
-iops --generate_setup [output.yaml]
+iops --generate [output.yaml]
 
 # Show version
 iops --version

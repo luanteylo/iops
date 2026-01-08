@@ -1,12 +1,159 @@
 import argparse
+import json
 import logging
 from pathlib import Path
+from typing import Dict, Any, List, Optional
 
 from iops.logger import setup_logger
 from iops.execution.runner import IOPSRunner
 from iops.config.loader import load_generic_config, validate_generic_config, check_system_probe_compatibility
 from iops.config.models import ConfigValidationError, GenericBenchmarkConfig
 from iops.execution.matrix import build_execution_matrix
+
+# IOPS file constants
+INDEX_FILENAME = "__iops_index.json"
+PARAMS_FILENAME = "__iops_params.json"
+
+
+def find_executions(path: Path, filters: Optional[List[str]] = None) -> None:
+    """
+    Find and display execution folders in a workdir.
+
+    Args:
+        path: Path to workdir (run root) or exec folder
+        filters: Optional list of VAR=VALUE filters
+    """
+    path = path.resolve()
+
+    # Parse filters into dict
+    filter_dict: Dict[str, str] = {}
+    if filters:
+        for f in filters:
+            if '=' not in f:
+                print(f"Invalid filter format: {f} (expected VAR=VALUE)")
+                return
+            key, value = f.split('=', 1)
+            filter_dict[key] = value
+
+    # Check if path is an exec folder (has __iops_params.json)
+    params_file = path / PARAMS_FILENAME
+    if params_file.exists():
+        _show_single_execution(path, params_file)
+        return
+
+    # Check if path is a run root (has __iops_index.json)
+    index_file = path / INDEX_FILENAME
+    if index_file.exists():
+        _show_executions_from_index(path, index_file, filter_dict)
+        return
+
+    # Try to find index in subdirectories (user might point to workdir containing run_XXX)
+    run_dirs = sorted(path.glob("run_*"))
+    if run_dirs:
+        for run_dir in run_dirs:
+            index_file = run_dir / INDEX_FILENAME
+            if index_file.exists():
+                print(f"\n=== {run_dir.name} ===")
+                _show_executions_from_index(run_dir, index_file, filter_dict)
+        return
+
+    print(f"No IOPS execution data found in: {path}")
+    print(f"Expected either {INDEX_FILENAME} (in run root) or {PARAMS_FILENAME} (in exec folder)")
+
+
+def _show_single_execution(exec_dir: Path, params_file: Path) -> None:
+    """Show details for a single execution folder."""
+    try:
+        with open(params_file, 'r') as f:
+            params = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Error reading {params_file}: {e}")
+        return
+    print("\nParameters:")
+    for key, value in sorted(params.items()):
+        print(f"  {key}: {value}")
+
+    # Count repetition folders
+    rep_dirs = sorted(exec_dir.glob("repetition_*"))
+    if rep_dirs:
+        print(f"Repetitions: {len(rep_dirs)}")
+
+
+def _show_executions_from_index(run_root: Path, index_file: Path, filter_dict: Dict[str, str]) -> None:
+    """Show executions from the index file, optionally filtered."""
+    try:
+        with open(index_file, 'r') as f:
+            index = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Error reading {index_file}: {e}")
+        return
+
+    benchmark_name = index.get("benchmark", "Unknown")
+    executions = index.get("executions", {})
+
+    if not executions:
+        print("No executions found in index.")
+        return
+
+    # Get all variable names for header
+    all_vars = set()
+    for exec_data in executions.values():
+        all_vars.update(exec_data.get("params", {}).keys())
+    var_names = sorted(all_vars)
+
+    # Filter executions
+    matches = []
+    for exec_key, exec_data in sorted(executions.items()):
+        params = exec_data.get("params", {})
+        rel_path = exec_data.get("path", "")
+
+        # Apply filters (partial match - only check specified vars)
+        if filter_dict:
+            match = True
+            for fkey, fval in filter_dict.items():
+                if fkey not in params:
+                    match = False
+                    break
+                # Convert both to string for comparison
+                if str(params[fkey]) != fval:
+                    match = False
+                    break
+            if not match:
+                continue
+
+        matches.append((exec_key, rel_path, params))
+
+    if not matches:
+        if filter_dict:
+            print(f"No executions match the filter: {filter_dict}")
+        else:
+            print("No executions found.")
+        return
+
+    # Display results
+
+    # Calculate column widths
+    col_widths = {"path": max(len("Path"), max(len(m[1]) for m in matches))}
+    for var in var_names:
+        var_values = [str(m[2].get(var, "")) for m in matches]
+        col_widths[var] = max(len(var), max(len(v) for v in var_values) if var_values else 0)
+
+    # Print header
+    header = "Path".ljust(col_widths["path"])
+    for var in var_names:
+        header += "  " + var.ljust(col_widths[var])
+    print("\n")
+    print(header)
+    print("-" * len(header))
+
+    # Print rows
+    for exec_key, rel_path, params in matches:
+        row = rel_path.ljust(col_widths["path"])
+        for var in var_names:
+            val = str(params.get(var, ""))
+            row += "  " + val.ljust(col_widths[var])
+        print(row)
+
 
 def load_version():
     """
@@ -33,6 +180,10 @@ def parse_arguments():
                         help="Validate the config file and exit")
     parser.add_argument('--analyze', type=Path, default=None, metavar='PATH',
                         help="Generate HTML report from a completed run")
+    parser.add_argument('--find', type=Path, default=None, metavar='PATH',
+                        help="Find execution folders in a workdir (use VAR=VALUE to filter)")
+    parser.add_argument('--filter', type=str, nargs='*', default=None, metavar='VAR=VALUE',
+                        help="Filter executions by variable values (use with --find)")
 
     # Execution options
     parser.add_argument('-n', '--dry-run', action='store_true',
@@ -276,6 +427,11 @@ def main():
             logger.error(f"Template generation failed: {e}")
             if args.verbose:
                 raise
+        return
+
+    # Handle --find mode (find execution folders)
+    if args.find:
+        find_executions(args.find, args.filter)
         return
 
     # Handle --analyze mode (generate report from existing results)

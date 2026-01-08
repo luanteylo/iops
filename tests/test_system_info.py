@@ -80,7 +80,7 @@ def test_system_probe_template_structure():
     # Verify key components of the probe
     assert "_iops_collect_sysinfo" in SYSTEM_PROBE_TEMPLATE
     assert "trap '_iops_collect_sysinfo' EXIT" in SYSTEM_PROBE_TEMPLATE
-    assert "iops_sysinfo.json" in SYSTEM_PROBE_TEMPLATE
+    assert "__iops_sysinfo.json" in SYSTEM_PROBE_TEMPLATE
     assert "hostname" in SYSTEM_PROBE_TEMPLATE
     assert "cpu_model" in SYSTEM_PROBE_TEMPLATE
     assert "cpu_cores" in SYSTEM_PROBE_TEMPLATE
@@ -205,7 +205,7 @@ def test_prepare_execution_artifacts_injects_probe_when_enabled(sample_config_fi
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
     assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
-    assert "iops_sysinfo.json" in probe_content
+    assert "__iops_sysinfo.json" in probe_content
 
     # User script should have source line (not inline probe)
     script_content = test.script_file.read_text()

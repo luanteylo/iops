@@ -37,6 +37,42 @@ iops --analyze <workdir/run_NNN>
 
 Generates an interactive HTML report from completed benchmark results.
 
+### Find Executions
+
+```bash
+iops --find <path>
+```
+
+Finds and displays execution folders in a workdir with their parameters. The path can be:
+- A run root directory (containing `__iops_index.json`)
+- A workdir containing multiple `run_XXX` folders
+- A specific execution folder (containing `__iops_params.json`)
+
+**Filter by parameters:**
+
+```bash
+iops --find <path> --filter VAR=VALUE [VAR2=VALUE2 ...]
+```
+
+Filter executions by variable values. Only executions matching all specified filters will be displayed.
+
+**Examples:**
+
+```bash
+# List all executions in a run
+iops --find ./workdir/run_001
+
+# List all runs in a workdir
+iops --find ./workdir
+
+# Show details for specific execution
+iops --find ./workdir/run_001/exec_0042
+
+# Filter by variable values
+iops --find ./workdir/run_001 --filter nodes=4 ppn=8
+iops --find ./workdir --filter block_size=1024
+```
+
 ### Show Version
 
 ```bash
@@ -58,6 +94,10 @@ iops config.yaml --check
 
 # Analyze results
 iops --analyze <workdir/run_NNN>
+
+# Find and filter executions
+iops --find <path>
+iops --find <path> --filter VAR=VALUE
 ```
 
 ### Execution Options
@@ -113,6 +153,8 @@ Mode Options:
   --generate [PATH]        Generate configuration template
   --check                  Validate configuration
   --analyze PATH           Generate analysis report from results
+  --find PATH              Find execution folders in workdir
+  --filter VAR=VALUE       Filter executions by variable values (use with --find)
 
 Execution Options:
   -n, --dry-run           Preview without executing
@@ -155,4 +197,10 @@ iops benchmark.yaml --check
 
 # Generate report with custom configuration
 iops --analyze workdir/run_001 --report-config custom_report.yaml
+
+# Find and explore executions
+iops --find workdir/run_001
+iops --find workdir/run_001 --filter nodes=4
+iops --find workdir/run_001 --filter nodes=4 ppn=8
+iops --find workdir/run_001/exec_0023
 ```

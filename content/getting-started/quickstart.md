@@ -72,7 +72,28 @@ iops my_config.yaml --log-file benchmark.log
 iops my_config.yaml --no-log-terminal
 ```
 
-## Step 4: Analyze Results
+## Step 4: Explore Executions
+
+You can explore and filter your benchmark executions using the `--find` command:
+
+```bash
+# List all executions with their parameters
+iops --find /path/to/workdir/run_001
+
+# Filter executions by variable values
+iops --find /path/to/workdir/run_001 --filter size=1000
+
+# Show details for a specific execution
+iops --find /path/to/workdir/run_001/exec_023
+```
+
+This is useful for:
+- Finding specific parameter combinations
+- Inspecting execution folders
+- Locating failed tests
+- Exploring large parameter sweeps
+
+## Step 5: Analyze Results
 
 After your benchmark completes, generate an interactive HTML report:
 
@@ -95,17 +116,32 @@ IOPS creates a structured working directory:
 ```
 workdir/
 ├── run_001/                    # Unique run directory
-│   ├── instances/              # Individual test instances
-│   │   ├── instance_001/
+│   ├── __iops_index.json       # Index of all executions with parameters
+│   ├── exec_001/               # Individual execution instance
+│   │   ├── __iops_params.json  # Parameters for this execution
+│   │   ├── repetition_1/       # Repetition folder
 │   │   │   ├── script.sh       # Generated execution script
 │   │   │   ├── stdout.txt      # Standard output
 │   │   │   └── stderr.txt      # Standard error
-│   │   └── instance_002/
+│   │   └── repetition_2/
+│   ├── exec_002/
+│   │   ├── __iops_params.json
+│   │   └── repetition_1/
 │   ├── results.csv             # Aggregated results
 │   ├── results.db              # SQLite database (if enabled)
 │   └── report.html             # Analysis report
 └── iops.log                    # Execution log
 ```
+
+### IOPS Metadata Files
+
+IOPS creates metadata files with the `__iops_` prefix to enable execution tracking and exploration:
+
+- `__iops_index.json` - Index of all executions in the run root
+- `__iops_params.json` - Parameter values for each execution folder
+- `__iops_sysinfo.json` - System information (if system probe is enabled)
+
+These files enable the `--find` command to quickly locate and filter executions by their parameters.
 
 ## Simple Example
 
