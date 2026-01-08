@@ -1267,7 +1267,7 @@ class ReportGenerator:
         html += "<p>Shows how the target metric evolved as the algorithm explored different configurations. "
         html += "The best value found so far is highlighted.</p>\n"
         fig_metric_evolution = self._create_bayesian_metric_evolution_plot(
-            target_metric, objective, n_initial_points
+            target_metric, objective, n_initial_points, report_vars
         )
         html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution')}</div>\n"
 
@@ -1528,7 +1528,7 @@ class ReportGenerator:
         return html
 
     def _create_bayesian_metric_evolution_plot(
-        self, target_metric: str, objective: str, n_initial_points: int
+        self, target_metric: str, objective: str, n_initial_points: int, report_vars: List[str]
     ) -> go.Figure:
         """
         Create plot showing metric evolution over Bayesian optimization iterations.
@@ -1537,17 +1537,38 @@ class ReportGenerator:
         - Observed metric values at each iteration
         - Running best (cumulative max/min)
         - Distinction between exploration and exploitation phases
+        - Variable values on hover
         """
         metric_col = self._get_metric_column(target_metric)
 
+        # Get variable columns
+        var_cols = []
+        for var in report_vars:
+            col = self._get_var_column(var)
+            if col in self.df.columns:
+                var_cols.append((var, col))
+
+        # Build aggregation dict - metric mean and first value for each variable
+        agg_dict = {metric_col: 'mean'}
+        for var_name, col in var_cols:
+            agg_dict[col] = 'first'  # Variables are same for all reps of same execution
+
         # Group by execution_id and compute mean across repetitions
-        df_grouped = self.df.groupby('execution.execution_id').agg({
-            metric_col: 'mean'
-        }).reset_index()
+        df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
         iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
         metric_values = self._to_python_list(df_grouped[metric_col].values)
+
+        # Build hover text with variable values
+        hover_texts = []
+        for idx, row in df_grouped.iterrows():
+            hover_parts = [f"Iteration: {int(row['execution.execution_id'])}"]
+            hover_parts.append(f"{target_metric}: {row[metric_col]:.4f}")
+            hover_parts.append("")  # Empty line separator
+            for var_name, col in var_cols:
+                hover_parts.append(f"{var_name}: {row[col]}")
+            hover_texts.append("<br>".join(hover_parts))
 
         # Compute running best
         if objective == 'maximize':
@@ -1568,7 +1589,8 @@ class ReportGenerator:
             name='Observed',
             marker=dict(size=10, color=colors, line=dict(width=1, color='white')),
             line=dict(color='lightgray', width=1),
-            hovertemplate='Iteration %{x}<br>' + target_metric + ': %{y:.4f}<extra></extra>'
+            hovertemplate='%{text}<extra></extra>',
+            text=hover_texts
         ))
 
         # Running best
