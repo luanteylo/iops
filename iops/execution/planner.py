@@ -36,24 +36,23 @@ import warnings
 # - Runs in subshell with || true to never affect script exit code
 # - Writes structured JSON for easy parsing by IOPS
 
-SYSTEM_PROBE_TEMPLATE = '''
-# === IOPS System Probe (auto-injected) ===
-# Collects system information from compute node after benchmark completes.
-# This runs at script EXIT and never affects the benchmark or its exit code.
+# Filename for the system probe script (written to execution directory)
+PROBE_FILENAME = "__iops_probe.sh"
 
-# Detect parallel filesystems (handles FUSE-mounted BeeGFS, etc.)
+# System probe script template - written as a separate file and sourced by user script
+SYSTEM_PROBE_TEMPLATE = '''#!/bin/bash
+# IOPS System Probe - Collects system information from compute node
+# This file is auto-generated and sourced by the main script.
+# It uses an EXIT trap to collect info after the benchmark completes.
+
 _iops_detect_pfs() {{
   _pfs_result=""
-  # Check df -T output for known PFS types and FUSE mounts with PFS paths
   while read -r _fs _type _size _used _avail _pct _mount; do
-    # Skip header and non-filesystem lines
     [ -z "$_mount" ] && continue
     [[ "$_fs" == "Filesystem" ]] && continue
-    # Match by filesystem type
     if [[ "$_type" =~ ^(lustre|gpfs|beegfs|cephfs|panfs|wekafs|pvfs2|orangefs|glusterfs)$ ]]; then
       [ -n "$_pfs_result" ] && _pfs_result="$_pfs_result,"
       _pfs_result="${{_pfs_result}}${{_type}}:${{_mount}}"
-    # Match FUSE mounts by mount path (BeeGFS often shows as just 'fuse')
     elif [[ "$_type" == "fuse" ]] && [[ "$_mount" =~ (beegfs|lustre|gpfs|ceph|panfs|weka|pvfs|orangefs|gluster) ]]; then
       [ -n "$_pfs_result" ] && _pfs_result="$_pfs_result,"
       _pfs_result="${{_pfs_result}}fuse:${{_mount}}"
@@ -80,9 +79,8 @@ _iops_collect_sysinfo() {{
     }} > "$_iops_sysinfo"
   ) 2>/dev/null || true
 }}
-trap '_iops_collect_sysinfo' EXIT
-# === End IOPS System Probe ===
 
+trap '_iops_collect_sysinfo' EXIT
 '''
 
 # Optional imports for Bayesian optimization
@@ -270,28 +268,32 @@ class BasePlanner(ABC, HasLogger):
 
     def _inject_system_probe(self, script_text: str, exec_dir: Path) -> str:
         """
-        Inject the system probe into a script.
+        Set up system probe for a script.
 
-        The probe is appended at the end of the script to avoid interfering
-        with system-specific directives (like SLURM's #SBATCH). The EXIT trap
-        ensures the probe runs when the script completes.
+        Writes the probe to a separate file and adds a source line to the user
+        script. This keeps the user script clean while still collecting system
+        information via an EXIT trap.
 
         Args:
             script_text: Original script content
-            exec_dir: Execution directory where sysinfo JSON will be written
+            exec_dir: Execution directory where probe script will be written
 
         Returns:
-            Script text with system probe appended
+            Script text with source line appended
         """
-        # Format the probe template with the execution directory
+        # Write probe script to separate file
         probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
+        probe_file = exec_dir / PROBE_FILENAME
+        with open(probe_file, "w") as f:
+            f.write(probe_script)
 
-        # Append probe at the end of the script
-        # Ensure there's a newline before the probe
+        # Add source line to user script
         if script_text and not script_text.endswith('\n'):
             script_text += '\n'
 
-        return script_text + probe_script
+        script_text += f'\n# Source IOPS system probe (collects node info on exit)\nsource "{probe_file}"\n'
+
+        return script_text
 
 
 # ============================================================================ #
