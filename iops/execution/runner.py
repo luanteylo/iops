@@ -594,7 +594,7 @@ class IOPSRunner(HasLogger):
 
             self.logger.info(
                 f"  [{i+1:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} "
-                f"round={detail['round']} | {detail['cores']} cores{core_hours_str}"
+                f"| {detail['cores']} cores{core_hours_str}"
             )
             self.logger.info(f"        {vars_str}")
 
@@ -652,8 +652,6 @@ class IOPSRunner(HasLogger):
             f.write(f"Scripts location: {self.cfg.benchmark.workdir}\n")
             f.write(f"Executor: {self.cfg.benchmark.executor}\n")
             f.write(f"Repetitions: {self.cfg.benchmark.repetitions}\n")
-            if self.cfg.rounds:
-                f.write(f"Rounds: {len(self.cfg.rounds)} ({', '.join([r.name for r in self.cfg.rounds])})\n")
             f.write("\n")
 
             # Core Configuration
@@ -701,7 +699,7 @@ class IOPSRunner(HasLogger):
                     vars_str += f", ... ({len(detail['vars'])} vars)"
 
                 f.write(f"\n[{i:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} ")
-                f.write(f"round={detail['round']} cores={detail['cores']}\n")
+                f.write(f"cores={detail['cores']}\n")
                 f.write(f"      {vars_str}\n")
 
         self.logger.info(f"✓ Report saved to: {report_path}")
