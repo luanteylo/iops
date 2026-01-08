@@ -470,12 +470,21 @@ def main():
         logger.info("=" * 70)
         logger.info(f"Reading results from: {args.analyze}")
 
-        # Load custom report config if provided
+        # Load report config: explicit flag > auto-detect in workdir > metadata defaults
         report_config = None
-        if args.report_config:
-            logger.info(f"Using custom report config: {args.report_config}")
+        config_path = args.report_config
+
+        # Auto-detect report_config.yaml in workdir if not explicitly provided
+        if config_path is None:
+            default_config = args.analyze / "report_config.yaml"
+            if default_config.exists():
+                config_path = default_config
+                logger.info(f"Auto-detected report config: {config_path}")
+
+        if config_path:
+            logger.info(f"Using report config: {config_path}")
             try:
-                report_config = load_report_config(args.report_config)
+                report_config = load_report_config(config_path)
             except Exception as e:
                 logger.error(f"Failed to load report config: {e}")
                 if args.verbose:
