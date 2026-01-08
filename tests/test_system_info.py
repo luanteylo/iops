@@ -96,8 +96,8 @@ def test_system_probe_template_structure():
     assert "|| true" in SYSTEM_PROBE_TEMPLATE
 
 
-def test_inject_system_probe_after_shebang(sample_config_file):
-    """Test that system probe is injected after shebang line."""
+def test_inject_system_probe_appended_at_end(sample_config_file):
+    """Test that system probe is appended at the end of the script."""
     config = load_config(sample_config_file)
     planner = ExhaustivePlanner(config)
 
@@ -106,40 +106,50 @@ def test_inject_system_probe_after_shebang(sample_config_file):
 
     result = planner._inject_system_probe(script_text, exec_dir)
 
-    # Should start with shebang
+    # Should start with original shebang
     assert result.startswith("#!/bin/bash\n")
 
-    # Probe should come after shebang
-    lines = result.split('\n')
-    assert lines[0] == "#!/bin/bash"
+    # Probe should be present
     assert "_iops_collect_sysinfo" in result
     assert "trap '_iops_collect_sysinfo' EXIT" in result
 
-    # Original content should still be present
-    assert "echo 'test'" in result
-    assert "echo 'more content'" in result
+    # Original content should come BEFORE the probe
+    probe_start = result.find("# === IOPS System Probe")
+    echo_test_pos = result.find("echo 'test'")
+    echo_more_pos = result.find("echo 'more content'")
+
+    assert echo_test_pos < probe_start, "Original content should be before probe"
+    assert echo_more_pos < probe_start, "Original content should be before probe"
 
     # Verify execution_dir is templated correctly
     assert str(exec_dir) in result
 
 
-def test_inject_system_probe_no_shebang(sample_config_file):
-    """Test that system probe is prepended when no shebang exists."""
+def test_inject_system_probe_preserves_slurm_directives(sample_config_file):
+    """Test that system probe doesn't interfere with SLURM #SBATCH directives."""
     config = load_config(sample_config_file)
     planner = ExhaustivePlanner(config)
 
-    script_text = "echo 'test without shebang'\necho 'more content'"
+    script_text = """#!/bin/bash
+#SBATCH --job-name=test
+#SBATCH --nodes=2
+#SBATCH --constraint=bora
+
+module load mpi
+mpirun ./my_app"""
     exec_dir = Path("/tmp/test_exec")
 
     result = planner._inject_system_probe(script_text, exec_dir)
 
-    # Probe should be at the beginning
-    assert "_iops_collect_sysinfo" in result
-    assert "trap '_iops_collect_sysinfo' EXIT" in result
+    # All SBATCH directives should come before the probe
+    probe_start = result.find("# === IOPS System Probe")
+    for directive in ["#SBATCH --job-name", "#SBATCH --nodes", "#SBATCH --constraint"]:
+        directive_pos = result.find(directive)
+        assert directive_pos < probe_start, f"{directive} should be before probe"
 
-    # Original content should follow probe
-    assert "echo 'test without shebang'" in result
-    assert "echo 'more content'" in result
+    # Original user commands should also be before probe
+    assert result.find("module load mpi") < probe_start
+    assert result.find("mpirun ./my_app") < probe_start
 
 
 def test_inject_system_probe_empty_script(sample_config_file):

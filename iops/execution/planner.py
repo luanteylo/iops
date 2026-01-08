@@ -217,31 +217,26 @@ class BasePlanner(ABC, HasLogger):
         """
         Inject the system probe into a script.
 
-        The probe is inserted after the shebang line (if present) so that
-        it sets up an EXIT trap before the user's script runs. The trap
-        executes the probe function after the script completes.
+        The probe is appended at the end of the script to avoid interfering
+        with system-specific directives (like SLURM's #SBATCH). The EXIT trap
+        ensures the probe runs when the script completes.
 
         Args:
             script_text: Original script content
             exec_dir: Execution directory where sysinfo JSON will be written
 
         Returns:
-            Script text with system probe injected
+            Script text with system probe appended
         """
         # Format the probe template with the execution directory
         probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
 
-        # Find the shebang line (if present) and insert probe after it
-        lines = script_text.split('\n', 1)
+        # Append probe at the end of the script
+        # Ensure there's a newline before the probe
+        if script_text and not script_text.endswith('\n'):
+            script_text += '\n'
 
-        if lines and lines[0].startswith('#!'):
-            # Has shebang - insert probe after it
-            shebang = lines[0]
-            rest = lines[1] if len(lines) > 1 else ''
-            return shebang + '\n' + probe_script + rest
-        else:
-            # No shebang - prepend probe
-            return probe_script + script_text
+        return script_text + probe_script
 
 
 # ============================================================================ #
