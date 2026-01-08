@@ -20,7 +20,7 @@ benchmark:
   # Use Bayesian optimization for nodes and processes_per_node
   search_method: "bayesian"
   bayesian_config:
-    target_metric: "bandwidth_mbps"
+    objective_metric: "bandwidth_mbps"  # Required: metric to optimize
     objective: "maximize"
     n_initial_points: 3    # Start with 3 random configurations
     n_iterations: 8        # Total 8 evaluations

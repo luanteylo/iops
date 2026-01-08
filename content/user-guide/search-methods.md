@@ -38,11 +38,12 @@ Uses Gaussian Process regression to intelligently explore the parameter space, f
 benchmark:
   search_method: "bayesian"
   bayesian_config:
-    target_metric: "throughput"
-    objective: "maximize"  # or "minimize"
+    objective_metric: "throughput"  # Required: must match parser metric
+    objective: "maximize"  # or "minimize" (default: "minimize")
     n_initial_points: 5
     n_iterations: 20
     acquisition_func: "EI"  # Expected Improvement
+    base_estimator: "RF"    # Random Forest (default)
 ```
 
 ### When to Use
@@ -55,14 +56,21 @@ benchmark:
 
 ### Configuration Options
 
-- **target_metric**: Metric to optimize (from parser output)
-- **objective**: `maximize` or `minimize`
-- **n_initial_points**: Random samples before optimization starts
-- **n_iterations**: Total number of evaluations
-- **acquisition_func**: Acquisition function
-  - `EI`: Expected Improvement (default, balanced)
+- **objective_metric** (required): Metric to optimize (must match a parser-defined metric)
+- **objective**: `maximize` or `minimize` (default: `minimize`)
+- **n_initial_points**: Random samples before optimization starts (default: 5)
+- **n_iterations**: Total number of evaluations (default: 20)
+- **acquisition_func**: Acquisition function (default: `EI`)
+  - `EI`: Expected Improvement (balanced)
   - `PI`: Probability of Improvement (more exploitative)
   - `LCB`: Lower Confidence Bound (more exploratory)
+- **base_estimator**: Surrogate model type (default: `RF`)
+  - `RF`: Random Forest (robust, handles categorical well)
+  - `GP`: Gaussian Process (best for continuous)
+  - `ET`: Extra Trees
+  - `GBRT`: Gradient Boosted Regression Trees
+- **xi**: Exploration trade-off for EI/PI (default: 0.01)
+- **kappa**: Exploration parameter for LCB (default: 1.96)
 
 ### Example
 
@@ -70,7 +78,7 @@ benchmark:
 benchmark:
   search_method: "bayesian"
   bayesian_config:
-    target_metric: "bandwidth_mbps"
+    objective_metric: "bandwidth_mbps"  # Required
     objective: "maximize"
     n_initial_points: 10
     n_iterations: 50
@@ -160,7 +168,7 @@ When using Bayesian or random search with `exhaustive_vars`:
 benchmark:
   search_method: "bayesian"
   bayesian_config:
-    target_metric: "bandwidth_mbps"
+    objective_metric: "bandwidth_mbps"  # Required
     objective: "maximize"
     n_initial_points: 3
     n_iterations: 8

@@ -1210,14 +1210,14 @@ class ReportGenerator:
         html += "<p>These plots show how the Bayesian optimization algorithm explored the parameter space "
         html += "and converged towards optimal configurations over successive iterations.</p>\n"
 
-        # Get target metric from bayesian_config
+        # Get target metric from bayesian_config (support both old and new field names)
         bayesian_config = self.metadata['benchmark'].get('bayesian_config', {})
-        target_metric = bayesian_config.get('target_metric')
-        objective = bayesian_config.get('objective', 'maximize')
+        target_metric = bayesian_config.get('objective_metric') or bayesian_config.get('target_metric')
+        objective = bayesian_config.get('objective', 'minimize')
         n_initial_points = bayesian_config.get('n_initial_points', 5)
 
         if not target_metric:
-            html += "<p><em>Warning: target_metric not found in bayesian_config</em></p>\n"
+            html += "<p><em>Warning: objective_metric not found in bayesian_config</em></p>\n"
             return html
 
         # Ensure we have execution_id for ordering

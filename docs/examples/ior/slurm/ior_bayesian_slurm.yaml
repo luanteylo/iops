@@ -28,7 +28,7 @@ benchmark:
   search_method: "bayesian"
 
   bayesian_config:
-    target_metric: "bwMiB"           # Optimize write bandwidth
+    objective_metric: "bwMiB"        # Required: metric to optimize (must match parser metrics)
     objective: "maximize"             # Maximize bandwidth
     n_initial_points: 5               # Random exploration phase (5 configurations)
     n_iterations: 20                  # Total evaluations (20 configurations)

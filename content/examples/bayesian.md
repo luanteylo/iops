@@ -19,7 +19,7 @@ See `docs/examples/example_bayesian.yaml` for the complete configuration.
 benchmark:
   search_method: "bayesian"
   bayesian_config:
-    target_metric: "throughput"
+    objective_metric: "throughput"  # Required: must match a metric from parser
     objective: "maximize"
     n_initial_points: 5
     n_iterations: 20

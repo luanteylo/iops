@@ -65,11 +65,11 @@ benchmark:
   # Uncomment to enable Bayesian optimization:
   #search_method: "bayesian"
   # bayesian_config:
-  #   target_metric: "file_creation_rate"  # Metric to optimize (from parser)
-  #   objective: "maximize"                # "maximize" or "minimize"
-  #   n_initial_points: 5                  # Random samples before optimization starts
-  #   n_iterations: 20                     # Total number of evaluations
-  #   acquisition_func: "EI"               # "EI" (Expected Improvement), "PI", or "LCB"
+  #   objective_metric: "file_creation_rate"  # Required: metric to optimize (from parser)
+  #   objective: "maximize"                   # "maximize" or "minimize" (default: "minimize")
+  #   n_initial_points: 5                     # Random samples before optimization starts
+  #   n_iterations: 20                        # Total number of evaluations
+  #   acquisition_func: "EI"                  # "EI" (Expected Improvement), "PI", or "LCB"
   
 
 
