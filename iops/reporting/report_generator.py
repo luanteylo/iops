@@ -1215,6 +1215,11 @@ class ReportGenerator:
         target_metric = bayesian_config.get('objective_metric') or bayesian_config.get('target_metric')
         objective = bayesian_config.get('objective', 'minimize')
         n_initial_points = bayesian_config.get('n_initial_points', 5)
+        n_iterations = bayesian_config.get('n_iterations', 20)
+        acquisition_func = bayesian_config.get('acquisition_func', 'EI')
+        base_estimator = bayesian_config.get('base_estimator', 'RF')
+        xi = bayesian_config.get('xi', 0.01)
+        kappa = bayesian_config.get('kappa', 1.96)
 
         if not target_metric:
             html += "<p><em>Warning: objective_metric not found in bayesian_config</em></p>\n"
@@ -1225,11 +1230,36 @@ class ReportGenerator:
             html += "<p><em>Warning: execution_id not found in results</em></p>\n"
             return html
 
-        html += f"<div class='info-box'>\n"
-        html += f"<p><strong>Target Metric:</strong> {target_metric} ({objective})</p>\n"
-        html += f"<p><strong>Initial Exploration:</strong> First {n_initial_points} iterations (random sampling)</p>\n"
-        html += f"<p><strong>Bayesian Optimization:</strong> Subsequent iterations (guided by surrogate model)</p>\n"
-        html += "</div>\n"
+        # Get planner stats for search space info
+        planner_stats = self.metadata['benchmark'].get('planner_stats') or {}
+        total_space_size = planner_stats.get('total_space_size', 0)
+
+        # Display Bayesian optimization configuration
+        html += "<h3>Optimization Configuration</h3>\n<table>\n"
+        html += "<tr><th>Parameter</th><th>Value</th></tr>\n"
+        html += f"<tr><td><strong>Objective Metric</strong></td><td>{target_metric} ({objective})</td></tr>\n"
+        html += f"<tr><td><strong>Total Iterations</strong></td><td>{n_iterations}</td></tr>\n"
+        html += f"<tr><td><strong>Initial Random Points</strong></td><td>{n_initial_points}</td></tr>\n"
+        html += f"<tr><td><strong>Acquisition Function</strong></td><td>{acquisition_func}</td></tr>\n"
+        html += f"<tr><td><strong>Surrogate Model</strong></td><td>{base_estimator}</td></tr>\n"
+        if acquisition_func in ('EI', 'PI'):
+            html += f"<tr><td><strong>Xi (exploration)</strong></td><td>{xi}</td></tr>\n"
+        if acquisition_func == 'LCB':
+            html += f"<tr><td><strong>Kappa (exploration)</strong></td><td>{kappa}</td></tr>\n"
+        html += "</table>\n"
+
+        # Display search space statistics if available
+        if total_space_size > 0:
+            coverage_pct = (n_iterations / total_space_size) * 100
+            savings_pct = 100 - coverage_pct
+            tests_saved = total_space_size - n_iterations
+
+            html += "<h3>Search Space Efficiency</h3>\n<table>\n"
+            html += "<tr><th>Metric</th><th>Value</th></tr>\n"
+            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} configurations</td></tr>\n"
+            html += f"<tr><td><strong>Bayesian Iterations</strong></td><td>{n_iterations:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
+            html += f"<tr><td><strong>Tests Saved</strong></td><td>{tests_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
+            html += "</table>\n"
 
         # Create plots
         # 1. Metric evolution over iterations

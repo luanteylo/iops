@@ -7,7 +7,7 @@ from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
 from iops.reporting.config_template import serialize_reporting_config, save_report_config_template
 
-from typing import Optional, List, Set
+from typing import Optional, List, Set, Dict, Any
 from pathlib import Path
 from jinja2 import Template
 from datetime import datetime
@@ -277,7 +277,28 @@ class IOPSRunner(HasLogger):
         bar = bar.ljust(width)
         return f"[{bar}]"
 
-    def _save_run_metadata(self, test_count: int = 0, benchmark_start_time: Optional[datetime] = None, benchmark_end_time: Optional[datetime] = None):
+    def _get_planner_stats(self) -> Optional[Dict[str, Any]]:
+        """Get search space statistics from the planner."""
+        if not self.planner:
+            return None
+
+        stats = {}
+
+        # Total search space size (available on RandomPlanner and BayesianPlanner)
+        if hasattr(self.planner, 'total_space_size'):
+            stats['total_space_size'] = self.planner.total_space_size
+
+        # For RandomPlanner: sampled size
+        if hasattr(self.planner, 'sampled_size'):
+            stats['sampled_size'] = self.planner.sampled_size
+
+        # For BayesianPlanner: n_iterations
+        if hasattr(self.planner, 'n_iterations'):
+            stats['n_iterations'] = self.planner.n_iterations
+
+        return stats if stats else None
+
+    def _save_run_metadata(self, test_count: int = 0, benchmark_start_time: Optional[datetime] = None, benchmark_end_time: Optional[datetime] = None, planner_stats: Optional[Dict[str, Any]] = None):
         """Save runtime metadata for report generation."""
         try:
             # Calculate timing metrics if provided
@@ -312,6 +333,7 @@ class IOPSRunner(HasLogger):
                     "cores_expr": self.cfg.benchmark.cores_expr,
                     "max_core_hours": self.cfg.benchmark.max_core_hours,
                     "hostname": hostname,  # Add hostname if available (best effort)
+                    "planner_stats": planner_stats,  # Search space statistics from planner
                     **timing_metadata,  # Add timing information if available
                 },
                 "variables": {},
@@ -685,7 +707,7 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"✓ Report saved to: {report_path}")
 
         # Save runtime metadata for report generation
-        self._save_run_metadata(test_count=total_tests)
+        self._save_run_metadata(test_count=total_tests, planner_stats=self._get_planner_stats())
 
         self.logger.info("\n" + "=" * 70)
         self.logger.info("DRY-RUN COMPLETE - No tests were executed")
@@ -914,7 +936,8 @@ class IOPSRunner(HasLogger):
         self._save_run_metadata(
             test_count=test_count,
             benchmark_start_time=benchmark_start_time,
-            benchmark_end_time=benchmark_end_time
+            benchmark_end_time=benchmark_end_time,
+            planner_stats=self._get_planner_stats()
         )
 
         # Save report config template for easy regeneration
