@@ -300,13 +300,7 @@ command:
     -O summaryFile={{ summary_file }} -O summaryFormat=JSON
     -o {{ ost_path }}/output.ior
 
-  # Example with conditionals (commented out):
-  # template: >
-  #   ior -w -b {{ block_size_mb }}mb -t 1mb
-  #   {% if ost_count > 4 %} --collective {% endif %}
-  #   {% if nodes > 8 %} --large-scale-mode {% endif %}
-  #   -O summaryFile={{ summary_file }} -O summaryFormat=JSON
-  #   -o {{ ost_path }}/output.ior
+
 
   # Optional: Additional metadata to attach to results
   # This appears in output as metadata.* columns
