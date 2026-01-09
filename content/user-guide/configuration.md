@@ -49,6 +49,7 @@ benchmark:
 - **search_method**: How to explore parameter space
 - **repetitions**: Number of times to repeat each test
 - **sqlite_db**: Optional cache database for skipping redundant tests
+- **track_executions**: Optional (default: true) - write metadata files for `iops find` command
 
 ## Variables Section
 
@@ -105,6 +106,8 @@ command:
   env:
     OMP_NUM_THREADS: "{{ threads }}"
 ```
+
+Jinja2 templates support powerful features including conditionals, loops, and filters. For comprehensive templating documentation including syntax requirements, see the [Jinja2 Templating section](../reference/yaml-schema.md#jinja2-templating) in the YAML Schema Reference.
 
 ## Scripts Section
 

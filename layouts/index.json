@@ -1,7 +1,7 @@
 {{- $pages := where .Site.RegularPages "Type" "!=" "json" -}}
 {{- $index := slice -}}
 {{- range $pages -}}
-  {{- $entry := dict "title" .Title "url" .RelPermalink "content" (.Plain | truncate 500) "section" .Section -}}
+  {{- $entry := dict "title" .Title "url" .RelPermalink "content" .Plain "section" .Section -}}
   {{- $index = $index | append $entry -}}
 {{- end -}}
 {{- $index | jsonify -}}

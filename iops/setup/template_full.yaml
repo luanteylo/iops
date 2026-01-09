@@ -137,6 +137,12 @@ benchmark:
   # Set to false to disable if system probing causes issues or is unnecessary
   collect_system_info: true
 
+  # Optional: Write execution metadata files for 'iops find' command (default: true)
+  # When enabled, IOPS writes __iops_index.json, __iops_params.json, and __iops_status.json
+  # files that enable the 'iops find' command to list and filter executions.
+  # Set to false to disable if file I/O overhead is a concern (e.g., interference with benchmarks)
+  track_executions: true
+
   # Optional: Variables to test exhaustively at each search point
   # For Bayesian/random search: these variables are fully expanded for each selected point
   # Use case: Analyze the impact of specific variables (e.g., ost_num) across all values
@@ -178,7 +184,7 @@ benchmark:
 # =============================================================================
 # Define parameters that will be swept or computed during execution.
 # Each variable has:
-#   - type: int | float | str
+#   - type: int | float | str | bool
 #   - sweep: defines how values vary (for swept variables)
 #   - expr: computation from other variables (for derived variables)
 #
@@ -280,6 +286,12 @@ vars:
 #   - {{ repetition }} - current repetition number (1-based)
 #   - {{ execution_dir }} - per-execution working directory
 #   - {{ workdir }} - base working directory
+#
+# Jinja2 features available:
+#   - Conditionals: {% if condition %} ... {% endif %}
+#   - Loops: {% for item in list %} ... {% endfor %}
+#   - Filters: {{ value | default('fallback') }}
+#   - Note: Spaces REQUIRED inside {% %} tags
 # =============================================================================
 command:
   # The command template - can be multiline using YAML '>' or '|' syntax
@@ -287,6 +299,14 @@ command:
     ior -w -b {{ block_size_mb }}mb -t 1mb
     -O summaryFile={{ summary_file }} -O summaryFormat=JSON
     -o {{ ost_path }}/output.ior
+
+  # Example with conditionals (commented out):
+  # template: >
+  #   ior -w -b {{ block_size_mb }}mb -t 1mb
+  #   {% if ost_count > 4 %} --collective {% endif %}
+  #   {% if nodes > 8 %} --large-scale-mode {% endif %}
+  #   -O summaryFile={{ summary_file }} -O summaryFormat=JSON
+  #   -o {{ ost_path }}/output.ior
 
   # Optional: Additional metadata to attach to results
   # This appears in output as metadata.* columns
@@ -561,6 +581,74 @@ output:
 #   - {{ metadata.key }}          - Any metadata from 'command.metadata'
 #   - {{ command.template }}      - The rendered command
 #   - {{ benchmark.name }}        - Benchmark name
+#
+# Jinja2 Advanced Features:
+#
+#   1. CONDITIONALS (if/else):
+#      {% if condition %} ... {% endif %}
+#      {% if condition %} ... {% else %} ... {% endif %}
+#      {% if condition %} ... {% elif other %} ... {% else %} ... {% endif %}
+#
+#      Example - Conditional command options:
+#        command:
+#          template: >
+#            benchmark --input data.bin
+#            {% if use_compression %} --compress {% endif %}
+#            {% if nodes > 4 %} --large-mode {% endif %}
+#            --output {{ output_file }}
+#
+#      Example - Conditional SLURM directives:
+#        script_template: |
+#          #!/bin/bash
+#          #SBATCH --job-name=iops_{{ execution_id }}
+#          #SBATCH --nodes={{ nodes }}
+#          {% if nodes > 4 %}
+#          #SBATCH --time=04:00:00
+#          #SBATCH --partition=large
+#          {% else %}
+#          #SBATCH --time=01:00:00
+#          {% endif %}
+#
+#   2. LOOPS (for):
+#      {% for item in list %} ... {% endfor %}
+#
+#      Example - Load multiple modules:
+#        {% for mod in ['mpi', 'ior', 'hdf5'] %}module load {{ mod }}; {% endfor %}
+#
+#      Example - Generate multiple input files:
+#        {% for i in range(3) %} --file{{ i }} input{{ i }}.dat {% endfor %}
+#
+#   3. FILTERS (transform values):
+#      {{ value | filter }}
+#      {{ value | filter(arg) }}
+#
+#      Common filters:
+#        - {{ var | default('fallback') }}   - Use default if undefined
+#        - {{ name | upper }}                - Convert to uppercase
+#        - {{ name | lower }}                - Convert to lowercase
+#        - {{ path | basename }}             - Extract filename from path
+#        - {{ num | round(2) }}              - Round to 2 decimal places
+#        - {{ num | abs }}                   - Absolute value
+#
+#      Example:
+#        output_file: "{{ custom_path | default('/default/path') }}/results.csv"
+#
+#   4. CRITICAL SYNTAX REQUIREMENT:
+#      **Spaces are REQUIRED inside {% %} tags:**
+#        - Correct: {% if condition %}
+#        - Wrong:   {%if condition%}    (causes TemplateSyntaxError)
+#
+#      **Spaces in {{ }} are optional but recommended:**
+#        - Both work: {{ var }} and {{var}}
+#        - Recommended: {{ var }}
+#
+#   5. OPERATORS:
+#      - Comparison: ==, !=, <, >, <=, >=
+#      - Logical: and, or, not
+#      - Membership: in, not in
+#
+#      Example:
+#        {% if nodes > 1 and processes_per_node >= 4 %} --parallel {% endif %}
 #
 # Special Features:
 #   - Cache: Use --use_cache to reuse results from previous runs

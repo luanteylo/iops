@@ -46,6 +46,9 @@ PARAMS_FILENAME = "__iops_params.json"
 # Filename for the execution index (written to run root)
 INDEX_FILENAME = "__iops_index.json"
 
+# Filename for the execution status (written to exec_XXXX directory after completion)
+STATUS_FILENAME = "__iops_status.json"
+
 # System probe script template - written as a separate file and sourced by user script
 SYSTEM_PROBE_TEMPLATE = '''#!/bin/bash
 # IOPS System Probe - Collects system information from compute node
@@ -252,8 +255,9 @@ class BasePlanner(ABC, HasLogger):
         # Must be set before _write_params_file so derived variables render correctly
         test.execution_dir = exec_dir
 
-        # Write params file in exec folder (only on first repetition)
-        if repetition == 1:
+        # Write params/index files in exec folder (only on first repetition)
+        # Can be disabled with track_executions: false to reduce file I/O
+        if repetition == 1 and getattr(self.cfg.benchmark, 'track_executions', True):
             self._write_params_file(test, exec_parent_dir)
 
         # Get the rendered script text
