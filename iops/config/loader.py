@@ -253,7 +253,7 @@ def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
         "benchmark.description",
         "benchmark.workdir",
         "benchmark.repetitions",
-        "benchmark.sqlite_db",
+        "benchmark.cache_file",
         "benchmark.search_method",
         "benchmark.executor",
         "benchmark.random_seed",
@@ -330,33 +330,42 @@ def _validate_output_field_list(
         )
 
 
-def create_workdir(cfg: GenericBenchmarkConfig, logger) -> None:
+def create_workdir(cfg: GenericBenchmarkConfig, logger, dry_run: bool = False) -> None:
     """
     Creates a new RUN directory under the configured base workdir.
 
     Layout:
-      <base_workdir>/run_<id>/
+      <base_workdir>/run_<id>/       (normal execution)
+      <base_workdir>/dryrun_<id>/    (dry-run mode)
         ├── logs/
         └── runs/
 
     Updates cfg.benchmark.workdir to point to the new run directory.
+
+    Args:
+        cfg: The benchmark configuration
+        logger: Logger instance
+        dry_run: If True, use 'dryrun_' prefix instead of 'run_'
     """
     base_workdir = cfg.benchmark.workdir
 
     base_workdir.mkdir(parents=True, exist_ok=True)
     logger.debug(f"Base work directory: {base_workdir}")
 
-    # Find existing run directories
+    # Determine prefix based on mode
+    prefix = "dryrun_" if dry_run else "run_"
+
+    # Find existing directories with this prefix
     run_dirs = [
         d for d in base_workdir.iterdir()
         if d.is_dir()
-        and d.name.startswith("run_")
+        and d.name.startswith(prefix)
         and d.name.split("_", 1)[1].isdigit()
     ]
 
     next_id = max((int(d.name.split("_", 1)[1]) for d in run_dirs), default=0) + 1
 
-    run_root = base_workdir / f"run_{next_id:03d}"
+    run_root = base_workdir / f"{prefix}{next_id:03d}"
     run_root.mkdir(parents=True, exist_ok=True)
 
     # Standard subfolders
@@ -435,13 +444,14 @@ def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> Non
 
 # ----------------- Main loading function ----------------- #
 
-def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
+def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> GenericBenchmarkConfig:
     """
     Load and parse a YAML configuration file into a GenericBenchmarkConfig object.
 
     Args:
         config_path: Path to the YAML configuration file
         logger: Logger instance for debug messages
+        dry_run: If True, create 'dryrun_' folders instead of 'run_' folders
 
     Returns:
         Validated GenericBenchmarkConfig object with workdir created
@@ -601,7 +611,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         description=b.get("description"),
         workdir=_expand_path(b["workdir"]),
         repetitions=b.get("repetitions", 1),
-        sqlite_db=_expand_path(b["sqlite_db"]) if "sqlite_db" in b else None,
+        cache_file=_expand_path(b["cache_file"]) if "cache_file" in b else None,
         search_method=search_method,
         executor=b.get("executor", "slurm"),
         executor_options=executor_options,
@@ -623,12 +633,16 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
         sweep_cfg = None
         if "sweep" in cfg:
             s = cfg["sweep"]
+            # Normalize scalar values to a list (user-friendly: values: 2 -> values: [2])
+            values = s.get("values")
+            if values is not None and not isinstance(values, list):
+                values = [values]
             sweep_cfg = SweepConfig(
                 mode=s["mode"],
                 start=s.get("start"),
                 end=s.get("end"),
                 step=s.get("step"),
-                values=s.get("values"),
+                values=values,
             )
         vars_cfg[name] = VarConfig(
             type=cfg["type"],
@@ -735,7 +749,7 @@ def load_generic_config(config_path: Path, logger) -> GenericBenchmarkConfig:
     )
 
     validate_generic_config(cfg)
-    create_workdir(cfg, logger)  # logger can be None here
+    create_workdir(cfg, logger, dry_run=dry_run)
     return cfg
 
 
@@ -995,15 +1009,15 @@ def validate_yaml_config(config_path: Path) -> List[str]:
             except Exception as e:
                 errors.append(f"Invalid benchmark.workdir path: {e}")
 
-        # Validate sqlite_db path if present
-        if "sqlite_db" in b and b["sqlite_db"] is not None:
+        # Validate cache_file path if present
+        if "cache_file" in b and b["cache_file"] is not None:
             try:
-                db_path = _expand_path(b["sqlite_db"])
+                db_path = _expand_path(b["cache_file"])
                 # Check parent directory exists (file may not exist yet)
                 if not db_path.parent.exists():
-                    errors.append(f"benchmark.sqlite_db parent directory does not exist: {db_path.parent}")
+                    errors.append(f"benchmark.cache_file parent directory does not exist: {db_path.parent}")
             except Exception as e:
-                errors.append(f"Invalid benchmark.sqlite_db path: {e}")
+                errors.append(f"Invalid benchmark.cache_file path: {e}")
 
         # Validate repetitions
         if "repetitions" in b:
@@ -1196,8 +1210,13 @@ def validate_yaml_config(config_path: Path) -> List[str]:
                 elif mode == "list":
                     if "values" not in sweep:
                         errors.append(f"var '{name}' with mode 'list' is missing 'values'")
-                    elif not sweep["values"]:
-                        errors.append(f"var '{name}' with mode 'list' must have non-empty 'values'")
+                    else:
+                        # Normalize scalar to list for validation
+                        values = sweep["values"]
+                        if values is not None and not isinstance(values, list):
+                            values = [values]
+                        if not values:
+                            errors.append(f"var '{name}' with mode 'list' must have non-empty 'values'")
                 else:
                     errors.append(f"var '{name}' has invalid sweep.mode='{mode}' (must be 'range' or 'list')")
 

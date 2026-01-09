@@ -96,7 +96,7 @@ iops generate my_config.yaml
 Generate an interactive HTML report from results:
 
 ```bash
-iops analyze <workdir/run_NNN> [options]
+iops report <workdir/run_NNN> [options]
 ```
 
 Creates visualization reports with plots and statistical analysis.
@@ -108,10 +108,10 @@ Creates visualization reports with plots and statistical analysis.
 
 ```bash
 # Generate report
-iops analyze ./workdir/run_001
+iops report ./workdir/run_001
 
 # With custom report config
-iops analyze ./workdir/run_001 --report-config custom_report.yaml
+iops report ./workdir/run_001 --report-config custom_report.yaml
 ```
 
 ### find - Explore Executions
@@ -202,7 +202,7 @@ For subcommand-specific help:
 iops run --help
 iops check --help
 iops generate --help
-iops analyze --help
+iops report --help
 iops find --help
 ```
 
@@ -213,7 +213,7 @@ iops find --help
 | `iops run <config.yaml>` | Execute benchmark |
 | `iops check <config.yaml>` | Validate configuration |
 | `iops generate [path]` | Create config template |
-| `iops analyze <path>` | Generate HTML report |
+| `iops report <path>` | Generate HTML report |
 | `iops find <path> [filters...]` | Explore executions |
 | `iops --version` | Show version |
 | `iops --help` | Show help |
@@ -226,7 +226,7 @@ Each subcommand provides its own help documentation:
 iops run --help      # Shows run-specific options
 iops check --help    # Shows check-specific options
 iops generate --help # Shows generate-specific options
-iops analyze --help  # Shows analyze-specific options
+iops report --help  # Shows analyze-specific options
 iops find --help     # Shows find-specific options
 ```
 
@@ -253,6 +253,6 @@ If you're updating from an older version of IOPS, here's how the commands have c
 | `iops config.yaml --check` | `iops check config.yaml` |
 | `iops --generate` | `iops generate` |
 | `iops --generate output.yaml` | `iops generate output.yaml` |
-| `iops --analyze /path` | `iops analyze /path` |
+| `iops report /path` | `iops report /path` |
 | `iops --find /path` | `iops find /path` |
 | `iops --find /path --filter nodes=4` | `iops find /path nodes=4` |

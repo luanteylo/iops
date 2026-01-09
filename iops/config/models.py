@@ -113,7 +113,7 @@ class BenchmarkConfig:
     description: Optional[str]
     workdir: Path
     repetitions: Optional[int] = 1        # global default (can be ignored if rounds have their own)
-    sqlite_db: Optional[Path] = None
+    cache_file: Optional[Path] = None
     search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
     executor_options: Optional[ExecutorOptionsConfig] = None  # executor-specific configuration

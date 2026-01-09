@@ -326,7 +326,7 @@ def save_report_config_template(
             # Add header comment
             f.write("# IOPS Report Configuration\n")
             f.write("# This file was auto-generated based on your benchmark execution.\n")
-            f.write("# Edit and use with: iops --analyze <workdir> --report-config report_config.yaml\n")
+            f.write("# Edit and use with: iops report <workdir> --report-config report_config.yaml\n")
             f.write("#\n")
             if has_user_config:
                 f.write("# This config is based on your provided reporting settings.\n")

@@ -247,7 +247,7 @@ IOPS 3.0 is a major rewrite with breaking changes to the configuration format.
 - Try `iops generate` to create a template
 - Enable caching with `iops run config.yaml --use-cache` for faster iterations
 - Use Bayesian optimization for large parameter spaces
-- Generate reports with `iops analyze ./workdir/run_001`
+- Generate reports with `iops report ./workdir/run_001`
 - Explore executions with `iops find ./workdir nodes=4`
 
 ---

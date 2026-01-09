@@ -14,6 +14,7 @@ from iops.execution.matrix import build_execution_matrix
 INDEX_FILENAME = "__iops_index.json"
 PARAMS_FILENAME = "__iops_params.json"
 STATUS_FILENAME = "__iops_status.json"
+METADATA_FILENAME = "__iops_run_metadata.json"
 
 # Default truncation width for parameter values
 DEFAULT_TRUNCATE_WIDTH = 30
@@ -48,6 +49,26 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
             pass
     # Default: no status file means execution hasn't completed or is from old run
     return {"status": "PENDING", "error": None, "end_time": None}
+
+
+def _read_run_metadata(run_root: Path) -> Dict[str, Any]:
+    """
+    Read run metadata from the metadata file.
+
+    Args:
+        run_root: Path to the run root directory (e.g., workdir/run_001)
+
+    Returns:
+        Dict with run metadata, or empty dict if file doesn't exist
+    """
+    metadata_file = run_root / METADATA_FILENAME
+    if metadata_file.exists():
+        try:
+            with open(metadata_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
 
 
 def find_executions(
@@ -97,8 +118,8 @@ def find_executions(
         )
         return
 
-    # Try to find index in subdirectories (user might point to workdir containing run_XXX)
-    run_dirs = sorted(path.glob("run_*"))
+    # Try to find index in subdirectories (user might point to workdir containing run_XXX or dryrun_XXX)
+    run_dirs = sorted(list(path.glob("run_*")) + list(path.glob("dryrun_*")))
     if run_dirs:
         for run_dir in run_dirs:
             index_file = run_dir / INDEX_FILENAME
@@ -127,6 +148,21 @@ def _show_single_execution(
     except (json.JSONDecodeError, OSError) as e:
         print(f"Error reading {params_file}: {e}")
         return
+
+    # Try to read run metadata from parent (run root is 2 levels up: exec_XXXX -> runs -> run_root)
+    run_root = exec_dir.parent.parent
+    run_metadata = _read_run_metadata(run_root)
+    bench_meta = run_metadata.get("benchmark", {})
+
+    # Display run header with metadata
+    if bench_meta.get("name"):
+        print(f"\nBenchmark: {bench_meta['name']}")
+    if bench_meta.get("description"):
+        print(f"Description: {bench_meta['description']}")
+    if bench_meta.get("hostname"):
+        print(f"Host: {bench_meta['hostname']}")
+    if bench_meta.get("timestamp"):
+        print(f"Executed: {bench_meta['timestamp']}")
 
     # Read status
     status_info = _read_status(exec_dir)
@@ -188,6 +224,19 @@ def _show_executions_from_index(
 
     benchmark_name = index.get("benchmark", "Unknown")
     executions = index.get("executions", {})
+
+    # Read run metadata for additional info
+    run_metadata = _read_run_metadata(run_root)
+    bench_meta = run_metadata.get("benchmark", {})
+
+    # Display run header with metadata
+    print(f"Benchmark: {benchmark_name}")
+    if bench_meta.get("description"):
+        print(f"Description: {bench_meta['description']}")
+    if bench_meta.get("hostname"):
+        print(f"Host: {bench_meta['hostname']}")
+    if bench_meta.get("timestamp"):
+        print(f"Executed: {bench_meta['timestamp']}")
 
     if not executions:
         print("No executions found in index.")
@@ -338,18 +387,46 @@ def _add_common_args(parser):
                         help="Show full traceback for errors")
 
 
+def _preprocess_args():
+    """
+    Preprocess command-line arguments to support shorthand syntax.
+
+    If the first argument is a YAML file (ends with .yaml or .yml),
+    automatically insert 'run' command. This allows:
+        iops config.yaml  ->  iops run config.yaml
+    """
+    import sys
+
+    if len(sys.argv) < 2:
+        return
+
+    first_arg = sys.argv[1]
+
+    # Skip if it's already a known command, a flag, or --version/--help
+    known_commands = {'run', 'check', 'find', 'report', 'generate'}
+    if first_arg in known_commands or first_arg.startswith('-'):
+        return
+
+    # If first arg looks like a YAML file, insert 'run' command
+    if first_arg.endswith('.yaml') or first_arg.endswith('.yml'):
+        sys.argv.insert(1, 'run')
+
+
 def parse_arguments():
+    _preprocess_args()
+
     parser = argparse.ArgumentParser(
         description="IOPS - A generic benchmark orchestration framework for automated parametric experiments.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  iops config.yaml                  Execute benchmark (shorthand)
   iops run config.yaml              Execute benchmark
   iops run config.yaml --dry-run    Preview execution plan
   iops check config.yaml            Validate configuration
   iops find ./workdir               List all executions
   iops find ./workdir nodes=4       Filter by parameter
-  iops analyze ./run_001            Generate HTML report
+  iops report ./run_001             Generate HTML report
   iops generate                     Create config template
 """
     )
@@ -387,19 +464,42 @@ Examples:
                              help="Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING)")
     _add_common_args(find_parser)
 
-    # ---- analyze command ----
-    analyze_parser = subparsers.add_parser('analyze', help='Generate HTML report from completed run',
-                                            description='Generate an interactive HTML report from benchmark results.')
-    analyze_parser.add_argument('path', type=Path, help="Path to the run directory (e.g., ./workdir/run_001)")
-    analyze_parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
-                                help="Custom report config YAML (auto-detects report_config.yaml in workdir)")
-    _add_common_args(analyze_parser)
+    # ---- report command ----
+    report_parser = subparsers.add_parser('report', help='Generate HTML report from completed run',
+                                           description='Generate an interactive HTML report from benchmark results.')
+    report_parser.add_argument('path', type=Path, help="Path to the run directory (e.g., ./workdir/run_001)")
+    report_parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
+                               help="Custom report config YAML (auto-detects report_config.yaml in workdir)")
+    _add_common_args(report_parser)
 
     # ---- generate command ----
     generate_parser = subparsers.add_parser('generate', help='Generate a default config template',
                                              description='Generate a YAML configuration template to get started.')
     generate_parser.add_argument('output', type=Path, nargs='?', default=Path("iops_config.yaml"),
                                  help="Output file path (default: iops_config.yaml)")
+
+    # Executor type (mutually exclusive)
+    executor_group = generate_parser.add_mutually_exclusive_group()
+    executor_group.add_argument('--local', action='store_true', dest='executor_local',
+                                help="Generate template for local execution (default)")
+    executor_group.add_argument('--slurm', action='store_true', dest='executor_slurm',
+                                help="Generate template for SLURM cluster execution")
+
+    # Benchmark type (mutually exclusive)
+    benchmark_group = generate_parser.add_mutually_exclusive_group()
+    benchmark_group.add_argument('--ior', action='store_true', dest='benchmark_ior',
+                                 help="Generate IOR benchmark template (default)")
+    benchmark_group.add_argument('--mdtest', action='store_true', dest='benchmark_mdtest',
+                                 help="Generate mdtest metadata benchmark template")
+
+    # Template complexity
+    generate_parser.add_argument('--full', action='store_true',
+                                 help="Generate fully documented template with all options")
+
+    # Examples
+    generate_parser.add_argument('--examples', action='store_true',
+                                 help="Copy example configurations and scripts to ./examples/")
+
     _add_common_args(generate_parser)
 
     # ---- check command ----
@@ -477,8 +577,8 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(f"  Workdir    : {cfg.benchmark.workdir}")
     logger.debug(f"  Repetitions: {cfg.benchmark.repetitions}")
     logger.debug(f"  Executor   : {cfg.benchmark.executor}")
-    if cfg.benchmark.sqlite_db:
-        logger.debug(f"  SQLite DB  : {cfg.benchmark.sqlite_db}")
+    if cfg.benchmark.cache_file:
+        logger.debug(f"  Cache File : {cfg.benchmark.cache_file}")
 
     # Budget configuration
     if cfg.benchmark.max_core_hours or args.max_core_hours:
@@ -614,9 +714,21 @@ def main():
         from iops.setup import BenchmarkWizard
 
         try:
+            # Determine executor (default: local)
+            executor = "slurm" if args.executor_slurm else "local"
+
+            # Determine benchmark (default: ior)
+            benchmark = "mdtest" if args.benchmark_mdtest else "ior"
+
             wizard = BenchmarkWizard()
             output_path = str(args.output) if args.output else None
-            output_file = wizard.run(output_path=output_path)
+            output_file = wizard.run(
+                output_path=output_path,
+                executor=executor,
+                benchmark=benchmark,
+                full_template=args.full,
+                copy_examples=args.examples
+            )
 
             if output_file:
                 logger.info(f"Configuration template generated successfully: {output_file}")
@@ -648,13 +760,13 @@ def main():
         )
         return
 
-    # ---- analyze command ----
-    if args.command == 'analyze':
+    # ---- report command ----
+    if args.command == 'report':
         from iops.reporting.report_generator import generate_report_from_workdir
         from iops.config.loader import load_report_config
 
         logger.info("=" * 70)
-        logger.info("ANALYSIS MODE: Generating HTML report")
+        logger.info("REPORT MODE: Generating HTML report")
         logger.info("=" * 70)
         logger.info(f"Reading results from: {args.path}")
 
@@ -705,7 +817,7 @@ def main():
     # ---- run command ----
     if args.command == 'run':
         try:
-            cfg = load_generic_config(args.config_file, logger=logger)
+            cfg = load_generic_config(args.config_file, logger=logger, dry_run=args.dry_run)
         except ConfigValidationError as e:
             logger.error(f"Configuration error: {e}")
             if args.verbose:
@@ -725,10 +837,16 @@ def main():
         runner = IOPSRunner(cfg=cfg, args=args)
 
         # Run in dry-run mode or normal mode
-        if args.dry_run:
-            runner.run_dry()
-        else:
-            runner.run()
+        try:
+            if args.dry_run:
+                runner.run_dry()
+            else:
+                runner.run()
+        except ConfigValidationError as e:
+            logger.error(f"Configuration error: {e}")
+            if args.verbose:
+                raise
+            return
 
 
 

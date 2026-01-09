@@ -18,7 +18,7 @@ benchmark:
   name: "IOR Benchmark"
   description: "A benchmark to measure I/O performance using the IOR tool."
   workdir: "/home/luan/workdir/"
-  sqlite_db: "/home/luan/iops.db"
+  cache_file: "/home/luan/iops.db"
   repetitions: 3 # global repetitions for each test case. It is ignored when rounds has its own value
   search_method: "exhaustive" # used to define the policy for test execution selection
   executor : "local" # specify the executor to use : local | slurm

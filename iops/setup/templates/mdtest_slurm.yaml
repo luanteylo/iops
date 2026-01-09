@@ -1,0 +1,178 @@
+# =============================================================================
+# IOPS Configuration - mdtest Benchmark (SLURM Cluster)
+# =============================================================================
+#
+# A simple configuration for running mdtest metadata benchmarks on SLURM.
+#
+# Quick Start:
+#   1. Update paths: workdir, test_dir
+#   2. Update SLURM directives: partition, time limit, modules
+#   3. Validate: iops check my_config.yaml
+#   4. Dry run:  iops run my_config.yaml --dry-run
+#   5. Execute:  iops run my_config.yaml
+#
+# For a fully documented template with all options, run: iops generate --full
+# =============================================================================
+
+benchmark:
+  name: "mdtest Benchmark"
+  workdir: "./"
+  repetitions: 3
+  search_method: "exhaustive"
+  executor: "slurm"
+  cache_file: "./iops_cache.db"
+
+vars:
+  # Number of compute nodes
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+
+  # MPI processes per node
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16]
+
+  # Files to create per process
+  files_per_proc:
+    type: int
+    sweep:
+      mode: list
+      values: [100, 1000, 10000]
+
+  # Directory tree depth (0 = flat)
+  tree_depth:
+    type: int
+    sweep:
+      mode: list
+      values: [0, 2]
+
+  # Total MPI tasks
+  ntasks:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+  # Test directory path
+  test_dir:
+    type: str
+    expr: "/path/to/testfs/mdtest_{{ execution_id }}"
+
+  # Output file for mdtest results
+  output_file:
+    type: str
+    expr: "{{ execution_dir }}/mdtest_output.txt"
+
+command:
+  template: >
+    mdtest -n {{ files_per_proc }} -d {{ test_dir }}
+    -z {{ tree_depth }} -F -C -T -r
+
+scripts:
+  - name: "mdtest"
+    submit: "sbatch"
+    script_template: |
+      #!/bin/bash
+
+      #SBATCH --job-name=mdtest_{{ execution_id }}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=01:00:00
+      #SBATCH --chdir={{ execution_dir }}
+      #SBATCH -o batch%j.out
+      #SBATCH -e batch%j.err
+      #SBATCH --exclusive
+
+      # Customize these for your cluster:
+      # #SBATCH --partition=your_partition
+      # #SBATCH --account=your_account
+
+      # Load required modules (customize for your cluster)
+      module purge
+      module load mpi
+
+      echo "=== SLURM Allocation ==="
+      echo "Nodes: $SLURM_JOB_NUM_NODES"
+      echo "Tasks: $SLURM_NTASKS"
+      echo "========================"
+
+      # Create test directory
+      mkdir -p {{ test_dir }}
+
+      # Execute the benchmark
+      mpirun {{ command.template }} > {{ output_file }} 2>&1
+
+      # Cleanup test directory
+      rm -rf {{ test_dir }}
+
+    parser:
+      file: "{{ output_file }}"
+      metrics:
+        - name: file_creation_rate
+        - name: file_stat_rate
+        - name: file_removal_rate
+      parser_script: |
+        import re
+
+        def parse(file_path: str):
+            """Parse mdtest output and extract performance metrics."""
+            with open(file_path, "r") as f:
+                content = f.read()
+
+            metrics = {}
+
+            # Find the SUMMARY rate section
+            summary_match = re.search(
+                r"SUMMARY rate:.*?\n.*?Operation.*?Max.*?Min.*?Mean.*?Std Dev.*?\n.*?-+.*?\n(.*?)(?:\n\n|--\s+finished|\Z)",
+                content,
+                re.DOTALL | re.IGNORECASE,
+            )
+
+            if not summary_match:
+                return {
+                    "file_creation_rate": None,
+                    "file_stat_rate": None,
+                    "file_removal_rate": None,
+                }
+
+            summary_section = summary_match.group(1)
+
+            for line in summary_section.strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+
+                operation_name = " ".join(parts[:-4]).lower()
+
+                try:
+                    mean_value = float(parts[-2])
+                except (ValueError, IndexError):
+                    continue
+
+                if "file creation" in operation_name:
+                    metrics["file_creation_rate"] = mean_value
+                elif "file stat" in operation_name:
+                    metrics["file_stat_rate"] = mean_value
+                elif "file removal" in operation_name:
+                    metrics["file_removal_rate"] = mean_value
+
+            # Ensure all expected metrics are present
+            for key in ["file_creation_rate", "file_stat_rate", "file_removal_rate"]:
+                if key not in metrics:
+                    metrics[key] = None
+
+            return metrics
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+    mode: append

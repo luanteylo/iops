@@ -13,14 +13,14 @@ IOPS now supports intelligent caching of execution results using SQLite. This al
 
 ## Configuration
 
-Add `sqlite_db` to your YAML config:
+Add `cache_file` to your YAML config:
 
 ```yaml
 benchmark:
   name: "IOR Benchmark"
   description: "I/O performance testing"
   workdir: "/home/user/workdir/"
-  sqlite_db: "/home/user/iops_cache.db"  # Cache database
+  cache_file: "/home/user/iops_cache.db"  # Cache database
   repetitions: 3
   executor: "local"
 ```
@@ -112,7 +112,7 @@ Without exclusion:
 benchmark:
   name: "IOR Benchmark"
   workdir: "/home/user/workdir/"
-  sqlite_db: "/home/user/iops_cache.db"
+  cache_file: "/home/user/iops_cache.db"
   cache_exclude_vars: ["summary_file"]  # Exclude from cache hash
   repetitions: 3
 ```
@@ -234,10 +234,10 @@ cache.clear_cache()
 **Problem**: Tests execute even with `--use-cache`
 
 **Solutions**:
-1. Check `sqlite_db` is set in YAML:
+1. Check `cache_file` is set in YAML:
    ```yaml
    benchmark:
-     sqlite_db: "/absolute/path/to/cache.db"
+     cache_file: "/absolute/path/to/cache.db"
    ```
 
 2. Verify cache file exists and has entries:
@@ -309,7 +309,7 @@ cache.clear_cache()
 2. Use separate cache files for different experiments:
    ```yaml
    benchmark:
-     sqlite_db: "/path/to/experiment1_cache.db"
+     cache_file: "/path/to/experiment1_cache.db"
    ```
 
 ## Implementation Details
@@ -329,8 +329,8 @@ cache.clear_cache()
 
 ```python
 # In IOPSRunner.__init__()
-if args.use_cache and cfg.benchmark.sqlite_db:
-    self.cache = ExecutionCache(cfg.benchmark.sqlite_db)
+if args.use_cache and cfg.benchmark.cache_file:
+    self.cache = ExecutionCache(cfg.benchmark.cache_file)
 
 # In IOPSRunner.run()
 if self.cache:
@@ -347,7 +347,7 @@ if self.cache:
 
 ## Best Practices
 
-1. **Use absolute paths** for `sqlite_db` to avoid confusion
+1. **Use absolute paths** for `cache_file` to avoid confusion
 2. **Keep cache files per project** for organization
 3. **Clear cache** when benchmark logic changes significantly
 4. **Monitor cache hit rate** to ensure it's working as expected

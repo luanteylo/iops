@@ -22,7 +22,7 @@ benchmark:
   name: "IOR Random Sampling Benchmark"
   description: "Demonstrates random sampling of parameter space"
   workdir: "/home/luan/workdir/"
-  sqlite_db: "/home/luan/iops.db"
+  cache_file: "/home/luan/iops.db"
   repetitions: 3  # Each sampled configuration runs 3 times for statistical validity
 
   # Use random sampling planner instead of exhaustive

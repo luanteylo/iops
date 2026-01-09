@@ -194,8 +194,8 @@ class ExecutionInstance:
     # This is NOT templated; it is just data that can be used in the Jinja context.
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    # Optional: DB path (if you want it here)
-    sqlite_db: Path | None = None
+    # Optional: cache file path (if you want it here)
+    cache_file: Path | None = None
 
     # ---------- Template fields (stored from cfg, rendered lazily) ---------- #
 
@@ -575,7 +575,7 @@ class ExecutionInstance:
             f"Workdir   : {self.workdir}",
             f"Exeucution Dir: {self.execution_dir}",
             f"Repetitions: {self.repetition}/{self.repetitions}",            
-            f"SQLite DB : {self.sqlite_db}",
+            f"Cache File: {self.cache_file}",
             sep,
             "Variables:",
         ]
@@ -737,7 +737,7 @@ def create_execution_instance(
         benchmark_name=cfg.benchmark.name,
         benchmark_description=cfg.benchmark.description,
         workdir=cfg.benchmark.workdir,
-        sqlite_db=getattr(cfg.benchmark, "sqlite_db", None),
+        cache_file=getattr(cfg.benchmark, "cache_file", None),
         base_vars=base_vars,
         derived_var_cfgs=derived_var_cfgs,
         exhaustive_var_names=exhaustive_var_names or [],

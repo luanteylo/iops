@@ -32,7 +32,7 @@ benchmark:
   # Optional: SQLite database for caching execution results
   # When --use_cache is specified, results are reused if parameters match
   # Set this to enable caching across multiple runs
-  sqlite_db: "/path/to/your/cache.db"
+  cache_file: "/path/to/your/cache.db"
 
   # Optional: Number of repetitions for each test case (default: 1)
   # Can be overridden per round. Higher values improve statistical validity
@@ -485,8 +485,8 @@ output:
 # =============================================================================
 # Automatic HTML report generation with interactive plots
 # Reports include performance analysis, best configurations, and custom visualizations
-# Manual: iops analyze /path/to/workdir/run_NNN
-# Custom: iops analyze /path/to/workdir/run_NNN --report-config report.yaml
+# Manual: iops report /path/to/workdir/run_NNN
+# Custom: iops report /path/to/workdir/run_NNN --report-config report.yaml
 # Docs: https://lgouveia.gitlabpages.inria.fr/iops/user-guide/reporting/
 # =============================================================================
 reporting:

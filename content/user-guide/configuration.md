@@ -38,7 +38,7 @@ benchmark:
   executor: "local"  # or "slurm"
   search_method: "exhaustive"  # or "bayesian" or "random"
   repetitions: 3
-  sqlite_db: "/path/to/cache.db"  # Optional: for result caching
+  cache_file: "/path/to/cache.db"  # Optional: for result caching
 ```
 
 ### Key Fields
@@ -48,7 +48,7 @@ benchmark:
 - **executor**: Where to run jobs (`local` or `slurm`)
 - **search_method**: How to explore parameter space
 - **repetitions**: Number of times to repeat each test
-- **sqlite_db**: Optional cache database for skipping redundant tests
+- **cache_file**: Optional cache file for skipping redundant tests
 - **track_executions**: Optional (default: true) - write metadata files for `iops find` command
 
 ## Variables Section

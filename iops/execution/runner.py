@@ -41,14 +41,14 @@ class IOPSRunner(HasLogger):
         # Pass runner reference to executor for job tracking (used by SLURM)
         self.executor.set_runner(self)
 
-        # Initialize cache if sqlite_db is configured (always populate, use only with --use_cache)
+        # Initialize cache if cache_file is configured (always populate, use only with --use_cache)
         self.cache: Optional[ExecutionCache] = None
         self.use_cache_reads = args.use_cache  # Flag to control reading from cache
 
-        if cfg.benchmark.sqlite_db:
+        if cfg.benchmark.cache_file:
             exclude_vars = cfg.benchmark.cache_exclude_vars or []
             self.cache = ExecutionCache(
-                cfg.benchmark.sqlite_db,
+                cfg.benchmark.cache_file,
                 exclude_vars=exclude_vars
             )
 
@@ -62,7 +62,7 @@ class IOPSRunner(HasLogger):
                 self.logger.info("Cache: WRITE-ONLY mode (use --use_cache to enable reads)")
         elif args.use_cache:
             self.logger.warning(
-                "Cache requested (--use_cache) but benchmark.sqlite_db not configured. "
+                "Cache requested (--use_cache) but benchmark.cache_file not configured. "
                 "Cache disabled."
             )
 
@@ -660,7 +660,7 @@ class IOPSRunner(HasLogger):
         except Exception as e:
             self.logger.warning(f"Failed to generate report: {e}")
             self.logger.warning("You can manually generate the report later using:")
-            self.logger.warning(f"  iops --analyze {self.cfg.benchmark.workdir}")
+            self.logger.warning(f"  iops report {self.cfg.benchmark.workdir}")
 
     def run_dry(self):
         """

@@ -16,7 +16,7 @@ benchmark:
   name: "IOR Benchmark with Constraints"
   description: "Demonstrates parameter constraint validation in IOPS"
   workdir: "/tmp/iops_constraints_example/"
-  sqlite_db: "/tmp/iops_constraints.db"
+  cache_file: "/tmp/iops_constraints.db"
   repetitions: 2
   search_method: "exhaustive"
   executor: "local"
