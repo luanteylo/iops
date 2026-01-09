@@ -1,6 +1,6 @@
 
 from iops.logger import HasLogger
-from iops.execution.planner import BasePlanner
+from iops.execution.planner import BasePlanner, STATUS_FILENAME
 from iops.execution.executors import BaseExecutor
 from iops.execution.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
@@ -20,6 +20,15 @@ import socket
 
 # IOPS metadata filename
 METADATA_FILENAME = "__iops_run_metadata.json"
+
+
+def _get_iops_version() -> str:
+    """Load the IOPS version from the VERSION file."""
+    version_file = Path(__file__).parent.parent / "VERSION"
+    if version_file.exists():
+        with version_file.open() as f:
+            return f.read().strip()
+    return "unknown"
 
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
@@ -416,6 +425,41 @@ class IOPSRunner(HasLogger):
             self.logger.warning(f"Failed to compute core-hours for test {test.execution_id}: {e}")
             return 0.0
 
+    def _write_status_file(self, test) -> None:
+        """
+        Write execution status to a JSON file in the exec folder.
+
+        Creates __iops_status.json containing the final execution status,
+        any error message, and completion timestamp. This enables the
+        'iops find' command to display and filter by execution status.
+
+        Args:
+            test: Completed ExecutionInstance with metadata containing status
+        """
+        if test.execution_dir is None:
+            self.logger.debug("Cannot write status file: execution_dir is None")
+            return
+
+        # Get the exec_XXXX folder (parent of repetition_XXX folder)
+        exec_dir = test.execution_dir
+        if exec_dir.name.startswith("repetition_"):
+            exec_dir = exec_dir.parent
+
+        status_file = exec_dir / STATUS_FILENAME
+
+        status_data = {
+            "status": test.metadata.get("__executor_status", "UNKNOWN"),
+            "error": test.metadata.get("__error"),
+            "end_time": test.metadata.get("__end"),
+        }
+
+        try:
+            with open(status_file, "w") as f:
+                json.dump(status_data, f, indent=2, default=str)
+            self.logger.debug(f"  [Status] Wrote status file: {status_file}")
+        except Exception as e:
+            self.logger.warning(f"Failed to write status file {status_file}: {e}")
+
     def _make_progress_bar(self, percentage: float, width: int = 30) -> str:
         """
         Create a visual progress bar.
@@ -486,6 +530,7 @@ class IOPSRunner(HasLogger):
                 relative_output_path = str(output_path)
 
             metadata = {
+                "iops_version": _get_iops_version(),
                 "benchmark": {
                     "name": self.cfg.benchmark.name,
                     "description": self.cfg.benchmark.description or "",
@@ -968,6 +1013,11 @@ class IOPSRunner(HasLogger):
                             if k not in ['metrics']  # Don't duplicate metrics
                         },
                     )
+
+            # Write status file for 'iops find' command (for both executed and cached results)
+            # Can be disabled with track_executions: false to reduce file I/O
+            if getattr(self.cfg.benchmark, 'track_executions', True):
+                self._write_status_file(test)
 
             # Log test summary (clean single-line output at INFO level)
             status = test.metadata.get("__executor_status", "UNKNOWN")

@@ -7,8 +7,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Set, Tuple, Optional
 from pathlib import Path
 import ast
+import re
 import yaml
 import os
+
+from jinja2 import Environment, TemplateSyntaxError
 
 # Optional pyarrow for parquet support
 try:
@@ -49,6 +52,103 @@ from iops.config.models import (
 def _expand_path(p: str) -> Path:
     """Expand environment variables and user paths, then resolve to absolute path."""
     return Path(os.path.expandvars(p)).expanduser().resolve()
+
+
+# Jinja2 environment for template validation (matches matrix.py settings)
+_jinja_env = Environment(
+    autoescape=False,
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+
+
+def _validate_jinja_template(
+    template: str,
+    field_name: str,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Validate Jinja2 template syntax without rendering.
+
+    Args:
+        template: The template string to validate
+        field_name: Name of the field for error messages (e.g., "command.template")
+
+    Returns:
+        (True, None) if valid
+        (False, error_message) if invalid with helpful guidance
+    """
+    if not template or not isinstance(template, str):
+        return True, None  # Empty templates are handled elsewhere
+
+    try:
+        _jinja_env.parse(template)
+        return True, None
+    except TemplateSyntaxError as e:
+        # Build helpful error message
+        error_msg = f"Jinja2 syntax error in '{field_name}': {e.message}"
+
+        # Add line info if available
+        if e.lineno:
+            error_msg += f" (line {e.lineno})"
+
+        # Detect common mistake: missing spaces in {% %} tags
+        # Pattern matches {%word without space after {%
+        missing_space_pattern = r'\{%[a-zA-Z]|\{%-[a-zA-Z]|[a-zA-Z]%\}|[a-zA-Z]-%\}'
+        if re.search(missing_space_pattern, template):
+            error_msg += (
+                "\n  HINT: Spaces are REQUIRED inside {% %} control tags."
+                "\n  Correct: {% if condition %} ... {% endif %}"
+                "\n  Wrong:   {%if condition%} ... {%endif%}"
+            )
+
+        # Detect unclosed variable tags {{ without }}
+        unclosed_var_pattern = r'\{\{[^}]*$|\{\{[^}]*[^}]\n'
+        if re.search(unclosed_var_pattern, template) or (template.count('{{') > template.count('}}')):
+            error_msg += (
+                "\n  HINT: Unclosed variable tag detected."
+                "\n  Correct: {{ variable }}"
+                "\n  Wrong:   {{ variable"
+            )
+
+        # Detect unclosed block tags - check for common blocks without matching end
+        block_starts = re.findall(r'\{%\s*(if|for|block|macro)\b', template)
+        block_ends = re.findall(r'\{%\s*end(if|for|block|macro)\b', template)
+        if len(block_starts) > len(block_ends):
+            error_msg += (
+                "\n  HINT: Unclosed block tag detected (missing {% end... %})."
+                "\n  Every {% if %} needs {% endif %}"
+                "\n  Every {% for %} needs {% endfor %}"
+            )
+
+        # Detect wrong comparison operator (= instead of ==)
+        wrong_equals_pattern = r'\{%\s*if\s+[^%]*[^=!<>]=[^=][^%]*%\}'
+        if re.search(wrong_equals_pattern, template):
+            error_msg += (
+                "\n  HINT: Use '==' for comparison, not '='."
+                "\n  Correct: {% if value == 'test' %}"
+                "\n  Wrong:   {% if value = 'test' %}"
+            )
+
+        # Detect undefined filter (common ones users might mistype)
+        undefined_filter_match = re.search(r'\|\s*(\w+)', template)
+        if undefined_filter_match and 'undefined' in e.message.lower():
+            filter_name = undefined_filter_match.group(1)
+            error_msg += (
+                f"\n  HINT: Filter '{filter_name}' may not exist."
+                "\n  Common filters: default, upper, lower, int, float, round, abs"
+                "\n  Example: {{ value | default('fallback') }}"
+            )
+
+        # Show the problematic part of the template if we can identify it
+        if e.lineno and '\n' in template:
+            lines = template.split('\n')
+            if 0 < e.lineno <= len(lines):
+                problem_line = lines[e.lineno - 1].strip()
+                if len(problem_line) > 80:
+                    problem_line = problem_line[:77] + "..."
+                error_msg += f"\n  Problem line: {problem_line}"
+
+        return False, error_msg
 
 
 def validate_parser_script(
@@ -1048,7 +1148,7 @@ def validate_yaml_config(config_path: Path) -> List[str]:
         if not vars_data:
             errors.append("At least one variable must be defined in 'vars'")
 
-        valid_var_types = ("int", "float", "str")
+        valid_var_types = ("int", "float", "str", "bool")
         for name, cfg in vars_data.items():
             if not isinstance(cfg, dict):
                 errors.append(f"var '{name}' must be a dictionary")
@@ -1308,7 +1408,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if not cfg.vars:
         raise ConfigValidationError("At least one variable must be defined in 'vars'")
 
-    valid_var_types = ("int", "float", "str")
+    valid_var_types = ("int", "float", "str", "bool")
     for name, v in cfg.vars.items():
         # Validate var type
         if v.type not in valid_var_types:
@@ -1349,6 +1449,12 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"var '{name}' has invalid sweep.mode='{v.sweep.mode}'"
                 )
 
+        # Validate Jinja2 syntax in expr (if present)
+        if v.expr:
+            ok, err = _validate_jinja_template(v.expr, f"vars['{name}'].expr")
+            if not ok:
+                raise ConfigValidationError(err)
+
     # ---- variable reference lists ----
     def validate_var_list(field_name: str, var_list) -> None:
         if var_list is None:
@@ -1367,6 +1473,11 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if not cfg.command.template.strip():
         raise ConfigValidationError("command.template must not be empty")
 
+    # Validate Jinja2 syntax in command.template
+    ok, err = _validate_jinja_template(cfg.command.template, "command.template")
+    if not ok:
+        raise ConfigValidationError(err)
+
     # ---- scripts ----
     if not cfg.scripts:
         raise ConfigValidationError("At least one script must be defined in 'scripts'")
@@ -1376,6 +1487,11 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             raise ConfigValidationError(
                 f"script '{s.name}' must have a non-empty script_template"
             )
+
+        # Validate Jinja2 syntax in script_template
+        ok, err = _validate_jinja_template(s.script_template, f"scripts['{s.name}'].script_template")
+        if not ok:
+            raise ConfigValidationError(err)
 
         # post is OPTIONAL – only validate if present
         if s.post is not None:

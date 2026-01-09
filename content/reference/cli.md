@@ -139,6 +139,9 @@ Only executions matching all specified filters will be displayed.
 
 **Options:**
 - `--show-command` - Display the command column in output
+- `--full` - Show full parameter values without truncation (default truncates at 30 chars)
+- `--hide COL1,COL2` - Hide specific columns (comma-separated list)
+- `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING)
 
 **Examples:**
 
@@ -160,6 +163,18 @@ iops find ./workdir/run_001 nodes=4 ppn=8
 
 # Show command column
 iops find ./workdir/run_001 --show-command
+
+# Show full parameter values without truncation
+iops find ./workdir/run_001 --full
+
+# Hide specific columns
+iops find ./workdir/run_001 --hide nodes,ppn
+
+# Filter by execution status
+iops find ./workdir/run_001 --status FAILED
+
+# Combine filters and options
+iops find ./workdir/run_001 nodes=4 --status SUCCEEDED --show-command
 
 # Complex filter
 iops find ./workdir block_size=1024 threads=8

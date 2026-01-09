@@ -99,6 +99,7 @@ benchmark:
     poll_interval: integer        # Optional: status polling interval in seconds (default: 30)
   random_seed: integer            # Optional: seed for randomization (default: 42)
   collect_system_info: boolean    # Optional: collect system info from compute nodes (default: true)
+  track_executions: boolean       # Optional: write execution metadata files (default: true)
   cache_exclude_vars: list        # Optional: variables to exclude from cache hash
   exhaustive_vars: list           # Optional: variables to test exhaustively at each search point
   report_vars: list               # Optional: variables to include in analysis reports
@@ -288,6 +289,60 @@ benchmark:
 - The probe uses standard Linux commands (`lscpu`, `ibstat`, `lsmod`, `mount`)
 - Failures are graceful: missing tools or permissions result in empty/null fields
 - System info is deduplicated by hostname across all executions in a run
+
+#### `track_executions` (optional, default: true)
+
+Controls whether IOPS writes execution metadata files that enable the `iops find` command to explore and filter executions by parameters.
+
+**Metadata Files Generated:**
+- `__iops_index.json` - Created in run root directory; indexes all executions with parameters and relative paths
+- `__iops_params.json` - Created in each execution folder; stores parameter values for that execution
+- `__iops_status.json` - Created in each execution folder after execution; stores status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING) and error messages
+
+**When to Enable (Default):**
+- You want to use `iops find` to explore executions
+- You need to filter executions by parameter values
+- You need to track execution status and identify failures
+- Debugging or investigating specific parameter combinations
+
+**When to Disable:**
+- File I/O overhead might interfere with benchmark measurements
+- Running on systems with strict file count limits
+- You're using custom tooling to track executions
+- Benchmark is extremely I/O sensitive and minimizing overhead is critical
+
+```yaml
+benchmark:
+  track_executions: true   # Default: enabled
+```
+
+**Disable if unnecessary:**
+```yaml
+benchmark:
+  track_executions: false  # Skip metadata file generation
+```
+
+**Example Status File (`__iops_status.json`):**
+```json
+{
+  "status": "SUCCEEDED",
+  "error": null,
+  "end_time": "2026-01-09T14:23:45.678901"
+}
+```
+
+**Status Values:**
+- `SUCCEEDED` - Execution completed successfully
+- `FAILED` - Execution failed with non-zero exit code
+- `ERROR` - Execution encountered an error during setup or execution
+- `UNKNOWN` - Status could not be determined
+- `PENDING` - Execution has not yet completed
+
+**Notes:**
+- The status file is written immediately after execution completes
+- Error messages are captured in the `error` field when status is FAILED or ERROR
+- Use `iops find <path> --status FAILED` to locate failed executions
+- Metadata files use relative paths, making workdirs portable across systems
 
 #### `cache_exclude_vars` (optional)
 List of variable names to exclude from cache hash calculation. **Use this when variables contain run-specific values that change between executions but shouldn't invalidate the cache.**
@@ -671,6 +726,7 @@ benchmark:
   executor: "local"
   random_seed: 42
   collect_system_info: true               # Collect system info from nodes
+  track_executions: true                  # Write metadata files for 'iops find' command
   cache_exclude_vars: ["summary_file"]    # Exclude path-based derived vars
 ```
 
@@ -1912,9 +1968,11 @@ When using `--report-config`:
 
 ## Jinja2 Templating
 
-All string fields support Jinja2 templating with `{{ variable }}` syntax.
+IOPS uses Jinja2 templating throughout the configuration to enable dynamic values, conditional logic, and computed expressions. All string fields in the configuration support Jinja2 syntax.
 
 ### Available Context
+
+Templates have access to:
 
 | Category | Variables |
 |----------|-----------|
@@ -1924,25 +1982,422 @@ All string fields support Jinja2 templating with `{{ variable }}` syntax.
 | **Metadata** | All command.metadata keys |
 | **Command** | `command.template` |
 
-### Examples
+### 1. Variable Substitution
+
+The most common use case is variable interpolation using `{{ variable_name }}`:
 
 ```yaml
-# File paths
-summary_file: "{{ execution_dir }}/summary_{{ execution_id }}_r{{ repetition }}.json"
+command:
+  template: "ior -w -b {{ block_size }}mb -t {{ transfer_size }}mb -o {{ output_file }}"
 
-# Conditional logic
-script_name: "{% if nodes > 4 %}large_scale{% else %}small_scale{% endif %}_job.sh"
-
-# Loops (advanced)
-module_list: "{% for mod in ['mpi', 'ior', 'hdf5'] %}module load {{ mod }}; {% endfor %}"
-
-# Filters
-uppercase_name: "{{ benchmark.name | upper }}"
+vars:
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_r{{ repetition }}.json"
 ```
 
-### Strict Mode
+**Spaces inside `{{ }}` are optional but recommended for readability:**
+- Both work: `{{ var }}` and `{{var}}`
+- Recommended: `{{ var }}`
 
-Templates use `StrictUndefined`: referencing undefined variables raises an error immediately.
+### 2. Conditionals
+
+Use `{% if condition %}` for conditional logic in templates:
+
+```yaml
+# Basic conditional
+command:
+  template: >
+    my_benchmark --input data.bin
+    {% if use_compression %} --compress {% endif %}
+    --output {{ output_file }}
+
+# With else clause
+command:
+  template: >
+    ior {% if operation == "write" %} -w {% else %} -r {% endif %}
+    -b {{ block_size }}mb
+    -o {{ output_path }}
+
+# Numeric comparison
+command:
+  template: >
+    mpirun -np {{ ntasks }}
+    {% if nodes > 8 %} --large-scale {% endif %}
+    ./benchmark
+
+# Complex conditions
+command:
+  template: >
+    benchmark
+    {% if nodes > 1 and processes_per_node >= 4 %} --parallel-mode {% endif %}
+    --config {{ config_file }}
+```
+
+**Available operators:**
+- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- Logical: `and`, `or`, `not`
+- Membership: `in`, `not in`
+
+**CRITICAL SYNTAX REQUIREMENT:**
+- **Spaces are required** inside `{% %}` tags
+- **Correct**: `{% if condition %}`, `{% endif %}`
+- **Wrong**: `{%if condition%}`, `{%endif%}` (will cause `TemplateSyntaxError`)
+
+### 3. Loops
+
+Use `{% for %}` to iterate over sequences:
+
+```yaml
+# Iterate over a list
+vars:
+  module_list:
+    type: str
+    expr: "{% for mod in ['mpi', 'ior', 'hdf5'] %}module load {{ mod }}; {% endfor %}"
+
+# Iterate over a range
+command:
+  template: >
+    benchmark
+    {% for i in range(3) %} --file{{ i }} input{{ i }}.dat {% endfor %}
+
+# Iterate with index
+script_template: |
+  #!/bin/bash
+  {% for i in range(nodes) %}
+  echo "Processing node {{ i }}"
+  {% endfor %}
+```
+
+**Loop variables:**
+- `loop.index`: Current iteration (1-indexed)
+- `loop.index0`: Current iteration (0-indexed)
+- `loop.first`: True on first iteration
+- `loop.last`: True on last iteration
+
+**Syntax requirement**: Spaces required inside `{% %}` tags.
+
+### 4. Filters
+
+Filters transform values using the `|` operator:
+
+```yaml
+# Default value if variable is undefined
+vars:
+  config_file:
+    type: str
+    expr: "{{ custom_config | default('/etc/default.conf') }}"
+
+# String manipulation
+vars:
+  uppercase_name:
+    type: str
+    expr: "{{ benchmark.name | upper }}"
+
+  lowercase_name:
+    type: str
+    expr: "{{ benchmark.name | lower }}"
+
+  filename:
+    type: str
+    expr: "{{ output_path | basename }}"
+
+# Numeric filters
+vars:
+  rounded_value:
+    type: float
+    expr: "{{ block_size_mb | round(2) }}"
+
+  absolute_value:
+    type: int
+    expr: "{{ difference | abs }}"
+```
+
+**Common filters:**
+- `default(value)`: Provide default if undefined
+- `upper`: Convert to uppercase
+- `lower`: Convert to lowercase
+- `basename`: Extract filename from path
+- `dirname`: Extract directory from path
+- `round(precision)`: Round to N decimal places
+- `abs`: Absolute value
+- `int`: Convert to integer
+- `float`: Convert to float
+- `string`: Convert to string
+- `length`: Get length of sequence
+
+### 5. Expressions
+
+Combine variables with arithmetic and function calls:
+
+```yaml
+# Arithmetic in derived variables
+vars:
+  total_processes:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+  block_size_mb:
+    type: int
+    expr: "{{ (volume_size_gb * 1024) // (nodes * ppn) }}"
+
+  percentage:
+    type: float
+    expr: "{{ (current_value / max_value) * 100.0 }}"
+
+# Using functions
+vars:
+  max_cores:
+    type: int
+    expr: "{{ max(nodes * ppn, 16) }}"
+
+  min_block_size:
+    type: int
+    expr: "{{ min(block_size_mb, 1024) }}"
+```
+
+**Available functions:**
+- `min()`, `max()`: Minimum/maximum values
+- `abs()`: Absolute value
+- `round()`: Round to nearest integer
+- `int()`, `float()`: Type conversion
+
+### 6. Where Jinja2 Templates Are Used
+
+Jinja2 templating is available in these configuration sections:
+
+1. **`command.template`**: The benchmark command
+   ```yaml
+   command:
+     template: "mpirun -np {{ ntasks }} {% if debug %} --verbose {% endif %} ./benchmark"
+   ```
+
+2. **`scripts[].script_template`**: Script content (inline or file reference)
+   ```yaml
+   script_template: |
+     #!/bin/bash
+     {% if nodes > 1 %}
+     #SBATCH --nodes={{ nodes }}
+     {% endif %}
+     {{ command.template }}
+   ```
+
+3. **`vars[].expr`**: Derived variable expressions
+   ```yaml
+   vars:
+     output_dir:
+       type: str
+       expr: "{{ workdir }}/{% if use_cache %}cached{% else %}fresh{% endif %}/results"
+   ```
+
+4. **`output.sink.path`**: Output file paths
+   ```yaml
+   output:
+     sink:
+       path: "{{ workdir }}/results_{% if production %}prod{% else %}dev{% endif %}.csv"
+   ```
+
+5. **`scripts[].parser.file`**: Parser file paths
+   ```yaml
+   parser:
+     file: "{{ execution_dir }}/output_{{ repetition }}.json"
+   ```
+
+6. **`benchmark.workdir`**: Working directory
+   ```yaml
+   benchmark:
+     workdir: "/scratch/{{ username }}/benchmarks"
+   ```
+
+### 7. Common Use Cases
+
+#### Conditional Command Options
+
+```yaml
+vars:
+  use_compression:
+    type: bool
+    sweep:
+      mode: list
+      values: [true, false]
+
+  enable_debug:
+    type: bool
+    sweep:
+      mode: list
+      values: [false]
+
+command:
+  template: >
+    my_benchmark --input data.bin
+    {% if use_compression %} --compress gzip {% endif %}
+    {% if enable_debug %} --verbose --log-level DEBUG {% endif %}
+    --output {{ execution_dir }}/result.out
+```
+
+#### Dynamic Script Generation
+
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+scripts:
+  - name: "benchmark"
+    submit: "sbatch"
+    script_template: |
+      #!/bin/bash
+      #SBATCH --job-name=iops_{{ execution_id }}
+      #SBATCH --nodes={{ nodes }}
+      {% if nodes > 4 %}
+      #SBATCH --time=04:00:00
+      #SBATCH --partition=large
+      {% else %}
+      #SBATCH --time=01:00:00
+      #SBATCH --partition=normal
+      {% endif %}
+
+      module load mpi
+      {{ command.template }}
+```
+
+#### Conditional File Paths
+
+```yaml
+vars:
+  filesystem:
+    type: str
+    sweep:
+      mode: list
+      values: ["lustre", "beegfs", "gpfs"]
+
+  output_path:
+    type: str
+    expr: >
+      {% if filesystem == "lustre" %}/mnt/lustre/benchmarks
+      {% elif filesystem == "beegfs" %}/beegfs/benchmarks
+      {% else %}/gpfs/benchmarks{% endif %}/{{ execution_id }}
+```
+
+#### Environment-Specific Configuration
+
+```yaml
+vars:
+  environment:
+    type: str
+    sweep:
+      mode: list
+      values: ["dev", "staging", "production"]
+
+command:
+  template: >
+    benchmark
+    --config {% if environment == "production" %}/etc/prod.conf{% else %}/etc/dev.conf{% endif %}
+    {% if environment == "dev" %} --debug --verbose {% endif %}
+    --output {{ output_file }}
+```
+
+### 8. Syntax Requirements Summary
+
+**Variable substitution `{{ }}`:**
+- Spaces optional but recommended: `{{ var }}` preferred over `{{var}}`
+- Use for: outputting values, expressions
+
+**Control structures `{% %}`:**
+- **Spaces are REQUIRED**: `{% if condition %}` not `{%if condition%}`
+- **Always close tags**: `{% if %}` requires `{% endif %}`, `{% for %}` requires `{% endfor %}`
+- Use for: conditionals, loops, control flow
+
+**Comments `{# #}`:**
+- Used for template comments (ignored in output)
+- Example: `{# This is a comment #}`
+
+**Common errors:**
+- `TemplateSyntaxError: expected token 'end of statement block'`: Missing spaces in `{% %}`
+  - Fix: `{%if x%}` → `{% if x %}`
+- `UndefinedError`: Referencing undefined variable
+  - Fix: Use `{{ var | default('fallback') }}` or ensure variable exists
+
+### 9. Strict Mode
+
+IOPS templates use Jinja2's `StrictUndefined` mode:
+
+- **Referencing undefined variables raises an immediate error**
+- This prevents silent failures from typos
+- Use the `default` filter for optional variables: `{{ optional_var | default('fallback') }}`
+
+### 10. Advanced Example
+
+Complete example combining multiple Jinja2 features:
+
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  operation:
+    type: str
+    sweep:
+      mode: list
+      values: ["read", "write"]
+
+  use_compression:
+    type: bool
+    sweep:
+      mode: list
+      values: [true, false]
+
+  ntasks:
+    type: int
+    expr: "{{ nodes * 16 }}"
+
+  output_dir:
+    type: str
+    expr: "{{ execution_dir }}/{% if use_compression %}compressed{% else %}uncompressed{% endif %}"
+
+command:
+  template: >
+    mpirun -np {{ ntasks }}
+    ior {% if operation == "write" %}-w{% else %}-r{% endif %}
+    {% if use_compression %} --compress gzip {% endif %}
+    {% if nodes > 4 %} --collective {% endif %}
+    -b 1gb -t 1mb
+    -o {{ output_dir }}/data.ior
+
+scripts:
+  - name: "benchmark"
+    submit: "{% if nodes > 1 %}sbatch{% else %}bash{% endif %}"
+    script_template: |
+      #!/bin/bash
+      {% if nodes > 1 %}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --time={% if nodes > 4 %}04:00:00{% else %}01:00:00{% endif %}
+      {% endif %}
+
+      echo "Running {{ operation }} test with {{ nodes }} nodes"
+      {% if use_compression %}
+      echo "Compression: enabled"
+      {% else %}
+      echo "Compression: disabled"
+      {% endif %}
+
+      {{ command.template }}
+```
+
+This example demonstrates:
+- Conditionals in variable expressions (`expr`)
+- Conditionals in command templates
+- Conditionals in script templates (SLURM directives)
+- Mixed numeric comparisons and string equality
+- Nested conditionals
+- Variable interpolation throughout
 
 ---
 
