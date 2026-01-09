@@ -458,33 +458,8 @@ metrics:
 - **Interactive hover**: Shows all variable values and the metric value for each cell
 - **Performance**: Keep total variables to 2-3 for best performance (more variables = larger pivot table)
 
-**Example output**:
-```
-                     transfer_size_kb: 32    1024   8192   32768
-nodes  processes_per_node
-1      1                               150.2  145.8  142.1  138.5
-       64                              180.3  175.9  172.4  NaN
-       128                             195.1  190.7  NaN    NaN
-4      1                               245.8  242.1  238.6  235.2
-       64                              310.5  305.8  301.2  NaN
-       128                             NaN    NaN    NaN    NaN
-```
 
----
 
-## Per-Variable Plots
-
-Generate one plot per swept variable automatically:
-
-```yaml
-reporting:
-  default_plots:
-    - type: "bar"
-      per_variable: true          # Create one bar chart per variable
-      show_error_bars: true
-```
-
-This is useful for quick exploration of all parameters without manually specifying each plot.
 
 ---
 
@@ -504,7 +479,7 @@ reporting:
 These plots are used when:
 - `custom_plots` section is enabled
 - A metric has no specific `metrics.{metric_name}` configuration
-
+- Quick exploration of all parameters without manually specifying each plot.
 ---
 
 ## Themes and Styling
@@ -596,7 +571,7 @@ reporting:
 
 ---
 
-## Complete Examples
+##  Examples
 
 ### Minimal Configuration
 
@@ -700,151 +675,4 @@ reporting:
           title: "Bandwidth vs Latency Trade-off"
 ```
 
-### Dark Theme Report
 
-```yaml
-reporting:
-  enabled: true
-
-  theme:
-    style: "plotly_dark"
-    colors: ["#00d4ff", "#ff006e", "#ffbe0b", "#8338ec"]
-
-  metrics:
-    bandwidth:
-      plots:
-        - type: "heatmap"
-          x_var: "nodes"
-          y_var: "block_size"
-          colorscale: "Plasma"
-```
-
----
-
-## Configuration Priority
-
-When using `--report-config`, the configuration priority is:
-
-1. **CLI-provided config** (`--report-config custom.yaml`): Highest priority
-2. **Metadata config** (stored in workdir from execution): Used if no CLI override
-3. **Legacy defaults**: Fallback behavior for old runs without reporting metadata
-
----
-
-## Backward Compatibility
-
-The reporting feature is **fully backward compatible**:
-
-- Old workdirs without `reporting` configuration can still be analyzed with `iops report`
-- Reports are **opt-in** (disabled by default with `enabled: false`)
-- Existing configurations continue to work without modification
-
----
-
-## Best Practices
-
-### 1. Start Simple
-
-Begin with the minimal configuration and enable auto-generation:
-
-```yaml
-reporting:
-  enabled: true
-```
-
-Review the default report, then customize as needed.
-
-### 2. Use Report-Config for Iteration
-
-After running your benchmark once, experiment with visualizations using `--report-config`:
-
-```bash
-# Run benchmark once
-iops run config.yaml
-
-# Try different visualizations
-iops report /workdir/run_001 --report-config viz_v1.yaml
-iops report /workdir/run_001 --report-config viz_v2.yaml
-```
-
-### 3. Match Plot Types to Data
-
-- **Categorical/discrete variables**: Use bar charts
-- **Continuous trends**: Use line plots
-- **Two-variable relationships**: Use heatmaps or scatter plots
-- **Distribution analysis**: Use box/violin plots (when available)
-- **Multi-dimensional**: Use parallel coordinates or scatter with color/size
-
-### 4. Control Section Visibility
-
-Disable irrelevant sections to keep reports focused:
-
-```yaml
-reporting:
-  sections:
-    bayesian_evolution: false    # Disable if not using Bayesian
-    pareto_frontier: false       # Disable for single-metric benchmarks
-```
-
-### 5. Customize for Presentation
-
-For presentations or reports, use custom themes and high-resolution plots:
-
-```yaml
-reporting:
-  theme:
-    style: "simple_white"
-    font_family: "Arial, sans-serif"
-
-  plot_defaults:
-    height: 600
-    width: 1000
-```
-
----
-
-## Troubleshooting
-
-### Report Not Generated
-
-**Problem**: Report doesn't appear after execution.
-
-**Solution**: Verify `reporting.enabled: true` in your configuration.
-
-### Missing Plots
-
-**Problem**: Expected plots don't appear in the report.
-
-**Solution**: Check that:
-- `sections.custom_plots: true`
-- Metric names in `metrics` match parser output exactly
-- Required fields (`x_var`, etc.) are specified for plot type
-
-### Incorrect Variable Names
-
-**Problem**: Plots show errors about missing variables.
-
-**Solution**: Use `iops report /workdir/run_001 --dry-run` to see available variables and metrics (feature request).
-
-Verify variable names match those in your `vars` section.
-
-### Theme Not Applied
-
-**Problem**: Custom theme/colors not showing.
-
-**Solution**: Ensure `theme` is at the correct level:
-
-```yaml
-reporting:
-  enabled: true
-  theme:                # Correct: under reporting
-    style: "plotly_dark"
-```
-
----
-
-## Next Steps
-
-- Explore the [YAML Schema Reference](../reference/yaml-schema.md) for complete reporting configuration options
-- See [Example with Reporting](../examples/example_with_reporting.yaml) for a working configuration
-- Learn about [Analysis & Reports](analysis.md) for general analysis workflows

@@ -9,4 +9,3 @@ This section covers:
 
 - **[Installation](installation)** - Install IOPS on your system
 - **[Quick Start](quickstart)** - Run your first benchmark in 5 minutes
-- **[Basic Concepts](concepts)** - Understand IOPS architecture and workflow

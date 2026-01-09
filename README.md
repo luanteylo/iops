@@ -48,7 +48,10 @@ pip install iops-benchmark
 # Add the IOPS Spack repository
 spack repo add https://gitlab.inria.fr/lgouveia/iops-spack.git
 
-# Install IOPS
+# Option 1: Standalone mode - uses pip for dependencies
+spack install iops-benchmark+standalone
+
+# Option 2: Full Spack-managed dependencies
 spack install iops-benchmark
 
 # Load the module
@@ -72,73 +75,21 @@ pip install .
 iops --version
 ```
 
-### Development Installation
-
-For development work, install in editable mode:
-
-```bash
-# Clone the repository
-git clone https://gitlab.inria.fr/lgouveia/iops.git
-cd iops
-
-# Install in editable mode
-pip install -e .
-
-# Verify installation
-iops --version
-```
-
-### Using a Virtual Environment (Recommended)
-
-Using a virtual environment keeps IOPS dependencies isolated from your system Python:
-
-**Option 1: Python venv**
-
-```bash
-# Create virtual environment
-python3 -m venv iops_env
-
-# Activate it
-source iops_env/bin/activate  # On Linux/Mac
-
-# Install IOPS (from source)
-pip install .
-
-# Or for development
-pip install -e .
-
-# Verify installation
-iops --version
-```
-
-**Option 2: Conda**
-
-```bash
-# Create conda environment
-conda create -n iops python=3.10
-conda activate iops
-
-# Install IOPS (from source)
-pip install .
-
-# Or for development
-pip install -e .
-
-# Verify installation
-iops --version
-```
-
 ## Quick Start
 
 ### 1. Create a Configuration
 
-Generate a comprehensive YAML template with all options documented:
+Generate a YAML configuration template:
 
 ```bash
 iops generate my_config.yaml
 ```
 
-This creates a fully-commented template showing all available configuration options. Customize it for your needs.
+For a fully-documented template with all options:
+
+```bash
+iops generate my_config.yaml --full
+```
 
 Or start from an example:
 
@@ -243,7 +194,6 @@ benchmark:
   name: "My Benchmark Study"
   workdir: "./workdir"
   executor: "local"  # or "slurm" for clusters
-  search_method: "exhaustive"
   repetitions: 3
 
 vars:
@@ -257,18 +207,33 @@ vars:
     type: int
     sweep:
       mode: list
-      values: [4, 16, 64]
+      values: [64, 256, 1024]
 
 command:
   template: "my_benchmark --threads {{ threads }} --buffer {{ buffer_size }}"
 
 scripts:
   - name: "benchmark"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      # Built-in variables: execution_id, execution_dir, repetition
+      echo "Running execution {{ execution_id }}, repetition {{ repetition }}"
+      {{ command.template }} > output.txt
+
     parser:
-      file: "{{ execution_dir }}/output.json"
+      # execution_dir is automatically set to each execution's folder
+      file: "{{ execution_dir }}/output.txt"
       metrics:
         - name: throughput
-      parser_script: scripts/parse_results.py
+      parser_script: |
+        import re
+
+        def parse(file_path: str):
+            with open(file_path) as f:
+                content = f.read()
+            match = re.search(r"throughput:\s*([\d.]+)", content)
+            return {"throughput": float(match.group(1)) if match else 0}
 
 output:
   sink:

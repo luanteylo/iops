@@ -26,34 +26,35 @@ pip install iops-benchmark
 ### Adding the IOPS Spack Repository
 
 ```bash
-# Add the IOPS Spack repository directly
+# Add the IOPS Spack repository
 spack repo add https://gitlab.inria.fr/lgouveia/iops-spack.git
 ```
 
-### Installing IOPS
+### Option 1: Standalone Mode
+
+Uses pip to install dependencies from PyPI.
 
 ```bash
-# Install IOPS and all dependencies
-spack install iops-benchmark
+spack install iops-benchmark+standalone
+```
 
+### Option 2: Full Spack-Managed Dependencies
+
+Spack builds and manages all dependencies.
+
+```bash
+spack install iops-benchmark
+```
+
+### Loading and Verifying
+
+```bash
 # Load the module
 spack load iops-benchmark
 
 # Verify installation
 iops --version
 ```
-
-### Tips for HPC Systems
-
-On HPC systems with older compilers, you may need to load a newer GCC module before installing:
-
-```bash
-module load gcc/12.2.0  # adjust version as needed
-spack compiler find
-spack install iops-benchmark
-```
-
-To speed up installation, you can configure Spack to use system packages (Python, OpenSSL, etc.) by editing `~/.spack/packages.yaml`. See the [Spack documentation](https://spack.readthedocs.io/en/latest/getting_started.html#system-packages) for details.
 
 ## Installation from Source
 
@@ -68,64 +69,6 @@ cd iops
 
 # Install the package with dependencies
 pip install .
-
-# Verify installation
-iops --version
-```
-
-### Development Installation
-
-For development work, install in editable mode:
-
-```bash
-# Clone the repository
-git clone https://gitlab.inria.fr/lgouveia/iops.git
-cd iops
-
-# Install in editable mode
-pip install -e .
-
-# Verify installation
-iops --version
-```
-
-## Using a Virtual Environment (Recommended)
-
-Using a virtual environment keeps IOPS dependencies isolated from your system Python.
-
-### Option 1: Python venv
-
-```bash
-# Create virtual environment
-python3 -m venv iops_env
-
-# Activate it
-source iops_env/bin/activate  # On Linux/Mac
-# or on Windows:
-# iops_env\Scripts\activate
-
-# Install IOPS (from source)
-pip install .
-
-# Or for development
-pip install -e .
-
-# Verify installation
-iops --version
-```
-
-### Option 2: Conda
-
-```bash
-# Create conda environment
-conda create -n iops python=3.10
-conda activate iops
-
-# Install IOPS (from source)
-pip install .
-
-# Or for development
-pip install -e .
 
 # Verify installation
 iops --version
@@ -146,21 +89,3 @@ iops generate test_config.yaml
 iops check test_config.yaml
 ```
 
-## Dependencies
-
-IOPS automatically installs the following dependencies:
-
-- `pyyaml` - YAML parsing
-- `ruamel.yaml` - Enhanced YAML support
-- `psutil` - System utilities
-- `sqlmodel` - SQLite ORM
-- `smt` - Surrogate modeling toolkit
-- `scikit-optimize` - Bayesian optimization
-- `pandas` - Data manipulation
-- `jinja2` - Template engine
-- `plotly` - Interactive plots
-- `pyarrow` & `fastparquet` - Parquet file support
-
-## Next Steps
-
-Now that IOPS is installed, proceed to the [Quick Start](quickstart.md) guide to run your first benchmark.

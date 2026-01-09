@@ -31,19 +31,9 @@ enableGitInfo = true
   weight = 3
 
 [[menu.main]]
-  name = "Examples"
-  url = "examples/"
-  weight = 4
-
-[[menu.main]]
-  name = "Reference"
-  url = "reference/"
-  weight = 5
-
-[[menu.main]]
   name = "About"
   url = "about/"
-  weight = 6
+  weight = 4
 
 [[menu.main]]
   name = "Search"

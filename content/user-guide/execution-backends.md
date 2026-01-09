@@ -158,18 +158,3 @@ This allows IOPS to work with various SLURM configurations and wrapper systems c
 - The `{job_id}` placeholder is required for status, info, and cancel commands.
 - The `poll_interval` controls how often (in seconds) IOPS checks job status during execution. Default is 30 seconds.
 
-## Comparison
-
-| Feature | Local | SLURM |
-|---------|-------|-------|
-| **Setup** | Simple | Requires cluster access |
-| **Parallelism** | Limited | High |
-| **Resource Management** | Manual | Automatic |
-| **Monitoring** | Direct | Via scheduler |
-| **Budget Tracking** | No | Yes |
-
-## Next Steps
-
-- Learn about [Configuration](configuration.md)
-- Understand [Result Caching](caching.md)
-- See [SLURM examples](../examples/slurm.md)
