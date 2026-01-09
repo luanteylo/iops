@@ -11,7 +11,7 @@
   "@type": "SoftwareSourceCode",
   "name": "IOPS",
   "description": "A generic benchmark orchestration framework for automated parametric experiments.",
-  "version": "3.1.2",
+  "version": "3.3.1",
   "license": "https://spdx.org/licenses/BSD-3-Clause",
   "programmingLanguage": "Python",
   "author": {
