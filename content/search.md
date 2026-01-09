@@ -83,7 +83,11 @@ date: 2024-01-01
     .then(data => {
       searchData = data;
       fuse = new Fuse(data, {
-        keys: ['title', 'content'],
+        keys: [
+          { name: 'title', weight: 3 },
+          { name: 'section', weight: 2 },
+          { name: 'content', weight: 1 }
+        ],
         includeScore: true,
         threshold: 0.4,
         ignoreLocation: true
