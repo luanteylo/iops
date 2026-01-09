@@ -135,8 +135,8 @@ class BasePlanner(ABC, HasLogger):
         self.logger.info("  search_method: %s", bench.search_method)
         self.logger.info("  repetitions: %s", bench.repetitions)
         self.logger.info("  random_seed: %s", bench.random_seed)
-        if bench.sqlite_db:
-            self.logger.info("  sqlite_db: %s", bench.sqlite_db)
+        if bench.cache_file:
+            self.logger.info("  cache_file: %s", bench.cache_file)
         if bench.cache_exclude_vars:
             self.logger.info("  cache_exclude_vars: %s", bench.cache_exclude_vars)
         if bench.exhaustive_vars:

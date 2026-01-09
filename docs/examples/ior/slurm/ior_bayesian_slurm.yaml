@@ -13,7 +13,7 @@
 #
 # Usage:
 #   Run optimization:  iops run example_plafrim_bayesian.yaml
-#   Generate report:   iops analyze /home/lgouveia/workdir/run_XXX
+#   Generate report:   iops report /home/lgouveia/workdir/run_XXX
 #   Debug mode:        iops run example_plafrim_bayesian.yaml --log_level DEBUG
 #
 # =============================================================================
@@ -22,7 +22,7 @@ benchmark:
   name: "IOR Bayesian Optimization - PlaFRIM"
   description: "Find optimal IOR parameters for maximum write bandwidth using Bayesian optimization on PlaFRIM cluster"
   workdir: "/home/lgouveia/workdir/"
-  sqlite_db: "/home/lgouveia/iops_bayesian.db"
+  cache_file: "/home/lgouveia/iops_bayesian.db"
 
   # Bayesian optimization settings
   search_method: "bayesian"
@@ -183,7 +183,7 @@ output:
 #
 # 5. Analysis:
 #    After completion, generate report:
-#      iops analyze /home/lgouveia/workdir/run_XXX
+#      iops report /home/lgouveia/workdir/run_XXX
 #
 #    Report includes:
 #    - Best configuration found

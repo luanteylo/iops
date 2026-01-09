@@ -189,7 +189,7 @@ iops find /path/to/workdir/run_001/exec_042
 
 ```bash
 # Generate HTML report with interactive plots
-iops analyze /path/to/workdir/run_001
+iops report /path/to/workdir/run_001
 ```
 
 ## How It Works
@@ -313,7 +313,7 @@ IOPS caches execution results to avoid redundant tests. Enable caching by specif
 
 ```yaml
 benchmark:
-  sqlite_db: "/path/to/cache.db"
+  cache_file: "/path/to/cache.db"
 ```
 
 Then use `--use-cache` to skip tests with identical parameters:
@@ -397,7 +397,7 @@ iops find <path> nodes=4 ppn=8    # Filter by parameters
 iops find <path> --show-command   # Show command column
 
 # Generate analysis report
-iops analyze <workdir/run_NNN> [--report-config report.yaml]
+iops report <workdir/run_NNN> [--report-config report.yaml]
 
 # Generate configuration template
 iops generate [output.yaml]

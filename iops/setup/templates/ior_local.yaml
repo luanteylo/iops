@@ -1,0 +1,98 @@
+# =============================================================================
+# IOPS Configuration - IOR Benchmark (Local Execution)
+# =============================================================================
+#
+# A simple configuration for running IOR benchmarks locally with MPI.
+#
+# Quick Start:
+#   1. Update paths: workdir, output file path in command template
+#   2. Validate: iops check my_config.yaml
+#   3. Dry run:  iops run my_config.yaml --dry-run
+#   4. Execute:  iops run my_config.yaml
+#
+# For a fully documented template with all options, run: iops generate --full
+# =============================================================================
+
+benchmark:
+  name: "IOR Benchmark"
+  workdir: "./"
+  repetitions: 3
+  search_method: "exhaustive"
+  executor: "local"
+  cache_file: "./iops_cache.db"
+
+vars:
+  # Number of MPI processes
+  processes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  # Data volume size in GB
+  volume_size_gb:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+
+  # Computed block size (ensures each process writes equal share)
+  block_size_mb:
+    type: int
+    expr: "(volume_size_gb * 1024) // processes"
+
+  # Output file for IOR JSON summary
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary.json"
+
+command:
+  template: >
+    ior -w -r -b {{ block_size_mb }}m -t 1m
+    -O summaryFile={{ summary_file }} -O summaryFormat=JSON
+    -o ./testfile.ior
+
+scripts:
+  - name: "ior"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      set -euo pipefail
+
+      echo "Running IOR with {{ processes }} processes"
+      mpirun -np {{ processes }} {{ command.template }}
+      echo "Completed repetition {{ repetition }}"
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+      parser_script: |
+        import json
+
+        def parse(file_path: str):
+            """Parse IOR JSON output and extract bandwidth metric."""
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError("No tests found in IOR JSON output")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError("No Results found in IOR JSON output")
+
+            # Get write result (or first result if only one exists)
+            write_res = next(
+                (r for r in results if str(r.get("access", "")).lower() == "write"),
+                results[0],
+            )
+
+            return {"bwMiB": write_res.get("bwMiB")}
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+    mode: append

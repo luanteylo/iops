@@ -14,7 +14,7 @@
 #
 # Usage:
 #   iops run example_bayesian.yaml
-#   iops analyze <workdir>/run_XXX  # Generate analysis report after completion
+#   iops report <workdir>/run_XXX  # Generate analysis report after completion
 #
 # =============================================================================
 
@@ -22,7 +22,7 @@ benchmark:
   name: "IOR Bayesian Optimization"
   description: "Find optimal IOR parameters for maximum write bandwidth using Bayesian optimization"
   workdir: "/home/luan/workdir/"
-  sqlite_db: "/home/luan/iops_bayesian.db"
+  cache_file: "/home/luan/iops_bayesian.db"
 
   # Use Bayesian optimization search method
   search_method: "bayesian"
@@ -163,7 +163,7 @@ output:
 #    - LCB (Lower Confidence Bound): More explorative, broader search
 #
 # 5. After Completion:
-#    - Run: iops analyze <workdir>/run_XXX
+#    - Run: iops report <workdir>/run_XXX
 #    - Report shows convergence, best parameters, and optimization progress
 #    - Best configuration will show optimal processes_per_node and volume_size_gb
 #

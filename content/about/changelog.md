@@ -8,6 +8,23 @@ All notable changes to IOPS are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1] - 2026-01-09
+
+### Added
+- YAML file shorthand: `iops config.yaml` now works as `iops run config.yaml`
+- `dryrun_` prefix for dry-run folders to distinguish from regular runs
+- `cache_file` enabled by default in generated templates
+- Client-side search to documentation site
+- Benchmark metadata display in `iops find` output (name, host, timestamp)
+
+### Changed
+- Rename `sqlite_db` config field to `cache_file` for clarity
+- Enhance `iops find` to detect both `run_*` and `dryrun_*` folders
+
+### Fixed
+- Search index to include full page content
+- File permission test when running as root
+
 ## [3.3.0] - 2026-01-09
 
 ### Added
@@ -247,7 +264,7 @@ IOPS 3.0 is a major rewrite with breaking changes to the configuration format.
 - Try `iops generate` to create a template
 - Enable caching with `iops run config.yaml --use-cache` for faster iterations
 - Use Bayesian optimization for large parameter spaces
-- Generate reports with `iops analyze ./workdir/run_001`
+- Generate reports with `iops report ./workdir/run_001`
 - Explore executions with `iops find ./workdir nodes=4`
 
 ---

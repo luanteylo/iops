@@ -99,7 +99,7 @@ After your benchmark completes, generate an interactive HTML report:
 
 ```bash
 # Generate HTML report with interactive plots
-iops analyze /path/to/workdir/run_001
+iops report /path/to/workdir/run_001
 ```
 
 The report includes:

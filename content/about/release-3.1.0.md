@@ -85,7 +85,7 @@ This makes it trivial to regenerate reports with different visualizations:
 vim workdir/run_001/report_config.yaml
 
 # Regenerate report with new settings
-iops --analyze workdir/run_001 --report-config workdir/run_001/report_config.yaml
+iops report workdir/run_001 --report-config workdir/run_001/report_config.yaml
 ```
 
 ### Enhanced Test Summary

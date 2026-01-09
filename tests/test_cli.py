@@ -124,17 +124,17 @@ class TestParseArguments:
             args = parse_arguments()
             assert args.time_estimate == '120'
 
-    def test_parse_analyze(self):
-        """Test 'analyze' command."""
-        test_args = ['analyze', '/path/to/workdir']
+    def test_parse_report(self):
+        """Test 'report' command."""
+        test_args = ['report', '/path/to/workdir']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
-            assert args.command == 'analyze'
+            assert args.command == 'report'
             assert args.path == Path('/path/to/workdir')
 
     def test_parse_report_config(self):
-        """Test --report-config argument with analyze command."""
-        test_args = ['analyze', '/path/to/workdir', '--report-config', 'report.yaml']
+        """Test --report-config argument with report command."""
+        test_args = ['report', '/path/to/workdir', '--report-config', 'report.yaml']
         with patch.object(sys, 'argv', ['iops'] + test_args):
             args = parse_arguments()
             assert args.report_config == Path('report.yaml')
@@ -269,8 +269,14 @@ class TestGenerate:
                 with patch('iops.main.initialize_logger'):
                     main()
 
-            # Verify custom path was passed
-            mock_wizard.run.assert_called_once_with(output_path='custom.yaml')
+            # Verify custom path was passed with default options
+            mock_wizard.run.assert_called_once_with(
+                output_path='custom.yaml',
+                executor='local',
+                benchmark='ior',
+                full_template=False,
+                copy_examples=False
+            )
 
     def test_generate_cancelled(self):
         """Test template generation when user cancels."""
@@ -381,15 +387,15 @@ class TestCheck:
         mock_validate.assert_called_once()
 
 
-class TestAnalyze:
-    """Test 'analyze' command (report generation from workdir)."""
+class TestReport:
+    """Test 'report' command (report generation from workdir)."""
 
     @patch('iops.reporting.report_generator.generate_report_from_workdir')
-    def test_analyze_success(self, mock_generate):
+    def test_report_success(self, mock_generate):
         """Test successful report generation."""
         mock_generate.return_value = Path('/workdir/report.html')
 
-        test_args = ['analyze', '/path/to/workdir']
+        test_args = ['report', '/path/to/workdir']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -402,13 +408,13 @@ class TestAnalyze:
 
     @patch('iops.reporting.report_generator.generate_report_from_workdir')
     @patch('iops.config.loader.load_report_config')
-    def test_analyze_with_custom_report_config(self, mock_load_config, mock_generate):
+    def test_report_with_custom_report_config(self, mock_load_config, mock_generate):
         """Test report generation with custom report config."""
         mock_report_config = Mock()
         mock_load_config.return_value = mock_report_config
         mock_generate.return_value = Path('/workdir/report.html')
 
-        test_args = ['analyze', '/path/to/workdir', '--report-config', 'report.yaml']
+        test_args = ['report', '/path/to/workdir', '--report-config', 'report.yaml']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -421,11 +427,11 @@ class TestAnalyze:
         )
 
     @patch('iops.config.loader.load_report_config')
-    def test_analyze_invalid_report_config(self, mock_load_config):
-        """Test analyze with invalid report config file."""
+    def test_report_invalid_report_config(self, mock_load_config):
+        """Test report with invalid report config file."""
         mock_load_config.side_effect = ConfigValidationError("Invalid config")
 
-        test_args = ['analyze', '/path/to/workdir', '--report-config', 'bad.yaml']
+        test_args = ['report', '/path/to/workdir', '--report-config', 'bad.yaml']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -433,11 +439,11 @@ class TestAnalyze:
                 main()
 
     @patch('iops.config.loader.load_report_config')
-    def test_analyze_invalid_report_config_verbose(self, mock_load_config):
-        """Test analyze with invalid report config and --verbose."""
+    def test_report_invalid_report_config_verbose(self, mock_load_config):
+        """Test report with invalid report config and --verbose."""
         mock_load_config.side_effect = ConfigValidationError("Invalid config")
 
-        test_args = ['analyze', '/path/to/workdir', '--report-config', 'bad.yaml', '--verbose']
+        test_args = ['report', '/path/to/workdir', '--report-config', 'bad.yaml', '--verbose']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -445,11 +451,11 @@ class TestAnalyze:
                     main()
 
     @patch('iops.reporting.report_generator.generate_report_from_workdir')
-    def test_analyze_generation_error(self, mock_generate):
-        """Test analyze when report generation fails."""
+    def test_report_generation_error(self, mock_generate):
+        """Test report when report generation fails."""
         mock_generate.side_effect = FileNotFoundError("Missing metadata")
 
-        test_args = ['analyze', '/path/to/workdir']
+        test_args = ['report', '/path/to/workdir']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -457,11 +463,11 @@ class TestAnalyze:
                 main()
 
     @patch('iops.reporting.report_generator.generate_report_from_workdir')
-    def test_analyze_generation_error_verbose(self, mock_generate):
-        """Test analyze error with --verbose shows traceback."""
+    def test_report_generation_error_verbose(self, mock_generate):
+        """Test report error with --verbose shows traceback."""
         mock_generate.side_effect = FileNotFoundError("Missing metadata")
 
-        test_args = ['analyze', '/path/to/workdir', '--verbose']
+        test_args = ['report', '/path/to/workdir', '--verbose']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):
@@ -711,9 +717,9 @@ class TestSpecialModes:
 
         # Should complete without error about missing config_file
 
-    def test_analyze_exits_early(self):
-        """Test that 'analyze' command doesn't require config_file."""
-        test_args = ['analyze', '/workdir']
+    def test_report_exits_early(self):
+        """Test that 'report' command doesn't require config_file."""
+        test_args = ['report', '/workdir']
 
         with patch.object(sys, 'argv', ['iops'] + test_args):
             with patch('iops.main.initialize_logger'):

@@ -29,10 +29,10 @@ benchmark:
   # Structure: <workdir>/run_NNN/runs/ and <workdir>/run_NNN/logs/
   workdir: "/path/to/your/workdir"
 
-  # Optional: SQLite database for caching execution results
-  # When --use_cache is specified, results are reused if parameters match
+  # Optional: Cache file for storing execution results
+  # When --use-cache is specified, results are reused if parameters match
   # Set this to enable caching across multiple runs
-  sqlite_db: "/path/to/your/cache.db"
+  cache_file: "/path/to/your/cache.db"
 
   # Optional: Number of repetitions for each test case (default: 1)
   repetitions: 3
@@ -171,7 +171,7 @@ benchmark:
   # estimated_time_seconds: 300
 
   # Optional: Variables to include in analysis reports
-  # When using --analyze, only these variables will be used in plots and Pareto frontier
+  # When using --report, only these variables will be used in plots and Pareto frontier
   # Useful when you have string variables that shouldn't be plotted
   # If omitted, all numeric swept variables are included
   report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
@@ -300,13 +300,7 @@ command:
     -O summaryFile={{ summary_file }} -O summaryFormat=JSON
     -o {{ ost_path }}/output.ior
 
-  # Example with conditionals (commented out):
-  # template: >
-  #   ior -w -b {{ block_size_mb }}mb -t 1mb
-  #   {% if ost_count > 4 %} --collective {% endif %}
-  #   {% if nodes > 8 %} --large-scale-mode {% endif %}
-  #   -O summaryFile={{ summary_file }} -O summaryFormat=JSON
-  #   -o {{ ost_path }}/output.ior
+
 
   # Optional: Additional metadata to attach to results
   # This appears in output as metadata.* columns
@@ -324,65 +318,56 @@ command:
 #   - External script files: script_template: path/to/script.sh
 #   - Embedded scripts: script_template: | (inline YAML multiline string)
 #
-# NOTE: For better maintainability, use external script files referenced by path.
-#       Embedded scripts are shown here for completeness but are harder to debug
-#       and edit. See docs/examples/scripts/ for reference implementations.
+# This template uses embedded scripts for portability. You can also reference
+# external script files by replacing the embedded content with a file path.
+# Use 'iops generate --examples' to get example scripts you can customize.
 # =============================================================================
 scripts:
   # Script name (can define multiple scripts)
   - name: "ior"
 
-    # submission method for this script (required for local and slurm executors)
-    #submit: "bash"        # for local executor
-    submit: "sbatch"
+    # Submission method for this script (required for local and slurm executors)
+    # submit: "bash"      # for local executor
+    submit: "sbatch"      # for SLURM executor
 
     # ---------------------------------------------------------------------------
-    # SCRIPT OPTIONS:
+    # SCRIPT TEMPLATE
     # ---------------------------------------------------------------------------
-    # OPTION 1: EXTERNAL SCRIPT FILE (RECOMMENDED - Active by default)
-    #   Reference an external script file. This is the preferred approach.
-    #   The wizard copied working example scripts organized by tool:
-    #     - examples/ior/scripts/ior_slurm.sh (SLURM submission script for IOR)
-    #     - examples/ior/scripts/ior_parser.py (IOR result parser)
-    #     - examples/mdtest/scripts/ (for mdtest-specific scripts)
-    #
-    #   Customize these scripts for your cluster and benchmark needs.
+    # The script to execute. Can be:
+    #   - Embedded (inline YAML string) - used here for portability
+    #   - External file path: script_template: path/to/script.sh
     # ---------------------------------------------------------------------------
-    script_template: examples/ior/scripts/ior_slurm.sh
+    script_template: |
+      #!/bin/bash
 
-    # ---------------------------------------------------------------------------
-    # OPTION 2: EMBEDDED SCRIPT (alternative, less maintainable)
-    #   You can embed the script directly in YAML. However, this makes editing
-    #   and debugging more difficult. Use external files when possible.
-    #
-    #   To use embedded script, comment out the line above and uncomment below:
-    # ---------------------------------------------------------------------------
-    # script_template: |
-    #   #!/bin/bash
-    #
-    #   #SBATCH --job-name=iops_{{ execution_id }}
-    #   #SBATCH --ntasks={{ ntasks }}
-    #   #SBATCH --nodes={{ nodes }}
-    #   #SBATCH --ntasks-per-node={{ processes_per_node }}
-    #   #SBATCH --time=04:00:00
-    #   #SBATCH --chdir={{ execution_dir }}
-    #   #SBATCH -o batch%j.out
-    #   #SBATCH -e batch%j.err
-    #   #SBATCH --exclusive
-    #
-    #   # Uncomment and customize these SLURM directives as needed:
-    #   # #SBATCH --partition=your_partition
-    #   # #SBATCH --constraint=your_constraint
-    #   # #SBATCH --account=your_account
-    #   # #SBATCH --qos=your_qos
-    #
-    #   # Load required modules (customize for your cluster)
-    #   module purge
-    #   module load mpi/openmpi/4.0.1
-    #
-    #   # Execute the benchmark command
-    #   # Note: SLURM sets MPI task count automatically via --ntasks
-    #   mpirun {{ command.template }}
+      #SBATCH --job-name=iops_{{ execution_id }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=04:00:00
+      #SBATCH --chdir={{ execution_dir }}
+      #SBATCH -o batch%j.out
+      #SBATCH -e batch%j.err
+      #SBATCH --exclusive
+
+      # Uncomment and customize these SLURM directives as needed:
+      # #SBATCH --partition=your_partition
+      # #SBATCH --constraint=your_constraint
+      # #SBATCH --account=your_account
+      # #SBATCH --qos=your_qos
+
+      # Load required modules (customize for your cluster)
+      module purge
+      module load mpi
+
+      # Log SLURM allocation info
+      echo "=== SLURM Allocation ==="
+      echo "Nodes: $SLURM_JOB_NUM_NODES"
+      echo "Tasks: $SLURM_NTASKS"
+      echo "========================"
+
+      # Execute the benchmark command
+      mpirun {{ command.template }}
 
     # ---------------------------------------------------------------------------
     # POST-EXECUTION SCRIPT (optional)
@@ -415,68 +400,44 @@ scripts:
         # - name: runtime   # Total execution time
 
       # ---------------------------------------------------------------------------
-      # PARSER SCRIPT OPTIONS:
+      # PARSER SCRIPT
       # ---------------------------------------------------------------------------
-      # OPTION 1: EXTERNAL PARSER SCRIPT (RECOMMENDED - Active by default)
-      #   Reference an external Python script with a parse(file_path) function.
-      #   This makes editing and debugging easier.
-      #   The wizard copied a working IOR parser to: examples/ior/scripts/ior_parser.py
-      #
-      #   Customize this script to parse your benchmark's output format.
+      # Python script to parse output files. Can be:
+      #   - Embedded (inline YAML string) - used here for portability
+      #   - External file path: parser_script: path/to/parser.py
+      # Must define: def parse(file_path: str) -> dict
       # ---------------------------------------------------------------------------
-      parser_script: examples/ior/scripts/ior_parser.py
+      parser_script: |
+        import json
 
-      # ---------------------------------------------------------------------------
-      # OPTION 2: EMBEDDED PARSER SCRIPT (alternative)
-      #   Embed the parser directly in this YAML file.
-      #   Must define: def parse(file_path: str) -> dict
-      #
-      #   To use embedded parser, comment out the line above and uncomment below:
-      # ---------------------------------------------------------------------------
-      # parser_script: |
-      #   import json
-      #
-      #   def parse(file_path: str):
-      #       """
-      #       Parse IOR JSON output and extract metrics.
-      #
-      #       This is an example parser for IOR JSON format output.
-      #       Customize this function to parse your benchmark's output format.
-      #
-      #       Args:
-      #           file_path: Path to the output file to parse
-      #
-      #       Returns:
-      #           dict: Metrics dictionary with keys matching 'metrics' list above
-      #                 Example: {"bwMiB": 1234.5, "iops": 5000}
-      #       """
-      #       with open(file_path, "r") as f:
-      #           data = json.load(f)
-      #
-      #       # Navigate IOR JSON structure
-      #       # Customize this section based on your output format
-      #       tests = data.get("tests", [])
-      #       if not tests:
-      #           raise ValueError("No tests found in IOR JSON")
-      #
-      #       results = tests[0].get("Results", [])
-      #       if not results:
-      #           raise ValueError("No Results found in IOR JSON")
-      #
-      #       # Find write operation (or use first result)
-      #       write_res = next(
-      #           (r for r in results if str(r.get("access", "")).lower() == "write"),
-      #           results[0],
-      #       )
-      #
-      #       # Return metrics dictionary
-      #       # Keys MUST match the names in 'metrics' list above
-      #       return {
-      #           "bwMiB": write_res.get("bwMiB"),
-      #           # Add more metrics as needed:
-      #           # "iops": write_res.get("iops"),
-      #           # "latency": write_res.get("latency"),
-      #       }
+        def parse(file_path: str):
+            """
+            Parse IOR JSON output and extract metrics.
+
+            Args:
+                file_path: Path to the output file to parse
+
+            Returns:
+                dict: Metrics dictionary with keys matching 'metrics' list above
+            """
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError("No tests found in IOR JSON")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError("No Results found in IOR JSON")
+
+            # Find write operation (or use first result)
+            write_res = next(
+                (r for r in results if str(r.get("access", "")).lower() == "write"),
+                results[0],
+            )
+
+            return {"bwMiB": write_res.get("bwMiB")}
 
 
 # =============================================================================
@@ -514,8 +475,8 @@ output:
 # REPORTING CONFIGURATION (optional)
 # =============================================================================
 # Automatic HTML report generation with interactive plots
-# Manual: iops --analyze /path/to/workdir/run_NNN
-# Custom: iops --analyze /path/to/workdir/run_NNN --report-config report.yaml
+# Manual: iops --report /path/to/workdir/run_NNN
+# Custom: iops --report /path/to/workdir/run_NNN --report-config report.yaml
 # Docs: https://lgouveia.gitlabpages.inria.fr/iops/user-guide/reporting/
 # =============================================================================
 # reporting:
@@ -654,7 +615,7 @@ output:
 #   - Cache: Use --use_cache to reuse results from previous runs
 #   - Dry-run: Use --dry-run to preview execution without running tests
 #   - Budget: Set max_core_hours and cores_expr for resource limits
-#   - Reports: Use --analyze /path/to/run_NNN to generate HTML analysis
+#   - Reports: Use --report /path/to/run_NNN to generate HTML analysis
 #   - Validation: Use --check_setup to validate configuration without execution
 #
 # Working Directory Structure:

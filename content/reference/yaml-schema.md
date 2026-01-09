@@ -86,7 +86,7 @@ benchmark:
   name: string                    # Required: benchmark name
   description: string             # Optional: human-readable description
   workdir: path                   # Required: base working directory
-  sqlite_db: path                 # Optional: cache database location
+  cache_file: path                # Optional: cache file location
   repetitions: integer            # Optional: global repetitions (default: 1)
   search_method: string           # Optional: "exhaustive" | "greedy" | "bayesian"
   executor: string                # Optional: "local" | "slurm" (default: "slurm")
@@ -146,11 +146,11 @@ Supports environment variables:
 workdir: "$HOME/benchmarks"  # Expands to /home/user/benchmarks
 ```
 
-#### `sqlite_db` (optional)
-Path to SQLite database for caching execution results. **Required for `--use-cache` flag.**
+#### `cache_file` (optional)
+Path to cache file for caching execution results. **Required for `--use-cache` flag.**
 
 ```yaml
-sqlite_db: "/scratch/benchmarks/ior_cache.db"
+cache_file: "/scratch/benchmarks/ior_cache.db"
 ```
 
 #### `repetitions` (optional, default: 1)
@@ -445,7 +445,7 @@ benchmark:
 
 List of variable names to include in analysis reports. **Use this to control which variables appear in plots and Pareto frontier analysis.**
 
-When generating reports with `iops analyze`, only these variables will be used for:
+When generating reports with `iops report`, only these variables will be used for:
 - Parameter sweep plots
 - Pareto frontier calculations
 - Variable correlation analysis
@@ -479,7 +479,7 @@ benchmark:
 If `report_vars` is not specified, all **numeric swept variables** are included in analysis reports.
 
 **Notes:**
-- Only affects report generation with `iops analyze`
+- Only affects report generation with `iops report`
 - Does not affect execution or result storage
 - All variables are still saved in output files
 
@@ -720,7 +720,7 @@ benchmark:
   name: "IOR Parallel I/O Benchmark"
   description: "Testing I/O performance with MPI-IO"
   workdir: "/scratch/$USER/ior_benchmark"
-  sqlite_db: "/scratch/$USER/ior_cache.db"
+  cache_file: "/scratch/$USER/ior_cache.db"
   repetitions: 3
   search_method: "exhaustive"
   executor: "local"
@@ -1461,7 +1461,7 @@ The `reporting` section allows you to:
 
 - **Automatic reports**: Set `enabled: true` to generate reports after each execution
 - **Custom visualizations**: Define per-metric plots for detailed analysis
-- **Post-execution analysis**: Use `iops --analyze` to generate reports from completed runs
+- **Post-execution analysis**: Use `iops report` to generate reports from completed runs
 - **Visualization iteration**: Use `--report-config` to try different plot configurations without re-running benchmarks
 
 ### Schema
@@ -1544,7 +1544,7 @@ reporting:
   enabled: true
 ```
 
-**When disabled (default)**, reports can still be generated manually using `iops --analyze`.
+**When disabled (default)**, reports can still be generated manually using `iops report`.
 
 #### `output_dir` (optional)
 
@@ -1912,7 +1912,7 @@ iops config.yaml
 Generate report from completed run:
 
 ```bash
-iops --analyze /path/to/workdir/run_001
+iops report /path/to/workdir/run_001
 ```
 
 Works with any run, regardless of whether `reporting` was configured.
@@ -1922,7 +1922,7 @@ Works with any run, regardless of whether `reporting` was configured.
 Regenerate with custom visualization settings:
 
 ```bash
-iops --analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+iops report /path/to/workdir/run_001 --report-config custom_report.yaml
 ```
 
 **custom_report.yaml** contains only the `reporting` section:
@@ -2460,7 +2460,7 @@ output:
 benchmark:
   name: "IOR Optimization"
   workdir: "/scratch/$USER/ior_benchmark"
-  sqlite_db: "/scratch/$USER/ior_cache.db"
+  cache_file: "/scratch/$USER/ior_cache.db"
   executor: "slurm"
   repetitions: 3
 
@@ -2544,7 +2544,7 @@ output:
 benchmark:
   name: "Cached IOR Sweep"
   workdir: "/scratch/ior"
-  sqlite_db: "/scratch/ior_cache.db"  # Enable caching
+  cache_file: "/scratch/ior_cache.db"  # Enable caching
   executor: "local"
   repetitions: 3
   random_seed: 12345

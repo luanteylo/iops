@@ -119,9 +119,9 @@ def test_integration_with_cache(simple_integration_config, tmp_path):
     """Test end-to-end execution with caching."""
     config = load_config(simple_integration_config)
 
-    # Add cache database
+    # Add cache file
     cache_db = tmp_path / "cache.db"
-    config.benchmark.sqlite_db = cache_db
+    config.benchmark.cache_file = cache_db
 
     # First run
     args = Mock()

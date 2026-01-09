@@ -32,7 +32,7 @@ benchmark:
 
   # Optional: SQLite database for caching execution results
   # When --use_cache is specified, results are reused if parameters match
-  sqlite_db: "/tmp/iops_mdtest_cache.db"
+  cache_file: "/tmp/iops_mdtest_cache.db"
 
   # Optional: Number of repetitions for each test case (default: 1)
   repetitions: 2

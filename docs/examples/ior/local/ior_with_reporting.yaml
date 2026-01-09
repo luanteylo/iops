@@ -15,13 +15,13 @@
 #   iops run example_with_reporting.yaml
 #
 # To regenerate report with custom settings:
-#   iops analyze /path/to/workdir/run_001 --report-config custom_report.yaml
+#   iops report /path/to/workdir/run_001 --report-config custom_report.yaml
 
 benchmark:
   name: "IOR Benchmark with Custom Reporting"
   description: "Demonstrates IOPS reporting feature with custom plots and visualizations"
   workdir: "/tmp/iops_reporting_demo"
-  sqlite_db: "/tmp/iops_reporting_demo/cache.db"
+  cache_file: "/tmp/iops_reporting_demo/cache.db"
   executor: "local"
   repetitions: 3
   search_method: "exhaustive"
@@ -312,7 +312,7 @@ reporting:
 #                colorscale: "Plasma"
 #
 #      Then run:
-#      iops analyze /tmp/iops_reporting_demo/run_001 --report-config custom_report.yaml
+#      iops report /tmp/iops_reporting_demo/run_001 --report-config custom_report.yaml
 #
 # 4. The report includes:
 #    - Test Summary: Execution statistics, cache hits, parameter space coverage

@@ -140,7 +140,7 @@ IOPS can cache execution results to avoid redundant tests. When enabled, IOPS co
 
 ```yaml
 benchmark:
-  sqlite_db: "/path/to/cache.db"
+  cache_file: "/path/to/cache.db"
 ```
 
 Enable caching with the `--use-cache` flag:
