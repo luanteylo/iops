@@ -211,6 +211,11 @@ class TestReadStatus:
 
     def test_read_status_handles_os_error(self, tmp_path):
         """Test that OS errors are handled gracefully."""
+        import os
+        # Skip this test when running as root (root can read files regardless of permissions)
+        if os.geteuid() == 0:
+            pytest.skip("Test cannot run as root - root bypasses file permissions")
+
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
 
