@@ -1,0 +1,808 @@
+---
+title: "IOPS YAML Format Reference"
+---
+
+*Complete guide to the IOPS benchmark configuration format*
+
+---
+
+## Table of Contents
+
+1. [File Structure Overview](#file-structure-overview)
+2. [`benchmark`](#benchmark)
+3. [`vars`](#vars)
+4. [`constraints` (optional)](#constraints-optional)
+5. [`command`](#command)
+6. [`scripts`](#scripts)
+7. [`output`](#output)
+8. [`reporting` (optional)](#reporting-optional)
+
+See also: [Jinja2 Templating](jinja2-templating.md) for dynamic values, conditionals, and expressions.
+
+---
+
+## File Structure Overview
+
+```yaml
+benchmark:       # Global configuration (name, workdir, executor, search method)
+vars:            # Variable definitions (swept and derived)
+constraints:     # (Optional) Parameter validation rules
+command:         # Command template and metadata
+scripts:         # Execution scripts and parsers
+output:          # Output configuration (CSV, Parquet, SQLite)
+reporting:       # (Optional) Report generation settings
+```
+
+**Required sections:** `benchmark`, `vars`, `command`, `scripts`, `output`
+
+---
+
+## `benchmark`
+
+Defines global benchmark configuration.
+
+```yaml
+benchmark:
+  name: string                      # Required: benchmark name
+  workdir: path                     # Required: base working directory
+  description: string               # Optional: human-readable description
+  repetitions: integer              # Optional: repetitions per test (default: 1)
+
+  search_method: string             # Optional: "exhaustive" | "random" | "bayesian"
+  random_config:                    # Required if search_method: "random"
+    n_samples: integer              #   Sample exactly N configurations
+    percentage: float               #   OR sample percentage of parameter space
+    fallback_to_exhaustive: boolean #   Use full space if sample >= total (default: true)
+  bayesian_config:                  # Required if search_method: "bayesian"
+    objective_metric: string        #   Required: metric to optimize
+    objective: string               #   "minimize" | "maximize" (default: "minimize")
+    n_iterations: integer           #   Total evaluations (default: 20)
+    n_initial_points: integer       #   Random samples before optimization (default: 5)
+    acquisition_func: string        #   "EI" | "PI" | "LCB" (default: "EI")
+    base_estimator: string          #   "RF" | "GP" | "ET" | "GBRT" (default: "RF")
+    xi: float                       #   Exploration trade-off for EI/PI (default: 0.01)
+    kappa: float                    #   Exploration parameter for LCB (default: 1.96)
+
+  executor: string                  # Optional: "local" | "slurm" (default: "slurm")
+  executor_options:                 # Optional: executor-specific configuration
+    commands:                       #   SLURM command templates
+      submit: string                #     Submit command (default: "sbatch")
+      status: string                #     Status template (default: "squeue -j {job_id} ...")
+      info: string                  #     Info template (default: "scontrol show job {job_id}")
+      cancel: string                #     Cancel template (default: "scancel {job_id}")
+    poll_interval: integer          #   Status polling interval in seconds (default: 30)
+
+  random_seed: integer              # Optional: seed for randomization (default: 42)
+  cache_file: path                  # Optional: cache file location
+  cache_exclude_vars: list          # Optional: vars to exclude from cache hash
+  collect_system_info: boolean      # Optional: collect system info (default: true)
+  track_executions: boolean         # Optional: write metadata files (default: true)
+  exhaustive_vars: list             # Optional: vars to test exhaustively
+  report_vars: list                 # Optional: vars to include in reports
+  max_core_hours: float             # Optional: CPU core-hours budget limit
+  cores_expr: string                # Optional: Jinja expression for cores (default: "1")
+  estimated_time_seconds: float     # Optional: estimated test duration (seconds)
+```
+
+#### `name` (required)
+Human-readable benchmark name. Used in logs and output.
+
+#### `workdir` (required)
+Base directory for all benchmark outputs. Supports environment variables.
+
+#### `description` (optional)
+Free-text description of the benchmark purpose.
+
+#### `repetitions` (optional, default: 1)
+Number of times each test should be repeated.
+
+#### `search_method` (optional, default: "exhaustive")
+Test selection strategy: `exhaustive`, `random`, or `bayesian`.
+
+<details>
+<summary><strong>random_config</strong> (required if search_method: "random")</summary>
+
+Configuration for random sampling:
+
+```yaml
+benchmark:
+  search_method: "random"
+  random_config:
+    n_samples: 20                    # Sample exactly N configurations
+    # OR
+    percentage: 0.1                  # Sample 10% of parameter space
+    fallback_to_exhaustive: true     # Use full space if sample >= total
+```
+
+- `n_samples` and `percentage` are mutually exclusive
+- `fallback_to_exhaustive`: When true, uses exhaustive search if requested samples >= total space
+
+</details>
+
+<details>
+<summary><strong>bayesian_config</strong> (required if search_method: "bayesian")</summary>
+
+Configuration for Bayesian optimization:
+
+```yaml
+benchmark:
+  search_method: "bayesian"
+  bayesian_config:
+    objective_metric: "throughput"   # Required: metric to optimize
+    objective: "maximize"            # "minimize" | "maximize"
+    n_iterations: 20                 # Total evaluations
+    n_initial_points: 5              # Random samples before optimization
+    acquisition_func: "EI"           # "EI", "PI", or "LCB"
+    base_estimator: "RF"             # "RF", "GP", "ET", or "GBRT"
+    xi: 0.01                         # Exploration trade-off for EI/PI
+    kappa: 1.96                      # Exploration parameter for LCB
+```
+
+**Surrogate models:**
+- `RF`: Random Forest (default) - Best for categorical/mixed spaces
+- `GP`: Gaussian Process - Best for continuous spaces
+- `ET`: Extra Trees
+- `GBRT`: Gradient Boosted Regression Trees
+
+</details>
+
+#### `executor` (optional, default: "slurm")
+Execution backend: `local` or `slurm`.
+
+<details>
+<summary><strong>executor_options</strong> (optional, SLURM only)</summary>
+
+Customize SLURM commands and polling behavior:
+
+```yaml
+benchmark:
+  executor: "slurm"
+  executor_options:
+    commands:
+      submit: "sbatch"
+      status: "squeue -j {job_id} --noheader --format=%T"
+      info: "scontrol show job {job_id}"
+      cancel: "scancel {job_id}"
+    poll_interval: 30  # seconds
+```
+
+- `{job_id}` placeholder is replaced at runtime
+- Useful for systems with command wrappers or custom SLURM installations
+
+</details>
+
+#### `random_seed` (optional, default: 42)
+Seed for random operations (repetition interleaving, random/bayesian sampling).
+
+#### `cache_file` (optional)
+Path to cache file. Required for `--use-cache` flag.
+
+#### `cache_exclude_vars` (optional)
+Variables to exclude from cache hash (e.g., path-based derived variables).
+
+#### `collect_system_info` (optional, default: true)
+Collect hardware/environment info from compute nodes.
+
+#### `track_executions` (optional, default: true)
+Write metadata files for `iops find` command.
+
+#### `exhaustive_vars` (optional)
+Variables to test exhaustively at each search point (for hybrid strategies).
+
+#### `report_vars` (optional)
+Variables to include in analysis reports.
+
+#### `max_core_hours` (optional)
+CPU core-hours budget. Overridable via `--max-core-hours`.
+
+#### `cores_expr` (optional, default: "1")
+Jinja2 expression to compute cores per test (e.g., `"{{ nodes * ppn }}"`).
+
+#### `estimated_time_seconds` (optional)
+Estimated time per test. Used for dry-run budget analysis.
+
+---
+
+## `vars`
+
+Defines the parameter space (swept variables) and computed values (derived variables).
+
+```yaml
+vars:
+  # Swept variable (list mode)
+  variable_name:
+    type: string                # Required: "int" | "float" | "str" | "bool"
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  # Swept variable (range mode)
+  variable_name:
+    type: int
+    sweep:
+      mode: range
+      start: 8
+      end: 32
+      step: 8
+
+  # Derived variable
+  variable_name:
+    type: int
+    expr: "nodes * processes_per_node"
+```
+
+#### `type` (required)
+Data type: `int`, `float`, `str`, or `bool`.
+
+#### `sweep` (for swept variables)
+Defines values to sweep. Creates executions via Cartesian product. Mutually exclusive with `expr`.
+
+<details>
+<summary><strong>sweep.mode: list</strong></summary>
+
+Explicit list of values:
+
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  io_pattern:
+    type: str
+    sweep:
+      mode: list
+      values: ["sequential", "random"]
+```
+
+</details>
+
+<details>
+<summary><strong>sweep.mode: range</strong></summary>
+
+Numeric range (inclusive). `step` can be negative for descending:
+
+```yaml
+vars:
+  processes_per_node:
+    type: int
+    sweep:
+      mode: range
+      start: 8
+      end: 32
+      step: 8   # Creates: [8, 16, 24, 32]
+```
+
+</details>
+
+#### `expr` (for derived variables)
+Expression to compute the variable. Mutually exclusive with `sweep`.
+
+<details>
+<summary><strong>Expression Examples</strong></summary>
+
+**Python arithmetic:**
+```yaml
+vars:
+  block_size_mb:
+    type: int
+    expr: "(volume_size_gb * 1024) // (nodes * processes_per_node)"
+
+  total_processes:
+    type: int
+    expr: "nodes * processes_per_node"
+```
+
+**Jinja2 templates:**
+```yaml
+vars:
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+  output_path:
+    type: str
+    expr: "{{ workdir }}/results/node_{{ nodes }}"
+```
+
+Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, `int()`, `float()`
+
+</details>
+
+<details>
+<summary><strong>Built-in Variables</strong></summary>
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `execution_id` | int | Unique execution ID (1, 2, 3, ...) |
+| `repetition` | int | Current repetition (1, 2, 3, ...) |
+| `repetitions` | int | Total repetitions for this test |
+| `workdir` | str | Base working directory |
+| `execution_dir` | str | Per-execution directory |
+
+</details>
+
+---
+
+## `constraints` (optional)
+
+Defines validation rules for parameter combinations.
+
+```yaml
+constraints:
+  - name: string              # Required: unique constraint identifier
+    rule: string              # Required: Python expression returning bool
+    violation_policy: string  # Optional: "skip" | "error" | "warn" (default: "skip")
+    description: string       # Optional: human-readable explanation
+```
+
+#### `name` (required)
+Unique identifier for this constraint.
+
+#### `rule` (required)
+Python expression evaluating to `True` (valid) or `False` (invalid).
+
+Available: all variables, math functions (`min`, `max`, `abs`, `round`, `floor`, `ceil`)
+
+#### `violation_policy` (optional, default: "skip")
+- `skip`: Filter out invalid combinations
+- `error`: Stop execution immediately
+- `warn`: Log warning but proceed
+
+#### `description` (optional)
+Human-readable explanation.
+
+<details>
+<summary><strong>Examples</strong></summary>
+
+```yaml
+constraints:
+  # Divisibility
+  - name: "block_transfer_alignment"
+    rule: "block_size % transfer_size == 0"
+    violation_policy: "skip"
+    description: "Block size must be a multiple of transfer size"
+
+  # Resource limits
+  - name: "max_processes"
+    rule: "nodes * processes_per_node <= 256"
+    violation_policy: "warn"
+
+  # Relationship validation
+  - name: "transfer_size_limit"
+    rule: "transfer_size <= block_size"
+    violation_policy: "skip"
+```
+
+</details>
+
+---
+
+## `command`
+
+Defines the benchmark command template and metadata.
+
+```yaml
+command:
+  template: string              # Required: command template (Jinja2)
+  metadata:                     # Optional: arbitrary metadata
+    key: value
+  env:                          # Optional: environment variables
+    VAR_NAME: value
+```
+
+#### `template` (required)
+The benchmark command as a Jinja2 template.
+
+```yaml
+command:
+  template: >
+    ior -w -b {{ block_size_mb }}mb -t 1mb
+    -O summaryFile={{ summary_file }}
+    -o {{ output_path }}/data.ior
+```
+
+#### `metadata` (optional)
+Key-value metadata stored with results. Appears as `metadata.*` columns.
+
+```yaml
+command:
+  metadata:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+```
+
+#### `env` (optional)
+Environment variables to set before execution.
+
+```yaml
+command:
+  env:
+    OMP_NUM_THREADS: "{{ processes_per_node }}"
+    MPI_BUFFER_SIZE: "4194304"
+```
+
+---
+
+## `scripts`
+
+Defines execution scripts, submission commands, and result parsers.
+
+```yaml
+scripts:
+  - name: string                    # Required: script identifier
+    submit: string                  # Required: "bash" | "sbatch"
+    script_template: |              # Required: script content (Jinja2)
+      #!/bin/bash
+      ...
+      {{ command.template }}
+
+    post:                           # Optional: post-processing
+      script: |
+        #!/bin/bash
+        ...
+
+    parser:                         # Optional: result parser
+      file: string                  #   Output file to parse
+      metrics:                      #   Metrics to extract
+        - name: string
+      parser_script: |              #   Python parser function
+        def parse(file_path: str):
+            ...
+            return {"metric": value}
+```
+
+#### `name` (required)
+Script identifier. Used for file naming.
+
+#### `submit` (required)
+- **Local executor**: `bash` or `sh`
+- **SLURM executor**: `sbatch`
+
+#### `script_template` (required)
+Script content as Jinja2 template. Use `{{ command.template }}` to include the command.
+
+<details>
+<summary><strong>Local Executor Example</strong></summary>
+
+```yaml
+scripts:
+  - name: "ior"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      set -euo pipefail
+      echo "Execution {{ execution_id }}, repetition {{ repetition }}"
+      module load mpi ior
+      {{ command.template }}
+```
+
+</details>
+
+<details>
+<summary><strong>SLURM Executor Example</strong></summary>
+
+```yaml
+scripts:
+  - name: "ior"
+    submit: "sbatch"
+    script_template: |
+      #!/bin/bash
+      #SBATCH --job-name=iops_{{ execution_id }}
+      #SBATCH --output={{ execution_dir }}/stdout
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=01:00:00
+
+      module load mpi ior
+      mpirun {{ command.template }}
+```
+
+</details>
+
+<details>
+<summary><strong>post</strong> (optional)</summary>
+
+Post-processing script executed after main script completes:
+
+```yaml
+scripts:
+  - name: "ior"
+    submit: "sbatch"
+    script_template: |
+      ...
+
+    post:
+      script: |
+        #!/bin/bash
+        echo "Job completed at $(date)"
+        echo "Summary: {{ summary_file }}"
+        ls -lh {{ execution_dir }}
+```
+
+</details>
+
+<details>
+<summary><strong>parser</strong> (required)</summary>
+
+Defines how to extract metrics from benchmark output:
+
+```yaml
+scripts:
+  - name: "ior"
+    submit: "sbatch"
+    script_template: |
+      ...
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+        - name: iops
+        - name: latency
+      parser_script: |
+        import json
+
+        def parse(file_path: str):
+            with open(file_path, "r") as f:
+                data = json.load(f)
+            results = data["tests"][0]["Results"][0]
+            return {
+                "bwMiB": float(results["bwMiB"]),
+                "iops": float(results["OPs"]),
+                "latency": float(results["MeanTime"])
+            }
+```
+
+**Requirements:**
+- Function must be named `parse`
+- Takes one argument: `file_path` (str)
+- Returns dict with metric names matching `metrics` list
+
+</details>
+
+---
+
+## `output`
+
+Defines where and how to store execution results.
+
+```yaml
+output:
+  sink:
+    type: string              # Required: "csv" | "parquet" | "sqlite"
+    path: string              # Required: output file path (Jinja2)
+    mode: string              # Optional: "append" | "overwrite" (default: append)
+    include:                  # Optional: fields to include (mutually exclusive with exclude)
+      - "execution.*"
+      - "vars.*"
+      - "metrics.*"
+    exclude:                  # Optional: fields to exclude (mutually exclusive with include)
+      - "benchmark.description"
+    table: string             # Optional: table name for SQLite (default: "results")
+```
+
+#### `type` (required)
+Output format: `csv`, `parquet`, or `sqlite`.
+
+#### `path` (required)
+Output file path. Can use templates.
+
+#### `mode` (optional, default: "append")
+Write mode: `append` or `overwrite`.
+
+#### `include` / `exclude` (optional)
+Field filtering using dot notation. Mutually exclusive.
+
+| Prefix | Fields |
+|--------|--------|
+| `benchmark.*` | `name`, `description`, `workdir` |
+| `execution.*` | `execution_id`, `repetition`, `execution_dir` |
+| `vars.*` | All variable names |
+| `metadata.*` | All command metadata keys |
+| `metrics.*` | All parser metric names |
+
+#### `table` (optional, SQLite only)
+Table name (default: "results").
+
+<details>
+<summary><strong>Examples</strong></summary>
+
+```yaml
+# CSV with exclusions
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+    mode: append
+    exclude:
+      - "benchmark.description"
+```
+
+</details>
+
+---
+
+## `reporting` (optional)
+
+Enables HTML report generation with interactive plots. Disabled by default.
+
+```yaml
+reporting:
+  enabled: boolean              # Optional: enable auto-generation (default: false)
+  output_dir: path              # Optional: report output directory (default: workdir)
+  output_filename: string       # Optional: report filename (default: "analysis_report.html")
+
+  theme:                        # Optional: theme configuration
+    style: string               #   Plotly theme (default: "plotly_white")
+    colors: list                #   Custom color palette (hex codes)
+    font_family: string         #   Font family
+
+  sections:                     # Optional: section visibility (all true by default)
+    test_summary: boolean
+    best_results: boolean
+    variable_impact: boolean
+    parallel_coordinates: boolean
+    pareto_frontier: boolean
+    bayesian_evolution: boolean
+    custom_plots: boolean
+
+  best_results:                 # Optional: best results configuration
+    top_n: integer              #   Number of top configs (default: 5)
+    show_command: boolean       #   Include rendered command (default: true)
+    min_samples: integer        #   Minimum repetitions required (default: 1)
+
+  metrics:                      # Optional: per-metric plot definitions
+    metric_name:
+      plots:
+        - type: string
+          x_var: string
+          ...
+
+  default_plots:                # Optional: fallback plots
+    - type: string
+      per_variable: boolean
+      ...
+
+  plot_defaults:                # Optional: default sizing
+    height: integer
+    width: integer
+    margin:
+      l: integer
+      r: integer
+      t: integer
+      b: integer
+```
+
+#### `enabled` (optional, default: false)
+Enable automatic report generation. Can also use `iops report` manually.
+
+#### `output_dir` (optional)
+Directory for reports. Defaults to run's workdir.
+
+#### `output_filename` (optional, default: "analysis_report.html")
+Report filename.
+
+<details>
+<summary><strong>theme</strong> (optional)</summary>
+
+```yaml
+reporting:
+  theme:
+    style: "plotly_white"     # plotly, plotly_dark, ggplot2, seaborn, simple_white
+    colors: ["#3498db", "#e74c3c", "#2ecc71"]
+    font_family: "Arial, sans-serif"
+```
+
+</details>
+
+<details>
+<summary><strong>sections</strong> (optional)</summary>
+
+Controls which report sections are visible:
+
+```yaml
+reporting:
+  sections:
+    test_summary: true         # Execution statistics
+    best_results: true         # Top N configurations
+    variable_impact: true      # Variance-based importance
+    parallel_coordinates: true # Multi-dimensional visualization
+    pareto_frontier: true      # Multi-objective analysis
+    bayesian_evolution: false  # Optimization progress (Bayesian only)
+    custom_plots: true         # User-defined plots
+```
+
+</details>
+
+<details>
+<summary><strong>best_results</strong> (optional)</summary>
+
+```yaml
+reporting:
+  best_results:
+    top_n: 10                 # Number of top configurations
+    show_command: true        # Include rendered command
+    min_samples: 3            # Minimum repetitions required
+```
+
+</details>
+
+<details>
+<summary><strong>metrics</strong> (optional)</summary>
+
+Define custom plots per metric:
+
+```yaml
+reporting:
+  metrics:
+    bwMiB:
+      plots:
+        - type: "execution_scatter"
+
+        - type: "line"
+          x_var: "block_size_mb"
+          group_by: "nodes"
+          title: "Bandwidth vs Block Size"
+
+        - type: "heatmap"
+          x_var: "nodes"
+          y_var: "processes_per_node"
+          colorscale: "Viridis"
+
+        - type: "coverage_heatmap"
+          row_vars: ["nodes", "processes_per_node"]
+          col_var: "volume_size_gb"
+          aggregation: "mean"
+```
+
+**Plot types:** `bar`, `line`, `scatter`, `heatmap`, `box`, `violin`, `surface_3d`, `parallel_coordinates`, `execution_scatter`, `coverage_heatmap`
+
+| Plot Type | Required | Key Options |
+|-----------|----------|-------------|
+| `bar` | `x_var` | `show_error_bars` |
+| `line` | `x_var` | `group_by` |
+| `scatter` | `x_var` | `y_var`, `color_by` |
+| `heatmap` | `x_var`, `y_var` | `colorscale` |
+| `box` | `x_var` | `show_outliers` |
+| `coverage_heatmap` | `row_vars`, `col_var` | `aggregation`, `sort_rows_by` |
+
+</details>
+
+<details>
+<summary><strong>default_plots</strong> (optional)</summary>
+
+Fallback plots for metrics without custom configuration:
+
+```yaml
+reporting:
+  default_plots:
+    - type: "execution_scatter"
+    - type: "bar"
+      per_variable: true
+      show_error_bars: true
+```
+
+</details>
+
+<details>
+<summary><strong>plot_defaults</strong> (optional)</summary>
+
+Default sizing for all plots:
+
+```yaml
+reporting:
+  plot_defaults:
+    height: 500
+    width: null              # auto
+    margin:
+      l: 80
+      r: 80
+      t: 100
+      b: 80
+```
+
+</details>

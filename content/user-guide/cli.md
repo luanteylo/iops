@@ -15,7 +15,15 @@ IOPS uses a subcommand-based CLI structure similar to git, docker, and other mod
 iops <subcommand> [arguments] [options]
 ```
 
-## Available Subcommands
+| Command | Purpose |
+|---------|---------|
+| `iops run <config.yaml>` | Execute benchmark |
+| `iops check <config.yaml>` | Validate configuration |
+| `iops generate [path]` | Create config template |
+| `iops report <path>` | Generate HTML report |
+| `iops find <path> [filters...]` | Explore executions |
+
+## Subcommand Reference
 
 ### run - Execute Benchmark
 
@@ -76,19 +84,49 @@ iops check benchmark.yaml
 Generate a configuration template:
 
 ```bash
-iops generate [output.yaml]
+iops generate [output.yaml] [options]
 ```
 
-Creates a comprehensive YAML template with all options documented. If no path is provided, the command is interactive.
+Creates a YAML configuration template. By default, generates a simple starter template for the IOR benchmark with local execution. If no path is provided, the output is saved to `iops_config.yaml`.
+
+**Options:**
+- `--slurm` - Generate template for SLURM executor (default: local)
+- `--mdtest` - Generate template for mdtest benchmark (default: IOR)
+- `--full` - Generate comprehensive template with all options documented
+- `--examples` - Copy example configurations and scripts to output directory
+
+**Templates:**
+
+| Benchmark | Executor | Flag Combination |
+|-----------|----------|------------------|
+| IOR | Local | (default) |
+| IOR | SLURM | `--slurm` |
+| mdtest | Local | `--mdtest` |
+| mdtest | SLURM | `--mdtest --slurm` |
 
 **Examples:**
 
 ```bash
-# Interactive generation
+# Generate simple IOR + local template (saves to iops_config.yaml)
 iops generate
 
 # Generate at specific path
 iops generate my_config.yaml
+
+# Generate IOR + SLURM template
+iops generate slurm_config.yaml --slurm
+
+# Generate mdtest + local template
+iops generate mdtest_config.yaml --mdtest
+
+# Generate mdtest + SLURM template
+iops generate mdtest_slurm.yaml --mdtest --slurm
+
+# Generate comprehensive template with all options
+iops generate full_config.yaml --full
+
+# Generate template and copy example files
+iops generate my_config.yaml --examples
 ```
 
 ### analyze - Generate Report
@@ -205,54 +243,3 @@ iops generate --help
 iops report --help
 iops find --help
 ```
-
-## Command Summary
-
-| Command | Purpose |
-|---------|---------|
-| `iops run <config.yaml>` | Execute benchmark |
-| `iops check <config.yaml>` | Validate configuration |
-| `iops generate [path]` | Create config template |
-| `iops report <path>` | Generate HTML report |
-| `iops find <path> [filters...]` | Explore executions |
-| `iops --version` | Show version |
-| `iops --help` | Show help |
-
-## Context-Sensitive Help
-
-Each subcommand provides its own help documentation:
-
-```bash
-iops run --help      # Shows run-specific options
-iops check --help    # Shows check-specific options
-iops generate --help # Shows generate-specific options
-iops report --help  # Shows analyze-specific options
-iops find --help     # Shows find-specific options
-```
-
-This is more convenient than the old flag-based system where all options were shown together.
-
-## Benefits of Subcommand Structure
-
-The new subcommand-based CLI offers several advantages:
-
-1. **Clearer Intent** - `iops run config.yaml` is more explicit than `iops config.yaml`
-2. **Context-Sensitive Help** - Each subcommand shows only relevant options
-3. **Familiar Pattern** - Matches git, docker, kubectl, and other modern tools
-4. **Better Organization** - Related options are grouped under their subcommand
-5. **Easier Discovery** - Users can explore available commands with `iops --help`
-
-## Migration from Old Syntax
-
-If you're updating from an older version of IOPS, here's how the commands have changed:
-
-| Old Syntax | New Syntax |
-|------------|------------|
-| `iops config.yaml` | `iops run config.yaml` |
-| `iops config.yaml --dry-run` | `iops run config.yaml --dry-run` |
-| `iops config.yaml --check` | `iops check config.yaml` |
-| `iops --generate` | `iops generate` |
-| `iops --generate output.yaml` | `iops generate output.yaml` |
-| `iops report /path` | `iops report /path` |
-| `iops --find /path` | `iops find /path` |
-| `iops --find /path --filter nodes=4` | `iops find /path nodes=4` |

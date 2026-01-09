@@ -7,11 +7,11 @@ Comprehensive guide to using IOPS features and capabilities.
 
 This section covers:
 
-- **[Configuration](configuration)** - Configure IOPS for your needs
-- **[YAML Format](yaml-format)** - Understand the configuration file format
+- **[YAML Schema Reference](yaml-schema)** - Complete configuration file reference
+- **[Jinja2 Templating](jinja2-templating)** - Dynamic values, conditionals, and expressions
 - **[Search Methods](search-methods)** - Exhaustive, Bayesian, and random search
 - **[Execution Backends](execution-backends)** - Local and SLURM execution
 - **[Result Caching](caching)** - Smart caching to skip redundant tests
 - **[Exploring Executions](exploring-executions)** - Find and filter execution folders
 - **[Custom Reports & Visualization](reporting)** - Interactive HTML reports with custom plots
-- **[Analysis & Output Formats](analysis)** - Generate reports, output formats, and result analysis
+- **[Command Line Interface](cli)** - Complete CLI reference

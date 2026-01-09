@@ -124,5 +124,6 @@ By contributing to IOPS, you agree that your contributions will be licensed unde
   - Luan Teylo
   - Abdraman Mahamat
   - Francieli Boito
+  - Mihail Popov
 - **Team**: TADaaM - INRIA Bordeaux
 - **Repository**: [https://gitlab.inria.fr/lgouveia/iops](https://gitlab.inria.fr/lgouveia/iops)
