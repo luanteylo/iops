@@ -625,6 +625,8 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
         bayesian_config=bayesian_config,
         random_config=random_config,
         collect_system_info=b.get("collect_system_info", True),
+        track_executions=b.get("track_executions", True),
+        create_folders_upfront=b.get("create_folders_upfront", False),
     )
 
     # ---- vars ----

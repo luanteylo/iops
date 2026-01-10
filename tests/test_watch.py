@@ -172,7 +172,7 @@ class TestLoadIndex:
         from iops.results.watch import _load_index
 
         index_file = mock_run_dir / "__iops_index.json"
-        benchmark_name, executions, total_expected, repetitions = _load_index(index_file)
+        benchmark_name, executions, total_expected, repetitions, _, _, _ = _load_index(index_file)
 
         assert benchmark_name == "Test Benchmark"
         assert len(executions) == 3
@@ -205,7 +205,7 @@ class TestCollectExecutionData:
         """Test collecting all executions without filters."""
         from iops.results.watch import _load_index, _collect_execution_data
 
-        _, executions, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, _, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, status_counts = _collect_execution_data(
             mock_run_dir, executions, {}, None, set()
         )
@@ -219,7 +219,7 @@ class TestCollectExecutionData:
         """Test collecting executions with status filter."""
         from iops.results.watch import _load_index, _collect_execution_data
 
-        _, executions, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, _, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, status_counts = _collect_execution_data(
             mock_run_dir, executions, {}, "RUNNING", set()
         )
@@ -236,7 +236,7 @@ class TestCollectExecutionData:
         """Test collecting executions with parameter filter."""
         from iops.results.watch import _load_index, _collect_execution_data
 
-        _, executions, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, _, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, _ = _collect_execution_data(
             mock_run_dir, executions, {"nodes": "2"}, None, set()
         )
@@ -248,7 +248,7 @@ class TestCollectExecutionData:
         """Test that collection returns rep_statuses list for each test."""
         from iops.results.watch import _load_index, _collect_execution_data
 
-        _, executions, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, _, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, _ = _collect_execution_data(
             mock_run_dir, executions, {}, None, set()
         )
@@ -266,7 +266,7 @@ class TestBuildTable:
         """Test building a basic table."""
         from iops.results.watch import _load_index, _collect_execution_data, _build_table
 
-        _, executions, _, repetitions = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, _ = _collect_execution_data(
             mock_run_dir, executions, {}, None, set()
         )
@@ -283,7 +283,7 @@ class TestBuildTable:
         """Test building table with command column."""
         from iops.results.watch import _load_index, _collect_execution_data, _build_table
 
-        _, executions, _, repetitions = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, _ = _collect_execution_data(
             mock_run_dir, executions, {}, None, set()
         )
@@ -301,7 +301,7 @@ class TestBuildTable:
         """Test building table with hidden path column."""
         from iops.results.watch import _load_index, _collect_execution_data, _build_table
 
-        _, executions, _, repetitions = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, _ = _collect_execution_data(
             mock_run_dir, executions, {}, None, set()
         )
@@ -318,7 +318,7 @@ class TestBuildTable:
         """Test that table always shows variable columns."""
         from iops.results.watch import _load_index, _collect_execution_data, _build_table
 
-        _, executions, _, repetitions = _load_index(mock_run_dir / "__iops_index.json")
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
         tests, _ = _collect_execution_data(
             mock_run_dir, executions, {}, None, set()
         )
@@ -349,7 +349,7 @@ class TestMultipleRepetitions:
         """Test collecting executions with multiple repetitions."""
         from iops.results.watch import _load_index, _collect_execution_data
 
-        _, executions, _, repetitions = _load_index(
+        _, executions, _, repetitions, _, _, _ = _load_index(
             mock_run_dir_with_reps / "__iops_index.json"
         )
         assert repetitions == 2
@@ -374,7 +374,7 @@ class TestMultipleRepetitions:
         """Test that table shows status dots when repetitions > 1."""
         from iops.results.watch import _load_index, _collect_execution_data, _build_table
 
-        _, executions, _, repetitions = _load_index(
+        _, executions, _, repetitions, _, _, _ = _load_index(
             mock_run_dir_with_reps / "__iops_index.json"
         )
         tests, _ = _collect_execution_data(
@@ -394,7 +394,7 @@ class TestMultipleRepetitions:
         """Test that table does NOT show Rep column when repetitions == 1."""
         from iops.results.watch import _load_index, _collect_execution_data, _build_table
 
-        _, executions, _, repetitions = _load_index(
+        _, executions, _, repetitions, _, _, _ = _load_index(
             mock_run_dir / "__iops_index.json"
         )
         assert repetitions == 1
@@ -415,7 +415,7 @@ class TestMultipleRepetitions:
         """Test that test dicts include rep_statuses list."""
         from iops.results.watch import _load_index, _collect_execution_data
 
-        _, executions, _, repetitions = _load_index(
+        _, executions, _, repetitions, _, _, _ = _load_index(
             mock_run_dir_with_reps / "__iops_index.json"
         )
         tests, _ = _collect_execution_data(
@@ -530,7 +530,7 @@ class TestWatchExecutionsDiscovery:
         index_file = run_dirs[0] / INDEX_FILENAME
         assert index_file.exists()
 
-        benchmark_name, executions, total_expected, repetitions = _load_index(index_file)
+        benchmark_name, executions, total_expected, repetitions, _, _, _ = _load_index(index_file)
         assert benchmark_name == "Test Benchmark"
         assert len(executions) == 3
         assert total_expected == 3

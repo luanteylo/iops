@@ -128,6 +128,7 @@ class BenchmarkConfig:
     random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
     collect_system_info: bool = True  # Collect system info (hostname, CPU, memory, etc.) from compute nodes
     track_executions: bool = True  # Write execution metadata files for 'iops find' command
+    create_folders_upfront: bool = False  # Create all exec folders at start (enables SKIPPED status visibility)
 
 
 @dataclass

@@ -510,6 +510,9 @@ def main():
                 runner.run_dry()
             else:
                 runner.run()
+        except KeyboardInterrupt:
+            logger.info("\n\nExecution interrupted by user (Ctrl+C)")
+            return
         except ConfigValidationError as e:
             logger.error(f"Configuration error: {e}")
             if args.verbose:

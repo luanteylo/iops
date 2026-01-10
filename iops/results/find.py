@@ -31,7 +31,10 @@ def _truncate_value(value: str, max_width: int) -> str:
 
 def _read_status(exec_path: Path) -> Dict[str, Any]:
     """
-    Read execution status from the status file.
+    Read execution status from status files.
+
+    First checks for test-level status (SKIPPED) in exec_XXXX folder.
+    Then checks repetition folders for execution status.
 
     Args:
         exec_path: Path to the exec_XXXX folder
@@ -39,14 +42,64 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
     Returns:
         Dict with status info, or default values if file doesn't exist
     """
-    status_file = exec_path / STATUS_FILENAME
-    if status_file.exists():
+    # First check for test-level status (SKIPPED, PENDING, COMPLETE)
+    test_status_file = exec_path / STATUS_FILENAME
+    if test_status_file.exists():
         try:
-            with open(status_file, 'r') as f:
+            with open(test_status_file, 'r') as f:
+                test_status = json.load(f)
+                # If test is SKIPPED, return that directly
+                if test_status.get("status") == "SKIPPED":
+                    return test_status
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Check repetition folders for execution status
+    rep_dirs = sorted(exec_path.glob("repetition_*"))
+    if rep_dirs:
+        # Aggregate status from repetitions
+        statuses = []
+        error = None
+        end_time = None
+
+        for rep_dir in rep_dirs:
+            rep_status_file = rep_dir / STATUS_FILENAME
+            if rep_status_file.exists():
+                try:
+                    with open(rep_status_file, 'r') as f:
+                        rep_status = json.load(f)
+                        statuses.append(rep_status.get("status", "UNKNOWN"))
+                        if rep_status.get("error"):
+                            error = rep_status.get("error")
+                        if rep_status.get("end_time"):
+                            end_time = rep_status.get("end_time")
+                except (json.JSONDecodeError, OSError):
+                    statuses.append("UNKNOWN")
+            else:
+                statuses.append("PENDING")
+
+        # Determine overall status
+        if any(s == "RUNNING" for s in statuses):
+            overall = "RUNNING"
+        elif any(s == "PENDING" for s in statuses):
+            overall = "PENDING"
+        elif any(s in ("FAILED", "ERROR") for s in statuses):
+            overall = "FAILED"
+        elif all(s == "SUCCEEDED" for s in statuses):
+            overall = "SUCCEEDED"
+        else:
+            overall = "UNKNOWN"
+
+        return {"status": overall, "error": error, "end_time": end_time}
+
+    # No repetition folders yet - check test-level status or default to PENDING
+    if test_status_file.exists():
+        try:
+            with open(test_status_file, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
-    # Default: no status file means execution hasn't completed or is from old run
+
     return {"status": "PENDING", "error": None, "end_time": None}
 
 
@@ -168,6 +221,8 @@ def _show_single_execution(
     status = status_info.get("status", "UNKNOWN")
 
     print(f"\nStatus: {status}")
+    if status == "SKIPPED" and status_info.get("reason"):
+        print(f"Skip Reason: {status_info['reason']}")
     if status_info.get("error"):
         print(f"Error: {status_info['error']}")
     if status_info.get("end_time"):
@@ -245,10 +300,9 @@ def _show_executions_from_index(
     all_vars = set()
     for exec_data in executions.values():
         all_vars.update(exec_data.get("params", {}).keys())
-    var_names = sorted(all_vars)
 
     # Remove hidden columns from var_names
-    var_names = [v for v in var_names if v not in hide_columns]
+    var_names = sorted(v for v in all_vars if v not in hide_columns)
 
     # Determine truncation width
     truncate_width = None if show_full else DEFAULT_TRUNCATE_WIDTH
@@ -283,7 +337,8 @@ def _show_executions_from_index(
             if not match:
                 continue
 
-        matches.append((exec_key, rel_path, params, command, status))
+        skip_reason = status_info.get("reason") if status == "SKIPPED" else None
+        matches.append((exec_key, rel_path, params, command, status, skip_reason))
 
     if not matches:
         filter_desc = []
@@ -311,9 +366,13 @@ def _show_executions_from_index(
         path_values = [display_val(m[1]) for m in matches]
         col_widths["path"] = max(len("Path"), max(len(v) for v in path_values))
 
-    # Status column
+    # Status column (include skip reason in width calculation)
     if "status" not in hide_columns:
-        status_values = [m[4] for m in matches]
+        def format_status(status, skip_reason):
+            if status == "SKIPPED" and skip_reason:
+                return f"{status}:{skip_reason}"
+            return status
+        status_values = [format_status(m[4], m[5]) for m in matches]
         col_widths["status"] = max(len("Status"), max(len(v) for v in status_values))
 
     # Variable columns
@@ -343,14 +402,15 @@ def _show_executions_from_index(
     print("-" * len(header))
 
     # Print rows
-    for exec_key, rel_path, params, command, status in matches:
+    for exec_key, rel_path, params, command, status, skip_reason in matches:
         row_parts = []
 
         if "path" not in hide_columns:
             row_parts.append(display_val(rel_path).ljust(col_widths["path"]))
 
         if "status" not in hide_columns:
-            row_parts.append(status.ljust(col_widths["status"]))
+            status_display = format_status(status, skip_reason)
+            row_parts.append(status_display.ljust(col_widths["status"]))
 
         for var in var_names:
             val = display_val(str(params.get(var, "")))

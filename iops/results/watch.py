@@ -62,7 +62,7 @@ def check_rich_available() -> None:
 # Status display configuration
 # All status-related display is centralized here for consistency
 
-STATUS_ORDER = ["RUNNING", "PENDING", "SUCCEEDED", "FAILED", "ERROR", "UNKNOWN"]
+STATUS_ORDER = ["RUNNING", "PENDING", "SUCCEEDED", "FAILED", "ERROR", "SKIPPED", "UNKNOWN"]
 
 # Compact status symbols for repetition display and progress bar
 STATUS_SYMBOLS = {
@@ -71,6 +71,7 @@ STATUS_SYMBOLS = {
     "PENDING": ("W", "dim bold"),
     "FAILED": ("F", "red bold"),
     "ERROR": ("E", "red bold"),
+    "SKIPPED": ("X", "dim italic"),
     "UNKNOWN": ("?", "dim"),
 }
 
@@ -81,19 +82,21 @@ STATUS_LABELS = {
     "PENDING": ("WAIT", "dim"),
     "FAILED": ("FAIL", "red"),
     "ERROR": ("ERR", "red bold"),
+    "SKIPPED": ("SKIP", "dim italic"),
     "UNKNOWN": ("???", "dim"),
 }
 
 
-def _load_index(index_file: Path) -> Tuple[str, Dict[str, Any], int, int]:
+def _load_index(index_file: Path) -> Tuple[str, Dict[str, Any], int, int, bool, int, int]:
     """
-    Load the index file and return benchmark name, executions, expected total, and repetitions.
+    Load the index file and return benchmark info.
 
     Args:
         index_file: Path to __iops_index.json
 
     Returns:
-        Tuple of (benchmark_name, executions_dict, total_expected, repetitions)
+        Tuple of (benchmark_name, executions_dict, total_expected, repetitions,
+                  folders_upfront, active_tests, skipped_tests)
     """
     try:
         with open(index_file, 'r') as f:
@@ -105,7 +108,10 @@ def _load_index(index_file: Path) -> Tuple[str, Dict[str, Any], int, int]:
         index.get("benchmark", "Unknown"),
         index.get("executions", {}),
         index.get("total_expected", 0),
-        index.get("repetitions", 1)
+        index.get("repetitions", 1),
+        index.get("folders_upfront", False),
+        index.get("active_tests", 0),
+        index.get("skipped_tests", 0),
     )
 
 
@@ -135,7 +141,8 @@ def _collect_execution_data(
     filter_dict: Dict[str, str],
     status_filter: Optional[str],
     hide_columns: set,
-    expected_repetitions: int = 1
+    expected_repetitions: int = 1,
+    folders_upfront: bool = False
 ) -> Tuple[List[Dict], Dict[str, int]]:
     """
     Collect current execution data from status files.
@@ -144,6 +151,9 @@ def _collect_execution_data(
     individual repetition statuses. Returns one entry per test config with
     all repetition statuses grouped together.
 
+    In upfront mode (folders_upfront=True), also reads test-level status from
+    exec_XXXX/__iops_status.json to detect SKIPPED tests.
+
     Args:
         run_root: Path to run root directory
         executions: Executions dict from index
@@ -151,13 +161,15 @@ def _collect_execution_data(
         status_filter: Status filter (filters tests that have at least one rep matching)
         hide_columns: Columns to hide
         expected_repetitions: Expected number of repetitions per config
+        folders_upfront: Whether folders were created upfront (enables SKIPPED status)
 
     Returns:
         Tuple of (test_list, status_counts)
-        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time
+        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time, skip_reason
         rep_statuses is a list of status strings for each repetition
         avg_time is the average duration in seconds for successful repetitions (or None)
         total_time is the sum of durations for all successful repetitions (or None)
+        skip_reason is the skip reason for SKIPPED tests (or None)
     """
     # Collect tests and count statuses
     tests = []
@@ -183,6 +195,49 @@ def _collect_execution_data(
 
         # Get the exec_XXXX folder
         exec_path = run_root / rel_path
+
+        # Check for test-level status (upfront mode)
+        # In upfront mode, SKIPPED tests have a status file in exec_XXXX folder
+        skip_reason = None
+        test_status = None
+
+        if folders_upfront:
+            # Check index for status (faster than reading file)
+            test_status = exec_data.get("status")
+            skip_reason = exec_data.get("skip_reason")
+
+        # If not in index, try to read from test-level status file
+        if test_status is None:
+            test_status_file = exec_path / STATUS_FILENAME
+            if test_status_file.exists():
+                try:
+                    with open(test_status_file, 'r') as f:
+                        test_status_data = json.load(f)
+                        test_status = test_status_data.get("status")
+                        skip_reason = test_status_data.get("reason")
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+        # Handle SKIPPED tests (no repetitions)
+        if test_status == "SKIPPED":
+            # SKIPPED tests count once in status counts
+            status_counts["SKIPPED"] += 1
+
+            # Apply status filter
+            if status_filter and status_filter.upper() != "SKIPPED":
+                continue
+
+            tests.append({
+                "exec_key": exec_key,
+                "rel_path": rel_path,
+                "params": params,
+                "command": command,
+                "rep_statuses": ["SKIPPED"],
+                "avg_time": None,
+                "total_time": None,
+                "skip_reason": skip_reason,
+            })
+            continue
 
         # Collect repetition statuses and timing
         rep_statuses = []
@@ -246,6 +301,7 @@ def _collect_execution_data(
             "rep_statuses": rep_statuses,
             "avg_time": avg_time,
             "total_time": total_time,
+            "skip_reason": None,
         })
 
     # Sort tests numerically by execution ID
@@ -264,8 +320,11 @@ def _collect_execution_data(
 def _get_test_overall_status(rep_statuses: List[str]) -> str:
     """
     Determine overall status of a test from its repetition statuses.
-    Priority: RUNNING > PENDING > FAILED/ERROR > SUCCEEDED
+    Priority: SKIPPED (special) > RUNNING > PENDING > FAILED/ERROR > SUCCEEDED
     """
+    # SKIPPED is a special case - test has no repetitions
+    if all(s == "SKIPPED" for s in rep_statuses):
+        return "SKIPPED"
     if any(s == "RUNNING" for s in rep_statuses):
         return "RUNNING"
     if any(s == "PENDING" for s in rep_statuses):
@@ -339,6 +398,7 @@ def _build_table(
         var_name_set = set()
         for test in tests:
             var_name_set.update(test.get("params", {}).keys())
+
         # Sort for consistent ordering, filter out hidden columns
         all_var_names = sorted(n for n in var_name_set if n not in hide_columns)
 
@@ -379,7 +439,7 @@ def _build_table(
     if total_repetitions > 1:
         table.add_column("Reps", justify="center")
     # Always show overall status
-    table.add_column("Status", justify="left", width=6)
+    table.add_column("Status", justify="left")
     # Time columns: Avg (per repetition) and Total (sum of all reps)
     table.add_column("Avg", justify="right", width=7)
     table.add_column("Total", justify="right", width=7)
@@ -487,9 +547,15 @@ def _build_table(
                 rep_text = _build_rep_status_text(rep_statuses)
                 row.append(rep_text)
 
-            # Overall status label
+            # Overall status label (with skip reason for SKIPPED tests)
             label, style = STATUS_LABELS.get(overall_status, STATUS_LABELS["UNKNOWN"])
-            row.append(Text(label, style=style))
+            if overall_status == "SKIPPED" and test.get("skip_reason"):
+                status_text = Text()
+                status_text.append(label, style=style)
+                status_text.append(f":{test['skip_reason']}", style="dim italic")
+                row.append(status_text)
+            else:
+                row.append(Text(label, style=style))
 
             # Average time column
             avg_time = test.get("avg_time")
@@ -720,7 +786,7 @@ def watch_executions(
             )
 
     # Load initial data
-    benchmark_name, executions, total_expected, repetitions = _load_index(index_file)
+    benchmark_name, executions, total_expected, repetitions, folders_upfront, active_tests, skipped_tests = _load_index(index_file)
     run_metadata = _read_run_metadata(run_root)
     bench_meta = run_metadata.get("benchmark", {})
 
@@ -746,14 +812,14 @@ def watch_executions(
             while not interrupted:
                 # Reload index to pick up new executions
                 try:
-                    benchmark_name, executions, total_expected, repetitions = _load_index(index_file)
+                    benchmark_name, executions, total_expected, repetitions, folders_upfront, active_tests, skipped_tests = _load_index(index_file)
                 except WatchModeError:
                     pass  # Keep using previous data if index read fails
 
                 # Collect current data (new format: one entry per test config)
                 tests, status_counts = _collect_execution_data(
                     run_root, executions, filter_dict, status_filter, hide_columns,
-                    expected_repetitions=repetitions
+                    expected_repetitions=repetitions, folders_upfront=folders_upfront
                 )
 
                 total_in_index = len(executions)
@@ -761,9 +827,21 @@ def watch_executions(
                 elapsed = datetime.now() - start_time
                 elapsed_str = str(elapsed).split('.')[0]  # Remove microseconds
 
-                # Calculate queued tests (expected but not yet created)
-                total_expected_configs = total_expected // max(1, repetitions)
-                queued_count = max(0, total_expected_configs - total_in_index)
+                # Calculate total test configs and queued tests
+                # In upfront mode, all tests are in the index (including skipped)
+                # In dynamic mode, only active tests exist, use total_expected to calculate
+                if folders_upfront:
+                    # Upfront mode: use index counts if available, otherwise count executions
+                    if active_tests > 0 or skipped_tests > 0:
+                        total_expected_configs = active_tests + skipped_tests
+                    else:
+                        # Fallback: count executions in index (backward compat)
+                        total_expected_configs = total_in_index
+                    queued_count = 0  # No queued tests in upfront mode - all folders exist
+                else:
+                    # Dynamic mode: calculate from total_expected
+                    total_expected_configs = total_expected // max(1, repetitions)
+                    queued_count = max(0, total_expected_configs - total_in_index)
 
                 # Add queued tests to pending count for progress bar
                 # (queued_count configs × repetitions = queued attempts)
@@ -796,8 +874,20 @@ def watch_executions(
                 header_text.append("    ", style="")
 
                 # Test configuration count × repetitions = total
-                header_text.append(f"{total_expected_configs}", style="cyan bold")
-                header_text.append(" tests", style="dim")
+                # Show breakdown if there are skipped tests
+                if skipped_tests > 0:
+                    header_text.append(f"{total_expected_configs}", style="cyan bold")
+                    header_text.append(" tests ", style="dim")
+                    header_text.append("(", style="dim")
+                    header_text.append(f"{active_tests}", style="cyan")
+                    header_text.append(" active + ", style="dim")
+                    header_text.append(f"{skipped_tests}", style="dim italic")
+                    header_text.append(" skipped", style="dim italic")
+                    header_text.append(")", style="dim")
+                else:
+                    header_text.append(f"{total_expected_configs}", style="cyan bold")
+                    header_text.append(" tests", style="dim")
+
                 if repetitions > 1:
                     header_text.append(" × ", style="dim")
                     header_text.append(f"{repetitions}", style="cyan bold")

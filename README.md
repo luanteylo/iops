@@ -1,4 +1,4 @@
-# IOPS
+# IOPS - Integrated Orchestration for Parametric Studies
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
 

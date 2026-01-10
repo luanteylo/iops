@@ -77,6 +77,7 @@ benchmark:
   cache_exclude_vars: list          # Optional: vars to exclude from cache hash
   collect_system_info: boolean      # Optional: collect system info (default: true)
   track_executions: boolean         # Optional: write metadata files (default: true)
+  create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
   exhaustive_vars: list             # Optional: vars to test exhaustively
   report_vars: list                 # Optional: vars to include in reports
   max_core_hours: float             # Optional: CPU core-hours budget limit
@@ -185,6 +186,21 @@ Collect hardware/environment info from compute nodes.
 
 #### `track_executions` (optional, default: true)
 Write metadata files for `iops find` command.
+
+#### `create_folders_upfront` (optional, default: false)
+Create all execution folders at run start instead of lazily during execution.
+
+When enabled:
+- All `exec_XXXX` folders are created before execution begins
+- Tests that will be skipped (due to constraints or planner selection) get a `SKIPPED` status
+- Full visibility into parameter space from the start
+- Useful for debugging constraints and planner behavior
+
+When disabled (default):
+- Folders are created lazily as each test executes
+- SKIPPED tests have no folder (current behavior)
+
+Note: Requires `track_executions: true` to write status files.
 
 #### `exhaustive_vars` (optional)
 Variables to test exhaustively at each search point (for hybrid strategies).

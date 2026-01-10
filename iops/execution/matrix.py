@@ -765,10 +765,10 @@ def create_execution_instance(
 def build_execution_matrix(
     cfg: GenericBenchmarkConfig,
     start_execution_id: int = 0,
-) -> List[ExecutionInstance]:
+) -> Tuple[List[ExecutionInstance], List[ExecutionInstance]]:
     """
-    Build the Cartesian product of swept variables and return a list of
-    ExecutionInstance objects.
+    Build the Cartesian product of swept variables and return lists of
+    ExecutionInstance objects (kept and skipped).
 
     IMPORTANT:
     - No Jinja rendering is done here.
@@ -779,6 +779,12 @@ def build_execution_matrix(
     Behaviour:
     - Sweep over all vars that have a `sweep` defined.
     - repetitions is 1 by default (or benchmark.repetitions if present).
+
+    Returns:
+        (kept_instances, skipped_instances):
+            - kept_instances: Instances that passed constraint filtering
+            - skipped_instances: Instances skipped due to constraint violations
+              (with metadata: __skipped, __skip_reason, __skip_message)
     """
 
     # ----------------- split vars ----------------- #
@@ -897,11 +903,12 @@ def build_execution_matrix(
                 executions.append(exec_instance)
 
     # Apply constraints if defined
+    skipped_instances: List[ExecutionInstance] = []
     if cfg.constraints:
         import logging
         logger = logging.getLogger(__name__)
 
-        executions, violations = filter_execution_matrix(
+        executions, skipped_instances, violations = filter_execution_matrix(
             executions,
             cfg.constraints,
             logger
@@ -909,11 +916,11 @@ def build_execution_matrix(
 
         # Log summary of constraint filtering
         if violations:
-            skipped = sum(1 for v in violations if v.violation_policy == "skip")
-            warned = sum(1 for v in violations if v.violation_policy == "warn")
+            skipped_count = sum(1 for v in violations if v.violation_policy == "skip")
+            warned_count = sum(1 for v in violations if v.violation_policy == "warn")
             logger.info(
                 f"Constraint filtering complete: {len(executions)} instances remaining after filtering. "
-                f"({skipped} skipped, {warned} warned)"
+                f"({skipped_count} skipped, {warned_count} warned)"
             )
 
-    return executions
+    return executions, skipped_instances
