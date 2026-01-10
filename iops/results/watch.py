@@ -267,12 +267,17 @@ def _collect_execution_data(
                     status_counts["UNKNOWN"] += 1
 
                 # Collect timing for successful repetitions
+                # First try status file (includes cached results), then fall back to sysinfo
                 if status == "SUCCEEDED":
-                    sysinfo = _read_sysinfo(rep_dir)
-                    if sysinfo and "duration_seconds" in sysinfo:
+                    duration = status_info.get("duration_seconds")
+                    if duration is None:
+                        # Fallback to sysinfo for older runs without duration in status
+                        sysinfo = _read_sysinfo(rep_dir)
+                        if sysinfo and "duration_seconds" in sysinfo:
+                            duration = sysinfo.get("duration_seconds")
+                    if duration is not None:
                         try:
-                            duration = float(sysinfo["duration_seconds"])
-                            rep_durations.append(duration)
+                            rep_durations.append(float(duration))
                         except (ValueError, TypeError):
                             pass
 

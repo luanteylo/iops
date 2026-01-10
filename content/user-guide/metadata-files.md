@@ -214,7 +214,8 @@ All paths are relative to the run root, making workdirs portable across systems.
   "status": "SUCCEEDED",
   "error": null,
   "end_time": "2026-01-09T14:23:45.678901",
-  "cached": false
+  "cached": false,
+  "duration_seconds": 125.3
 }
 ```
 
@@ -233,6 +234,8 @@ All paths are relative to the run root, making workdirs portable across systems.
 The `error` field contains the error message when status is FAILED or ERROR.
 
 The `cached` field indicates whether the result was retrieved from cache (`true`) or freshly executed (`false`). This is set when running with `--use-cache` and a cached result is found.
+
+The `duration_seconds` field contains the execution time in seconds. For executed tests, this comes from the probe script's timing. For cached results, it's calculated from start/end timestamps in the cached metadata.
 
 For skipped tests, a `reason` field explains why:
 ```json
