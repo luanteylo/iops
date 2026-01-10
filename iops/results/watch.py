@@ -501,8 +501,21 @@ def _build_table(
 
     available_width = terminal_width - fixed_width
 
-    # Estimate width per variable column (header + padding + value)
-    # Use max of header length and typical value length (~8 chars)
+    # When --metrics is requested, reserve space for metrics FIRST
+    # This prevents variables from greedily consuming all width
+    metric_names = []
+    reserved_metric_width = 0
+    if show_metrics and all_metric_names:
+        for metric_name in all_metric_names:
+            # Metric columns need ~10 chars for formatted values
+            col_width = max(10, len(metric_name) + 2)
+            if reserved_metric_width + col_width <= available_width // 3:
+                # Reserve up to 1/3 of available width for metrics
+                metric_names.append(metric_name)
+                reserved_metric_width += col_width
+
+    # Allocate remaining width to variable columns
+    available_for_vars = available_width - reserved_metric_width
     var_names = []
     hidden_vars_count = 0
     used_width = 0
@@ -510,22 +523,11 @@ def _build_table(
     for var_name in all_var_names:
         # Estimate column width: header length + 2 padding, min 6
         col_width = max(6, len(var_name) + 2)
-        if used_width + col_width <= available_width:
+        if used_width + col_width <= available_for_vars:
             var_names.append(var_name)
             used_width += col_width
         else:
             hidden_vars_count += 1
-
-    # Allocate remaining space for metric columns if showing metrics
-    metric_names = []
-    if show_metrics and all_metric_names:
-        remaining_width = available_width - used_width
-        for metric_name in all_metric_names:
-            # Metric columns need ~10 chars for formatted values
-            col_width = max(10, len(metric_name) + 2)
-            if remaining_width >= col_width:
-                metric_names.append(metric_name)
-                remaining_width -= col_width
 
     # Add columns
     if "path" not in hide_columns:
