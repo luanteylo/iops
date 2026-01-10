@@ -146,6 +146,7 @@ iops find ./workdir/run_001 --status PENDING
 - `SUCCEEDED` - Execution completed successfully
 - `FAILED` - Execution failed with non-zero exit code
 - `ERROR` - Execution encountered an error during setup
+- `SKIPPED` - Execution was skipped (constraint violation or planner selection)
 - `UNKNOWN` - Status could not be determined
 - `PENDING` - Execution has not yet completed
 
@@ -163,6 +164,82 @@ iops find ./workdir/run_001 nodes=4 ppn=8 --full --show-command
 # Hide columns and filter by status
 iops find ./workdir/run_001 --hide block_size --status SUCCEEDED
 ```
+
+## Watch Mode
+
+Watch mode provides real-time monitoring of benchmark execution progress. It displays a live-updating table showing execution status, parameters, and progress.
+
+### Enabling Watch Mode
+
+```bash
+iops find ./workdir/run_001 --watch
+```
+
+Or using the short flag:
+
+```bash
+iops find ./workdir/run_001 -w
+```
+
+### Requirements
+
+Watch mode requires the `rich` library. Install it with:
+
+```bash
+pip install iops-benchmark[watch]
+```
+
+Or install `rich` directly:
+
+```bash
+pip install rich
+```
+
+### Display Features
+
+The watch mode display includes:
+
+- **Progress bar** showing overall completion percentage
+- **Status summary** with counts for each status (RUNNING, PENDING, SUCCEEDED, etc.)
+- **Live table** with execution parameters and status
+- **Repetition tracking** showing status of each repetition (e.g., `SSS` for 3 succeeded)
+- **Auto-refresh** at configurable intervals
+
+### Watch Mode Options
+
+```bash
+# Custom refresh interval (default: 5 seconds)
+iops find ./workdir/run_001 --watch --interval 2
+
+# Watch with parameter filters
+iops find ./workdir/run_001 nodes=4 --watch
+
+# Watch with status filter
+iops find ./workdir/run_001 --watch --status RUNNING
+
+# Watch with hidden columns
+iops find ./workdir/run_001 --watch --hide block_size,transfer_size
+```
+
+### Status Indicators
+
+In watch mode, status is displayed using compact symbols:
+
+| Symbol | Status | Meaning |
+|--------|--------|---------|
+| `S` | SUCCEEDED | Execution completed successfully |
+| `R` | RUNNING | Currently executing |
+| `W` | PENDING | Waiting to execute |
+| `F` | FAILED | Execution failed |
+| `E` | ERROR | Error during setup |
+| `X` | SKIPPED | Skipped (constraint or planner) |
+| `?` | UNKNOWN | Status unknown |
+
+For multiple repetitions, status is shown as a sequence (e.g., `SRW` means repetition 1 succeeded, repetition 2 is running, repetition 3 is pending).
+
+### Exiting Watch Mode
+
+Press `Ctrl+C` to exit watch mode and return to the terminal.
 
 ## IOPS Metadata Files
 
