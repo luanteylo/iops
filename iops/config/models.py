@@ -96,6 +96,7 @@ class BayesianConfig:
             Higher values favor exploration
         objective: Optimization direction - "minimize" or "maximize" (default: "minimize")
         objective_metric: Metric name to optimize (required)
+        fallback_to_exhaustive: If True and n_iterations >= total space, use exhaustive search
     """
     n_initial_points: int = 5
     n_iterations: int = 20
@@ -105,6 +106,7 @@ class BayesianConfig:
     kappa: float = 1.96
     objective: Literal["minimize", "maximize"] = "minimize"
     objective_metric: Optional[str] = None
+    fallback_to_exhaustive: bool = True
 
 
 @dataclass

@@ -1110,6 +1110,30 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Total search space size (for comparison with exhaustive search)
         self.total_space_size = self._compute_total_space_size()
 
+        # Check for exhaustive fallback
+        self.fallback_to_exhaustive = self.bayesian_cfg.fallback_to_exhaustive
+        self._use_exhaustive_fallback = False
+        self._exhaustive_matrix: List[ExecutionInstance] = []
+        self._exhaustive_index = 0
+
+        if self.n_iterations >= self.total_space_size and self.total_space_size > 0:
+            if self.fallback_to_exhaustive:
+                self.logger.warning(
+                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
+                    f"Using full exhaustive search instead of Bayesian optimization."
+                )
+                self._use_exhaustive_fallback = True
+                # Build full execution matrix for exhaustive iteration
+                kept, _ = build_execution_matrix(self.cfg, start_execution_id=1)
+                self._exhaustive_matrix = kept
+                self._attempt_total = len(kept) * (cfg.benchmark.repetitions or 1)
+            else:
+                self.logger.warning(
+                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
+                    f"Clamping to total_space."
+                )
+                self.n_iterations = self.total_space_size
+
         # Best found so far
         self.best_params: Optional[Dict[str, Any]] = None
         self.best_value: Optional[float] = None
@@ -1122,24 +1146,30 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.current_params: Optional[List[Any]] = None
         self.current_rep = 0
 
-        self.logger.info(
-            f"Bayesian planner initialized: target={self.target_metric} "
-            f"objective={self.objective} n_iterations={self.n_iterations} "
-            f"n_initial={self.n_initial_points} estimator={self.base_estimator}"
-        )
-        self.logger.info(f"Search space: {len(self.search_space)} dimensions: {self.var_names}")
-        if self.ordinal_mappings:
-            self.logger.info(f"Using ordinal encoding for: {list(self.ordinal_mappings.keys())}")
-
-        # Log search space coverage
-        if self.total_space_size > 0:
-            coverage_pct = (self.n_iterations / self.total_space_size) * 100
-            savings_pct = 100 - coverage_pct
+        if self._use_exhaustive_fallback:
             self.logger.info(
-                f"Total search space: {self.total_space_size} configurations. "
-                f"Bayesian will explore {self.n_iterations} ({coverage_pct:.1f}%), "
-                f"saving {savings_pct:.1f}% vs exhaustive search."
+                f"Bayesian planner using exhaustive fallback: "
+                f"{len(self._exhaustive_matrix)} configurations"
             )
+        else:
+            self.logger.info(
+                f"Bayesian planner initialized: target={self.target_metric} "
+                f"objective={self.objective} n_iterations={self.n_iterations} "
+                f"n_initial={self.n_initial_points} estimator={self.base_estimator}"
+            )
+            self.logger.info(f"Search space: {len(self.search_space)} dimensions: {self.var_names}")
+            if self.ordinal_mappings:
+                self.logger.info(f"Using ordinal encoding for: {list(self.ordinal_mappings.keys())}")
+
+            # Log search space coverage
+            if self.total_space_size > 0:
+                coverage_pct = (self.n_iterations / self.total_space_size) * 100
+                savings_pct = 100 - coverage_pct
+                self.logger.info(
+                    f"Total search space: {self.total_space_size} configurations. "
+                    f"Bayesian will explore {self.n_iterations} ({coverage_pct:.1f}%), "
+                    f"saving {savings_pct:.1f}% vs exhaustive search."
+                )
 
     def _compute_total_space_size(self) -> int:
         """
@@ -1278,6 +1308,10 @@ class BayesianPlanner(BasePlanner, HasLogger):
         Returns:
             ExecutionInstance or None when optimization is complete
         """
+        # If using exhaustive fallback, delegate to simpler iteration
+        if self._use_exhaustive_fallback:
+            return self._next_test_exhaustive()
+
         # Handle repetitions for current test first
         # (must finish all reps before checking termination)
         if self.current_test and self.current_rep < self.repetitions:
@@ -1340,6 +1374,55 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.logger.info(
             f"[Bayesian] Iteration {self.iteration}/{self.n_iterations}: "
             f"Testing {params_dict}"
+        )
+
+        return test
+
+    def _next_test_exhaustive(self) -> Optional[ExecutionInstance]:
+        """
+        Return the next test when using exhaustive fallback mode.
+
+        Iterates through all configurations in the execution matrix.
+
+        Returns:
+            ExecutionInstance or None when all tests are complete
+        """
+        # Handle repetitions for current test first
+        if self.current_test and self.current_rep < self.repetitions:
+            self.current_rep += 1
+            self._attempt_count += 1
+            test = self._exhaustive_matrix[self._exhaustive_index - 1]
+            test.repetition = self.current_rep
+            self._prepare_execution_artifacts(test, self.current_rep)
+            self.logger.debug(
+                f"  [Exhaustive fallback] Repetition {self.current_rep}/{self.repetitions} "
+                f"of test {self._exhaustive_index}/{len(self._exhaustive_matrix)}"
+            )
+            return test
+
+        # Check if we've exhausted all configurations
+        if self._exhaustive_index >= len(self._exhaustive_matrix):
+            self.logger.info("=" * 70)
+            self.logger.info("EXHAUSTIVE SEARCH COMPLETE (Bayesian fallback)")
+            self.logger.info("=" * 70)
+            self.logger.info(f"Total configurations tested: {len(self._exhaustive_matrix)}")
+            self.logger.info("=" * 70)
+            return None
+
+        # Get next test from matrix
+        test = self._exhaustive_matrix[self._exhaustive_index]
+        self._exhaustive_index += 1
+        self.current_rep = 1
+        self._attempt_count += 1
+        test.repetition = self.current_rep
+        self.current_test = test
+
+        # Prepare artifacts
+        self._prepare_execution_artifacts(test, self.current_rep)
+
+        self.logger.info(
+            f"[Exhaustive fallback] Test {self._exhaustive_index}/{len(self._exhaustive_matrix)}: "
+            f"{test.vars}"
         )
 
         return test

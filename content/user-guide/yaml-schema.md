@@ -137,7 +137,11 @@ benchmark:
     base_estimator: "RF"             # "RF", "GP", "ET", or "GBRT"
     xi: 0.01                         # Exploration trade-off for EI/PI
     kappa: 1.96                      # Exploration parameter for LCB
+    fallback_to_exhaustive: true     # Use exhaustive if n_iterations >= total space
 ```
+
+**Options:**
+- `fallback_to_exhaustive` (default: true): When `n_iterations >= total_space_size`, automatically switches to exhaustive search to avoid Bayesian optimization overhead for small parameter spaces.
 
 **Surrogate models:**
 - `RF`: Random Forest (default) - Best for categorical/mixed spaces
