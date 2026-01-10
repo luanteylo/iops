@@ -589,6 +589,9 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
                 "Specify the metric name to optimize (e.g., 'throughput', 'latency')."
             )
 
+        # Parse fallback_to_exhaustive (default: True)
+        fallback_to_exhaustive = bc.get("fallback_to_exhaustive", True)
+
         bayesian_config = BayesianConfig(
             n_initial_points=n_initial_points,
             n_iterations=n_iterations,
@@ -598,6 +601,7 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
             kappa=float(kappa),
             objective=objective,
             objective_metric=objective_metric,
+            fallback_to_exhaustive=fallback_to_exhaustive,
         )
     elif search_method == "bayesian":
         # bayesian search method requires bayesian_config with objective_metric
@@ -625,6 +629,8 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
         bayesian_config=bayesian_config,
         random_config=random_config,
         collect_system_info=b.get("collect_system_info", True),
+        track_executions=b.get("track_executions", True),
+        create_folders_upfront=b.get("create_folders_upfront", False),
     )
 
     # ---- vars ----

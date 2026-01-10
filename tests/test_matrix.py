@@ -10,17 +10,18 @@ from iops.execution.matrix import build_execution_matrix, ExecutionInstance
 def test_build_basic_matrix(sample_config_file):
     """Test building a basic execution matrix."""
     config = load_config(sample_config_file)
-    matrix = build_execution_matrix(config)
+    matrix, skipped = build_execution_matrix(config)
 
     # Should have 2 tests (nodes=[1,2])
     assert len(matrix) == 2
+    assert len(skipped) == 0  # No constraints, so no skipped
     assert all(isinstance(test, ExecutionInstance) for test in matrix)
 
 
 def test_matrix_variable_expansion(sample_config_file):
     """Test that variables are properly expanded in matrix."""
     config = load_config(sample_config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     # Check first test
     test1 = matrix[0]
@@ -33,7 +34,7 @@ def test_matrix_variable_expansion(sample_config_file):
 def test_matrix_derived_variables(sample_config_file):
     """Test that derived variables are computed correctly."""
     config = load_config(sample_config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     for test in matrix:
         # total_procs should equal nodes * ppn
@@ -44,7 +45,7 @@ def test_matrix_derived_variables(sample_config_file):
 def test_matrix_execution_ids(sample_config_file):
     """Test that execution IDs are sequential."""
     config = load_config(sample_config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     execution_ids = [test.execution_id for test in matrix]
     assert execution_ids == list(range(1, len(matrix) + 1))
@@ -53,7 +54,7 @@ def test_matrix_execution_ids(sample_config_file):
 def test_matrix_repetitions(sample_config_file):
     """Test that repetitions are set correctly."""
     config = load_config(sample_config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     for test in matrix:
         assert test.repetitions == 2
@@ -62,7 +63,7 @@ def test_matrix_repetitions(sample_config_file):
 def test_matrix_lazy_rendering(sample_config_file):
     """Test that templates are rendered lazily."""
     config = load_config(sample_config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     test = matrix[0]
 
@@ -75,7 +76,7 @@ def test_matrix_lazy_rendering(sample_config_file):
 def test_matrix_script_text_rendering(sample_config_file):
     """Test that script text is rendered correctly."""
     config = load_config(sample_config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     test = matrix[0]
     script_text = test.script_text
@@ -102,7 +103,7 @@ def test_matrix_cartesian_product(tmp_path, sample_config_dict):
         yaml.dump(sample_config_dict, f)
 
     config = load_config(config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     # Should have 2 nodes * 2 threads = 4 tests
     assert len(matrix) == 4
@@ -143,7 +144,7 @@ def test_matrix_exhaustive_vars(tmp_path, sample_config_dict):
         yaml.dump(sample_config_dict, f)
 
     config = load_config(config_file)
-    matrix = build_execution_matrix(config)
+    matrix, _ = build_execution_matrix(config)
 
     # Should have (2 nodes * 2 block_size) * 3 ppn = 12 tests
     # Search space: nodes × block_size = 4 points

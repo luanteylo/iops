@@ -49,6 +49,12 @@ INDEX_FILENAME = "__iops_index.json"
 # Filename for the execution status (written to exec_XXXX directory after completion)
 STATUS_FILENAME = "__iops_status.json"
 
+# Test-level status constants (written by planner to exec_XXXX directory)
+# These are distinct from repetition-level status (written by executor to repetition_YYY directory)
+TEST_STATUS_SKIPPED = "SKIPPED"    # Test will not be executed (constraint or planner decision)
+TEST_STATUS_PENDING = "PENDING"    # Test is queued, no repetitions started yet
+TEST_STATUS_COMPLETE = "COMPLETE"  # All repetitions finished
+
 # System probe script template - written as a separate file and sourced by user script
 SYSTEM_PROBE_TEMPLATE = '''#!/bin/bash
 # IOPS System Probe - Collects system information from compute node
@@ -122,6 +128,10 @@ class BasePlanner(ABC, HasLogger):
         self.cfg = cfg
         # create a random generator with a fixed seed for reproducibility
         self.random = random.Random(cfg.benchmark.random_seed)
+        # Track whether folders have been initialized upfront
+        self._folders_initialized = False
+        # Store skipped instances (from constraints or planner selection)
+        self.skipped_matrix: List[ExecutionInstance] = []
         self._log_benchmark_config(cfg.benchmark)
 
     def _log_benchmark_config(self, bench) -> None:
@@ -215,10 +225,14 @@ class BasePlanner(ABC, HasLogger):
         Create folders + scripts for one test execution and one repetition.
 
         This method is shared by all planners. It:
-        - Creates the execution directory structure
+        - Creates the execution directory structure (unless upfront mode)
         - Sets test.repetition and metadata["repetition"]
         - Writes the main script file (with optional system probe injection)
         - Writes the post script file (if present)
+
+        In upfront mode (create_folders_upfront=True), exec_XXXX folders and
+        params files are already created. This method only creates the
+        repetition folder and writes scripts.
 
         Layout:
         <workdir>/
@@ -244,11 +258,17 @@ class BasePlanner(ABC, HasLogger):
 
         run_root = Path(self.cfg.benchmark.workdir)
         runs_root = run_root / "runs"
-        runs_root.mkdir(parents=True, exist_ok=True)
 
         # Create execution dir (exec_XXXX is parent, repetition_XXX is child)
         exec_parent_dir = runs_root / f"exec_{test.execution_id:04d}"
         exec_dir = exec_parent_dir / f"repetition_{repetition:03d}"
+
+        if not self._folders_initialized:
+            # Dynamic mode: create exec folder now
+            runs_root.mkdir(parents=True, exist_ok=True)
+            exec_parent_dir.mkdir(parents=True, exist_ok=True)
+
+        # Always create repetition folder (not created upfront)
         exec_dir.mkdir(parents=True, exist_ok=True)
 
         # Point to repetition dir (useful for templates like {{ execution_dir }})
@@ -258,6 +278,8 @@ class BasePlanner(ABC, HasLogger):
         # Write params/index files in exec folder (only on first repetition)
         # Can be disabled with track_executions: false to reduce file I/O
         if repetition == 1 and getattr(self.cfg.benchmark, 'track_executions', True):
+            # In dynamic mode: create params file for the first time
+            # In upfront mode: update params file with resolved values (execution_dir now known)
             self._write_params_file(test, exec_parent_dir)
 
         # Get the rendered script text
@@ -367,8 +389,15 @@ class BasePlanner(ABC, HasLogger):
             with open(index_file, "r") as f:
                 index = json.load(f)
         else:
+            # Get expected total from planner progress
+            # Note: progress['total'] already includes repetitions (it's _attempt_total)
+            progress = self.get_progress()
+            total_expected = progress.get('total', 0)
+            repetitions = max(1, int(getattr(self.cfg.benchmark, "repetitions", 1) or 1))
             index = {
                 "benchmark": self.cfg.benchmark.name,
+                "total_expected": total_expected,
+                "repetitions": repetitions,
                 "executions": {}
             }
 
@@ -384,6 +413,184 @@ class BasePlanner(ABC, HasLogger):
         }
 
         # Write updated index
+        with open(index_file, "w") as f:
+            json.dump(index, f, indent=2, default=str)
+
+    def _write_test_status(
+        self,
+        exec_dir: Path,
+        status: str,
+        reason: str = None,
+        message: str = None
+    ) -> None:
+        """
+        Write test-level status file in exec_XXXX folder.
+
+        This is distinct from repetition-level status (written by runner).
+        Test-level status tracks the overall state of a test configuration:
+        - SKIPPED: Test will not be executed (constraint or planner decision)
+        - PENDING: Test is queued, no repetitions started yet
+        - COMPLETE: All repetitions finished
+
+        Args:
+            exec_dir: The exec_XXXX directory
+            status: One of TEST_STATUS_SKIPPED, TEST_STATUS_PENDING, TEST_STATUS_COMPLETE
+            reason: Skip reason (for SKIPPED status): "constraint" or "planner"
+            message: Additional message (e.g., constraint violation message)
+        """
+        if not getattr(self.cfg.benchmark, 'track_executions', True):
+            return
+
+        status_file = exec_dir / STATUS_FILENAME
+        status_data = {"status": status}
+        if reason:
+            status_data["reason"] = reason
+        if message:
+            status_data["message"] = message
+
+        with open(status_file, "w") as f:
+            json.dump(status_data, f, indent=2, default=str)
+
+    def _initialize_all_folders(
+        self,
+        active_instances: List[ExecutionInstance],
+        skipped_instances: List[ExecutionInstance]
+    ) -> None:
+        """
+        Create all execution folders upfront with test-level status.
+
+        Called when create_folders_upfront=True. Creates folders for both
+        active tests (status=PENDING) and skipped tests (status=SKIPPED).
+
+        This enables watch mode to show the full parameter space from the start,
+        including which tests were skipped and why.
+
+        Args:
+            active_instances: Tests that will be executed
+            skipped_instances: Tests that were skipped (constraint or planner)
+        """
+        if not getattr(self.cfg.benchmark, 'track_executions', True):
+            return
+
+        run_root = Path(self.cfg.benchmark.workdir)
+        runs_root = run_root / "runs"
+        runs_root.mkdir(parents=True, exist_ok=True)
+
+        # Track all instances for index
+        all_index_entries = []
+
+        # Active instances: create folder with PENDING status
+        for instance in active_instances:
+            exec_dir = runs_root / f"exec_{instance.execution_id:04d}"
+            exec_dir.mkdir(parents=True, exist_ok=True)
+
+            # Filter out internal keys for params
+            params = {
+                k: v for k, v in instance.vars.items()
+                if not k.startswith("__")
+            }
+
+            # Write params file
+            params_file = exec_dir / PARAMS_FILENAME
+            with open(params_file, "w") as f:
+                json.dump(params, f, indent=2, default=str)
+
+            # Write test-level status
+            self._write_test_status(exec_dir, TEST_STATUS_PENDING)
+
+            # Add to index
+            exec_rel_path = exec_dir.relative_to(run_root)
+            all_index_entries.append({
+                "exec_key": f"exec_{instance.execution_id:04d}",
+                "path": str(exec_rel_path),
+                "params": params,
+                "command": instance.command,
+                "status": TEST_STATUS_PENDING,
+            })
+
+        # Skipped instances: create folder with SKIPPED status
+        for instance in skipped_instances:
+            exec_dir = runs_root / f"exec_{instance.execution_id:04d}"
+            exec_dir.mkdir(parents=True, exist_ok=True)
+
+            # Filter out internal keys for params
+            params = {
+                k: v for k, v in instance.vars.items()
+                if not k.startswith("__")
+            }
+
+            # Write params file
+            params_file = exec_dir / PARAMS_FILENAME
+            with open(params_file, "w") as f:
+                json.dump(params, f, indent=2, default=str)
+
+            # Get skip reason and message from metadata
+            reason = instance.metadata.get("__skip_reason", "unknown")
+            message = instance.metadata.get("__skip_message")
+
+            # Write test-level status
+            self._write_test_status(exec_dir, TEST_STATUS_SKIPPED, reason, message)
+
+            # Add to index
+            exec_rel_path = exec_dir.relative_to(run_root)
+            entry = {
+                "exec_key": f"exec_{instance.execution_id:04d}",
+                "path": str(exec_rel_path),
+                "params": params,
+                "command": instance.command,
+                "status": TEST_STATUS_SKIPPED,
+                "skip_reason": reason,
+            }
+            if message:
+                entry["skip_message"] = message
+            all_index_entries.append(entry)
+
+        # Write complete index
+        self._write_complete_index(all_index_entries, len(active_instances), len(skipped_instances))
+
+        self.logger.info(
+            f"  [Upfront] Created {len(active_instances)} active + {len(skipped_instances)} skipped folders"
+        )
+
+    def _write_complete_index(
+        self,
+        index_entries: List[Dict[str, Any]],
+        active_count: int,
+        skipped_count: int
+    ) -> None:
+        """
+        Write the complete execution index file upfront.
+
+        Called by _initialize_all_folders when create_folders_upfront=True.
+
+        Args:
+            index_entries: List of dicts with exec_key, path, params, command, status
+            active_count: Number of active (non-skipped) tests
+            skipped_count: Number of skipped tests
+        """
+        if not getattr(self.cfg.benchmark, 'track_executions', True):
+            return
+
+        run_root = Path(self.cfg.benchmark.workdir)
+        index_file = run_root / INDEX_FILENAME
+
+        repetitions = max(1, int(getattr(self.cfg.benchmark, "repetitions", 1) or 1))
+        total_expected = active_count * repetitions
+
+        index = {
+            "benchmark": self.cfg.benchmark.name,
+            "folders_upfront": True,
+            "total_expected": total_expected,
+            "repetitions": repetitions,
+            "active_tests": active_count,
+            "skipped_tests": skipped_count,
+            "executions": {}
+        }
+
+        for entry in index_entries:
+            exec_key = entry.pop("exec_key")
+            index["executions"][exec_key] = entry
+
         with open(index_file, "w") as f:
             json.dump(index, f, indent=2, default=str)
 
@@ -465,12 +672,26 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
         # Reset per-matrix state
         self.current_index = 0
 
-        self.execution_matrix = self.random_sample(build_execution_matrix(self.cfg))
+        # build_execution_matrix now returns (kept, skipped)
+        kept_instances, skipped_instances = build_execution_matrix(self.cfg)
+
+        # Store skipped instances for reference
+        self.skipped_matrix = skipped_instances
+
+        # Shuffle the active execution matrix
+        self.execution_matrix = self.random_sample(kept_instances)
         self.total_tests = len(self.execution_matrix)
+
+        # Initialize folders upfront if configured
+        if getattr(self.cfg.benchmark, 'create_folders_upfront', False):
+            self._initialize_all_folders(kept_instances, skipped_instances)
+            self._folders_initialized = True
 
         self._matrix_built = True  # mark as built
 
         self.logger.info("Total tests in execution matrix: %d", self.total_tests)
+        if skipped_instances:
+            self.logger.info("Skipped tests (constraints): %d", len(skipped_instances))
 
         if self.total_tests > 0:
             self._init_interleaving_state()
@@ -726,11 +947,34 @@ class RandomSamplingPlanner(ExhaustivePlanner):
         self.current_index = 0
 
         # Build full matrix, then sample
-        full_matrix = build_execution_matrix(self.cfg)
-        sampled_matrix = self._sample_execution_matrix(full_matrix)
-        self.execution_matrix = self.random_sample(sampled_matrix)
+        # build_execution_matrix now returns (kept, skipped)
+        kept_instances, constraint_skipped = build_execution_matrix(self.cfg)
 
+        # Sample from kept instances
+        sampled_matrix = self._sample_execution_matrix(kept_instances)
+
+        # Track planner-skipped instances (not selected by random sampling)
+        selected_ids = {t.execution_id for t in sampled_matrix}
+        planner_skipped = []
+        for t in kept_instances:
+            if t.execution_id not in selected_ids:
+                t.metadata["__skipped"] = True
+                t.metadata["__skip_reason"] = "planner"
+                t.metadata["__skip_message"] = "Not selected by random sampling"
+                planner_skipped.append(t)
+
+        # Combine all skipped instances
+        all_skipped = constraint_skipped + planner_skipped
+        self.skipped_matrix = all_skipped
+
+        # Shuffle the sampled matrix
+        self.execution_matrix = self.random_sample(sampled_matrix)
         self.total_tests = len(self.execution_matrix)
+
+        # Initialize folders upfront if configured
+        if getattr(self.cfg.benchmark, 'create_folders_upfront', False):
+            self._initialize_all_folders(sampled_matrix, all_skipped)
+            self._folders_initialized = True
 
         self._matrix_built = True  # mark as built
 
@@ -739,6 +983,10 @@ class RandomSamplingPlanner(ExhaustivePlanner):
             self.total_tests,
             self.total_space_size,
         )
+        if constraint_skipped:
+            self.logger.info("Skipped tests (constraints): %d", len(constraint_skipped))
+        if planner_skipped:
+            self.logger.info("Skipped tests (random sampling): %d", len(planner_skipped))
 
         if self.total_tests > 0:
             self._init_interleaving_state()
@@ -803,6 +1051,14 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 "Install it with: pip install scikit-optimize"
             )
 
+        # Warn if upfront folder creation is enabled - not supported for Bayesian
+        # because parameter combinations are determined dynamically during optimization
+        if getattr(self.cfg.benchmark, 'create_folders_upfront', False):
+            self.logger.warning(
+                "create_folders_upfront is not supported for Bayesian optimization. "
+                "Parameters are selected dynamically by the optimizer. Using dynamic folder creation."
+            )
+
         # Bayesian config is guaranteed by loader to be set when search_method is "bayesian"
         self.bayesian_cfg = self.cfg.benchmark.bayesian_config
 
@@ -854,6 +1110,30 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Total search space size (for comparison with exhaustive search)
         self.total_space_size = self._compute_total_space_size()
 
+        # Check for exhaustive fallback
+        self.fallback_to_exhaustive = self.bayesian_cfg.fallback_to_exhaustive
+        self._use_exhaustive_fallback = False
+        self._exhaustive_matrix: List[ExecutionInstance] = []
+        self._exhaustive_index = 0
+
+        if self.n_iterations >= self.total_space_size and self.total_space_size > 0:
+            if self.fallback_to_exhaustive:
+                self.logger.warning(
+                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
+                    f"Using full exhaustive search instead of Bayesian optimization."
+                )
+                self._use_exhaustive_fallback = True
+                # Build full execution matrix for exhaustive iteration
+                kept, _ = build_execution_matrix(self.cfg, start_execution_id=1)
+                self._exhaustive_matrix = kept
+                self._attempt_total = len(kept) * (cfg.benchmark.repetitions or 1)
+            else:
+                self.logger.warning(
+                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
+                    f"Clamping to total_space."
+                )
+                self.n_iterations = self.total_space_size
+
         # Best found so far
         self.best_params: Optional[Dict[str, Any]] = None
         self.best_value: Optional[float] = None
@@ -866,24 +1146,30 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.current_params: Optional[List[Any]] = None
         self.current_rep = 0
 
-        self.logger.info(
-            f"Bayesian planner initialized: target={self.target_metric} "
-            f"objective={self.objective} n_iterations={self.n_iterations} "
-            f"n_initial={self.n_initial_points} estimator={self.base_estimator}"
-        )
-        self.logger.info(f"Search space: {len(self.search_space)} dimensions: {self.var_names}")
-        if self.ordinal_mappings:
-            self.logger.info(f"Using ordinal encoding for: {list(self.ordinal_mappings.keys())}")
-
-        # Log search space coverage
-        if self.total_space_size > 0:
-            coverage_pct = (self.n_iterations / self.total_space_size) * 100
-            savings_pct = 100 - coverage_pct
+        if self._use_exhaustive_fallback:
             self.logger.info(
-                f"Total search space: {self.total_space_size} configurations. "
-                f"Bayesian will explore {self.n_iterations} ({coverage_pct:.1f}%), "
-                f"saving {savings_pct:.1f}% vs exhaustive search."
+                f"Bayesian planner using exhaustive fallback: "
+                f"{len(self._exhaustive_matrix)} configurations"
             )
+        else:
+            self.logger.info(
+                f"Bayesian planner initialized: target={self.target_metric} "
+                f"objective={self.objective} n_iterations={self.n_iterations} "
+                f"n_initial={self.n_initial_points} estimator={self.base_estimator}"
+            )
+            self.logger.info(f"Search space: {len(self.search_space)} dimensions: {self.var_names}")
+            if self.ordinal_mappings:
+                self.logger.info(f"Using ordinal encoding for: {list(self.ordinal_mappings.keys())}")
+
+            # Log search space coverage
+            if self.total_space_size > 0:
+                coverage_pct = (self.n_iterations / self.total_space_size) * 100
+                savings_pct = 100 - coverage_pct
+                self.logger.info(
+                    f"Total search space: {self.total_space_size} configurations. "
+                    f"Bayesian will explore {self.n_iterations} ({coverage_pct:.1f}%), "
+                    f"saving {savings_pct:.1f}% vs exhaustive search."
+                )
 
     def _compute_total_space_size(self) -> int:
         """
@@ -895,8 +1181,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
         Returns:
             Total number of possible configurations
         """
-        full_matrix = build_execution_matrix(self.cfg, start_execution_id=0)
-        return len(full_matrix)
+        kept, skipped = build_execution_matrix(self.cfg, start_execution_id=0)
+        return len(kept) + len(skipped)
 
     def _build_search_space(self):
         """
@@ -1022,7 +1308,24 @@ class BayesianPlanner(BasePlanner, HasLogger):
         Returns:
             ExecutionInstance or None when optimization is complete
         """
-        # Check if we've completed all iterations
+        # If using exhaustive fallback, delegate to simpler iteration
+        if self._use_exhaustive_fallback:
+            return self._next_test_exhaustive()
+
+        # Handle repetitions for current test first
+        # (must finish all reps before checking termination)
+        if self.current_test and self.current_rep < self.repetitions:
+            # Continue with repetitions of current configuration
+            self.current_rep += 1
+            self._attempt_count += 1
+            test = self._create_test_instance(self.current_params, self.current_rep)
+            self.logger.debug(
+                f"  [Bayesian] Repetition {self.current_rep}/{self.repetitions} "
+                f"of iteration {self.iteration}"
+            )
+            return test
+
+        # Check if we've completed all iterations (after finishing repetitions)
         if self.iteration >= self.n_iterations:
             self.logger.info("=" * 70)
             self.logger.info("BAYESIAN OPTIMIZATION COMPLETE")
@@ -1033,18 +1336,6 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.logger.info(f"Total evaluations: {len(self.y_observed)}")
             self.logger.info("=" * 70)
             return None
-
-        # Handle repetitions for current test
-        if self.current_test and self.current_rep < self.repetitions:
-            # Continue with repetitions of current configuration
-            self.current_rep += 1
-            self._attempt_count += 1
-            test = self._create_test_instance(self.current_params, self.current_rep)
-            self.logger.debug(
-                f"  [Bayesian] Repetition {self.current_rep}/{self.repetitions} "
-                f"of iteration {self.iteration + 1}"
-            )
-            return test
 
         # Get next point from optimizer, checking constraints
         max_constraint_retries = 100  # Avoid infinite loop if space is heavily constrained
@@ -1060,9 +1351,10 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 f"(retry {retry + 1}/{max_constraint_retries})"
             )
             # Tell optimizer this point is infeasible with a large penalty
-            # Note: scikit-optimize always minimizes internally, so inf is always "worst"
+            # Note: scikit-optimize always minimizes internally, so large positive is "worst"
             # (for maximization, actual values are negated before telling the optimizer)
-            self.optimizer.tell(next_params, float('inf'))
+            # Using 1e10 instead of inf because sklearn doesn't accept infinity values
+            self.optimizer.tell(next_params, 1e10)
         else:
             self.logger.warning(
                 f"  [Bayesian] Could not find valid point after {max_constraint_retries} retries. "
@@ -1082,6 +1374,55 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.logger.info(
             f"[Bayesian] Iteration {self.iteration}/{self.n_iterations}: "
             f"Testing {params_dict}"
+        )
+
+        return test
+
+    def _next_test_exhaustive(self) -> Optional[ExecutionInstance]:
+        """
+        Return the next test when using exhaustive fallback mode.
+
+        Iterates through all configurations in the execution matrix.
+
+        Returns:
+            ExecutionInstance or None when all tests are complete
+        """
+        # Handle repetitions for current test first
+        if self.current_test and self.current_rep < self.repetitions:
+            self.current_rep += 1
+            self._attempt_count += 1
+            test = self._exhaustive_matrix[self._exhaustive_index - 1]
+            test.repetition = self.current_rep
+            self._prepare_execution_artifacts(test, self.current_rep)
+            self.logger.debug(
+                f"  [Exhaustive fallback] Repetition {self.current_rep}/{self.repetitions} "
+                f"of test {self._exhaustive_index}/{len(self._exhaustive_matrix)}"
+            )
+            return test
+
+        # Check if we've exhausted all configurations
+        if self._exhaustive_index >= len(self._exhaustive_matrix):
+            self.logger.info("=" * 70)
+            self.logger.info("EXHAUSTIVE SEARCH COMPLETE (Bayesian fallback)")
+            self.logger.info("=" * 70)
+            self.logger.info(f"Total configurations tested: {len(self._exhaustive_matrix)}")
+            self.logger.info("=" * 70)
+            return None
+
+        # Get next test from matrix
+        test = self._exhaustive_matrix[self._exhaustive_index]
+        self._exhaustive_index += 1
+        self.current_rep = 1
+        self._attempt_count += 1
+        test.repetition = self.current_rep
+        self.current_test = test
+
+        # Prepare artifacts
+        self._prepare_execution_artifacts(test, self.current_rep)
+
+        self.logger.info(
+            f"[Exhaustive fallback] Test {self._exhaustive_index}/{len(self._exhaustive_matrix)}: "
+            f"{test.vars}"
         )
 
         return test

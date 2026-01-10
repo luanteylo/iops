@@ -179,7 +179,9 @@ Only executions matching all specified filters will be displayed.
 - `--show-command` - Display the command column in output
 - `--full` - Show full parameter values without truncation (default truncates at 30 chars)
 - `--hide COL1,COL2` - Hide specific columns (comma-separated list)
-- `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING)
+- `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING, SKIPPED)
+- `--watch, -w` - Enable watch mode for real-time monitoring (requires `rich` library)
+- `--interval N` - Refresh interval in seconds for watch mode (default: 5)
 
 **Examples:**
 
@@ -216,6 +218,15 @@ iops find ./workdir/run_001 nodes=4 --status SUCCEEDED --show-command
 
 # Complex filter
 iops find ./workdir block_size=1024 threads=8
+
+# Watch mode - monitor execution progress in real-time
+iops find ./workdir/run_001 --watch
+
+# Watch mode with custom refresh interval (2 seconds)
+iops find ./workdir/run_001 --watch --interval 2
+
+# Watch mode with filters
+iops find ./workdir/run_001 nodes=4 --watch
 ```
 
 ### --version - Show Version

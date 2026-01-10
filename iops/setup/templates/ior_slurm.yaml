@@ -38,7 +38,7 @@ vars:
       values: [4, 8, 16]
 
   # Data volume size in GB
-  volume_size_gb:
+  volume_gb:
     type: int
     sweep:
       mode: list
@@ -50,7 +50,7 @@ vars:
     expr: "{{ nodes * processes_per_node }}"
 
   # Computed block size per process
-  block_size_mb:
+  block_mb:
     type: int
     expr: "(volume_size_gb * 1024) // (nodes * processes_per_node)"
 
@@ -61,7 +61,7 @@ vars:
 
 command:
   template: >
-    ior -w -r -b {{ block_size_mb }}m -t 1m
+    ior -w -r -b {{ block_mb }}m -t 1m
     -O summaryFile={{ summary_file }} -O summaryFormat=JSON
     -o /path/to/testfs/testfile.ior
 

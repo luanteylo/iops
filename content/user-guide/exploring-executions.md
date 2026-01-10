@@ -146,6 +146,7 @@ iops find ./workdir/run_001 --status PENDING
 - `SUCCEEDED` - Execution completed successfully
 - `FAILED` - Execution failed with non-zero exit code
 - `ERROR` - Execution encountered an error during setup
+- `SKIPPED` - Execution was skipped (constraint violation or planner selection)
 - `UNKNOWN` - Status could not be determined
 - `PENDING` - Execution has not yet completed
 
@@ -164,106 +165,97 @@ iops find ./workdir/run_001 nodes=4 ppn=8 --full --show-command
 iops find ./workdir/run_001 --hide block_size --status SUCCEEDED
 ```
 
+## Watch Mode
+
+Watch mode provides real-time monitoring of benchmark execution progress. It displays a live-updating table showing execution status, parameters, and progress.
+
+### Enabling Watch Mode
+
+```bash
+iops find ./workdir/run_001 --watch
+```
+
+Or using the short flag:
+
+```bash
+iops find ./workdir/run_001 -w
+```
+
+### Requirements
+
+Watch mode requires the `rich` library. Install it with:
+
+```bash
+pip install iops-benchmark[watch]
+```
+
+Or install `rich` directly:
+
+```bash
+pip install rich
+```
+
+### Display Features
+
+The watch mode display includes:
+
+- **Progress bar** showing overall completion percentage
+- **Status summary** with counts for each status (RUNNING, PENDING, SUCCEEDED, etc.)
+- **Live table** with execution parameters and status
+- **Repetition tracking** showing status of each repetition (e.g., `SSS` for 3 succeeded)
+- **Auto-refresh** at configurable intervals
+
+![Watch Mode Interface](../../images/watch_feature.png)
+
+### Watch Mode Options
+
+```bash
+# Custom refresh interval (default: 5 seconds)
+iops find ./workdir/run_001 --watch --interval 2
+
+# Watch with parameter filters
+iops find ./workdir/run_001 nodes=4 --watch
+
+# Watch with status filter
+iops find ./workdir/run_001 --watch --status RUNNING
+
+# Watch with hidden columns
+iops find ./workdir/run_001 --watch --hide block_size,transfer_size
+```
+
+### Status Indicators
+
+In watch mode, status is displayed using compact symbols:
+
+| Symbol | Status | Meaning |
+|--------|--------|---------|
+| `S` | SUCCEEDED | Execution completed successfully |
+| `R` | RUNNING | Currently executing |
+| `W` | PENDING | Waiting to execute |
+| `F` | FAILED | Execution failed |
+| `E` | ERROR | Error during setup |
+| `X` | SKIPPED | Skipped (constraint or planner) |
+| `?` | UNKNOWN | Status unknown |
+
+For multiple repetitions, status is shown as a sequence (e.g., `SRW` means repetition 1 succeeded, repetition 2 is running, repetition 3 is pending).
+
+### Exiting Watch Mode
+
+Press `Ctrl+C` to exit watch mode and return to the terminal.
+
 ## IOPS Metadata Files
 
-IOPS generates metadata files with the `__iops_` prefix to enable fast execution lookup without parsing full result databases:
+The `iops find` command relies on metadata files that IOPS generates during benchmark execution. These files have the `__iops_` prefix and enable fast execution lookup without parsing full result databases.
 
-### `__iops_index.json`
+Key files used by `iops find`:
 
-Created in the run root directory. Contains an index of all executions with their parameters and relative paths.
+| File | Location | Purpose |
+|------|----------|---------|
+| `__iops_index.json` | Run root | Indexes all executions with parameters |
+| `__iops_params.json` | Each exec folder | Stores parameter values |
+| `__iops_status.json` | Each exec/rep folder | Tracks execution status |
 
-**Location:** `workdir/run_001/__iops_index.json`
+All paths in `__iops_index.json` are stored as relative paths, making workdirs **portable** across systems. You can archive, move, or share workdirs and the `find` command will work correctly.
 
-**Structure:**
-```json
-{
-  "benchmark": "IOR Performance Study",
-  "executions": {
-    "exec_001": {
-      "path": "exec_001",
-      "params": {
-        "nodes": 1,
-        "ppn": 4,
-        "block_size": 1024
-      },
-      "command": "mpirun -np 4 ./benchmark --nodes 1"
-    },
-    "exec_002": {
-      "path": "exec_002",
-      "params": {
-        "nodes": 1,
-        "ppn": 4,
-        "block_size": 4096
-      },
-      "command": "mpirun -np 4 ./benchmark --nodes 1"
-    }
-  }
-}
-```
-
-All paths are relative to the run root, making workdirs portable across systems.
-
-### `__iops_params.json`
-
-Created in each execution folder. Stores the parameter values for that specific execution.
-
-**Location:** `workdir/run_001/exec_042/__iops_params.json`
-
-**Structure:**
-```json
-{
-  "nodes": 4,
-  "ppn": 8,
-  "block_size": 4096
-}
-```
-
-### `__iops_status.json`
-
-Created in each execution folder after execution completes. Stores execution status and error information.
-
-**Location:** `workdir/run_001/exec_042/__iops_status.json`
-
-**Structure:**
-```json
-{
-  "status": "SUCCEEDED",
-  "error": null,
-  "end_time": "2026-01-09T14:23:45.678901"
-}
-```
-
-The `error` field contains the error message when status is FAILED or ERROR.
-
-### `__iops_sysinfo.json`
-
-Created by the system probe (if enabled). Contains system information about the execution environment.
-
-**Location:** `workdir/run_001/exec_001/repetition_1/__iops_sysinfo.json`
-
-This file includes CPU, memory, and OS information collected when the execution runs.
-
-## Disabling Metadata Generation
-
-If file I/O overhead is a concern or you don't need the `iops find` functionality, you can disable metadata generation:
-
-```yaml
-benchmark:
-  track_executions: false
-```
-
-When disabled, IOPS will not create `__iops_index.json`, `__iops_params.json`, or `__iops_status.json` files, and the `iops find` command will not work for those runs.
-
-
-
-## Portable Workdirs
-
-All paths in `__iops_index.json` are stored as relative paths. This means you can:
-
-- **Archive workdirs** and unpack them anywhere
-- **Move workdirs** between systems
-- **Share results** with collaborators
-- **Access workdirs** from different mount points
-
-The `find` command will work correctly regardless of where the workdir is located.
+For complete documentation on all metadata files, I/O overhead considerations, and configuration options, see the **[Metadata Files](../metadata-files)** guide.
 

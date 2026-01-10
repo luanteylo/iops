@@ -425,30 +425,33 @@ class IOPSRunner(HasLogger):
             self.logger.warning(f"Failed to compute core-hours for test {test.execution_id}: {e}")
             return 0.0
 
-    def _write_status_file(self, test) -> None:
+    def _write_status_file(self, test, status: str = None) -> None:
         """
-        Write execution status to a JSON file in the exec folder.
+        Write execution status to a JSON file in the repetition folder.
 
-        Creates __iops_status.json containing the final execution status,
+        Creates __iops_status.json containing the execution status,
         any error message, and completion timestamp. This enables the
         'iops find' command to display and filter by execution status.
 
+        The status file is written to the repetition folder (e.g., exec_0001/repetition_001/)
+        so each repetition has its own status.
+
         Args:
-            test: Completed ExecutionInstance with metadata containing status
+            test: ExecutionInstance with metadata
+            status: Optional status override (e.g., "RUNNING" before execution starts)
         """
         if test.execution_dir is None:
             self.logger.debug("Cannot write status file: execution_dir is None")
             return
 
-        # Get the exec_XXXX folder (parent of repetition_XXX folder)
-        exec_dir = test.execution_dir
-        if exec_dir.name.startswith("repetition_"):
-            exec_dir = exec_dir.parent
+        # Write status to the execution_dir (which is the repetition folder)
+        status_file = test.execution_dir / STATUS_FILENAME
 
-        status_file = exec_dir / STATUS_FILENAME
+        # Use provided status or get from metadata
+        final_status = status if status else test.metadata.get("__executor_status", "UNKNOWN")
 
         status_data = {
-            "status": test.metadata.get("__executor_status", "UNKNOWN"),
+            "status": final_status,
             "error": test.metadata.get("__error"),
             "end_time": test.metadata.get("__end"),
         }
@@ -456,7 +459,7 @@ class IOPSRunner(HasLogger):
         try:
             with open(status_file, "w") as f:
                 json.dump(status_data, f, indent=2, default=str)
-            self.logger.debug(f"  [Status] Wrote status file: {status_file}")
+            self.logger.debug(f"  [Status] Wrote status file: {status_file} (status={final_status})")
         except Exception as e:
             self.logger.warning(f"Failed to write status file {status_file}: {e}")
 
@@ -999,6 +1002,10 @@ class IOPSRunner(HasLogger):
 
             # Execute if not using cache
             if not used_cache:
+                # Write RUNNING status before execution starts
+                if getattr(self.cfg.benchmark, 'track_executions', True):
+                    self._write_status_file(test, status="RUNNING")
+
                 self.executor.submit(test)
                 self.executor.wait_and_collect(test)
 

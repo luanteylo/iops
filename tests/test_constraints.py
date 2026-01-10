@@ -163,6 +163,7 @@ class TestFilterExecutionMatrix:
         instance = Mock()
         instance.execution_id = execution_id
         instance.vars = vars_dict
+        instance.metadata = {}  # Required for skipped instances
         return instance
 
     def test_filter_with_skip_policy(self):
@@ -180,11 +181,12 @@ class TestFilterExecutionMatrix:
             self.create_mock_instance(4, {"block_size": 20, "transfer_size": 7}),  # Invalid
         ]
 
-        filtered, violations = filter_execution_matrix(instances, [constraint])
+        kept, skipped, violations = filter_execution_matrix(instances, [constraint])
 
-        assert len(filtered) == 2
-        assert filtered[0].execution_id == 1
-        assert filtered[1].execution_id == 3
+        assert len(kept) == 2
+        assert kept[0].execution_id == 1
+        assert kept[1].execution_id == 3
+        assert len(skipped) == 2
         assert len(violations) == 2
         assert all(v.violation_policy == "skip" for v in violations)
 
@@ -220,10 +222,11 @@ class TestFilterExecutionMatrix:
             self.create_mock_instance(3, {"y": 12}),  # Valid
         ]
 
-        filtered, violations = filter_execution_matrix(instances, [constraint])
+        kept, skipped, violations = filter_execution_matrix(instances, [constraint])
 
         # All instances should be kept with warn policy
-        assert len(filtered) == 3
+        assert len(kept) == 3
+        assert len(skipped) == 0  # warn policy doesn't skip
         assert len(violations) == 1
         assert violations[0].violation_policy == "warn"
         assert violations[0].execution_id == 2
@@ -248,11 +251,12 @@ class TestFilterExecutionMatrix:
             self.create_mock_instance(4, {"a": 60, "b": 10}),  # Valid for both
         ]
 
-        filtered, violations = filter_execution_matrix(instances, [constraint1, constraint2])
+        kept, skipped, violations = filter_execution_matrix(instances, [constraint1, constraint2])
 
-        assert len(filtered) == 2
-        assert filtered[0].execution_id == 1
-        assert filtered[1].execution_id == 4
+        assert len(kept) == 2
+        assert kept[0].execution_id == 1
+        assert kept[1].execution_id == 4
+        assert len(skipped) == 2
         assert len(violations) == 2
 
     def test_filter_with_no_constraints(self):
@@ -262,9 +266,10 @@ class TestFilterExecutionMatrix:
             self.create_mock_instance(2, {"x": 2}),
         ]
 
-        filtered, violations = filter_execution_matrix(instances, [])
+        kept, skipped, violations = filter_execution_matrix(instances, [])
 
-        assert len(filtered) == 2
+        assert len(kept) == 2
+        assert len(skipped) == 0
         assert len(violations) == 0
 
     def test_filter_with_mixed_policies(self):
@@ -286,12 +291,13 @@ class TestFilterExecutionMatrix:
             self.create_mock_instance(3, {"x": 10, "y": 150}),  # Invalid for warn_check
         ]
 
-        filtered, violations = filter_execution_matrix(instances, [constraint_skip, constraint_warn])
+        kept, skipped, violations = filter_execution_matrix(instances, [constraint_skip, constraint_warn])
 
         # Instance 2 should be filtered (skip), instance 3 should be kept (warn)
-        assert len(filtered) == 2
-        assert filtered[0].execution_id == 1
-        assert filtered[1].execution_id == 3
+        assert len(kept) == 2
+        assert kept[0].execution_id == 1
+        assert kept[1].execution_id == 3
+        assert len(skipped) == 1  # Only instance 2 is skipped
         assert len(violations) == 2
 
 

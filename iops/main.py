@@ -109,6 +109,10 @@ Examples:
                              help="Hide specific columns (comma-separated, e.g., --hide path,command)")
     find_parser.add_argument('--status', type=str, default=None, metavar='STATUS',
                              help="Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING)")
+    find_parser.add_argument('--watch', '-w', action='store_true',
+                             help="Continuously monitor execution status (requires: pip install iops-benchmark[watch])")
+    find_parser.add_argument('--interval', type=int, default=5, metavar='SECONDS',
+                             help="Refresh interval in seconds for watch mode (default: 5)")
     _add_common_args(find_parser)
 
     # ---- report command ----
@@ -397,14 +401,31 @@ def main():
         if args.hide:
             hide_columns = {col.strip() for col in args.hide.split(',')}
 
-        find_executions(
-            args.path,
-            args.filter,
-            show_command=args.show_command,
-            show_full=args.full,
-            hide_columns=hide_columns,
-            status_filter=args.status
-        )
+        if args.watch:
+            # Watch mode - requires rich library
+            from iops.results.watch import watch_executions, WatchModeError
+            try:
+                watch_executions(
+                    args.path,
+                    args.filter,
+                    show_command=args.show_command,
+                    show_full=args.full,
+                    hide_columns=hide_columns,
+                    status_filter=args.status,
+                    interval=args.interval
+                )
+            except WatchModeError as e:
+                logger.error(str(e))
+                return
+        else:
+            find_executions(
+                args.path,
+                args.filter,
+                show_command=args.show_command,
+                show_full=args.full,
+                hide_columns=hide_columns,
+                status_filter=args.status
+            )
         return
 
     # ---- report command ----
@@ -489,6 +510,9 @@ def main():
                 runner.run_dry()
             else:
                 runner.run()
+        except KeyboardInterrupt:
+            logger.info("\n\nExecution interrupted by user (Ctrl+C)")
+            return
         except ConfigValidationError as e:
             logger.error(f"Configuration error: {e}")
             if args.verbose:

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Optional, Dict, Any
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
 from iops.execution.matrix import ExecutionInstance
-from iops.execution.parser import parse_metrics_from_execution
+from iops.execution.parser import parse_metrics_from_execution, ParserError
 
 if TYPE_CHECKING:
     pass
@@ -487,12 +487,17 @@ class LocalExecutor(BaseExecutor):
         # Only parse if succeeded
         if test.metadata.get("__executor_status") == self.STATUS_SUCCEEDED:
             self.logger.debug(f"  [LocalExec] Parsing metrics from output files")
-            results = parse_metrics_from_execution(test) or {}
-            parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
+            try:
+                results = parse_metrics_from_execution(test) or {}
+                parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
 
-            for name, value in parsed.items():
-                if name in metrics:
-                    metrics[name] = value
+                for name, value in parsed.items():
+                    if name in metrics:
+                        metrics[name] = value
+            except ParserError as e:
+                self.logger.warning(f"  [LocalExec] Parser failed: {e}")
+                test.metadata["__executor_status"] = self.STATUS_FAILED
+                test.metadata["__error"] = f"Parser error: {e}"
 
         metric_count = len([v for v in metrics.values() if v is not None])
         self.logger.debug(

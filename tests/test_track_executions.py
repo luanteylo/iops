@@ -240,9 +240,8 @@ class TestRunnerTrackExecutions:
         # Write status file
         runner._write_status_file(test)
 
-        # Status file should be created in exec_XXXX folder (parent of repetition_XXX)
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be created in the repetition folder (execution_dir)
+        status_file = test.execution_dir / "__iops_status.json"
 
         assert status_file.exists(), "Status file should be created when track_executions=True"
 
@@ -278,8 +277,8 @@ class TestRunnerTrackExecutions:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
@@ -311,8 +310,8 @@ class TestRunnerTrackExecutions:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
@@ -342,8 +341,8 @@ class TestRunnerTrackExecutions:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
@@ -428,9 +427,8 @@ class TestRunnerTrackExecutions:
         # Call _write_status_file
         runner._write_status_file(test)
 
-        # Verify status file was created
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Verify status file was created in repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
         assert status_file.exists()
 
     def test_run_skips_write_status_file_when_disabled(
@@ -458,8 +456,8 @@ class TestRunnerTrackExecutions:
         # (the method itself doesn't check track_executions, the caller does)
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         # The _write_status_file method itself always writes
         # The gating happens in the caller (runner.run)
@@ -505,7 +503,8 @@ class TestTrackExecutionsIntegration:
         }
         runner._write_status_file(test)
 
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
         assert status_file.exists()
 
         # 3. Verify both files have correct content
@@ -635,8 +634,8 @@ class TestTrackExecutionsEdgeCases:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
@@ -680,7 +679,7 @@ class TestTrackExecutionsEdgeCases:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         assert status_file.exists()
