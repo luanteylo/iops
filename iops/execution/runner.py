@@ -450,29 +450,13 @@ class IOPSRunner(HasLogger):
         # Use provided status or get from metadata
         final_status = status if status else test.metadata.get("__executor_status", "UNKNOWN")
 
-        # Try to get duration from sysinfo first (most accurate), then calculate from timestamps
+        # Get duration from sysinfo (stored in metadata for both executed and cached results)
+        # For executed: comes from __iops_sysinfo.json file read by _store_system_info()
+        # For cached: comes from cached metadata which includes __sysinfo
         duration = None
-        sysinfo_file = test.execution_dir / "__iops_sysinfo.json"
-        try:
-            if sysinfo_file.exists():
-                with open(sysinfo_file, 'r') as f:
-                    sysinfo = json.load(f)
-                    duration = sysinfo.get("duration_seconds")
-        except (json.JSONDecodeError, OSError, PermissionError):
-            pass
-
-        # Fallback: calculate from start/end timestamps (for cached results)
-        if duration is None:
-            start_time = test.metadata.get("__start")
-            end_time = test.metadata.get("__end")
-            if start_time and end_time:
-                try:
-                    from datetime import datetime
-                    start_dt = datetime.fromisoformat(str(start_time))
-                    end_dt = datetime.fromisoformat(str(end_time))
-                    duration = (end_dt - start_dt).total_seconds()
-                except (ValueError, TypeError):
-                    pass
+        sysinfo = test.metadata.get("__sysinfo")
+        if sysinfo and "duration_seconds" in sysinfo:
+            duration = sysinfo.get("duration_seconds")
 
         status_data = {
             "status": final_status,

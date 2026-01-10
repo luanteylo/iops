@@ -235,7 +235,7 @@ The `error` field contains the error message when status is FAILED or ERROR.
 
 The `cached` field indicates whether the result was retrieved from cache (`true`) or freshly executed (`false`). This is set when running with `--use-cache` and a cached result is found.
 
-The `duration_seconds` field contains the execution time in seconds. For executed tests, this comes from the probe script's timing. For cached results, it's calculated from start/end timestamps in the cached metadata.
+The `duration_seconds` field contains the actual execution time in seconds from the probe script. This is available for both executed and cached results (the sysinfo is stored in the cache).
 
 For skipped tests, a `reason` field explains why:
 ```json
