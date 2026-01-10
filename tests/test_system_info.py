@@ -16,7 +16,7 @@ from datetime import datetime
 
 from iops.config.models import GenericBenchmarkConfig, BenchmarkConfig
 from iops.execution.planner import BasePlanner, ExhaustivePlanner, SYSTEM_PROBE_TEMPLATE, PROBE_FILENAME
-from iops.execution.executors.base import BaseExecutor, SYSINFO_FILENAME
+from iops.execution.executors import BaseExecutor, SYSINFO_FILENAME
 from iops.execution.matrix import ExecutionInstance
 from iops.execution.runner import IOPSRunner
 from conftest import load_config

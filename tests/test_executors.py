@@ -140,7 +140,7 @@ def test_local_executor_wait_and_collect(mock_test_instance):
     mock_metric.name = "metric1"
     mock_test_instance.parser.metrics = [mock_metric]
 
-    with patch("iops.execution.executors.local.parse_metrics_from_execution") as mock_parse:
+    with patch("iops.execution.executors.parse_metrics_from_execution") as mock_parse:
         mock_parse.return_value = {"metrics": {"metric1": 100.5}}
 
         executor.wait_and_collect(mock_test_instance)
