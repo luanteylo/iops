@@ -320,7 +320,7 @@ class BaseExecutor(ABC, HasLogger):
         cmd = ["bash", str(test.post_script_file)]
 
         try:
-            self.logger.debug(f"  [{self._LOG_PREFIX}] Executing post-script: {test.post_script_file.name}")
+            self.logger.info(f"  [{self._LOG_PREFIX}] Running post-script: {test.post_script_file.name}")
 
             result = subprocess.run(
                 cmd,
@@ -467,7 +467,6 @@ class LocalExecutor(BaseExecutor):
 
             # Execute post-processing script if present
             if self._safe_is_file(test.post_script_file):
-                self.logger.debug(f"  [LocalExec] Running post-processing script")
                 post_success = self._run_post_script(test)
                 if not post_success:
                     # Post script failed, mark entire test as failed
