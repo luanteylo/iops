@@ -11,7 +11,7 @@ This module contains all planner implementations:
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
 from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance
-from iops.constraints.evaluator import check_constraints_for_vars
+from iops.execution.constraints import check_constraints_for_vars
 
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod

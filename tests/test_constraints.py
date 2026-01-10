@@ -5,7 +5,7 @@ from unittest.mock import Mock, MagicMock
 from pathlib import Path
 
 from iops.config.models import ConstraintConfig, ConfigValidationError
-from iops.constraints.evaluator import evaluate_constraint, filter_execution_matrix, ConstraintViolation
+from iops.execution.constraints import evaluate_constraint, filter_execution_matrix, ConstraintViolation
 
 
 class TestEvaluateConstraint:

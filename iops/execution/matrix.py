@@ -16,7 +16,7 @@ from iops.config.models import (
     MetricConfig,
     ConfigValidationError,
 )
-from iops.constraints.evaluator import filter_execution_matrix
+from iops.execution.constraints import filter_execution_matrix
 
 
 # ----------------- Jinja helpers ----------------- #

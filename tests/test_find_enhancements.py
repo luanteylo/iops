@@ -17,11 +17,11 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from iops.main import (
+from iops.main import parse_arguments
+from iops.results.find import (
     find_executions,
     _truncate_value,
     _read_status,
-    parse_arguments,
     INDEX_FILENAME,
     PARAMS_FILENAME,
     STATUS_FILENAME,

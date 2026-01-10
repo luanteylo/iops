@@ -14,6 +14,8 @@ from iops.main import (
     initialize_logger,
     log_execution_context,
     main,
+)
+from iops.results.find import (
     find_executions,
     INDEX_FILENAME,
     PARAMS_FILENAME,
