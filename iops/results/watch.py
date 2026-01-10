@@ -118,7 +118,8 @@ def _collect_execution_data(
     hide_columns: set,
     expected_repetitions: int = 1,
     folders_upfront: bool = False,
-    cached_filter: Optional[bool] = None
+    cached_filter: Optional[bool] = None,
+    metric_filters: Optional[Dict[str, Tuple[str, float]]] = None
 ) -> Tuple[List[Dict], Dict[str, int]]:
     """
     Collect current execution data from status files.
@@ -139,15 +140,17 @@ def _collect_execution_data(
         expected_repetitions: Expected number of repetitions per config
         folders_upfront: Whether folders were created upfront (enables SKIPPED status)
         cached_filter: Filter by cache status (True=only cached, False=only executed)
+        metric_filters: Dict of metric_name -> (operator, value) for filtering by metrics
 
     Returns:
         Tuple of (test_list, status_counts)
-        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time, skip_reason, cached
+        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time, skip_reason, cached, metrics
         rep_statuses is a list of status strings for each repetition
         avg_time is the average duration in seconds for successful repetitions (or None)
         total_time is the sum of durations for all successful repetitions (or None)
         skip_reason is the skip reason for SKIPPED tests (or None)
         cached is True if all reps are cached, False if none, "partial" if mixed
+        metrics is a dict of metric_name -> average value across successful repetitions (or None)
     """
     # Collect tests and count statuses
     tests = []
@@ -209,6 +212,10 @@ def _collect_execution_data(
             if cached_filter is True:
                 continue
 
+            # SKIPPED tests can't match metric filters (no metrics)
+            if metric_filters:
+                continue
+
             tests.append({
                 "exec_key": exec_key,
                 "rel_path": rel_path,
@@ -219,20 +226,31 @@ def _collect_execution_data(
                 "total_time": None,
                 "skip_reason": skip_reason,
                 "cached": False,
+                "metrics": None,
             })
             continue
 
-        # Collect repetition statuses, timing, and cache flags
+        # Collect repetition statuses, timing, cache flags, and metrics
         rep_statuses = []
         rep_cached_flags = []
         rep_durations = []  # Duration in seconds for successful reps
+        all_metrics: Dict[str, list] = {}  # Collect metrics for averaging
 
         # Scan for repetition subdirectories
         rep_dirs = sorted(exec_path.glob("repetition_*"))
 
         if rep_dirs:
             for rep_dir in rep_dirs:
-                status_info = _read_status(rep_dir)
+                # Read status file directly (not using _read_status which aggregates)
+                rep_status_file = rep_dir / STATUS_FILENAME
+                status_info = {}
+                if rep_status_file.exists():
+                    try:
+                        with open(rep_status_file, 'r') as f:
+                            status_info = json.load(f)
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
                 status = status_info.get("status", "UNKNOWN")
                 rep_statuses.append(status)
                 rep_cached_flags.append(status_info.get("cached", False))
@@ -251,6 +269,15 @@ def _collect_execution_data(
                             rep_durations.append(float(duration))
                         except (ValueError, TypeError):
                             pass
+
+                # Collect metrics from successful repetitions for averaging
+                rep_metrics = status_info.get("metrics")
+                if rep_metrics:
+                    for metric_name, metric_value in rep_metrics.items():
+                        if metric_value is not None:
+                            if metric_name not in all_metrics:
+                                all_metrics[metric_name] = []
+                            all_metrics[metric_name].append(metric_value)
 
             # Add pending for missing repetitions
             existing_reps = len(rep_dirs)
@@ -289,6 +316,50 @@ def _collect_execution_data(
             total_time = sum(rep_durations)
             avg_time = total_time / len(rep_durations)
 
+        # Calculate average metrics (only for numeric values)
+        avg_metrics = None
+        if all_metrics:
+            avg_metrics = {}
+            for metric_name, values in all_metrics.items():
+                try:
+                    # Try to calculate average for numeric values
+                    numeric_values = [float(v) for v in values if isinstance(v, (int, float))]
+                    if numeric_values:
+                        avg_metrics[metric_name] = sum(numeric_values) / len(numeric_values)
+                except (ValueError, TypeError):
+                    pass
+            if not avg_metrics:
+                avg_metrics = None
+
+        # Apply metric filters
+        if metric_filters and avg_metrics:
+            match = True
+            for metric_name, (operator, threshold) in metric_filters.items():
+                if metric_name not in avg_metrics:
+                    match = False
+                    break
+                metric_val = avg_metrics[metric_name]
+                if operator == ">" and not (metric_val > threshold):
+                    match = False
+                    break
+                elif operator == ">=" and not (metric_val >= threshold):
+                    match = False
+                    break
+                elif operator == "<" and not (metric_val < threshold):
+                    match = False
+                    break
+                elif operator == "<=" and not (metric_val <= threshold):
+                    match = False
+                    break
+                elif operator == "=" and not (metric_val == threshold):
+                    match = False
+                    break
+            if not match:
+                continue
+        elif metric_filters and not avg_metrics:
+            # Has metric filters but no metrics yet - skip
+            continue
+
         # Apply status filter - include test if any repetition matches
         if status_filter:
             if not any(s.upper() == status_filter.upper() for s in rep_statuses):
@@ -304,6 +375,7 @@ def _collect_execution_data(
             "total_time": total_time,
             "skip_reason": None,
             "cached": cached,
+            "metrics": avg_metrics,
         })
 
     # Sort tests numerically by execution ID
@@ -374,13 +446,14 @@ def _build_table(
     show_only_active: bool = False,
     total_expected_configs: int = 0,
     terminal_width: int = 80,
-    max_rows: Optional[int] = None
+    max_rows: Optional[int] = None,
+    show_metrics: bool = False
 ) -> Tuple[Table, int, int, int, Dict[str, int]]:
     """
     Build a rich Table from test data.
 
     Args:
-        tests: List of test dicts with exec_key, rel_path, params, command, rep_statuses, avg_time
+        tests: List of test dicts with exec_key, rel_path, params, command, rep_statuses, avg_time, metrics
         show_command: Whether to show command column
         show_full: Whether to show full values
         hide_columns: Columns to hide
@@ -389,6 +462,7 @@ def _build_table(
         total_expected_configs: Total expected number of test configs (for queued placeholders)
         terminal_width: Terminal width for auto-fitting variable columns
         max_rows: Maximum number of rows to display (None for unlimited)
+        show_metrics: If True, display metric columns
 
     Returns:
         Tuple of (table, shown_count, total_count, hidden_vars_count, hidden_by_status)
@@ -407,7 +481,17 @@ def _build_table(
         # Sort for consistent ordering, filter out hidden columns
         all_var_names = sorted(n for n in var_name_set if n not in hide_columns)
 
-    # Calculate available width for variable columns
+    # Collect all metric names if showing metrics
+    all_metric_names = []
+    if show_metrics and tests:
+        metric_name_set = set()
+        for test in tests:
+            metrics = test.get("metrics")
+            if metrics:
+                metric_name_set.update(metrics.keys())
+        all_metric_names = sorted(metric_name_set)
+
+    # Calculate available width for variable and metric columns
     # Fixed columns: Test (~12), Reps (~reps*2), Status (6), Avg (7), Total (7), Command (~40)
     fixed_width = 12 + 8 + 9 + 9 + 6  # Test + Status + Avg + Total + padding
     if total_repetitions > 1:
@@ -432,6 +516,17 @@ def _build_table(
         else:
             hidden_vars_count += 1
 
+    # Allocate remaining space for metric columns if showing metrics
+    metric_names = []
+    if show_metrics and all_metric_names:
+        remaining_width = available_width - used_width
+        for metric_name in all_metric_names:
+            # Metric columns need ~10 chars for formatted values
+            col_width = max(10, len(metric_name) + 2)
+            if remaining_width >= col_width:
+                metric_names.append(metric_name)
+                remaining_width -= col_width
+
     # Add columns
     if "path" not in hide_columns:
         table.add_column("Test", style="cyan", no_wrap=True)
@@ -448,6 +543,11 @@ def _build_table(
     # Time columns: Avg (per repetition) and Total (sum of all reps)
     table.add_column("Avg", justify="right", width=7)
     table.add_column("Total", justify="right", width=7)
+
+    # Add metric columns if showing metrics
+    for metric_name in metric_names:
+        table.add_column(metric_name, justify="right", style="magenta")
+
     if show_command and "command" not in hide_columns:
         table.add_column("Command", style="dim", max_width=40)
 
@@ -556,6 +656,10 @@ def _build_table(
             row.append(Text("--", style="dim"))  # Avg
             row.append(Text("--", style="dim"))  # Total
 
+            # Metric columns (no metrics for queued)
+            for _ in metric_names:
+                row.append(Text("--", style="dim"))
+
             if show_command and "command" not in hide_columns:
                 row.append(Text("--", style="dim"))
         else:
@@ -630,6 +734,22 @@ def _build_table(
                 row.append(Text(time_str, style="green"))
             else:
                 row.append(Text("--", style="dim"))
+
+            # Metric columns
+            test_metrics = test.get("metrics", {}) or {}
+            for metric_name in metric_names:
+                metric_val = test_metrics.get(metric_name)
+                if metric_val is not None:
+                    # Format based on magnitude
+                    if abs(metric_val) >= 1000:
+                        metric_str = f"{metric_val:.1f}"
+                    elif abs(metric_val) >= 1:
+                        metric_str = f"{metric_val:.2f}"
+                    else:
+                        metric_str = f"{metric_val:.3f}"
+                    row.append(Text(metric_str, style="magenta"))
+                else:
+                    row.append(Text("--", style="dim"))
 
             if show_command and "command" not in hide_columns:
                 row.append(display_val(command))
@@ -787,7 +907,9 @@ def watch_executions(
     status_filter: Optional[str] = None,
     interval: int = 5,
     exit_on_complete: bool = False,
-    cached_filter: Optional[bool] = None
+    cached_filter: Optional[bool] = None,
+    show_metrics: bool = False,
+    metric_filters: Optional[List[str]] = None
 ) -> None:
     """
     Watch execution folders with live updates.
@@ -802,6 +924,8 @@ def watch_executions(
         interval: Refresh interval in seconds
         exit_on_complete: Exit when all executions complete
         cached_filter: Filter by cache status (True=only cached, False=only executed)
+        show_metrics: If True, display metric columns with average values
+        metric_filters: Optional list of metric filters (e.g., "bwMiB>1000")
     """
     check_rich_available()
 
@@ -816,6 +940,26 @@ def watch_executions(
                 raise WatchModeError(f"Invalid filter format: {f} (expected VAR=VALUE)")
             key, value = f.split('=', 1)
             filter_dict[key] = value
+
+    # Parse metric filters (e.g., "bwMiB>1000", "latency<=0.5")
+    import re
+    metric_filter_dict: Optional[Dict[str, Tuple[str, float]]] = None
+    if metric_filters:
+        metric_filter_dict = {}
+        for mf in metric_filters:
+            # Parse metric filter: metric_name<op>value
+            match = re.match(r'^(\w+)(>=|<=|>|<|=)(.+)$', mf)
+            if not match:
+                raise WatchModeError(
+                    f"Invalid metric filter format: {mf}\n"
+                    f"Expected format: METRIC<op>VALUE (e.g., bwMiB>1000, latency<=0.5)"
+                )
+            metric_name, operator, value_str = match.groups()
+            try:
+                value = float(value_str)
+            except ValueError:
+                raise WatchModeError(f"Invalid metric filter value: {value_str} (must be a number)")
+            metric_filter_dict[metric_name] = (operator, value)
 
     # Find index file
     index_file = path / INDEX_FILENAME
@@ -868,7 +1012,7 @@ def watch_executions(
                 tests, status_counts = _collect_execution_data(
                     run_root, executions, filter_dict, status_filter, hide_columns,
                     expected_repetitions=repetitions, folders_upfront=folders_upfront,
-                    cached_filter=cached_filter
+                    cached_filter=cached_filter, metric_filters=metric_filter_dict
                 )
 
                 total_in_index = len(executions)
@@ -988,7 +1132,8 @@ def watch_executions(
                         show_only_active=show_only_active,
                         total_expected_configs=total_expected_configs,
                         terminal_width=terminal_width,
-                        max_rows=max_rows
+                        max_rows=max_rows,
+                        show_metrics=show_metrics
                     )
 
                     # Build note for hidden items

@@ -115,6 +115,10 @@ Examples:
                              help="Continuously monitor execution status (requires: pip install iops-benchmark[watch])")
     find_parser.add_argument('--interval', type=int, default=5, metavar='SECONDS',
                              help="Refresh interval in seconds for watch mode (default: 5)")
+    find_parser.add_argument('--metrics', '-m', action='store_true',
+                             help="Show metric columns with average values (watch mode only)")
+    find_parser.add_argument('--filter-metric', type=str, action='append', metavar='METRIC<OP>VALUE',
+                             help="Filter by metric value, e.g., 'bwMiB>1000' (watch mode only, can repeat)")
     _add_common_args(find_parser)
 
     # ---- report command ----
@@ -420,7 +424,9 @@ def main():
                     hide_columns=hide_columns,
                     status_filter=args.status,
                     interval=args.interval,
-                    cached_filter=cached_filter
+                    cached_filter=cached_filter,
+                    show_metrics=args.metrics,
+                    metric_filters=getattr(args, 'filter_metric', None)
                 )
             except WatchModeError as e:
                 logger.error(str(e))

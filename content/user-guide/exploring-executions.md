@@ -247,6 +247,44 @@ iops find ./workdir/run_001 --watch --cached yes
 
 In watch mode, cached results are indicated with a cyan `C` next to the status (e.g., `OK C` for a cached successful result).
 
+### Displaying Metrics
+
+Watch mode can display collected metrics (e.g., throughput, IOPS, latency) as additional columns. Metrics are averaged across completed repetitions:
+
+```bash
+# Show metrics in watch mode
+iops find ./workdir/run_001 --watch --metrics
+
+# Short flag
+iops find ./workdir/run_001 -w -m
+```
+
+When metrics are enabled, the table will include columns for each metric defined in your parser configuration. Values are displayed as averages across all completed repetitions for each test.
+
+### Filtering by Metrics
+
+You can filter executions based on metric values using the `--filter-metric` flag. This is useful for finding high-performing or problematic configurations:
+
+```bash
+# Show only results with bandwidth > 1000 MiB/s
+iops find ./workdir/run_001 --watch --metrics --filter-metric "bwMiB>1000"
+
+# Filter by latency
+iops find ./workdir/run_001 --watch --metrics --filter-metric "latency<=0.5"
+
+# Multiple metric filters (AND logic)
+iops find ./workdir/run_001 --watch -m --filter-metric "bwMiB>1000" --filter-metric "iops>=5000"
+```
+
+**Supported operators:**
+- `>` - Greater than
+- `>=` - Greater than or equal
+- `<` - Less than
+- `<=` - Less than or equal
+- `=` - Equal to
+
+Metric filters only match executions that have completed with metric values. Pending or failed executions without metrics are excluded when metric filters are active.
+
 ### Status Indicators
 
 In watch mode, status is displayed using compact symbols:
@@ -277,7 +315,7 @@ Key files used by `iops find`:
 |------|----------|---------|
 | `__iops_index.json` | Run root | Indexes all executions with parameters |
 | `__iops_params.json` | Each exec folder | Stores parameter values |
-| `__iops_status.json` | Each exec/rep folder | Tracks execution status and cache flag |
+| `__iops_status.json` | Each exec/rep folder | Tracks execution status, cache flag, and metrics |
 
 All paths in `__iops_index.json` are stored as relative paths, making workdirs **portable** across systems. You can archive, move, or share workdirs and the `find` command will work correctly.
 

@@ -43,6 +43,8 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         Dict with status info, or default values if file doesn't exist.
         Includes 'cached' field: True if all reps are cached, False if none,
         'partial' if some are cached.
+        Includes 'metrics' field: Dict of metric_name -> average value across
+        successful repetitions, or None if no metrics available.
     """
     # First check for test-level status (SKIPPED, PENDING, COMPLETE)
     test_status_file = exec_path / STATUS_FILENAME
@@ -64,6 +66,8 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         cached_flags = []
         error = None
         end_time = None
+        # Collect metrics from all successful repetitions for averaging
+        all_metrics: Dict[str, list] = {}
 
         for rep_dir in rep_dirs:
             rep_status_file = rep_dir / STATUS_FILENAME
@@ -77,6 +81,14 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
                             error = rep_status.get("error")
                         if rep_status.get("end_time"):
                             end_time = rep_status.get("end_time")
+                        # Collect metrics for averaging
+                        rep_metrics = rep_status.get("metrics")
+                        if rep_metrics:
+                            for metric_name, metric_value in rep_metrics.items():
+                                if metric_value is not None:
+                                    if metric_name not in all_metrics:
+                                        all_metrics[metric_name] = []
+                                    all_metrics[metric_name].append(metric_value)
                 except (json.JSONDecodeError, OSError):
                     statuses.append("UNKNOWN")
                     cached_flags.append(False)
@@ -104,7 +116,28 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         else:
             cached = False
 
-        return {"status": overall, "error": error, "end_time": end_time, "cached": cached}
+        # Calculate average metrics (only for numeric values)
+        avg_metrics = None
+        if all_metrics:
+            avg_metrics = {}
+            for metric_name, values in all_metrics.items():
+                try:
+                    # Try to calculate average for numeric values
+                    numeric_values = [float(v) for v in values if isinstance(v, (int, float))]
+                    if numeric_values:
+                        avg_metrics[metric_name] = sum(numeric_values) / len(numeric_values)
+                except (ValueError, TypeError):
+                    pass
+            if not avg_metrics:
+                avg_metrics = None
+
+        return {
+            "status": overall,
+            "error": error,
+            "end_time": end_time,
+            "cached": cached,
+            "metrics": avg_metrics,
+        }
 
     # No repetition folders yet - check test-level status or default to PENDING
     if test_status_file.exists():
@@ -114,7 +147,7 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             pass
 
-    return {"status": "PENDING", "error": None, "end_time": None, "cached": False}
+    return {"status": "PENDING", "error": None, "end_time": None, "cached": False, "metrics": None}
 
 
 def _read_run_metadata(run_root: Path) -> Dict[str, Any]:

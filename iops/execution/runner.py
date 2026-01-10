@@ -458,12 +458,23 @@ class IOPSRunner(HasLogger):
         if sysinfo and "duration_seconds" in sysinfo:
             duration = sysinfo.get("duration_seconds")
 
+        # Get metrics if available (only for completed executions)
+        metrics = None
+        if final_status in ("SUCCEEDED", "FAILED", "ERROR"):
+            raw_metrics = test.metadata.get("metrics", {})
+            # Only include metrics that have non-None values
+            if raw_metrics:
+                metrics = {k: v for k, v in raw_metrics.items() if v is not None}
+                if not metrics:
+                    metrics = None
+
         status_data = {
             "status": final_status,
             "error": test.metadata.get("__error"),
             "end_time": test.metadata.get("__end"),
             "cached": test.metadata.get("__cached", False),
             "duration_seconds": duration,
+            "metrics": metrics,
         }
 
         try:

@@ -183,6 +183,8 @@ Only executions matching all specified filters will be displayed.
 - `--cached {yes,no}` - Filter by cache status (yes=only cached, no=only executed)
 - `--watch, -w` - Enable watch mode for real-time monitoring (requires `rich` library)
 - `--interval N` - Refresh interval in seconds for watch mode (default: 5)
+- `--metrics, -m` - Show metric columns with average values (watch mode only)
+- `--filter-metric METRIC<OP>VALUE` - Filter by metric value, e.g., `bwMiB>1000` (watch mode only, can repeat)
 
 **Examples:**
 
@@ -234,6 +236,15 @@ iops find ./workdir/run_001 --cached yes
 
 # Show only freshly executed results (not from cache)
 iops find ./workdir/run_001 --cached no
+
+# Watch mode with metrics display
+iops find ./workdir/run_001 --watch --metrics
+
+# Filter by metric values (show only results with bwMiB > 1000)
+iops find ./workdir/run_001 --watch --metrics --filter-metric "bwMiB>1000"
+
+# Multiple metric filters
+iops find ./workdir/run_001 --watch -m --filter-metric "bwMiB>1000" --filter-metric "latency<=0.5"
 ```
 
 ### --version - Show Version
