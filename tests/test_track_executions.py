@@ -640,11 +640,12 @@ class TestTrackExecutionsEdgeCases:
         with open(status_file, 'r') as f:
             status_data = json.load(f)
 
-        # Should have exactly these three fields
+        # Should have exactly these four fields
         assert "status" in status_data
         assert "error" in status_data
         assert "end_time" in status_data
-        assert len(status_data) == 3
+        assert "cached" in status_data
+        assert len(status_data) == 4
 
         # Status should be a string
         assert isinstance(status_data["status"], str)
@@ -652,6 +653,8 @@ class TestTrackExecutionsEdgeCases:
         assert status_data["error"] is None or isinstance(status_data["error"], str)
         # end_time can be None or string
         assert status_data["end_time"] is None or isinstance(status_data["end_time"], str)
+        # cached should be a boolean
+        assert isinstance(status_data["cached"], bool)
 
     def test_track_executions_with_cache(self, sample_config_file, tmp_path):
         """Test that track_executions works correctly with cached executions."""

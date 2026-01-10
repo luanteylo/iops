@@ -109,6 +109,8 @@ Examples:
                              help="Hide specific columns (comma-separated, e.g., --hide path,command)")
     find_parser.add_argument('--status', type=str, default=None, metavar='STATUS',
                              help="Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING)")
+    find_parser.add_argument('--cached', type=str, default=None, choices=['yes', 'no'],
+                             help="Filter by cache status (yes=only cached, no=only executed)")
     find_parser.add_argument('--watch', '-w', action='store_true',
                              help="Continuously monitor execution status (requires: pip install iops-benchmark[watch])")
     find_parser.add_argument('--interval', type=int, default=5, metavar='SECONDS',
@@ -401,6 +403,11 @@ def main():
         if args.hide:
             hide_columns = {col.strip() for col in args.hide.split(',')}
 
+        # Parse cached filter (convert string to bool)
+        cached_filter = None
+        if args.cached:
+            cached_filter = args.cached == 'yes'
+
         if args.watch:
             # Watch mode - requires rich library
             from iops.results.watch import watch_executions, WatchModeError
@@ -412,7 +419,8 @@ def main():
                     show_full=args.full,
                     hide_columns=hide_columns,
                     status_filter=args.status,
-                    interval=args.interval
+                    interval=args.interval,
+                    cached_filter=cached_filter
                 )
             except WatchModeError as e:
                 logger.error(str(e))
@@ -424,7 +432,8 @@ def main():
                 show_command=args.show_command,
                 show_full=args.full,
                 hide_columns=hide_columns,
-                status_filter=args.status
+                status_filter=args.status,
+                cached_filter=cached_filter
             )
         return
 

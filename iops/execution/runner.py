@@ -454,6 +454,7 @@ class IOPSRunner(HasLogger):
             "status": final_status,
             "error": test.metadata.get("__error"),
             "end_time": test.metadata.get("__end"),
+            "cached": test.metadata.get("__cached", False),
         }
 
         try:

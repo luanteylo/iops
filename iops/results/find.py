@@ -40,7 +40,9 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         exec_path: Path to the exec_XXXX folder
 
     Returns:
-        Dict with status info, or default values if file doesn't exist
+        Dict with status info, or default values if file doesn't exist.
+        Includes 'cached' field: True if all reps are cached, False if none,
+        'partial' if some are cached.
     """
     # First check for test-level status (SKIPPED, PENDING, COMPLETE)
     test_status_file = exec_path / STATUS_FILENAME
@@ -59,6 +61,7 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
     if rep_dirs:
         # Aggregate status from repetitions
         statuses = []
+        cached_flags = []
         error = None
         end_time = None
 
@@ -69,14 +72,17 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
                     with open(rep_status_file, 'r') as f:
                         rep_status = json.load(f)
                         statuses.append(rep_status.get("status", "UNKNOWN"))
+                        cached_flags.append(rep_status.get("cached", False))
                         if rep_status.get("error"):
                             error = rep_status.get("error")
                         if rep_status.get("end_time"):
                             end_time = rep_status.get("end_time")
                 except (json.JSONDecodeError, OSError):
                     statuses.append("UNKNOWN")
+                    cached_flags.append(False)
             else:
                 statuses.append("PENDING")
+                cached_flags.append(False)
 
         # Determine overall status
         if any(s == "RUNNING" for s in statuses):
@@ -90,7 +96,15 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         else:
             overall = "UNKNOWN"
 
-        return {"status": overall, "error": error, "end_time": end_time}
+        # Determine cache status: True if all cached, False if none, "partial" if mixed
+        if all(cached_flags):
+            cached = True
+        elif any(cached_flags):
+            cached = "partial"
+        else:
+            cached = False
+
+        return {"status": overall, "error": error, "end_time": end_time, "cached": cached}
 
     # No repetition folders yet - check test-level status or default to PENDING
     if test_status_file.exists():
@@ -100,7 +114,7 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             pass
 
-    return {"status": "PENDING", "error": None, "end_time": None}
+    return {"status": "PENDING", "error": None, "end_time": None, "cached": False}
 
 
 def _read_run_metadata(run_root: Path) -> Dict[str, Any]:
@@ -129,7 +143,8 @@ def find_executions(
     show_command: bool = False,
     show_full: bool = False,
     hide_columns: Optional[set] = None,
-    status_filter: Optional[str] = None
+    status_filter: Optional[str] = None,
+    cached_filter: Optional[bool] = None
 ) -> None:
     """
     Find and display execution folders in a workdir.
@@ -141,6 +156,7 @@ def find_executions(
         show_full: If True, show full values without truncation
         hide_columns: Set of column names to hide
         status_filter: Filter by execution status (SUCCEEDED, FAILED, etc.)
+        cached_filter: Filter by cache status (True=only cached, False=only executed)
     """
     path = path.resolve()
     hide_columns = hide_columns or set()
@@ -166,7 +182,7 @@ def find_executions(
     if index_file.exists():
         _show_executions_from_index(
             path, index_file, filter_dict, show_command,
-            show_full, hide_columns, status_filter
+            show_full, hide_columns, status_filter, cached_filter
         )
         return
 
@@ -179,7 +195,7 @@ def find_executions(
                 print(f"\n=== {run_dir.name} ===")
                 _show_executions_from_index(
                     run_dir, index_file, filter_dict, show_command,
-                    show_full, hide_columns, status_filter
+                    show_full, hide_columns, status_filter, cached_filter
                 )
         return
 
@@ -264,7 +280,8 @@ def _show_executions_from_index(
     show_command: bool = False,
     show_full: bool = False,
     hide_columns: Optional[set] = None,
-    status_filter: Optional[str] = None
+    status_filter: Optional[str] = None,
+    cached_filter: Optional[bool] = None
 ) -> None:
     """Show executions from the index file, optionally filtered."""
     hide_columns = hide_columns or set()
@@ -323,6 +340,18 @@ def _show_executions_from_index(
         if status_filter and status.upper() != status_filter.upper():
             continue
 
+        # Get cache status
+        cached = status_info.get("cached", False)
+
+        # Apply cached filter
+        if cached_filter is not None:
+            # cached_filter=True means only show cached
+            # cached_filter=False means only show executed (not cached)
+            if cached_filter and not cached:
+                continue
+            if not cached_filter and cached:
+                continue
+
         # Apply parameter filters (partial match - only check specified vars)
         if filter_dict:
             match = True
@@ -338,7 +367,7 @@ def _show_executions_from_index(
                 continue
 
         skip_reason = status_info.get("reason") if status == "SKIPPED" else None
-        matches.append((exec_key, rel_path, params, command, status, skip_reason))
+        matches.append((exec_key, rel_path, params, command, status, skip_reason, cached))
 
     if not matches:
         filter_desc = []
@@ -346,6 +375,8 @@ def _show_executions_from_index(
             filter_desc.append(f"parameters: {filter_dict}")
         if status_filter:
             filter_desc.append(f"status: {status_filter}")
+        if cached_filter is not None:
+            filter_desc.append(f"cached: {cached_filter}")
         if filter_desc:
             print(f"No executions match the filter ({', '.join(filter_desc)})")
         else:
@@ -366,13 +397,18 @@ def _show_executions_from_index(
         path_values = [display_val(m[1]) for m in matches]
         col_widths["path"] = max(len("Path"), max(len(v) for v in path_values))
 
-    # Status column (include skip reason in width calculation)
+    # Status column (include skip reason and cache indicator in width calculation)
     if "status" not in hide_columns:
-        def format_status(status, skip_reason):
+        def format_status(status, skip_reason, cached):
+            result = status
             if status == "SKIPPED" and skip_reason:
-                return f"{status}:{skip_reason}"
-            return status
-        status_values = [format_status(m[4], m[5]) for m in matches]
+                result = f"{status}:{skip_reason}"
+            if cached is True:
+                result += " [C]"
+            elif cached == "partial":
+                result += " [C*]"
+            return result
+        status_values = [format_status(m[4], m[5], m[6]) for m in matches]
         col_widths["status"] = max(len("Status"), max(len(v) for v in status_values))
 
     # Variable columns
@@ -402,14 +438,14 @@ def _show_executions_from_index(
     print("-" * len(header))
 
     # Print rows
-    for exec_key, rel_path, params, command, status, skip_reason in matches:
+    for exec_key, rel_path, params, command, status, skip_reason, cached in matches:
         row_parts = []
 
         if "path" not in hide_columns:
             row_parts.append(display_val(rel_path).ljust(col_widths["path"]))
 
         if "status" not in hide_columns:
-            status_display = format_status(status, skip_reason)
+            status_display = format_status(status, skip_reason, cached)
             row_parts.append(status_display.ljust(col_widths["status"]))
 
         for var in var_names:

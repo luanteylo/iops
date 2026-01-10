@@ -142,7 +142,8 @@ def _collect_execution_data(
     status_filter: Optional[str],
     hide_columns: set,
     expected_repetitions: int = 1,
-    folders_upfront: bool = False
+    folders_upfront: bool = False,
+    cached_filter: Optional[bool] = None
 ) -> Tuple[List[Dict], Dict[str, int]]:
     """
     Collect current execution data from status files.
@@ -162,14 +163,16 @@ def _collect_execution_data(
         hide_columns: Columns to hide
         expected_repetitions: Expected number of repetitions per config
         folders_upfront: Whether folders were created upfront (enables SKIPPED status)
+        cached_filter: Filter by cache status (True=only cached, False=only executed)
 
     Returns:
         Tuple of (test_list, status_counts)
-        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time, skip_reason
+        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time, skip_reason, cached
         rep_statuses is a list of status strings for each repetition
         avg_time is the average duration in seconds for successful repetitions (or None)
         total_time is the sum of durations for all successful repetitions (or None)
         skip_reason is the skip reason for SKIPPED tests (or None)
+        cached is True if all reps are cached, False if none, "partial" if mixed
     """
     # Collect tests and count statuses
     tests = []
@@ -227,6 +230,10 @@ def _collect_execution_data(
             if status_filter and status_filter.upper() != "SKIPPED":
                 continue
 
+            # SKIPPED tests are not cached
+            if cached_filter is True:
+                continue
+
             tests.append({
                 "exec_key": exec_key,
                 "rel_path": rel_path,
@@ -236,11 +243,13 @@ def _collect_execution_data(
                 "avg_time": None,
                 "total_time": None,
                 "skip_reason": skip_reason,
+                "cached": False,
             })
             continue
 
-        # Collect repetition statuses and timing
+        # Collect repetition statuses, timing, and cache flags
         rep_statuses = []
+        rep_cached_flags = []
         rep_durations = []  # Duration in seconds for successful reps
 
         # Scan for repetition subdirectories
@@ -251,6 +260,7 @@ def _collect_execution_data(
                 status_info = _read_status(rep_dir)
                 status = status_info.get("status", "UNKNOWN")
                 rep_statuses.append(status)
+                rep_cached_flags.append(status_info.get("cached", False))
 
                 # Count statuses
                 if status in status_counts:
@@ -274,12 +284,29 @@ def _collect_execution_data(
                 pending_count = expected_repetitions - existing_reps
                 for _ in range(pending_count):
                     rep_statuses.append("PENDING")
+                    rep_cached_flags.append(False)
                 status_counts["PENDING"] += pending_count
         else:
             # No repetition folders yet - all repetitions are pending
             for _ in range(expected_repetitions):
                 rep_statuses.append("PENDING")
+                rep_cached_flags.append(False)
             status_counts["PENDING"] += expected_repetitions
+
+        # Determine cache status: True if all cached, False if none, "partial" if mixed
+        if all(rep_cached_flags):
+            cached = True
+        elif any(rep_cached_flags):
+            cached = "partial"
+        else:
+            cached = False
+
+        # Apply cached filter
+        if cached_filter is not None:
+            if cached_filter and not cached:
+                continue
+            if not cached_filter and cached:
+                continue
 
         # Calculate average and total time for this test
         avg_time = None
@@ -302,6 +329,7 @@ def _collect_execution_data(
             "avg_time": avg_time,
             "total_time": total_time,
             "skip_reason": None,
+            "cached": cached,
         })
 
     # Sort tests numerically by execution ID
@@ -371,8 +399,9 @@ def _build_table(
     total_repetitions: int = 1,
     show_only_active: bool = False,
     total_expected_configs: int = 0,
-    terminal_width: int = 80
-) -> Tuple[Table, int, int, int]:
+    terminal_width: int = 80,
+    max_rows: Optional[int] = None
+) -> Tuple[Table, int, int, int, Dict[str, int]]:
     """
     Build a rich Table from test data.
 
@@ -385,9 +414,11 @@ def _build_table(
         show_only_active: If True, only show tests that are not fully succeeded
         total_expected_configs: Total expected number of test configs (for queued placeholders)
         terminal_width: Terminal width for auto-fitting variable columns
+        max_rows: Maximum number of rows to display (None for unlimited)
 
     Returns:
-        Tuple of (table, shown_count, total_count, hidden_vars_count)
+        Tuple of (table, shown_count, total_count, hidden_vars_count, hidden_by_status)
+        hidden_by_status is a dict of status -> count of rows hidden due to row limit
     """
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
 
@@ -473,7 +504,7 @@ def _build_table(
         all_ids = sorted(existing_ids)
 
     # Build combined list: existing tests + queued placeholders, in order
-    display_items = []  # List of (id, test_or_none, is_queued)
+    display_items = []  # List of (id, test_or_none, is_queued, status)
     for exec_id in all_ids:
         if exec_id in tests_by_id:
             test = tests_by_id[exec_id]
@@ -481,14 +512,48 @@ def _build_table(
             # Skip completed tests if show_only_active
             if show_only_active and overall_status == "SUCCEEDED":
                 continue
-            display_items.append((exec_id, test, False))
+            display_items.append((exec_id, test, False, overall_status))
         else:
             # Queued placeholder - skip if show_only_active (queued are "pending", not active)
             if not show_only_active:
-                display_items.append((exec_id, None, True))
+                display_items.append((exec_id, None, True, "QUEUED"))
+
+    # Apply row limiting with priority ordering
+    # Priority: RUNNING > FAILED/ERROR > PENDING > SUCCEEDED > SKIPPED > QUEUED
+    hidden_by_status: Dict[str, int] = {}
+
+    if max_rows is not None and len(display_items) > max_rows:
+        # Define priority order (lower = higher priority)
+        status_priority = {
+            "RUNNING": 0,
+            "FAILED": 1,
+            "ERROR": 1,
+            "PENDING": 2,
+            "SUCCEEDED": 3,
+            "SKIPPED": 4,
+            "QUEUED": 5,
+            "UNKNOWN": 6,
+        }
+
+        # Sort by priority, then by exec_id
+        sorted_items = sorted(
+            display_items,
+            key=lambda x: (status_priority.get(x[3], 99), x[0])
+        )
+
+        # Take top max_rows items
+        visible_items = sorted_items[:max_rows]
+        hidden_items = sorted_items[max_rows:]
+
+        # Count hidden items by status
+        for _, _, _, status in hidden_items:
+            hidden_by_status[status] = hidden_by_status.get(status, 0) + 1
+
+        # Re-sort visible items by exec_id to maintain order in display
+        display_items = sorted(visible_items, key=lambda x: x[0])
 
     # Add rows
-    for exec_id, test, is_queued in display_items:
+    for exec_id, test, is_queued, _ in display_items:
         row = []
 
         if is_queued:
@@ -547,15 +612,24 @@ def _build_table(
                 rep_text = _build_rep_status_text(rep_statuses)
                 row.append(rep_text)
 
-            # Overall status label (with skip reason for SKIPPED tests)
+            # Overall status label (with skip reason and cache indicator)
             label, style = STATUS_LABELS.get(overall_status, STATUS_LABELS["UNKNOWN"])
+            cached = test.get("cached", False)
+            status_text = Text()
+            status_text.append(label, style=style)
+
             if overall_status == "SKIPPED" and test.get("skip_reason"):
-                status_text = Text()
-                status_text.append(label, style=style)
                 status_text.append(f":{test['skip_reason']}", style="dim italic")
-                row.append(status_text)
-            else:
-                row.append(Text(label, style=style))
+
+            # Add cache indicator
+            if cached is True:
+                status_text.append(" ", style="")
+                status_text.append("C", style="cyan bold")
+            elif cached == "partial":
+                status_text.append(" ", style="")
+                status_text.append("C*", style="cyan")
+
+            row.append(status_text)
 
             # Average time column
             avg_time = test.get("avg_time")
@@ -589,7 +663,7 @@ def _build_table(
         table.add_row(*row)
 
     total_count = total_expected_configs if total_expected_configs > 0 else len(tests)
-    return table, len(display_items), total_count, hidden_vars_count
+    return table, len(display_items), total_count, hidden_vars_count, hidden_by_status
 
 
 def _build_progress_bar(
@@ -738,7 +812,8 @@ def watch_executions(
     hide_columns: Optional[set] = None,
     status_filter: Optional[str] = None,
     interval: int = 5,
-    exit_on_complete: bool = False
+    exit_on_complete: bool = False,
+    cached_filter: Optional[bool] = None
 ) -> None:
     """
     Watch execution folders with live updates.
@@ -752,6 +827,7 @@ def watch_executions(
         status_filter: Filter by execution status
         interval: Refresh interval in seconds
         exit_on_complete: Exit when all executions complete
+        cached_filter: Filter by cache status (True=only cached, False=only executed)
     """
     check_rich_available()
 
@@ -819,7 +895,8 @@ def watch_executions(
                 # Collect current data (new format: one entry per test config)
                 tests, status_counts = _collect_execution_data(
                     run_root, executions, filter_dict, status_filter, hide_columns,
-                    expected_repetitions=repetitions, folders_upfront=folders_upfront
+                    expected_repetitions=repetitions, folders_upfront=folders_upfront,
+                    cached_filter=cached_filter
                 )
 
                 total_in_index = len(executions)
@@ -926,7 +1003,7 @@ def watch_executions(
                     header_text.append(f"{datetime.now().strftime('%H:%M:%S')}", style="dim")
 
                 # Filter info if any
-                if filter_dict or status_filter:
+                if filter_dict or status_filter or cached_filter is not None:
                     header_text.append("\n")
                     header_text.append(" 🔍 ", style="dim")
                     filter_parts = []
@@ -934,27 +1011,62 @@ def watch_executions(
                         filter_parts.append(", ".join(f"{k}={v}" for k, v in filter_dict.items()))
                     if status_filter:
                         filter_parts.append(f"status={status_filter}")
+                    if cached_filter is not None:
+                        filter_parts.append(f"cached={'yes' if cached_filter else 'no'}")
                     header_text.append(f"{', '.join(filter_parts)}", style="italic")
 
                 header = Panel(header_text, border_style="blue", padding=(0, 1))
 
                 # Build table
                 terminal_width = console.size.width
+                terminal_height = console.size.height
+
+                # Calculate max rows based on terminal height
+                # Reserve space for: header panel (~6 lines), progress bar (~5 lines),
+                # table header (1 line), notes (1 line), and some padding (3 lines)
+                header_lines = 6 if (filter_dict or status_filter or cached_filter is not None) else 5
+                footer_lines = 7  # progress bar + status counts + completion msg + padding
+                table_header_lines = 2  # header + divider
+                notes_lines = 1
+                reserved_lines = header_lines + footer_lines + table_header_lines + notes_lines
+                max_rows = max(5, terminal_height - reserved_lines)
+
                 if tests or total_expected_configs > 0:
-                    table, shown_count, total_count, hidden_vars = _build_table(
+                    table, shown_count, total_count, hidden_vars, hidden_by_status = _build_table(
                         tests, show_command, show_full, hide_columns,
                         total_repetitions=repetitions,
                         show_only_active=show_only_active,
                         total_expected_configs=total_expected_configs,
-                        terminal_width=terminal_width
+                        terminal_width=terminal_width,
+                        max_rows=max_rows
                     )
 
                     # Build note for hidden items
                     notes = []
                     if show_only_active and shown_count < total_count:
-                        notes.append(f"{total_count - shown_count} completed tests hidden")
+                        completed_hidden = total_count - shown_count - sum(hidden_by_status.values())
+                        if completed_hidden > 0:
+                            notes.append(f"{completed_hidden} completed hidden")
+
+                    # Show hidden rows due to row limit with status breakdown
+                    if hidden_by_status:
+                        hidden_parts = []
+                        for status in ["PENDING", "QUEUED", "SUCCEEDED", "SKIPPED"]:
+                            if status in hidden_by_status:
+                                count = hidden_by_status[status]
+                                if status == "QUEUED":
+                                    hidden_parts.append(f"{count} queued")
+                                elif status == "PENDING":
+                                    hidden_parts.append(f"{count} pending")
+                                elif status == "SUCCEEDED":
+                                    hidden_parts.append(f"{count} done")
+                                elif status == "SKIPPED":
+                                    hidden_parts.append(f"{count} skipped")
+                        if hidden_parts:
+                            notes.append(f"{', '.join(hidden_parts)} off-screen")
+
                     if hidden_vars > 0:
-                        notes.append(f"+{hidden_vars} vars hidden, use --hide to customize")
+                        notes.append(f"+{hidden_vars} vars, use --hide")
 
                     if notes:
                         table_note = Text()

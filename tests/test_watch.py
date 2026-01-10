@@ -271,7 +271,7 @@ class TestBuildTable:
             mock_run_dir, executions, {}, None, set()
         )
 
-        table, shown, total, _ = _build_table(tests, show_command=False,
+        table, shown, total, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
@@ -288,7 +288,7 @@ class TestBuildTable:
             mock_run_dir, executions, {}, None, set()
         )
 
-        table, shown, total, _ = _build_table(tests, show_command=True,
+        table, shown, total, _, _ = _build_table(tests, show_command=True,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
@@ -306,7 +306,7 @@ class TestBuildTable:
             mock_run_dir, executions, {}, None, set()
         )
 
-        table, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns={"path"},
                             total_repetitions=repetitions)
 
@@ -324,7 +324,7 @@ class TestBuildTable:
         )
 
         # Build table - vars should always be shown
-        table, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
         columns = [col.header for col in table.columns]
@@ -340,6 +340,50 @@ class TestBuildTable:
         # Also verify time columns are present
         assert "Avg" in columns
         assert "Total" in columns
+
+    def test_build_table_with_max_rows(self, mock_run_dir):
+        """Test that table respects max_rows limit."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        tests, _ = _collect_execution_data(
+            mock_run_dir, executions, {}, None, set()
+        )
+
+        # Limit to 2 rows (there are 3 tests)
+        table, shown, total, _, hidden_by_status = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions, max_rows=2
+        )
+
+        assert table.row_count == 2
+        assert shown == 2
+        assert total == 3
+        # Should have hidden 1 row
+        assert sum(hidden_by_status.values()) == 1
+
+    def test_build_table_max_rows_prioritizes_running(self, mock_run_dir_with_reps):
+        """Test that row limiting prioritizes RUNNING tests over PENDING."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(
+            mock_run_dir_with_reps / "__iops_index.json"
+        )
+        tests, _ = _collect_execution_data(
+            mock_run_dir_with_reps, executions, {}, None, set(),
+            expected_repetitions=repetitions
+        )
+
+        # Limit to 1 row - should keep the one with RUNNING status
+        table, shown, total, _, hidden_by_status = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions, max_rows=1
+        )
+
+        assert table.row_count == 1
+        assert shown == 1
+        # Some rows were hidden
+        assert sum(hidden_by_status.values()) >= 1
 
 
 class TestMultipleRepetitions:
@@ -382,7 +426,7 @@ class TestMultipleRepetitions:
             expected_repetitions=repetitions
         )
 
-        table, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
@@ -404,7 +448,7 @@ class TestMultipleRepetitions:
             expected_repetitions=repetitions
         )
 
-        table, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
