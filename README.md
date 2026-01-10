@@ -91,11 +91,7 @@ For a fully-documented template with all options:
 iops generate my_config.yaml --full
 ```
 
-Or start from an example:
 
-```bash
-cp docs/examples/ior/local/ior_simple.yaml my_config.yaml
-```
 
 ### 2. Preview Your Benchmark
 
@@ -287,23 +283,6 @@ Then use `--use-cache` to skip tests with identical parameters:
 iops run config.yaml --use-cache
 ```
 
-### Multi-Round Execution
-
-Run experiments in stages with the `rounds` feature:
-
-```yaml
-rounds:
-  - name: "explore"
-    sweep_vars: ["nodes"]
-    repetitions: 1
-
-  - name: "validate"
-    sweep_vars: ["nodes", "processes_per_node"]
-    repetitions: 5
-```
-
-Best results from each round propagate to the next.
-
 ### Budget Control
 
 Prevent exceeding compute allocations:
@@ -330,15 +309,6 @@ The documentation includes:
 - Working examples for various scenarios
 - Best practices and optimization tips
 
-## Examples
-
-Check `docs/examples/` for working configuration examples:
-
-- `ior/local/ior_simple.yaml` - Basic local IOR benchmark
-- `ior/local/ior_bayesian.yaml` - IOR with Bayesian optimization
-- `ior/slurm/ior_simple_slurm.yaml` - SLURM cluster deployment
-- `ior/slurm/ior_bayesian_slurm.yaml` - Cluster with Bayesian search
-- `mdtest/local/mdtest_local.yaml` - Metadata operations benchmark
 
 ## Command Reference
 

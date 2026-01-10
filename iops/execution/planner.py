@@ -367,8 +367,15 @@ class BasePlanner(ABC, HasLogger):
             with open(index_file, "r") as f:
                 index = json.load(f)
         else:
+            # Get expected total from planner progress
+            # Note: progress['total'] already includes repetitions (it's _attempt_total)
+            progress = self.get_progress()
+            total_expected = progress.get('total', 0)
+            repetitions = max(1, int(getattr(self.cfg.benchmark, "repetitions", 1) or 1))
             index = {
                 "benchmark": self.cfg.benchmark.name,
+                "total_expected": total_expected,
+                "repetitions": repetitions,
                 "executions": {}
             }
 

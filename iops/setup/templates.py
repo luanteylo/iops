@@ -4,7 +4,7 @@ TEMPLATES = {
     "ior": {
         "name": "IOR Benchmark",
         "description": "I/O performance testing with IOR",
-        "command_template": "ior -w -b {{ block_size_mb }}mb -t 1mb -O summaryFile={{ summary_file }} -O summaryFormat=JSON -o {{ output_path }}/output.ior",
+        "command_template": "ior -w -b {{ block_mb }}mb -t 1mb -O summaryFile={{ summary_file }} -O summaryFormat=JSON -o {{ output_path }}/output.ior",
         "suggested_vars": [
             {
                 "name": "processes_per_node",
@@ -13,15 +13,15 @@ TEMPLATES = {
                 "values": [4, 8, 16],
             },
             {
-                "name": "volume_size_gb",
+                "name": "volume_gb",
                 "type": "int",
                 "sweep_mode": "list",
                 "values": [1, 4, 8],
             },
             {
-                "name": "block_size_mb",
+                "name": "block_mb",
                 "type": "int",
-                "expr": "(volume_size_gb * 1024) / processes_per_node",
+                "expr": "(volume_gb * 1024) / processes_per_node",
             },
             {
                 "name": "summary_file",
