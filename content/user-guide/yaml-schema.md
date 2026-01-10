@@ -389,8 +389,6 @@ command:
   template: string              # Required: command template (Jinja2)
   metadata:                     # Optional: arbitrary metadata
     key: value
-  env:                          # Optional: environment variables
-    VAR_NAME: value
 ```
 
 #### `template` (required)
@@ -413,16 +411,6 @@ command:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
-```
-
-#### `env` (optional)
-Environment variables to set before execution.
-
-```yaml
-command:
-  env:
-    OMP_NUM_THREADS: "{{ processes_per_node }}"
-    MPI_BUFFER_SIZE: "4194304"
 ```
 
 ---

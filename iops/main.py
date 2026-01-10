@@ -629,11 +629,6 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug("  Template:")
     logger.debug("  " + cfg.command.template.replace("\n", "\n  "))
 
-    if cfg.command.env:
-        logger.debug("  Environment:")
-        for k, v in cfg.command.env.items():
-            logger.debug(f"    {k}={v}")
-
     if cfg.command.metadata:
         logger.debug("  Metadata:")
         for k, v in cfg.command.metadata.items():

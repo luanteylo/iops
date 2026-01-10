@@ -655,7 +655,6 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
     command = CommandConfig(
         template=c["template"],
         metadata=c.get("metadata", {}),
-        env=c.get("env", {}),
     )
 
     # ---- scripts ----

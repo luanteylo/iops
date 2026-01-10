@@ -162,7 +162,7 @@ class ExecutionInstance:
         * self.base_vars (for swept/fixed vars)
         * self.workdir
         * self.metadata (e.g., metadata["repetition"], metrics, etc.)
-      and all properties (command, env, script_text, derived vars, etc.)
+      and all properties (command, script_text, derived vars, etc.)
       will re-render using the current state.
     """
 
@@ -199,9 +199,8 @@ class ExecutionInstance:
 
     # ---------- Template fields (stored from cfg, rendered lazily) ---------- #
 
-    # Command template and env/metadata templates
+    # Command template and metadata templates
     command_template: str = ""
-    env_templates: Dict[str, Any] = field(default_factory=dict)
     metadata_templates: Dict[str, Any] = field(default_factory=dict)
 
     # Script metadata
@@ -345,20 +344,6 @@ class ExecutionInstance:
         return _render_template(self.command_template, ctx)
 
     @property
-    def env(self) -> Dict[str, str]:
-        """
-        Render the environment variables from env_templates and the current context.
-        """
-        ctx = self._render_context()
-        rendered: Dict[str, str] = {}
-        for k, v in self.env_templates.items():
-            if isinstance(v, str):
-                rendered[k] = _render_template(v, ctx)
-            else:
-                rendered[k] = str(v)
-        return rendered
-
-    @property
     def command_metadata(self) -> Dict[str, Any]:
         """
         Render metadata from metadata_templates and merge with runtime metadata.
@@ -404,7 +389,6 @@ class ExecutionInstance:
         Render the main script text from script_template, using:
         - {{ vars.* }}
         - {{ command }}
-        - {{ command_env }}
         - {{ command_metadata }}
         - plus the standard context.
         """
@@ -421,7 +405,6 @@ class ExecutionInstance:
             **base_ctx,
             "vars": self.vars,
             "command": command_obj,
-            "command_env": self.env,
             "command_metadata": self.command_metadata,
         }
 
@@ -444,7 +427,6 @@ class ExecutionInstance:
             **base_ctx,
             "vars": self.vars,
             "command": command_obj,
-            "command_env": self.env,
             "command_metadata": self.command_metadata,
         }
 
@@ -596,12 +578,6 @@ class ExecutionInstance:
         if self.post_script:
             lines.extend([sep, "Post-script:", self.post_script])
 
-        env_rendered = self.env
-        if env_rendered:
-            lines.extend([sep, "Environment:"])
-            for k, v in env_rendered.items():
-                lines.append(f"  {k}={v}")
-
         effective_metadata = self.command_metadata
         if effective_metadata:
             lines.extend([sep, "Metadata:"])
@@ -695,9 +671,8 @@ def create_execution_instance(
                 )
             derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
 
-    # Command/env/metadata templates from cfg
+    # Command/metadata templates from cfg
     command_template = cfg.command.template
-    env_templates = dict(cfg.command.env) if cfg.command.env else {}
     metadata_templates = dict(cfg.command.metadata) if cfg.command.metadata else {}
 
     # Output sink templates
@@ -744,7 +719,6 @@ def create_execution_instance(
         search_var_names=search_var_names or list(base_vars.keys()),
         metadata={},
         command_template=command_template,
-        env_templates=env_templates,
         metadata_templates=metadata_templates,
         script_name=script_cfg.name,
         script_template=script_template,
@@ -772,7 +746,7 @@ def build_execution_matrix(
 
     IMPORTANT:
     - No Jinja rendering is done here.
-      All templates (command, env, metadata, scripts, parser, CSV path,
+      All templates (command, metadata, scripts, parser, CSV path,
       and derived variable expressions) are stored in the ExecutionInstance
       and rendered lazily via @property.
 
