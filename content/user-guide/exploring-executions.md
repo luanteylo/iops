@@ -150,6 +150,25 @@ iops find ./workdir/run_001 --status PENDING
 - `UNKNOWN` - Status could not be determined
 - `PENDING` - Execution has not yet completed
 
+### Filter by Cache Status
+
+When using `--use-cache` with `iops run`, some results may come from the cache rather than being freshly executed. You can filter executions based on their cache status:
+
+```bash
+# Show only cached results
+iops find ./workdir/run_001 --cached yes
+
+# Show only freshly executed results (not from cache)
+iops find ./workdir/run_001 --cached no
+```
+
+**Cache indicators in output:**
+
+When displaying results, IOPS shows cache status next to the execution status:
+- `SUCCEEDED [C]` - Result was retrieved from cache
+- `SUCCEEDED [C*]` - Partially cached (some repetitions from cache, others executed)
+- `SUCCEEDED` - Freshly executed (not from cache)
+
 ### Combining Options
 
 Options can be combined with parameter filters:
@@ -221,7 +240,12 @@ iops find ./workdir/run_001 --watch --status RUNNING
 
 # Watch with hidden columns
 iops find ./workdir/run_001 --watch --hide block_size,transfer_size
+
+# Watch only cached or non-cached results
+iops find ./workdir/run_001 --watch --cached yes
 ```
+
+In watch mode, cached results are indicated with a cyan `C` next to the status (e.g., `OK C` for a cached successful result).
 
 ### Status Indicators
 
@@ -253,7 +277,7 @@ Key files used by `iops find`:
 |------|----------|---------|
 | `__iops_index.json` | Run root | Indexes all executions with parameters |
 | `__iops_params.json` | Each exec folder | Stores parameter values |
-| `__iops_status.json` | Each exec/rep folder | Tracks execution status |
+| `__iops_status.json` | Each exec/rep folder | Tracks execution status and cache flag |
 
 All paths in `__iops_index.json` are stored as relative paths, making workdirs **portable** across systems. You can archive, move, or share workdirs and the `find` command will work correctly.
 

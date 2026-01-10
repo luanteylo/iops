@@ -180,6 +180,7 @@ Only executions matching all specified filters will be displayed.
 - `--full` - Show full parameter values without truncation (default truncates at 30 chars)
 - `--hide COL1,COL2` - Hide specific columns (comma-separated list)
 - `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING, SKIPPED)
+- `--cached {yes,no}` - Filter by cache status (yes=only cached, no=only executed)
 - `--watch, -w` - Enable watch mode for real-time monitoring (requires `rich` library)
 - `--interval N` - Refresh interval in seconds for watch mode (default: 5)
 
@@ -227,6 +228,12 @@ iops find ./workdir/run_001 --watch --interval 2
 
 # Watch mode with filters
 iops find ./workdir/run_001 nodes=4 --watch
+
+# Show only cached results (from --use-cache runs)
+iops find ./workdir/run_001 --cached yes
+
+# Show only freshly executed results (not from cache)
+iops find ./workdir/run_001 --cached no
 ```
 
 ### --version - Show Version
