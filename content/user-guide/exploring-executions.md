@@ -205,6 +205,8 @@ The watch mode display includes:
 - **Repetition tracking** showing status of each repetition (e.g., `SSS` for 3 succeeded)
 - **Auto-refresh** at configurable intervals
 
+![Watch Mode Interface](/images/watch_feature.png)
+
 ### Watch Mode Options
 
 ```bash
