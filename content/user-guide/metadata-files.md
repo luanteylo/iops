@@ -28,7 +28,7 @@ Metadata files are written to the **workdir** during benchmark execution. While 
 | `__iops_run_metadata.json` | Run root | End of benchmark | Report generation |
 | `__iops_index.json` | Run root | During execution | Fast execution lookup |
 | `__iops_params.json` | Each exec folder | Before test runs | Parameter storage |
-| `__iops_status.json` | Each exec/rep folder | After test completes | Status tracking |
+| `__iops_status.json` | Each exec/rep folder | After test completes | Status and cache tracking |
 | `__iops_probe.sh` | Each repetition folder | Before test runs | System info collection |
 | `__iops_sysinfo.json` | Each repetition folder | After test completes | Hardware/environment info |
 
@@ -213,7 +213,8 @@ All paths are relative to the run root, making workdirs portable across systems.
 {
   "status": "SUCCEEDED",
   "error": null,
-  "end_time": "2026-01-09T14:23:45.678901"
+  "end_time": "2026-01-09T14:23:45.678901",
+  "cached": false
 }
 ```
 
@@ -230,6 +231,8 @@ All paths are relative to the run root, making workdirs portable across systems.
 | `UNKNOWN` | Status could not be determined |
 
 The `error` field contains the error message when status is FAILED or ERROR.
+
+The `cached` field indicates whether the result was retrieved from cache (`true`) or freshly executed (`false`). This is set when running with `--use-cache` and a cached result is found.
 
 For skipped tests, a `reason` field explains why:
 ```json
