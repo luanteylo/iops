@@ -34,11 +34,9 @@ from .find import (
     INDEX_FILENAME,
     PARAMS_FILENAME,
     STATUS_FILENAME,
-    METADATA_FILENAME,
     DEFAULT_TRUNCATE_WIDTH,
     _truncate_value,
     _read_status,
-    _read_run_metadata,
 )
 
 # Sysinfo filename constant
@@ -863,8 +861,6 @@ def watch_executions(
 
     # Load initial data
     benchmark_name, executions, total_expected, repetitions, folders_upfront, active_tests, skipped_tests = _load_index(index_file)
-    run_metadata = _read_run_metadata(run_root)
-    bench_meta = run_metadata.get("benchmark", {})
 
     if not executions:
         raise WatchModeError("No executions found in index.")
@@ -940,16 +936,6 @@ def watch_executions(
                 # Line 2: Configuration details
                 header_text.append("\n")
 
-                # Executor type with icon
-                executor = bench_meta.get("executor", "local")
-                executor_icon = "🖥" if executor == "local" else "🔲"
-                header_text.append(f" {executor_icon} ", style="")
-                executor_style = "magenta" if executor == "slurm" else "blue"
-                header_text.append(f"{executor}", style=executor_style)
-
-                # Separator
-                header_text.append("    ", style="")
-
                 # Test configuration count × repetitions = total
                 # Show breakdown if there are skipped tests
                 if skipped_tests > 0:
@@ -972,18 +958,6 @@ def watch_executions(
                     header_text.append(" = ", style="dim")
                     header_text.append(f"{total_expected}", style="cyan bold")
                     header_text.append(" total", style="dim")
-
-                # Search method (only show if not exhaustive)
-                search_method = bench_meta.get("search_method", "exhaustive")
-                if search_method and search_method != "exhaustive":
-                    header_text.append("    ", style="")
-                    header_text.append(f"[{search_method}]", style="yellow")
-
-                # Hostname (if available)
-                hostname = bench_meta.get("hostname", "")
-                if hostname:
-                    header_text.append("    ", style="")
-                    header_text.append(f"@{hostname}", style="dim")
 
                 # Line 3: Run status
                 header_text.append("\n")
