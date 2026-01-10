@@ -39,9 +39,6 @@ from .find import (
     _read_status,
 )
 
-# Sysinfo filename constant
-SYSINFO_FILENAME = "__iops_sysinfo.json"
-
 
 class WatchModeError(Exception):
     """Exception raised when watch mode cannot be used."""
@@ -111,26 +108,6 @@ def _load_index(index_file: Path) -> Tuple[str, Dict[str, Any], int, int, bool, 
         index.get("active_tests", 0),
         index.get("skipped_tests", 0),
     )
-
-
-def _read_sysinfo(rep_path: Path) -> Optional[Dict[str, Any]]:
-    """
-    Read sysinfo from a repetition directory.
-
-    Args:
-        rep_path: Path to a repetition folder (e.g., exec_0001/repetition_1)
-
-    Returns:
-        Dict with sysinfo data, or None if file doesn't exist or can't be read
-    """
-    sysinfo_file = rep_path / SYSINFO_FILENAME
-    if sysinfo_file.exists():
-        try:
-            with open(sysinfo_file, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-    return None
 
 
 def _collect_execution_data(
@@ -266,15 +243,9 @@ def _collect_execution_data(
                 else:
                     status_counts["UNKNOWN"] += 1
 
-                # Collect timing for successful repetitions
-                # First try status file (includes cached results), then fall back to sysinfo
+                # Collect timing for successful repetitions (from status file)
                 if status == "SUCCEEDED":
                     duration = status_info.get("duration_seconds")
-                    if duration is None:
-                        # Fallback to sysinfo for older runs without duration in status
-                        sysinfo = _read_sysinfo(rep_dir)
-                        if sysinfo and "duration_seconds" in sysinfo:
-                            duration = sysinfo.get("duration_seconds")
                     if duration is not None:
                         try:
                             rep_durations.append(float(duration))
