@@ -99,6 +99,35 @@ CREATE TABLE cached_executions (
 CREATE INDEX idx_param_hash ON cached_executions(param_hash, repetition);
 ```
 
+### Important: Command Changes Are Not Detected
+
+**Warning**: The cache hash is computed **only from variables**, not from the command template itself. This is intentional—commands often contain paths like `{{ execution_dir }}` that change between runs but shouldn't invalidate the cache.
+
+However, this means that if you modify your command template in ways that affect results, the cache will still return old results:
+
+```yaml
+# Original command
+command:
+  template: "fio --name=test --rw=read --bs={{ block_size }}"
+
+# Modified command (added --direct=1 for unbuffered I/O)
+command:
+  template: "fio --name=test --rw=read --bs={{ block_size }} --direct=1"
+```
+
+Since `block_size` hasn't changed, the cache hash remains the same, and you'll get stale results that don't reflect the `--direct=1` behavior.
+
+**Solutions:**
+1. **Clear the cache** when changing command behavior: delete the cache file or use `cache.clear_cache()`
+2. **Add a version variable** to force cache invalidation:
+   ```yaml
+   vars:
+     cache_version:
+       type: int
+       value: 2  # Increment when command changes
+   ```
+3. **Use a new cache file** for different command configurations
+
 ### What Gets Cached
 
 **Cached:**
