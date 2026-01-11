@@ -149,6 +149,8 @@ class VarConfig:
     type: str                 # "int", "float", "str", etc.
     sweep: Optional[SweepConfig] = None
     expr: Optional[str] = None  # for derived vars
+    when: Optional[str] = None  # condition for conditional variables
+    default: Optional[Any] = None  # value when condition is false
 
 
 @dataclass

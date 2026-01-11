@@ -654,6 +654,8 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
             type=cfg["type"],
             sweep=sweep_cfg,
             expr=cfg.get("expr"),
+            when=cfg.get("when"),
+            default=cfg.get("default"),
         )
 
     # ---- command ----
@@ -1226,6 +1228,21 @@ def validate_yaml_config(config_path: Path) -> List[str]:
                 else:
                     errors.append(f"var '{name}' has invalid sweep.mode='{mode}' (must be 'range' or 'list')")
 
+            # Validate conditional variable fields (when and default)
+            has_when = "when" in cfg and cfg["when"] is not None
+            has_default = "default" in cfg and cfg["default"] is not None
+
+            if has_when:
+                if not has_sweep:
+                    errors.append(f"var '{name}' has 'when' but no 'sweep' - 'when' is only valid for swept variables")
+                if has_expr:
+                    errors.append(f"var '{name}' cannot have both 'when' and 'expr'")
+                if not has_default:
+                    errors.append(f"var '{name}' has 'when' but no 'default' - 'default' is required when 'when' is specified")
+
+            if has_default and not has_when:
+                errors.append(f"var '{name}' has 'default' but no 'when' - 'default' is only used with conditional variables")
+
     except Exception as e:
         errors.append(f"Error validating vars section: {e}")
 
@@ -1473,6 +1490,30 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 raise ConfigValidationError(
                     f"var '{name}' has invalid sweep.mode='{v.sweep.mode}'"
                 )
+
+        # Validate conditional variable fields (when and default)
+        if v.when is not None:
+            if v.sweep is None:
+                raise ConfigValidationError(
+                    f"var '{name}' has 'when' but no 'sweep' - 'when' is only valid for swept variables"
+                )
+            if v.expr is not None:
+                raise ConfigValidationError(
+                    f"var '{name}' cannot have both 'when' and 'expr'"
+                )
+            if v.default is None:
+                raise ConfigValidationError(
+                    f"var '{name}' has 'when' but no 'default' - 'default' is required when 'when' is specified"
+                )
+            # Validate Jinja2 syntax in when expression
+            ok, err = _validate_jinja_template(v.when, f"vars['{name}'].when")
+            if not ok:
+                raise ConfigValidationError(err)
+
+        if v.default is not None and v.when is None:
+            raise ConfigValidationError(
+                f"var '{name}' has 'default' but no 'when' - 'default' is only used with conditional variables"
+            )
 
         # Validate Jinja2 syntax in expr (if present)
         if v.expr:
