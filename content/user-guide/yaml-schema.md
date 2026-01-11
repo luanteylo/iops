@@ -245,6 +245,15 @@ vars:
       end: 32
       step: 8
 
+  # Conditional variable (swept only when condition is true)
+  variable_name:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+    when: "other_var == true"   # Optional: condition expression
+    default: 0                  # Required if 'when' is specified
+
   # Derived variable
   variable_name:
     type: int
@@ -341,6 +350,88 @@ Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, 
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory |
+
+</details>
+
+#### `when` (for conditional variables, optional)
+Condition expression for conditional sweep. When true, the variable is swept normally. When false, the variable uses the `default` value. Only valid for swept variables.
+
+This eliminates redundant test combinations where a variable is irrelevant based on another variable's value.
+
+#### `default` (required if `when` is specified)
+Value to use when the `when` condition is false. Must be compatible with the variable's `type`.
+
+<details>
+<summary><strong>Conditional Variable Examples</strong></summary>
+
+**Basic conditional:**
+```yaml
+vars:
+  use_compression:
+    type: bool
+    sweep:
+      mode: list
+      values: [true, false]
+
+  compression_level:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 5, 9]
+    when: "use_compression"    # Only sweep when use_compression is true
+    default: 0                 # Use 0 when use_compression is false
+```
+
+Without `when`: 2 × 3 = 6 combinations
+With `when`: 3 (true) + 1 (false) = 4 combinations
+
+**Complex condition:**
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  advanced_threads:
+    type: int
+    sweep:
+      mode: list
+      values: [2, 4, 8]
+    when: "nodes > 2"          # Only sweep for larger node counts
+    default: 1
+```
+
+**Dependency chain:**
+```yaml
+vars:
+  enable_feature:
+    type: bool
+    sweep:
+      mode: list
+      values: [true, false]
+
+  feature_mode:
+    type: str
+    sweep:
+      mode: list
+      values: ["fast", "balanced", "accurate"]
+    when: "enable_feature"
+    default: "disabled"
+
+  feature_intensity:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 3]
+    when: "feature_mode != 'disabled'"   # Depends on feature_mode
+    default: 0
+```
+
+**Available operators:** `==`, `!=`, `<`, `>`, `<=`, `>=`, `and`, `or`, `not`
+
+**Available functions:** `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`
 
 </details>
 

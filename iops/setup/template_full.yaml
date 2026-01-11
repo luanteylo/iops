@@ -244,6 +244,42 @@ vars:
       values: [1, 2,  4, 8]
 
   # ---------------------------------------------------------------------------
+  # CONDITIONAL VARIABLES (swept only when condition is true)
+  # ---------------------------------------------------------------------------
+  # Use 'when' to make a swept variable conditional on another variable.
+  # When condition is false, the variable uses the 'default' value instead.
+  # This eliminates redundant test combinations where the variable is irrelevant.
+  #
+  # Example: use_compression controls whether compression_level is swept
+  # Without conditional: 2 * 3 = 6 combinations
+  # With conditional: 3 (when true) + 1 (when false) = 4 combinations
+  # ---------------------------------------------------------------------------
+
+  # Uncomment to enable conditional variable example:
+  # use_compression:
+  #   type: bool
+  #   sweep:
+  #     mode: list
+  #     values: [true, false]
+  #
+  # compression_level:
+  #   type: int
+  #   sweep:
+  #     mode: list
+  #     values: [1, 5, 9]
+  #   when: "use_compression"    # Only sweep when use_compression is true
+  #   default: 0                 # Use 0 when use_compression is false
+  #
+  # More complex condition example:
+  # advanced_option:
+  #   type: int
+  #   sweep:
+  #     mode: list
+  #     values: [1, 2, 4]
+  #   when: "nodes > 4 and processes_per_node >= 8"
+  #   default: 1
+
+  # ---------------------------------------------------------------------------
   # DERIVED VARIABLES (computed from other variables)
   # ---------------------------------------------------------------------------
   # Expression syntax:
