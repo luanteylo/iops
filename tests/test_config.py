@@ -5,7 +5,7 @@ import yaml
 from pathlib import Path
 
 from conftest import load_config
-from iops.config.models import GenericBenchmarkConfig
+from iops.config.models import GenericBenchmarkConfig, ConfigValidationError
 
 
 def test_load_valid_config(sample_config_file):
@@ -23,7 +23,7 @@ def test_load_valid_config(sample_config_file):
 
 def test_config_missing_file():
     """Test loading non-existent config file."""
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ConfigValidationError, match="not found"):
         load_config(Path("nonexistent.yaml"))
 
 
@@ -32,7 +32,7 @@ def test_config_invalid_yaml(tmp_path):
     invalid_file = tmp_path / "invalid.yaml"
     invalid_file.write_text("{ invalid yaml content [")
 
-    with pytest.raises(yaml.YAMLError):
+    with pytest.raises(ConfigValidationError, match="YAML syntax error"):
         load_config(invalid_file)
 
 

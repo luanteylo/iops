@@ -59,6 +59,25 @@ def _preprocess_args():
         sys.argv.insert(1, 'run')
 
 
+def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser):
+    """
+    Validate command-line arguments for specific commands.
+    Uses parser.error() for clean error messages.
+    """
+    if args.command == 'run':
+        if args.max_core_hours is not None and args.max_core_hours <= 0:
+            parser.error("--max-core-hours must be positive")
+
+        if args.time_estimate is not None:
+            for part in args.time_estimate.split(','):
+                part = part.strip()
+                try:
+                    val = float(part)
+                    if val <= 0:
+                        raise ValueError
+                except ValueError:
+                    parser.error(f"Invalid --time-estimate value: '{part}' (expected positive number)")
+
 def parse_arguments():
     _preprocess_args()
 
@@ -171,6 +190,9 @@ Examples:
     if args.command is None:
         parser.print_help()
         parser.exit()
+    
+    # validate args for specific commands
+    _validate_args(args, parser)
 
     return args
 

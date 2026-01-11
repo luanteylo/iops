@@ -480,23 +480,25 @@ class LocalExecutor(BaseExecutor):
 
     def wait_and_collect(self, test: ExecutionInstance) -> None:
         # Always create a full metrics dict first (all keys, None values)
-        metrics = {m.name: None for m in test.parser.metrics if test.parser}
+        
+        metrics = {m.name: None for m in (test.parser.metrics if test.parser else [])}
         test.metadata["metrics"] = metrics  # <-- guarantee presence early
 
         # Only parse if succeeded
         if test.metadata.get("__executor_status") == self.STATUS_SUCCEEDED:
-            self.logger.debug(f"  [LocalExec] Parsing metrics from output files")
-            try:
-                results = parse_metrics_from_execution(test) or {}
-                parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
+            if test.parser:
+                self.logger.debug(f"  [LocalExec] Parsing metrics from output files")
+                try:
+                    results = parse_metrics_from_execution(test) or {}
+                    parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
 
-                for name, value in parsed.items():
-                    if name in metrics:
-                        metrics[name] = value
-            except ParserError as e:
-                self.logger.warning(f"  [LocalExec] Parser failed: {e}")
-                test.metadata["__executor_status"] = self.STATUS_FAILED
-                test.metadata["__error"] = f"Parser error: {e}"
+                    for name, value in parsed.items():
+                        if name in metrics:
+                            metrics[name] = value
+                except ParserError as e:
+                    self.logger.warning(f"  [LocalExec] Parser failed: {e}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = f"Parser error: {e}"
 
         metric_count = len([v for v in metrics.values() if v is not None])
         self.logger.debug(

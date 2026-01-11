@@ -111,24 +111,12 @@ def _eval_expr(expr: str, vartype: str, context: Dict[str, Any]) -> Any:
 def _build_sweep_values(name: str, vcfg: VarConfig) -> List[Any]:
     """
     From a VarConfig with a 'sweep', return the list of values for this var.
-    """
-    if vcfg.sweep is None:
-        raise ConfigValidationError(
-            f"Variable '{name}' has no sweep defined but is treated as swept."
-        )
 
+    Note: Input validation (sweep existence, mode, range params, step!=0, non-empty values)
+    is handled by loader.py's validate_generic_config(). This function assumes valid input.
+    """
     mode = vcfg.sweep.mode
     if mode == "range":
-        if vcfg.sweep.start is None or vcfg.sweep.end is None or vcfg.sweep.step is None:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'range' must have start, end, step."
-            )
-
-        if vcfg.sweep.step == 0:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'range' cannot have step=0"
-            )
-
         values = list(
             range(
                 vcfg.sweep.start,
@@ -138,17 +126,8 @@ def _build_sweep_values(name: str, vcfg: VarConfig) -> List[Any]:
         )
         return [_cast_value(vcfg.type, v) for v in values]
 
-    elif mode == "list":
-        if not vcfg.sweep.values:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'list' must have non-empty 'values'."
-            )
+    else:  # mode == "list"
         return [_cast_value(vcfg.type, v) for v in vcfg.sweep.values]
-
-    else:
-        raise ConfigValidationError(
-            f"Variable '{name}' has invalid sweep mode: {mode}"
-        )
 
 
 # ----------------- Conditional variable helpers ----------------- #
@@ -397,11 +376,8 @@ class ExecutionInstance:
         all_vars: Dict[str, Any] = dict(self.base_vars)
 
         # derived_var_cfgs preserves insertion order (from build_execution_matrix)
+        # Note: expr validation is handled by loader.py's validate_generic_config()
         for name, (expr, vartype) in self.derived_var_cfgs.items():
-            if not expr:
-                raise ConfigValidationError(
-                    f"Derived variable '{name}' must define 'expr'."
-                )
             val = _eval_expr(expr, vartype, {**ctx0, **all_vars})
             all_vars[name] = val
 
@@ -809,13 +785,10 @@ def create_execution_instance(
     repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
 
     # Build derived var configs from cfg.vars
+    # Note: expr validation is handled by loader.py's validate_generic_config()
     derived_var_cfgs: Dict[str, Tuple[str, str]] = {}
     for name, vcfg in cfg.vars.items():
         if vcfg.sweep is None and vcfg.expr is not None:
-            if not vcfg.expr:
-                raise ConfigValidationError(
-                    f"Derived variable '{name}' must define 'expr'."
-                )
             derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
 
     # Command/env/metadata templates from cfg

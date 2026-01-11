@@ -92,13 +92,10 @@ class IOPSRunner(HasLogger):
             self.logger.info(f"Budget: {self.max_core_hours} core-hours (cores expr: {self.cores_expr})")
 
         # Determine estimated time scenarios (CLI overrides config)
+        # Validation is done in main.py _validate_args()
         self.estimated_time_scenarios: List[float] = []
         if hasattr(args, 'time_estimate') and args.time_estimate is not None and isinstance(args.time_estimate, str):
-            # Parse comma-separated values: "120" or "60,120,300"
-            try:
-                self.estimated_time_scenarios = [float(x.strip()) for x in args.time_estimate.split(',')]
-            except ValueError:
-                self.logger.warning(f"Invalid --time-estimate format: {args.time_estimate}. Expected number or comma-separated numbers.")
+            self.estimated_time_scenarios = [float(x.strip()) for x in args.time_estimate.split(',')]
         elif cfg.benchmark.estimated_time_seconds is not None:
             self.estimated_time_scenarios = [cfg.benchmark.estimated_time_seconds]
 
@@ -122,6 +119,7 @@ class IOPSRunner(HasLogger):
         # Key: hostname, Value: full sysinfo dict
         self.collected_system_info: Dict[str, Dict[str, Any]] = {}
 
+        # TODO check if signal handling is also done when executor=local
         # Register signal handler for Ctrl+C (SIGINT) if using SLURM executor
         if cfg.benchmark.executor == "slurm":
             signal.signal(signal.SIGINT, self._signal_handler)
@@ -967,7 +965,7 @@ class IOPSRunner(HasLogger):
                 self.budget_exceeded = True
                 self.logger.warning("=" * 70)
                 self.logger.warning(f"Budget limit reached: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours")
-                self.logger.warning("Stopping execution (current tests will complete)")
+                self.logger.warning("Stopping execution of further tests.")
                 self.logger.warning("=" * 70)
                 break
 

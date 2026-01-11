@@ -444,170 +444,120 @@ def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> Non
 
 # ----------------- Main loading function ----------------- #
 
-def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> GenericBenchmarkConfig:
+def _validate_structure(config_path: Path) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """
-    Load and parse a YAML configuration file into a GenericBenchmarkConfig object.
+    Validate the basic structure of a YAML configuration file.
+
+    This performs minimal validation:
+    - File exists and is readable
+    - Valid YAML syntax
+    - Required top-level sections present
 
     Args:
         config_path: Path to the YAML configuration file
-        logger: Logger instance for debug messages
-        dry_run: If True, create 'dryrun_' folders instead of 'run_' folders
 
     Returns:
-        Validated GenericBenchmarkConfig object with workdir created
+        Tuple of (data, errors):
+            - data: Parsed YAML dict if successful, None if errors
+            - errors: List of error messages (empty if valid)
+    """
+    errors: List[str] = []
+
+    # Check file exists
+    if not config_path.exists():
+        return None, [f"Configuration file not found: {config_path}"]
+
+    if not config_path.is_file():
+        return None, [f"Path is not a file: {config_path}"]
+
+    # Try to load YAML
+    try:
+        with open(config_path, "r") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        return None, [f"YAML syntax error: {e}"]
+    except Exception as e:
+        return None, [f"Failed to read configuration file: {e}"]
+
+    if data is None:
+        return None, ["Configuration file is empty"]
+
+    if not isinstance(data, dict):
+        return None, ["Configuration file must contain a YAML dictionary"]
+
+    # Check required sections
+    required_sections = ["benchmark", "vars", "command", "scripts", "output"]
+    for section in required_sections:
+        if section not in data:
+            errors.append(f"Missing required section: '{section}'")
+
+    if errors:
+        return None, errors
+
+    return data, []
+
+
+def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmarkConfig:
+    """
+    Parse a YAML data dictionary into a GenericBenchmarkConfig object.
+
+    This performs parsing only, not semantic validation. Validation is done
+    separately by validate_generic_config().
+
+    Args:
+        data: Parsed YAML dictionary
+        config_dir: Directory containing the config file (for resolving relative paths)
+
+    Returns:
+        GenericBenchmarkConfig object (not yet validated)
 
     Raises:
-        ConfigValidationError: If configuration is invalid
+        KeyError: If required fields are missing
+        ConfigValidationError: If data structure is invalid (e.g., constraints not a list)
     """
-    with open(config_path, "r") as f:
-        data = yaml.safe_load(f)
-
-    # Get config directory for resolving relative script paths
-    config_dir = config_path.parent
-
     # ---- benchmark ----
     b = data["benchmark"]
-    # if search method is not defined, we will execute all test cases (exhaustive)
 
     # Parse executor_options if present
     executor_options = None
     if "executor_options" in b and b["executor_options"] is not None:
         eo = b["executor_options"]
         executor_options = ExecutorOptionsConfig(
-            commands=eo.get("commands")
+            commands=eo.get("commands"),
+            poll_interval=eo.get("poll_interval"),
         )
 
-    # Parse and validate random_config if present
+    # Parse random_config if present (validation done in validate_generic_config)
     random_config = None
     search_method = b.get("search_method", "exhaustive")
     if "random_config" in b and b["random_config"] is not None:
         rc = b["random_config"]
-        n_samples = rc.get("n_samples")
         percentage = rc.get("percentage")
-        fallback = rc.get("fallback_to_exhaustive", True)
-
-        # Validation: must have exactly one of n_samples or percentage
-        if n_samples is not None and percentage is not None:
-            raise ConfigValidationError(
-                "random_config: cannot specify both 'n_samples' and 'percentage'. Choose one."
-            )
-        if n_samples is None and percentage is None:
-            raise ConfigValidationError(
-                "random_config: must specify either 'n_samples' or 'percentage'"
-            )
-
-        # Validate n_samples
-        if n_samples is not None:
-            if not isinstance(n_samples, int) or n_samples < 1:
-                raise ConfigValidationError(
-                    f"random_config.n_samples must be a positive integer, got: {n_samples}"
-                )
-
-        # Validate percentage
-        if percentage is not None:
-            if not isinstance(percentage, (int, float)) or percentage <= 0:
-                raise ConfigValidationError(
-                    f"random_config.percentage must be positive, got: {percentage}"
-                )
-            # Clamp percentage > 1.0 to 1.0 (with warning logged later in planner)
-            if percentage > 1.0:
-                percentage = 1.0
-
+        # Clamp percentage > 1.0 to 1.0
+        if percentage is not None and percentage > 1.0:
+            percentage = 1.0
         random_config = RandomSamplingConfig(
-            n_samples=n_samples,
+            n_samples=rc.get("n_samples"),
             percentage=percentage,
-            fallback_to_exhaustive=fallback,
-        )
-    elif search_method == "random":
-        # random search method requires random_config
-        raise ConfigValidationError(
-            "random_config: must specify either 'n_samples' or 'percentage'"
+            fallback_to_exhaustive=rc.get("fallback_to_exhaustive", True),
         )
 
-    # Parse and validate bayesian_config if present
+    # Parse bayesian_config if present (validation done in validate_generic_config)
     bayesian_config = None
     if "bayesian_config" in b and b["bayesian_config"] is not None:
         bc = b["bayesian_config"]
-
-        # Validate n_initial_points
-        n_initial_points = bc.get("n_initial_points", 5)
-        if not isinstance(n_initial_points, int) or n_initial_points < 1:
-            raise ConfigValidationError(
-                f"bayesian_config.n_initial_points must be a positive integer, got: {n_initial_points}"
-            )
-
-        # Validate n_iterations
-        n_iterations = bc.get("n_iterations", 20)
-        if not isinstance(n_iterations, int) or n_iterations < 1:
-            raise ConfigValidationError(
-                f"bayesian_config.n_iterations must be a positive integer, got: {n_iterations}"
-            )
-
-        # Validate acquisition_func
-        acquisition_func = bc.get("acquisition_func", "EI")
-        valid_acq_funcs = ("EI", "PI", "LCB")
-        if acquisition_func not in valid_acq_funcs:
-            raise ConfigValidationError(
-                f"bayesian_config.acquisition_func must be one of {valid_acq_funcs}, got: '{acquisition_func}'"
-            )
-
-        # Validate base_estimator
-        base_estimator = bc.get("base_estimator", "RF")
-        valid_estimators = ("RF", "GP", "ET", "GBRT")
-        if base_estimator not in valid_estimators:
-            raise ConfigValidationError(
-                f"bayesian_config.base_estimator must be one of {valid_estimators}, got: '{base_estimator}'"
-            )
-
-        # Validate xi (for EI/PI)
         xi = bc.get("xi", 0.01)
-        if not isinstance(xi, (int, float)):
-            raise ConfigValidationError(
-                f"bayesian_config.xi must be a number, got: {type(xi).__name__}"
-            )
-
-        # Validate kappa (for LCB)
         kappa = bc.get("kappa", 1.96)
-        if not isinstance(kappa, (int, float)):
-            raise ConfigValidationError(
-                f"bayesian_config.kappa must be a number, got: {type(kappa).__name__}"
-            )
-
-        # Validate objective
-        objective = bc.get("objective", "maximize")
-        valid_objectives = ("minimize", "maximize")
-        if objective not in valid_objectives:
-            raise ConfigValidationError(
-                f"bayesian_config.objective must be one of {valid_objectives}, got: '{objective}'"
-            )
-
-        # objective_metric is required for Bayesian optimization
-        objective_metric = bc.get("objective_metric")
-        if not objective_metric:
-            raise ConfigValidationError(
-                "bayesian_config.objective_metric is required. "
-                "Specify the metric name to optimize (e.g., 'throughput', 'latency')."
-            )
-
-        # Parse fallback_to_exhaustive (default: True)
-        fallback_to_exhaustive = bc.get("fallback_to_exhaustive", True)
-
         bayesian_config = BayesianConfig(
-            n_initial_points=n_initial_points,
-            n_iterations=n_iterations,
-            acquisition_func=acquisition_func,
-            base_estimator=base_estimator,
-            xi=float(xi),
-            kappa=float(kappa),
-            objective=objective,
-            objective_metric=objective_metric,
-            fallback_to_exhaustive=fallback_to_exhaustive,
-        )
-    elif search_method == "bayesian":
-        # bayesian search method requires bayesian_config with objective_metric
-        raise ConfigValidationError(
-            "bayesian_config is required when search_method is 'bayesian'. "
-            "You must specify at least 'objective_metric' to define which metric to optimize."
+            n_initial_points=bc.get("n_initial_points", 5),
+            n_iterations=bc.get("n_iterations", 20),
+            acquisition_func=bc.get("acquisition_func", "EI"),
+            base_estimator=bc.get("base_estimator", "RF"),
+            xi=float(xi) if isinstance(xi, (int, float)) else xi,
+            kappa=float(kappa) if isinstance(kappa, (int, float)) else kappa,
+            objective=bc.get("objective", "maximize"),
+            objective_metric=bc.get("objective_metric"),
+            fallback_to_exhaustive=bc.get("fallback_to_exhaustive", True),
         )
 
     benchmark = BenchmarkConfig(
@@ -746,7 +696,7 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
     if "reporting" in data and data["reporting"] is not None:
         reporting_cfg = _parse_reporting_config(data["reporting"])
 
-    cfg = GenericBenchmarkConfig(
+    return GenericBenchmarkConfig(
         benchmark=benchmark,
         vars=vars_cfg,
         constraints=constraints,
@@ -756,8 +706,43 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
         reporting=reporting_cfg,
     )
 
+
+def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> GenericBenchmarkConfig:
+    """
+    Load and parse a YAML configuration file into a GenericBenchmarkConfig object.
+
+    This is the main entry point for loading configurations. It:
+    1. Validates structure (file exists, valid YAML, required sections)
+    2. Parses into config objects
+    3. Validates semantics (single source of truth: validate_generic_config)
+    4. Creates workdir
+
+    Args:
+        config_path: Path to the YAML configuration file
+        logger: Logger instance for debug messages
+        dry_run: If True, create 'dryrun_' folders instead of 'run_' folders
+
+    Returns:
+        Validated GenericBenchmarkConfig object with workdir created
+
+    Raises:
+        ConfigValidationError: If configuration is invalid
+    """
+    # 1. Structural validation
+    data, errors = _validate_structure(config_path)
+    if errors:
+        raise ConfigValidationError("\n".join(errors))
+
+    # 2. Parse to config object
+    config_dir = config_path.parent
+    cfg = _parse_to_config(data, config_dir)
+
+    # 3. Semantic validation (single source of truth)
     validate_generic_config(cfg)
+
+    # 4. Create workdir (side effect)
     create_workdir(cfg, logger, dry_run=dry_run)
+
     return cfg
 
 
@@ -943,9 +928,11 @@ def validate_yaml_config(config_path: Path) -> List[str]:
     """
     Validate a YAML configuration file and return a list of all errors found.
 
-    This function attempts to load and validate the configuration file,
-    catching all errors and returning them as a list. If the configuration
-    is valid, an empty list is returned.
+    This function uses the same validation logic as load_generic_config() but
+    collects errors instead of raising exceptions. It delegates to:
+    1. _validate_structure() for structural validation
+    2. _parse_to_config() for parsing
+    3. validate_generic_config() for semantic validation
 
     Args:
         config_path: Path to the YAML configuration file
@@ -955,470 +942,30 @@ def validate_yaml_config(config_path: Path) -> List[str]:
     """
     errors: List[str] = []
 
-    # Check if file exists
-    if not config_path.exists():
-        errors.append(f"Configuration file not found: {config_path}")
-        return errors
+    # 1. Structural validation (file exists, valid YAML, required sections)
+    data, struct_errors = _validate_structure(config_path)
+    if struct_errors:
+        return struct_errors
 
-    if not config_path.is_file():
-        errors.append(f"Path is not a file: {config_path}")
-        return errors
-
-    # Try to load and parse the YAML
-    try:
-        with open(config_path, "r") as f:
-            data = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        errors.append(f"YAML syntax error: {e}")
-        return errors
-    except Exception as e:
-        errors.append(f"Failed to read configuration file: {e}")
-        return errors
-
-    if data is None:
-        errors.append("Configuration file is empty")
-        return errors
-
-    if not isinstance(data, dict):
-        errors.append("Configuration file must contain a YAML dictionary")
-        return errors
-
-    # Get config directory for resolving relative script paths
+    # 2. Try to parse into config object
     config_dir = config_path.parent
-
-    # Validate required top-level sections
-    required_sections = ["benchmark", "vars", "command", "scripts", "output"]
-    for section in required_sections:
-        if section not in data:
-            errors.append(f"Missing required section: '{section}'")
-
-    if errors:
+    try:
+        cfg = _parse_to_config(data, config_dir)
+    except KeyError as e:
+        errors.append(f"Missing required field: {e}")
+        return errors
+    except ConfigValidationError as e:
+        errors.append(str(e))
+        return errors
+    except Exception as e:
+        errors.append(f"Error parsing configuration: {e}")
         return errors
 
-    # Try to parse and validate the configuration
+    # 3. Semantic validation (single source of truth)
     try:
-        # ---- benchmark ----
-        b = data["benchmark"]
-
-        # Check required benchmark fields
-        if "name" not in b:
-            errors.append("benchmark.name is required")
-        if "workdir" not in b:
-            errors.append("benchmark.workdir is required")
-
-        # Validate workdir if present
-        if "workdir" in b:
-            try:
-                workdir = _expand_path(b["workdir"])
-                if not workdir.exists():
-                    errors.append(f"benchmark.workdir does not exist: {workdir}")
-                elif not workdir.is_dir():
-                    errors.append(f"benchmark.workdir is not a directory: {workdir}")
-            except Exception as e:
-                errors.append(f"Invalid benchmark.workdir path: {e}")
-
-        # Validate cache_file path if present
-        if "cache_file" in b and b["cache_file"] is not None:
-            try:
-                db_path = _expand_path(b["cache_file"])
-                # Check parent directory exists (file may not exist yet)
-                if not db_path.parent.exists():
-                    errors.append(f"benchmark.cache_file parent directory does not exist: {db_path.parent}")
-            except Exception as e:
-                errors.append(f"Invalid benchmark.cache_file path: {e}")
-
-        # Validate repetitions
-        if "repetitions" in b:
-            reps = b["repetitions"]
-            if not isinstance(reps, int) or reps < 1:
-                errors.append("benchmark.repetitions must be an integer >= 1")
-
-        # Validate search_method
-        search_method = b.get("search_method", "exhaustive")
-        if search_method not in ("exhaustive", "random", "bayesian"):
-            errors.append(f"benchmark.search_method must be one of: exhaustive, random, bayesian (got '{search_method}')")
-
-        # Validate executor
-        if "executor" in b:
-            executor = b["executor"]
-            if executor not in ("slurm", "local"):
-                errors.append(f"benchmark.executor must be one of: slurm, local (got '{executor}')")
-
-        # Validate random_seed
-        if "random_seed" in b and b["random_seed"] is not None:
-            if not isinstance(b["random_seed"], int):
-                errors.append(f"benchmark.random_seed must be an integer (got '{type(b['random_seed']).__name__}')")
-
-        # Validate collect_system_info
-        if "collect_system_info" in b and b["collect_system_info"] is not None:
-            if not isinstance(b["collect_system_info"], bool):
-                errors.append(f"benchmark.collect_system_info must be a boolean (got '{type(b['collect_system_info']).__name__}')")
-
-        # Validate max_core_hours
-        if "max_core_hours" in b and b["max_core_hours"] is not None:
-            if not isinstance(b["max_core_hours"], (int, float)) or b["max_core_hours"] <= 0:
-                errors.append("benchmark.max_core_hours must be a positive number")
-
-        # Validate estimated_time_seconds
-        if "estimated_time_seconds" in b and b["estimated_time_seconds"] is not None:
-            if not isinstance(b["estimated_time_seconds"], (int, float)) or b["estimated_time_seconds"] <= 0:
-                errors.append("benchmark.estimated_time_seconds must be a positive number")
-
-        # Validate executor_options
-        if "executor_options" in b and b["executor_options"] is not None:
-            eo = b["executor_options"]
-            if not isinstance(eo, dict):
-                errors.append("benchmark.executor_options must be a dictionary")
-            else:
-                if "commands" in eo and eo["commands"] is not None:
-                    if not isinstance(eo["commands"], dict):
-                        errors.append("benchmark.executor_options.commands must be a dictionary")
-                    else:
-                        valid_commands = ("submit", "status", "info", "cancel")
-                        for cmd_name in eo["commands"].keys():
-                            if cmd_name not in valid_commands:
-                                errors.append(
-                                    f"benchmark.executor_options.commands contains unknown command '{cmd_name}'. "
-                                    f"Valid commands: {valid_commands}"
-                                )
-                if "poll_interval" in eo and eo["poll_interval"] is not None:
-                    if not isinstance(eo["poll_interval"], (int, float)) or eo["poll_interval"] <= 0:
-                        errors.append("benchmark.executor_options.poll_interval must be a positive number")
-
-        # Validate random_config (required when search_method is "random")
-        if "random_config" in b and b["random_config"] is not None:
-            rc = b["random_config"]
-            if not isinstance(rc, dict):
-                errors.append("benchmark.random_config must be a dictionary")
-            else:
-                n_samples = rc.get("n_samples")
-                percentage = rc.get("percentage")
-
-                if n_samples is not None and percentage is not None:
-                    errors.append("random_config: cannot specify both 'n_samples' and 'percentage'. Choose one.")
-                if n_samples is None and percentage is None:
-                    errors.append("random_config: must specify either 'n_samples' or 'percentage'")
-
-                if n_samples is not None:
-                    if not isinstance(n_samples, int) or n_samples < 1:
-                        errors.append(f"random_config.n_samples must be a positive integer (got '{n_samples}')")
-
-                if percentage is not None:
-                    if not isinstance(percentage, (int, float)) or percentage <= 0:
-                        errors.append(f"random_config.percentage must be a positive number (got '{percentage}')")
-        elif search_method == "random":
-            errors.append("random_config is required when search_method is 'random'")
-
-        # Validate bayesian_config (required when search_method is "bayesian")
-        if "bayesian_config" in b and b["bayesian_config"] is not None:
-            bc = b["bayesian_config"]
-            if not isinstance(bc, dict):
-                errors.append("benchmark.bayesian_config must be a dictionary")
-            else:
-                # objective_metric is required
-                if "objective_metric" not in bc or not bc["objective_metric"]:
-                    errors.append("bayesian_config.objective_metric is required")
-
-                # Validate n_initial_points
-                if "n_initial_points" in bc:
-                    n_init = bc["n_initial_points"]
-                    if not isinstance(n_init, int) or n_init < 1:
-                        errors.append(f"bayesian_config.n_initial_points must be a positive integer (got '{n_init}')")
-
-                # Validate n_iterations
-                if "n_iterations" in bc:
-                    n_iter = bc["n_iterations"]
-                    if not isinstance(n_iter, int) or n_iter < 1:
-                        errors.append(f"bayesian_config.n_iterations must be a positive integer (got '{n_iter}')")
-
-                # Validate acquisition_func
-                if "acquisition_func" in bc:
-                    acq = bc["acquisition_func"]
-                    if acq not in ("EI", "PI", "LCB"):
-                        errors.append(f"bayesian_config.acquisition_func must be one of: EI, PI, LCB (got '{acq}')")
-
-                # Validate base_estimator
-                if "base_estimator" in bc:
-                    est = bc["base_estimator"]
-                    if est not in ("RF", "GP", "ET", "GBRT"):
-                        errors.append(f"bayesian_config.base_estimator must be one of: RF, GP, ET, GBRT (got '{est}')")
-
-                # Validate objective
-                if "objective" in bc:
-                    obj = bc["objective"]
-                    if obj not in ("minimize", "maximize"):
-                        errors.append(f"bayesian_config.objective must be one of: minimize, maximize (got '{obj}')")
-
-                # Validate xi
-                if "xi" in bc and not isinstance(bc["xi"], (int, float)):
-                    errors.append(f"bayesian_config.xi must be a number (got '{type(bc['xi']).__name__}')")
-
-                # Validate kappa
-                if "kappa" in bc and not isinstance(bc["kappa"], (int, float)):
-                    errors.append(f"bayesian_config.kappa must be a number (got '{type(bc['kappa']).__name__}')")
-        elif search_method == "bayesian":
-            errors.append("bayesian_config is required when search_method is 'bayesian'")
-
-    except KeyError as e:
-        errors.append(f"Missing required benchmark field: {e}")
-    except Exception as e:
-        errors.append(f"Error validating benchmark section: {e}")
-
-    # ---- vars ----
-    try:
-        vars_data = data.get("vars", {})
-        if not vars_data:
-            errors.append("At least one variable must be defined in 'vars'")
-
-        valid_var_types = ("int", "float", "str", "bool")
-        for name, cfg in vars_data.items():
-            if not isinstance(cfg, dict):
-                errors.append(f"var '{name}' must be a dictionary")
-                continue
-
-            if "type" not in cfg:
-                errors.append(f"var '{name}' is missing required field 'type'")
-            elif cfg["type"] not in valid_var_types:
-                errors.append(
-                    f"var '{name}' has invalid type '{cfg['type']}'. "
-                    f"Must be one of: {valid_var_types}"
-                )
-
-            has_sweep = "sweep" in cfg and cfg["sweep"] is not None
-            has_expr = "expr" in cfg and cfg["expr"] is not None
-
-            if not has_sweep and not has_expr:
-                errors.append(f"var '{name}' must define either a 'sweep' or an 'expr'")
-
-            if has_sweep and has_expr:
-                errors.append(f"var '{name}' cannot have both 'sweep' and 'expr'")
-
-            if has_sweep:
-                sweep = cfg["sweep"]
-                if not isinstance(sweep, dict):
-                    errors.append(f"var '{name}' sweep must be a dictionary")
-                    continue
-
-                if "mode" not in sweep:
-                    errors.append(f"var '{name}' sweep is missing required field 'mode'")
-                    continue
-
-                mode = sweep["mode"]
-                if mode == "range":
-                    if "start" not in sweep:
-                        errors.append(f"var '{name}' with mode 'range' is missing 'start'")
-                    if "end" not in sweep:
-                        errors.append(f"var '{name}' with mode 'range' is missing 'end'")
-                    if "step" not in sweep:
-                        errors.append(f"var '{name}' with mode 'range' is missing 'step'")
-
-                    if "step" in sweep and sweep["step"] == 0:
-                        errors.append(f"var '{name}' with mode 'range' cannot have step=0")
-
-                elif mode == "list":
-                    if "values" not in sweep:
-                        errors.append(f"var '{name}' with mode 'list' is missing 'values'")
-                    else:
-                        # Normalize scalar to list for validation
-                        values = sweep["values"]
-                        if values is not None and not isinstance(values, list):
-                            values = [values]
-                        if not values:
-                            errors.append(f"var '{name}' with mode 'list' must have non-empty 'values'")
-                else:
-                    errors.append(f"var '{name}' has invalid sweep.mode='{mode}' (must be 'range' or 'list')")
-
-            # Validate conditional variable fields (when and default)
-            has_when = "when" in cfg and cfg["when"] is not None
-            has_default = "default" in cfg and cfg["default"] is not None
-
-            if has_when:
-                if not has_sweep:
-                    errors.append(f"var '{name}' has 'when' but no 'sweep' - 'when' is only valid for swept variables")
-                if has_expr:
-                    errors.append(f"var '{name}' cannot have both 'when' and 'expr'")
-                if not has_default:
-                    errors.append(f"var '{name}' has 'when' but no 'default' - 'default' is required when 'when' is specified")
-
-            if has_default and not has_when:
-                errors.append(f"var '{name}' has 'default' but no 'when' - 'default' is only used with conditional variables")
-
-    except Exception as e:
-        errors.append(f"Error validating vars section: {e}")
-
-    # ---- variable reference lists validation (depends on vars being loaded) ----
-    try:
-        b = data.get("benchmark", {})
-        vars_data = data.get("vars", {})
-
-        # Helper to validate a list of variable references
-        def validate_var_list(field_name: str, var_list) -> None:
-            if var_list is None:
-                return
-            if not isinstance(var_list, list):
-                errors.append(f"benchmark.{field_name} must be a list of variable names")
-                return
-            invalid_vars = [v for v in var_list if v not in vars_data]
-            if invalid_vars:
-                errors.append(
-                    f"benchmark.{field_name} contains undefined variables: {invalid_vars}. "
-                    f"Available variables: {sorted(vars_data.keys())}"
-                )
-
-        # Validate report_vars
-        validate_var_list("report_vars", b.get("report_vars"))
-
-        # Validate cache_exclude_vars
-        validate_var_list("cache_exclude_vars", b.get("cache_exclude_vars"))
-
-        # Validate exhaustive_vars
-        validate_var_list("exhaustive_vars", b.get("exhaustive_vars"))
-
-    except Exception as e:
-        errors.append(f"Error validating variable reference lists: {e}")
-
-    # ---- constraints ----
-    try:
-        constraints_data = data.get("constraints", [])
-        if constraints_data is not None:
-            if not isinstance(constraints_data, list):
-                errors.append("'constraints' must be a list")
-            else:
-                for idx, constraint in enumerate(constraints_data):
-                    if not isinstance(constraint, dict):
-                        errors.append(f"constraints[{idx}] must be a dictionary")
-                        continue
-
-                    # Required fields
-                    if "rule" not in constraint:
-                        errors.append(f"constraints[{idx}] missing required field 'rule'")
-
-                    # Validate violation_policy
-                    policy = constraint.get("violation_policy", "skip")
-                    if policy not in ["skip", "error", "warn"]:
-                        errors.append(
-                            f"constraints[{idx}].violation_policy must be 'skip', 'error', or 'warn', got '{policy}'"
-                        )
-
-    except Exception as e:
-        errors.append(f"Error validating constraints section: {e}")
-
-    # ---- command ----
-    try:
-        command_data = data.get("command", {})
-        if not isinstance(command_data, dict):
-            errors.append("'command' section must be a dictionary")
-        elif "template" not in command_data:
-            errors.append("command.template is required")
-        elif not command_data["template"] or not str(command_data["template"]).strip():
-            errors.append("command.template must not be empty")
-
-    except Exception as e:
-        errors.append(f"Error validating command section: {e}")
-
-    # ---- scripts ----
-    try:
-        scripts_data = data.get("scripts", [])
-        if not scripts_data:
-            errors.append("At least one script must be defined in 'scripts'")
-
-        if not isinstance(scripts_data, list):
-            errors.append("'scripts' section must be a list")
-        else:
-            for idx, s in enumerate(scripts_data):
-                if not isinstance(s, dict):
-                    errors.append(f"scripts[{idx}] must be a dictionary")
-                    continue
-
-                script_name = s.get("name", f"script[{idx}]")
-
-                if "name" not in s:
-                    errors.append(f"scripts[{idx}] is missing required field 'name'")
-
-                if "submit" not in s:
-                    errors.append(f"script '{script_name}' is missing required field 'submit'")
-
-                if "script_template" not in s:
-                    errors.append(f"script '{script_name}' is missing required field 'script_template'")
-                elif not s["script_template"] or not str(s["script_template"]).strip():
-                    errors.append(f"script '{script_name}' must have a non-empty script_template")
-
-                # Validate post block if present
-                if "post" in s and s["post"] is not None:
-                    post = s["post"]
-                    if not isinstance(post, dict):
-                        errors.append(f"script '{script_name}' post must be a dictionary")
-                    elif "script" not in post or not post["script"] or not str(post["script"]).strip():
-                        errors.append(f"script '{script_name}' has a 'post' block but empty or missing 'script'")
-
-                # Validate parser block if present
-                if "parser" in s and s["parser"] is not None:
-                    parser = s["parser"]
-                    if not isinstance(parser, dict):
-                        errors.append(f"script '{script_name}' parser must be a dictionary")
-                        continue
-
-                    if "file" not in parser or not parser["file"] or not str(parser["file"]).strip():
-                        errors.append(f"script '{script_name}' parser.file is required and must not be empty")
-
-                    if "parser_script" not in parser or not parser["parser_script"] or not str(parser["parser_script"]).strip():
-                        errors.append(f"script '{script_name}' parser.parser_script is required and must not be empty")
-                    else:
-                        # Load parser script content if it's a file reference
-                        parser_script = _load_script_content(parser["parser_script"], config_dir)
-                        ok, err = validate_parser_script(parser_script)
-                        if not ok:
-                            errors.append(f"script '{script_name}' has invalid parser_script: {err}")
-
-                    if "metrics" not in parser or not parser["metrics"]:
-                        errors.append(f"script '{script_name}' parser.metrics is required and must be non-empty")
-                    elif isinstance(parser["metrics"], list):
-                        for m_idx, metric in enumerate(parser["metrics"]):
-                            if not isinstance(metric, dict):
-                                errors.append(f"script '{script_name}' parser.metrics[{m_idx}] must be a dictionary")
-                            elif "name" not in metric:
-                                errors.append(f"script '{script_name}' parser.metrics[{m_idx}] is missing 'name'")
-
-    except Exception as e:
-        errors.append(f"Error validating scripts section: {e}")
-
-    # ---- output ----
-    try:
-        output_data = data.get("output", {})
-        if not isinstance(output_data, dict):
-            errors.append("'output' section must be a dictionary")
-        elif "sink" not in output_data:
-            errors.append("output.sink is required")
-        else:
-            sink = output_data["sink"]
-            if not isinstance(sink, dict):
-                errors.append("output.sink must be a dictionary")
-            else:
-                if "type" not in sink:
-                    errors.append("output.sink.type is required")
-                elif sink["type"] not in ("csv", "parquet", "sqlite"):
-                    errors.append(f"output.sink.type must be one of: csv, parquet, sqlite (got '{sink['type']}')")
-                elif sink["type"] == "parquet" and not PYARROW_AVAILABLE:
-                    errors.append(
-                        "pyarrow is required for parquet output. "
-                        "Install with: pip install pyarrow or pip install iops-benchmark[parquet]"
-                    )
-
-                if "path" not in sink or not sink["path"] or not str(sink["path"]).strip():
-                    errors.append("output.sink.path is required and must not be empty")
-
-                if "mode" in sink and sink["mode"] not in ("append", "overwrite"):
-                    errors.append(f"output.sink.mode must be 'append' or 'overwrite' (got '{sink['mode']}')")
-
-                if "include" in sink and sink["include"] and "exclude" in sink and sink["exclude"]:
-                    errors.append("output.sink cannot define both 'include' and 'exclude'")
-
-                if "type" in sink and sink["type"] == "sqlite":
-                    if "table" not in sink or not sink["table"] or not str(sink["table"]).strip():
-                        errors.append("output.sink.table is required and must not be empty when type=sqlite")
-
-    except Exception as e:
-        errors.append(f"Error validating output section: {e}")
+        validate_generic_config(cfg)
+    except ConfigValidationError as e:
+        errors.append(str(e))
 
     return errors
 
@@ -1444,6 +991,68 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if cfg.benchmark.search_method not in ("exhaustive", "random", "bayesian"):
             raise ConfigValidationError(
                 "benchmark.search_method must be one of: exhaustive, random, bayesian"
+            )
+
+    # executor validation
+    if cfg.benchmark.executor not in ("slurm", "local"):
+        raise ConfigValidationError(
+            f"benchmark.executor must be one of: slurm, local (got '{cfg.benchmark.executor}')"
+        )
+
+    # random_config validation (required when search_method is "random")
+    if cfg.benchmark.search_method == "random":
+        rc = cfg.benchmark.random_config
+        if rc is None:
+            raise ConfigValidationError(
+                "random_config is required when search_method is 'random'"
+            )
+        if rc.n_samples is not None and rc.percentage is not None:
+            raise ConfigValidationError(
+                "random_config: cannot specify both 'n_samples' and 'percentage'. Choose one."
+            )
+        if rc.n_samples is None and rc.percentage is None:
+            raise ConfigValidationError(
+                "random_config: must specify either 'n_samples' or 'percentage'"
+            )
+        if rc.n_samples is not None and rc.n_samples < 1:
+            raise ConfigValidationError(
+                f"random_config.n_samples must be a positive integer (got '{rc.n_samples}')"
+            )
+        if rc.percentage is not None and rc.percentage <= 0:
+            raise ConfigValidationError(
+                f"random_config.percentage must be a positive number (got '{rc.percentage}')"
+            )
+
+    # bayesian_config validation (required when search_method is "bayesian")
+    if cfg.benchmark.search_method == "bayesian":
+        bc = cfg.benchmark.bayesian_config
+        if bc is None:
+            raise ConfigValidationError(
+                "bayesian_config is required when search_method is 'bayesian'"
+            )
+        if not bc.objective_metric:
+            raise ConfigValidationError(
+                "bayesian_config.objective_metric is required"
+            )
+        if bc.n_initial_points is not None and bc.n_initial_points < 1:
+            raise ConfigValidationError(
+                f"bayesian_config.n_initial_points must be a positive integer (got '{bc.n_initial_points}')"
+            )
+        if bc.n_iterations is not None and bc.n_iterations < 1:
+            raise ConfigValidationError(
+                f"bayesian_config.n_iterations must be a positive integer (got '{bc.n_iterations}')"
+            )
+        if bc.acquisition_func not in ("EI", "PI", "LCB"):
+            raise ConfigValidationError(
+                f"bayesian_config.acquisition_func must be one of: EI, PI, LCB (got '{bc.acquisition_func}')"
+            )
+        if bc.base_estimator not in ("RF", "GP", "ET", "GBRT"):
+            raise ConfigValidationError(
+                f"bayesian_config.base_estimator must be one of: RF, GP, ET, GBRT (got '{bc.base_estimator}')"
+            )
+        if bc.objective not in ("minimize", "maximize"):
+            raise ConfigValidationError(
+                f"bayesian_config.objective must be one of: minimize, maximize (got '{bc.objective}')"
             )
 
     # ---- vars ----
@@ -1534,6 +1143,18 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
 
     validate_var_list("cache_exclude_vars", cfg.benchmark.cache_exclude_vars)
     validate_var_list("exhaustive_vars", cfg.benchmark.exhaustive_vars)
+
+    # ---- constraints ----
+    for idx, constraint in enumerate(cfg.constraints):
+        if not constraint.rule or not constraint.rule.strip():
+            raise ConfigValidationError(
+                f"constraints[{idx}] ('{constraint.name}') must have a non-empty 'rule'"
+            )
+        if constraint.violation_policy not in ("skip", "error", "warn"):
+            raise ConfigValidationError(
+                f"constraints[{idx}].violation_policy must be 'skip', 'error', or 'warn' "
+                f"(got '{constraint.violation_policy}')"
+            )
 
     # ---- command ----
     if not cfg.command.template.strip():

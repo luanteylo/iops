@@ -126,7 +126,7 @@ def test_random_config_invalid_percentage_negative(tmp_path, sample_config_dict)
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    with pytest.raises(ConfigValidationError, match="must be positive"):
+    with pytest.raises(ConfigValidationError, match="must be a positive number"):
         load_config(config_file)
 
 
@@ -141,7 +141,7 @@ def test_random_config_invalid_percentage_zero(tmp_path, sample_config_dict):
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    with pytest.raises(ConfigValidationError, match="must be positive"):
+    with pytest.raises(ConfigValidationError, match="must be a positive number"):
         load_config(config_file)
 
 
@@ -407,5 +407,5 @@ def test_random_planner_default_config(tmp_path, sample_config_dict):
         yaml.dump(sample_config_dict, f)
 
     # Should raise error because random_config is required
-    with pytest.raises(ConfigValidationError, match="must specify either 'n_samples' or 'percentage'"):
+    with pytest.raises(ConfigValidationError, match="random_config is required"):
         load_config(config_file)

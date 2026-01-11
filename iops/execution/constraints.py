@@ -209,17 +209,12 @@ def filter_execution_matrix(
                     logger.debug(
                         f"Skipping execution {instance.execution_id}: {error_msg}"
                     )
-                elif constraint.violation_policy == "warn":
+                else:  # violation_policy == "warn"
                     # Log warning but keep instance
+                    # Note: violation_policy validation is handled by loader.py
                     logger.warning(
                         f"Execution {instance.execution_id}: {error_msg}. "
                         f"Proceeding anyway (violation_policy=warn)."
-                    )
-                else:
-                    # Unknown policy (shouldn't happen if validation is correct)
-                    logger.error(
-                        f"Unknown violation_policy '{constraint.violation_policy}' "
-                        f"for constraint '{constraint.name}'"
                     )
 
         # Keep instance if no "skip" violations occurred
