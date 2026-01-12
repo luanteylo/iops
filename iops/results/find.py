@@ -3,9 +3,12 @@ Find and explore IOPS execution folders.
 
 This module provides functionality for the `iops find` command,
 allowing users to discover and filter execution results.
+
+Supports both filesystem paths and tar archives.
 """
 
 import json
+import tarfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -170,6 +173,13 @@ def _read_run_metadata(run_root: Path) -> Dict[str, Any]:
     return {}
 
 
+def _is_archive(path: Path) -> bool:
+    """Check if path is a tar archive."""
+    if not path.is_file():
+        return False
+    return tarfile.is_tarfile(path)
+
+
 def find_executions(
     path: Path,
     filters: Optional[List[str]] = None,
@@ -180,10 +190,10 @@ def find_executions(
     cached_filter: Optional[bool] = None
 ) -> None:
     """
-    Find and display execution folders in a workdir.
+    Find and display execution folders in a workdir or archive.
 
     Args:
-        path: Path to workdir (run root) or exec folder
+        path: Path to workdir (run root), exec folder, or tar archive
         filters: Optional list of VAR=VALUE filters
         show_command: If True, display the command column
         show_full: If True, show full values without truncation
@@ -203,6 +213,14 @@ def find_executions(
                 return
             key, value = f.split('=', 1)
             filter_dict[key] = value
+
+    # Check if path is a tar archive
+    if _is_archive(path):
+        _find_executions_in_archive(
+            path, filter_dict, show_command, show_full,
+            hide_columns, status_filter, cached_filter
+        )
+        return
 
     # Check if path is an exec folder (has __iops_params.json)
     params_file = path / PARAMS_FILENAME
@@ -487,5 +505,194 @@ def _show_executions_from_index(
 
         if show_command and "command" not in hide_columns:
             row_parts.append(display_val(command))
+
+        print("  ".join(row_parts))
+
+
+def _find_executions_in_archive(
+    archive_path: Path,
+    filter_dict: Dict[str, str],
+    show_command: bool = False,
+    show_full: bool = False,
+    hide_columns: Optional[set] = None,
+    status_filter: Optional[str] = None,
+    cached_filter: Optional[bool] = None
+) -> None:
+    """
+    Find and display executions from a tar archive.
+
+    Args:
+        archive_path: Path to the tar archive
+        filter_dict: Dict of parameter filters
+        show_command: If True, display the command column
+        show_full: If True, show full values without truncation
+        hide_columns: Set of column names to hide
+        status_filter: Filter by execution status
+        cached_filter: Filter by cache status
+    """
+    from iops.archive import ArchiveReader
+
+    hide_columns = hide_columns or set()
+
+    try:
+        reader = ArchiveReader(archive_path)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error reading archive: {e}")
+        return
+
+    manifest = reader.get_manifest()
+    if not manifest:
+        print(f"No IOPS manifest found in archive: {archive_path}")
+        return
+
+    # Print archive header with metadata
+    print(f"Archive: {archive_path.name}")
+    print("-" * 40)
+    print(f"IOPS Version:     {manifest.iops_version}")
+    print(f"Created:          {manifest.created_at}")
+    print(f"Source Host:      {manifest.source_hostname}")
+    print(f"Archive Type:     {manifest.archive_type}")
+    print(f"Original Path:    {manifest.original_path}")
+    print(f"Total Executions: {manifest.total_executions}")
+    print(f"Checksums:        {len(manifest.checksums)} files")
+    print()
+    print("Runs:")
+    for run in manifest.runs:
+        print(f"  - {run.name}: \"{run.benchmark_name}\" ({run.execution_count} executions)")
+
+    # Get executions with filters
+    executions = reader.list_executions(
+        filters=filter_dict if filter_dict else None,
+        status_filter=status_filter,
+        cached_filter=cached_filter,
+    )
+
+    if not executions:
+        filter_desc = []
+        if filter_dict:
+            filter_desc.append(f"parameters: {filter_dict}")
+        if status_filter:
+            filter_desc.append(f"status: {status_filter}")
+        if cached_filter is not None:
+            filter_desc.append(f"cached: {cached_filter}")
+        if filter_desc:
+            print(f"No executions match the filter ({', '.join(filter_desc)})")
+        else:
+            print("No executions found in archive.")
+        return
+
+    # Show by run for workdir archives
+    if manifest.archive_type == "workdir":
+        runs_shown = set()
+        for run in manifest.runs:
+            run_executions = [e for e in executions if e["run"] == run.name]
+            if not run_executions:
+                continue
+
+            if run.name not in runs_shown:
+                runs_shown.add(run.name)
+                print(f"\n=== {run.name} ===")
+
+            _display_archive_executions(
+                run_executions, show_command, show_full, hide_columns
+            )
+    else:
+        # Single run archive - metadata already shown in header
+        _display_archive_executions(
+            executions, show_command, show_full, hide_columns
+        )
+
+    print(f"\nFound {len(executions)} execution(s)")
+
+
+def _display_archive_executions(
+    executions: List[dict],
+    show_command: bool = False,
+    show_full: bool = False,
+    hide_columns: Optional[set] = None
+) -> None:
+    """Display executions from archive in table format."""
+    hide_columns = hide_columns or set()
+
+    if not executions:
+        return
+
+    # Get all variable names
+    all_vars = set()
+    for exec_data in executions:
+        all_vars.update(exec_data.get("params", {}).keys())
+
+    var_names = sorted(v for v in all_vars if v not in hide_columns)
+
+    # Determine truncation width
+    truncate_width = None if show_full else DEFAULT_TRUNCATE_WIDTH
+
+    def display_val(val: str) -> str:
+        if truncate_width is None:
+            return val
+        return _truncate_value(val, truncate_width)
+
+    def format_status(status, skip_reason, cached):
+        result = status
+        if status == "SKIPPED" and skip_reason:
+            result = f"{status}:{skip_reason}"
+        if cached is True:
+            result += " [C]"
+        elif cached == "partial":
+            result += " [C*]"
+        return result
+
+    # Calculate column widths
+    col_widths = {}
+
+    if "path" not in hide_columns:
+        path_values = [display_val(e["path"]) for e in executions]
+        col_widths["path"] = max(len("Path"), max(len(v) for v in path_values))
+
+    if "status" not in hide_columns:
+        status_values = [format_status(e["status"], e.get("skip_reason"), e["cached"]) for e in executions]
+        col_widths["status"] = max(len("Status"), max(len(v) for v in status_values))
+
+    for var in var_names:
+        var_values = [display_val(str(e["params"].get(var, ""))) for e in executions]
+        col_widths[var] = max(len(var), max(len(v) for v in var_values) if var_values else 0)
+
+    if show_command and "command" not in hide_columns:
+        cmd_values = [display_val(e["command"]) for e in executions]
+        col_widths["command"] = max(len("Command"), max(len(v) for v in cmd_values) if cmd_values else 0)
+
+    # Build header
+    header_parts = []
+    if "path" not in hide_columns:
+        header_parts.append("Path".ljust(col_widths["path"]))
+    if "status" not in hide_columns:
+        header_parts.append("Status".ljust(col_widths["status"]))
+    for var in var_names:
+        header_parts.append(var.ljust(col_widths[var]))
+    if show_command and "command" not in hide_columns:
+        header_parts.append("Command")
+
+    header = "  ".join(header_parts)
+    print("\n")
+    print(header)
+    print("-" * len(header))
+
+    # Print rows
+    for exec_data in executions:
+        row_parts = []
+
+        if "path" not in hide_columns:
+            row_parts.append(display_val(exec_data["path"]).ljust(col_widths["path"]))
+
+        if "status" not in hide_columns:
+            status_display = format_status(exec_data["status"], exec_data.get("skip_reason"), exec_data["cached"])
+            row_parts.append(status_display.ljust(col_widths["status"]))
+
+        for var in var_names:
+            val = display_val(str(exec_data["params"].get(var, "")))
+            row_parts.append(val.ljust(col_widths[var]))
+
+        if show_command and "command" not in hide_columns:
+            row_parts.append(display_val(exec_data["command"]))
 
         print("  ".join(row_parts))

@@ -50,7 +50,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -183,6 +183,32 @@ Examples:
                                           description='Validate a YAML configuration file without executing.')
     check_parser.add_argument('config_file', type=Path, help="Path to the YAML configuration file")
     _add_common_args(check_parser)
+
+    # ---- archive command with subcommands ----
+    archive_parser = subparsers.add_parser('archive', help='Archive and extract IOPS workdirs',
+                                            description='Create and extract IOPS archives for portability.')
+    archive_subparsers = archive_parser.add_subparsers(dest='archive_command', title='archive commands',
+                                                        metavar='<archive-command>')
+
+    # archive create
+    archive_create_parser = archive_subparsers.add_parser('create', help='Create archive from workdir or run',
+                                                           description='Create a compressed archive from an IOPS run or workdir.')
+    archive_create_parser.add_argument('source', type=Path, help='Path to workdir or run directory')
+    archive_create_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                       help='Output archive path (default: <source>.tar.gz)')
+    archive_create_parser.add_argument('--compression', choices=['gz', 'bz2', 'xz', 'none'],
+                                       default='gz', help='Compression format (default: gz)')
+    _add_common_args(archive_create_parser)
+
+    # archive extract
+    archive_extract_parser = archive_subparsers.add_parser('extract', help='Extract archive to directory',
+                                                            description='Extract an IOPS archive to a directory.')
+    archive_extract_parser.add_argument('archive', type=Path, help='Path to archive file')
+    archive_extract_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                        help='Output directory (default: current directory)')
+    archive_extract_parser.add_argument('--no-verify', action='store_true',
+                                        help='Skip integrity verification')
+    _add_common_args(archive_extract_parser)
 
     args = parser.parse_args()
 
@@ -517,6 +543,61 @@ def main():
             return
         else:
             logger.info("Configuration is valid.")
+            return
+
+    # ---- archive command ----
+    if args.command == 'archive':
+        from iops.archive import create_archive, extract_archive
+        from iops.archive.core import COMPRESSION_EXTENSIONS
+
+        if args.archive_command == 'create':
+            try:
+                # Determine output path
+                if args.output:
+                    output_path = args.output
+                else:
+                    ext = COMPRESSION_EXTENSIONS.get(args.compression, ".tar.gz")
+                    output_path = Path(f"{args.source.name}{ext}")
+
+                archive_path = create_archive(args.source, output_path, args.compression)
+                logger.info(f"Archive created: {archive_path}")
+            except FileNotFoundError as e:
+                logger.error(f"Source not found: {e}")
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(f"Archive creation failed: {e}")
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error creating archive: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        elif args.archive_command == 'extract':
+            try:
+                dest = args.output or Path.cwd()
+                extracted_path = extract_archive(args.archive, dest, verify=not args.no_verify)
+                logger.info(f"Extracted to: {extracted_path}")
+            except FileNotFoundError as e:
+                logger.error(f"Archive not found: {e}")
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(f"Extraction failed: {e}")
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error extracting archive: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        else:
+            # No subcommand provided
+            logger.error("No archive subcommand specified. Use 'iops archive create' or 'iops archive extract'.")
+            logger.info("Run 'iops archive --help' for more information.")
             return
 
     # ---- run command ----

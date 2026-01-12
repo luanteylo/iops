@@ -13,11 +13,12 @@ Use the `find` command to locate and display execution folders with their parame
 iops find /path/to/workdir
 ```
 
-The `find` command works with three types of paths:
+The `find` command works with four types of paths:
 
 1. **Run root directory** - Contains `__iops_index.json`
 2. **Workdir with multiple runs** - Contains `run_001/`, `run_002/`, etc.
 3. **Specific execution folder** - Contains `__iops_params.json`
+4. **Tar archive** - Created by `iops archive create` (supports `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tar`)
 
 ### List All Executions in a Run
 
@@ -320,4 +321,191 @@ Key files used by `iops find`:
 All paths in `__iops_index.json` are stored as relative paths, making workdirs **portable** across systems. You can archive, move, or share workdirs and the `find` command will work correctly.
 
 For complete documentation on all metadata files, I/O overhead considerations, and configuration options, see the **[Metadata Files](../metadata-files)** guide.
+
+## Inspecting Archives
+
+The `iops find` command can inspect tar archives directly without extracting them first. This is useful for quickly checking what's inside an archive before extraction:
+
+```bash
+# List executions in an archive
+iops find study.tar.gz
+```
+
+Output:
+```
+Archive: study.tar.gz
+----------------------------------------
+IOPS Version:     3.4.0
+Created:          2024-01-15T10:30:00
+Source Host:      login-node.cluster
+Archive Type:     run
+Original Path:    /scratch/user/workdir/run_001
+Total Executions: 3
+Checksums:        12 files
+
+Runs:
+  - run_001: "IOR Performance Study" (3 executions)
+
+
+Path       Status     nodes  ppn  block_size
+--------------------------------------------
+exec_0001  SUCCEEDED  1      4    1024
+exec_0002  SUCCEEDED  1      4    4096
+exec_0003  FAILED     1      8    1024
+
+Found 3 execution(s)
+```
+
+The header shows archive metadata including the IOPS version used to create it, creation timestamp, source hostname, and integrity checksum count.
+
+All filtering options work with archives:
+
+```bash
+# Filter by parameters
+iops find study.tar.gz nodes=4
+
+# Filter by status
+iops find study.tar.gz --status FAILED
+
+# Combine filters
+iops find study.tar.gz nodes=4 ppn=8 --status SUCCEEDED
+
+# Show command column
+iops find study.tar.gz --show-command
+
+# Show full parameter values
+iops find study.tar.gz --full
+```
+
+For workdir archives containing multiple runs, the output groups executions by run:
+
+```bash
+iops find all_studies.tar.gz
+```
+
+Output:
+```
+Archive: all_studies.tar.gz
+----------------------------------------
+IOPS Version:     3.4.0
+Created:          2024-01-15T10:30:00
+Source Host:      login-node.cluster
+Archive Type:     workdir
+Original Path:    /scratch/user/workdir
+Total Executions: 3
+Checksums:        18 files
+
+Runs:
+  - run_001: "IOR Performance Study" (2 executions)
+  - run_002: "mdtest Scaling" (1 executions)
+
+=== run_001 ===
+
+Path       Status     nodes  ppn
+--------------------------------
+exec_0001  SUCCEEDED  1      4
+exec_0002  SUCCEEDED  2      4
+
+=== run_002 ===
+
+Path       Status     size
+--------------------------
+exec_0001  SUCCEEDED  1024
+
+Found 3 execution(s)
+```
+
+## Archiving Workdirs
+
+IOPS provides built-in support for archiving and extracting workdirs, making it easy to share benchmark results between systems or create backups.
+
+### Creating Archives
+
+Use `iops archive create` to create a compressed archive:
+
+```bash
+# Archive a single run
+iops archive create ./workdir/run_001 -o my_study.tar.gz
+
+# Archive entire workdir with all runs
+iops archive create ./workdir -o all_studies.tar.gz
+```
+
+IOPS automatically detects whether you're archiving a single run or an entire workdir based on the directory structure.
+
+**Compression options:**
+
+```bash
+# Default: gzip compression
+iops archive create ./workdir/run_001 -o study.tar.gz
+
+# Better compression with xz
+iops archive create ./workdir/run_001 --compression xz -o study.tar.xz
+
+# Faster compression with bz2
+iops archive create ./workdir/run_001 --compression bz2 -o study.tar.bz2
+
+# No compression (fastest, largest)
+iops archive create ./workdir/run_001 --compression none -o study.tar
+```
+
+### Extracting Archives
+
+Use `iops archive extract` to restore an archive:
+
+```bash
+# Extract to current directory
+iops archive extract study.tar.gz
+
+# Extract to specific location
+iops archive extract study.tar.gz -o ./restored_data
+```
+
+By default, IOPS verifies file integrity using SHA256 checksums stored in the archive. Skip verification with `--no-verify` if needed:
+
+```bash
+iops archive extract study.tar.gz -o ./restored --no-verify
+```
+
+### Archive Contents
+
+Archives include:
+- All execution directories with output files
+- IOPS metadata files (`__iops_index.json`, `__iops_params.json`, `__iops_status.json`, etc.)
+- An archive manifest (`__iops_archive_manifest.json`) containing:
+  - IOPS version and creation timestamp
+  - Source hostname and original path
+  - Run information (names, execution counts)
+  - SHA256 checksums for integrity verification
+
+### Use Cases
+
+**Sharing results with collaborators:**
+```bash
+# On source system
+iops archive create ./workdir/run_001 -o ior_scaling_study.tar.gz
+
+# Transfer the archive
+scp ior_scaling_study.tar.gz collaborator@remote:/data/
+
+# On remote system
+iops archive extract ior_scaling_study.tar.gz -o ./shared_results
+iops find ./shared_results  # Works immediately
+iops report ./shared_results  # Generate report from shared data
+```
+
+**Backing up completed studies:**
+```bash
+# Archive with maximum compression for long-term storage
+iops archive create ./workdir --compression xz -o backup_2024.tar.xz
+```
+
+**Moving data between clusters:**
+```bash
+# Archive on cluster A
+iops archive create ./scratch/benchmark_results -o results.tar.gz
+
+# Extract on cluster B
+iops archive extract results.tar.gz -o ./gpfs/restored_results
+```
 
