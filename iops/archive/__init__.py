@@ -20,6 +20,7 @@ def create_archive(
     source: Union[str, Path],
     output: Union[str, Path],
     compression: str = "gz",
+    show_progress: bool = True,
 ) -> Path:
     """
     Create an IOPS archive from a run directory or workdir.
@@ -28,6 +29,7 @@ def create_archive(
         source: Path to the run directory or workdir to archive.
         output: Path for the output archive file.
         compression: Compression type ("gz", "bz2", "xz", or "none").
+        show_progress: Whether to show a progress bar (requires rich).
 
     Returns:
         Path to the created archive.
@@ -44,13 +46,14 @@ def create_archive(
         PosixPath('/path/to/all_studies.tar.xz')
     """
     writer = ArchiveWriter(Path(source))
-    return writer.write(Path(output), compression)
+    return writer.write(Path(output), compression, show_progress=show_progress)
 
 
 def extract_archive(
     archive: Union[str, Path],
     dest: Union[str, Path],
     verify: bool = True,
+    show_progress: bool = True,
 ) -> Path:
     """
     Extract an IOPS archive to a directory.
@@ -59,6 +62,7 @@ def extract_archive(
         archive: Path to the archive file.
         dest: Directory to extract to.
         verify: Whether to verify checksums after extraction.
+        show_progress: Whether to show a progress bar (requires rich).
 
     Returns:
         Path to the extracted directory.
@@ -75,4 +79,4 @@ def extract_archive(
         PosixPath('/path/to/extracted')
     """
     reader = ArchiveReader(Path(archive))
-    return reader.extract(Path(dest), verify)
+    return reader.extract(Path(dest), verify, show_progress=show_progress)

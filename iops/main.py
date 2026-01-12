@@ -198,6 +198,8 @@ Examples:
                                        help='Output archive path (default: <source>.tar.gz)')
     archive_create_parser.add_argument('--compression', choices=['gz', 'bz2', 'xz', 'none'],
                                        default='gz', help='Compression format (default: gz)')
+    archive_create_parser.add_argument('--no-progress', action='store_true',
+                                       help='Disable progress bar')
     _add_common_args(archive_create_parser)
 
     # archive extract
@@ -208,6 +210,8 @@ Examples:
                                         help='Output directory (default: current directory)')
     archive_extract_parser.add_argument('--no-verify', action='store_true',
                                         help='Skip integrity verification')
+    archive_extract_parser.add_argument('--no-progress', action='store_true',
+                                        help='Disable progress bar')
     _add_common_args(archive_extract_parser)
 
     args = parser.parse_args()
@@ -559,7 +563,8 @@ def main():
                     ext = COMPRESSION_EXTENSIONS.get(args.compression, ".tar.gz")
                     output_path = Path(f"{args.source.name}{ext}")
 
-                archive_path = create_archive(args.source, output_path, args.compression)
+                archive_path = create_archive(args.source, output_path, args.compression,
+                                              show_progress=not args.no_progress)
                 logger.info(f"Archive created: {archive_path}")
             except FileNotFoundError as e:
                 logger.error(f"Source not found: {e}")
@@ -578,7 +583,8 @@ def main():
         elif args.archive_command == 'extract':
             try:
                 dest = args.output or Path.cwd()
-                extracted_path = extract_archive(args.archive, dest, verify=not args.no_verify)
+                extracted_path = extract_archive(args.archive, dest, verify=not args.no_verify,
+                                                 show_progress=not args.no_progress)
                 logger.info(f"Extracted to: {extracted_path}")
             except FileNotFoundError as e:
                 logger.error(f"Archive not found: {e}")

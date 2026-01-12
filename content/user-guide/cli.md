@@ -278,6 +278,7 @@ IOPS automatically detects whether the source is a run or workdir.
 **Options:**
 - `-o, --output PATH` - Output archive path (default: `<source>.tar.gz`)
 - `--compression {gz,bz2,xz,none}` - Compression format (default: gz)
+- `--no-progress` - Disable progress bar
 
 **Examples:**
 
@@ -308,8 +309,11 @@ iops archive extract <archive> [options]
 **Options:**
 - `-o, --output PATH` - Output directory (default: current directory)
 - `--no-verify` - Skip integrity verification
+- `--no-progress` - Disable progress bar
 
 By default, IOPS verifies the integrity of extracted files using SHA256 checksums stored in the archive manifest. Use `--no-verify` to skip this check.
+
+Progress bars are shown by default when the `rich` library is installed. Use `--no-progress` to disable them.
 
 **Examples:**
 

@@ -449,6 +449,18 @@ iops archive create ./workdir/run_001 --compression bz2 -o study.tar.bz2
 iops archive create ./workdir/run_001 --compression none -o study.tar
 ```
 
+**Progress bar:**
+
+By default, a progress bar is shown during archive creation and extraction (requires the `rich` library). Disable it with `--no-progress`:
+
+```bash
+# Create archive without progress bar
+iops archive create ./workdir/run_001 -o study.tar.gz --no-progress
+
+# Extract without progress bar
+iops archive extract study.tar.gz -o ./restored --no-progress
+```
+
 ### Extracting Archives
 
 Use `iops archive extract` to restore an archive:

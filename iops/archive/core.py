@@ -5,12 +5,51 @@ import json
 import socket
 import tarfile
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from iops.archive.manifest import ArchiveManifest, RunInfo
 from iops.logger import HasLogger
+
+# Try to import rich for progress bars
+try:
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+
+@contextmanager
+def _get_progress_context(show_progress: bool, description: str, total: int):
+    """
+    Context manager that provides a progress tracker.
+
+    If rich is available and show_progress is True, yields a rich Progress task.
+    Otherwise, yields a no-op tracker.
+
+    Args:
+        show_progress: Whether to show progress bar.
+        description: Description for the progress bar.
+        total: Total number of items.
+
+    Yields:
+        Tuple of (progress_instance, task_id) or (None, None) if no progress.
+    """
+    if show_progress and RICH_AVAILABLE and total > 0:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("[dim]{task.completed}/{task.total}"),
+        )
+        with progress:
+            task = progress.add_task(description, total=total)
+            yield progress, task
+    else:
+        yield None, None
 
 
 # Compression mode mapping for tarfile
@@ -216,13 +255,28 @@ class ArchiveWriter(HasLogger):
             checksums=checksums,
         )
 
-    def write(self, output_path: Path, compression: str = "gz") -> Path:
+    def _collect_all_files(self) -> List[Path]:
+        """
+        Collect all files and directories to be archived.
+
+        Returns:
+            List of all paths (files and directories) under source_path.
+        """
+        all_items = []
+        for item in self.source_path.rglob("*"):
+            all_items.append(item)
+        return all_items
+
+    def write(
+        self, output_path: Path, compression: str = "gz", show_progress: bool = True
+    ) -> Path:
         """
         Create the archive at the specified path.
 
         Args:
             output_path: Path for the output archive file.
             compression: Compression type ("gz", "bz2", "xz", or "none").
+            show_progress: Whether to show a progress bar (requires rich).
 
         Returns:
             Path to the created archive.
@@ -253,6 +307,10 @@ class ArchiveWriter(HasLogger):
             f"with {manifest.total_executions} total execution(s)"
         )
 
+        # Collect all files for progress tracking
+        all_files = self._collect_all_files()
+        total_files = len(all_files)
+
         # Determine tarfile mode
         mode = f"w:{COMPRESSION_MODES[compression]}" if COMPRESSION_MODES[compression] else "w"
 
@@ -271,12 +329,14 @@ class ArchiveWriter(HasLogger):
 
             tar.addfile(manifest_info, io.BytesIO(manifest_bytes))
 
-            # Add all files from source directory
-            # Use arcname to control the path within the archive
-            for item in self.source_path.iterdir():
-                arcname = item.name
-                self.logger.debug(f"Adding: {arcname}")
-                tar.add(item, arcname=arcname)
+            # Add all files from source directory with progress
+            with _get_progress_context(show_progress, "Creating archive", total_files) as (progress, task):
+                for item in all_files:
+                    arcname = str(item.relative_to(self.source_path))
+                    self.logger.debug(f"Adding: {arcname}")
+                    tar.add(item, arcname=arcname, recursive=False)
+                    if progress is not None:
+                        progress.advance(task)
 
         self.logger.info(f"Archive created successfully: {output_path}")
         return output_path
@@ -404,13 +464,16 @@ class ArchiveReader(HasLogger):
 
         return errors
 
-    def extract(self, dest_path: Path, verify: bool = True) -> Path:
+    def extract(
+        self, dest_path: Path, verify: bool = True, show_progress: bool = True
+    ) -> Path:
         """
         Extract the archive to the specified directory.
 
         Args:
             dest_path: Directory to extract to.
             verify: Whether to verify checksums after extraction.
+            show_progress: Whether to show a progress bar (requires rich).
 
         Returns:
             Path to the extracted directory.
@@ -437,15 +500,22 @@ class ArchiveReader(HasLogger):
         # Extract all files
         mode = self._get_tarfile_mode()
         with tarfile.open(self.archive_path, mode) as tar:
+            members = tar.getmembers()
+            safe_members = []
+
             # Security: filter to prevent path traversal attacks
-            def safe_filter(member: tarfile.TarInfo, path: str) -> Optional[tarfile.TarInfo]:
-                # Prevent absolute paths and path traversal
+            for member in members:
                 if member.name.startswith("/") or ".." in member.name:
                     self.logger.warning(f"Skipping potentially unsafe path: {member.name}")
-                    return None
-                return member
+                else:
+                    safe_members.append(member)
 
-            tar.extractall(dest_path, filter=safe_filter)
+            # Extract with progress
+            with _get_progress_context(show_progress, "Extracting archive", len(safe_members)) as (progress, task):
+                for member in safe_members:
+                    tar.extract(member, dest_path)
+                    if progress is not None:
+                        progress.advance(task)
 
         # Verify integrity if requested
         if verify:
