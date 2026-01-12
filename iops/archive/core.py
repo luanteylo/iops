@@ -255,17 +255,9 @@ class ArchiveWriter(HasLogger):
             checksums=checksums,
         )
 
-    def _collect_all_files(self) -> List[Path]:
-        """
-        Collect all files and directories to be archived.
-
-        Returns:
-            List of all paths (files and directories) under source_path.
-        """
-        all_items = []
-        for item in self.source_path.rglob("*"):
-            all_items.append(item)
-        return all_items
+    def _count_files(self) -> int:
+        """Count total files and directories for progress tracking."""
+        return sum(1 for _ in self.source_path.rglob("*"))
 
     def write(
         self, output_path: Path, compression: str = "gz", show_progress: bool = True
@@ -307,9 +299,8 @@ class ArchiveWriter(HasLogger):
             f"with {manifest.total_executions} total execution(s)"
         )
 
-        # Collect all files for progress tracking
-        all_files = self._collect_all_files()
-        total_files = len(all_files)
+        # Count files for progress tracking
+        total_files = self._count_files() if show_progress and RICH_AVAILABLE else 0
 
         # Determine tarfile mode
         mode = f"w:{COMPRESSION_MODES[compression]}" if COMPRESSION_MODES[compression] else "w"
@@ -331,12 +322,16 @@ class ArchiveWriter(HasLogger):
 
             # Add all files from source directory with progress
             with _get_progress_context(show_progress, "Creating archive", total_files) as (progress, task):
-                for item in all_files:
-                    arcname = str(item.relative_to(self.source_path))
-                    self.logger.debug(f"Adding: {arcname}")
-                    tar.add(item, arcname=arcname, recursive=False)
+                # Use filter to track progress while keeping recursive add for performance
+                def progress_filter(tarinfo):
                     if progress is not None:
                         progress.advance(task)
+                    return tarinfo
+
+                for item in self.source_path.iterdir():
+                    arcname = item.name
+                    self.logger.debug(f"Adding: {arcname}")
+                    tar.add(item, arcname=arcname, filter=progress_filter)
 
         self.logger.info(f"Archive created successfully: {output_path}")
         return output_path
@@ -501,21 +496,21 @@ class ArchiveReader(HasLogger):
         mode = self._get_tarfile_mode()
         with tarfile.open(self.archive_path, mode) as tar:
             members = tar.getmembers()
-            safe_members = []
+            total_members = len(members)
 
-            # Security: filter to prevent path traversal attacks
-            for member in members:
-                if member.name.startswith("/") or ".." in member.name:
-                    self.logger.warning(f"Skipping potentially unsafe path: {member.name}")
-                else:
-                    safe_members.append(member)
-
-            # Extract with progress
-            with _get_progress_context(show_progress, "Extracting archive", len(safe_members)) as (progress, task):
-                for member in safe_members:
-                    tar.extract(member, dest_path)
+            # Extract with progress using filter for both security and progress tracking
+            with _get_progress_context(show_progress, "Extracting archive", total_members) as (progress, task):
+                def safe_progress_filter(member: tarfile.TarInfo, path: str) -> Optional[tarfile.TarInfo]:
+                    # Track progress
                     if progress is not None:
                         progress.advance(task)
+                    # Security: prevent path traversal attacks
+                    if member.name.startswith("/") or ".." in member.name:
+                        self.logger.warning(f"Skipping potentially unsafe path: {member.name}")
+                        return None
+                    return member
+
+                tar.extractall(dest_path, filter=safe_progress_filter)
 
         # Verify integrity if requested
         if verify:
