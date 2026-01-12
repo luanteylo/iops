@@ -1,7 +1,10 @@
 """Core archive functionality for creating and extracting IOPS archives."""
 
+import bz2
+import gzip
 import hashlib
 import json
+import lzma
 import socket
 import tarfile
 import tempfile
@@ -302,11 +305,23 @@ class ArchiveWriter(HasLogger):
         # Count files for progress tracking
         total_files = self._count_files() if show_progress and RICH_AVAILABLE else 0
 
-        # Determine tarfile mode
-        mode = f"w:{COMPRESSION_MODES[compression]}" if COMPRESSION_MODES[compression] else "w"
+        # Open compressed file with appropriate compression level
+        # Use level 6 for gz/bz2 (matching system tar defaults) for better speed
+        if compression == "gz":
+            fileobj = gzip.open(output_path, "wb", compresslevel=6)
+        elif compression == "bz2":
+            fileobj = bz2.open(output_path, "wb", compresslevel=6)
+        elif compression == "xz":
+            fileobj = lzma.open(output_path, "wb", preset=6)
+        else:
+            fileobj = None
 
         # Create the archive
-        with tarfile.open(output_path, mode) as tar:
+        with tarfile.open(
+            output_path if fileobj is None else None,
+            mode="w",
+            fileobj=fileobj,
+        ) as tar:
             # Add manifest first
             manifest_json = json.dumps(manifest.to_dict(), indent=2)
             manifest_bytes = manifest_json.encode("utf-8")
@@ -332,6 +347,10 @@ class ArchiveWriter(HasLogger):
                     arcname = item.name
                     self.logger.debug(f"Adding: {arcname}")
                     tar.add(item, arcname=arcname, filter=progress_filter)
+
+        # Close the compression file object if we created one
+        if fileobj is not None:
+            fileobj.close()
 
         self.logger.info(f"Archive created successfully: {output_path}")
         return output_path
