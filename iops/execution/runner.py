@@ -1,6 +1,6 @@
 
 from iops.logger import HasLogger
-from iops.execution.planner import BasePlanner, STATUS_FILENAME
+from iops.execution.planner import BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX
 from iops.execution.executors import BaseExecutor
 from iops.execution.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
@@ -17,9 +17,14 @@ import sys
 import subprocess
 import shlex
 import socket
+import glob
+import csv
 
 # IOPS metadata filename
 METADATA_FILENAME = "__iops_run_metadata.json"
+
+# Resource trace summary filename
+RESOURCE_SUMMARY_FILENAME = "__iops_resource_summary.csv"
 
 
 def _get_iops_version() -> str:
@@ -118,6 +123,9 @@ class IOPSRunner(HasLogger):
         # Track system info collected from compute nodes
         # Key: hostname, Value: full sysinfo dict
         self.collected_system_info: Dict[str, Dict[str, Any]] = {}
+
+        # Track completed tests for resource trace aggregation
+        self.completed_tests: List = []
 
         # TODO check if signal handling is also done when executor=local
         # Register signal handler for Ctrl+C (SIGINT) if using SLURM executor
@@ -249,6 +257,202 @@ class IOPSRunner(HasLogger):
         result["nodes_detail"] = self.collected_system_info
 
         return result
+
+    def _compute_trace_metrics(self, trace_files: List[Path]) -> Dict[str, Any]:
+        """
+        Compute aggregated metrics from trace files.
+
+        Reads all trace CSV files (one per node) and computes summary metrics.
+
+        Args:
+            trace_files: List of paths to __iops_trace_*.csv files
+
+        Returns:
+            Dictionary with aggregated metrics:
+            - mem_peak_gb: Maximum memory used across all nodes
+            - mem_avg_gb: Average memory used
+            - mem_peak_per_node_gb: Peak memory per node (max of node peaks)
+            - cpu_avg_pct: Average CPU utilization across all samples and cores
+            - cpu_max_pct: Peak CPU utilization
+            - cpu_imbalance_pct: Max - Min core utilization (load balancing indicator)
+            - nodes_traced: Number of nodes with trace data
+            - samples_collected: Total number of samples
+            - trace_duration_s: Time span of trace data
+        """
+        all_cpu_user = []
+        all_cpu_system = []
+        all_mem_used_kb = []
+        per_node_mem_peak = {}
+        per_core_max_cpu = {}
+        timestamps = []
+        nodes_seen = set()
+
+        for trace_file in trace_files:
+            try:
+                with open(trace_file, 'r', newline='') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        try:
+                            hostname = row.get('hostname', 'unknown')
+                            nodes_seen.add(hostname)
+
+                            # Parse values
+                            ts = float(row.get('timestamp', 0))
+                            cpu_user = float(row.get('cpu_user_pct', 0))
+                            cpu_system = float(row.get('cpu_system_pct', 0))
+                            mem_total = int(row.get('mem_total_kb', 0))
+                            mem_avail = int(row.get('mem_available_kb', 0))
+
+                            timestamps.append(ts)
+                            all_cpu_user.append(cpu_user)
+                            all_cpu_system.append(cpu_system)
+
+                            # Calculate memory used
+                            mem_used = mem_total - mem_avail
+                            all_mem_used_kb.append(mem_used)
+
+                            # Track per-node peak memory
+                            if hostname not in per_node_mem_peak:
+                                per_node_mem_peak[hostname] = 0
+                            per_node_mem_peak[hostname] = max(per_node_mem_peak[hostname], mem_used)
+
+                            # Track per-core CPU for imbalance calculation
+                            core = row.get('core', '0')
+                            core_key = f"{hostname}:{core}"
+                            cpu_total = cpu_user + cpu_system
+                            if core_key not in per_core_max_cpu:
+                                per_core_max_cpu[core_key] = 0
+                            per_core_max_cpu[core_key] = max(per_core_max_cpu[core_key], cpu_total)
+
+                        except (ValueError, KeyError) as e:
+                            self.logger.debug(f"Skipping malformed trace row: {e}")
+                            continue
+
+            except Exception as e:
+                self.logger.debug(f"Failed to read trace file {trace_file}: {e}")
+                continue
+
+        # Compute aggregated metrics
+        metrics = {
+            "nodes_traced": len(nodes_seen),
+            "samples_collected": len(timestamps),
+        }
+
+        if not timestamps:
+            return metrics
+
+        # Memory metrics (convert KB to GB)
+        if all_mem_used_kb:
+            metrics["mem_peak_gb"] = round(max(all_mem_used_kb) / (1024 * 1024), 3)
+            metrics["mem_avg_gb"] = round(sum(all_mem_used_kb) / len(all_mem_used_kb) / (1024 * 1024), 3)
+
+        if per_node_mem_peak:
+            # Peak per node is the max of all node peaks
+            metrics["mem_peak_per_node_gb"] = round(max(per_node_mem_peak.values()) / (1024 * 1024), 3)
+
+        # CPU metrics
+        if all_cpu_user and all_cpu_system:
+            all_cpu_total = [u + s for u, s in zip(all_cpu_user, all_cpu_system)]
+            metrics["cpu_avg_pct"] = round(sum(all_cpu_total) / len(all_cpu_total), 2)
+            metrics["cpu_max_pct"] = round(max(all_cpu_total), 2)
+
+        # CPU imbalance (difference between most and least utilized cores)
+        if per_core_max_cpu:
+            max_core_cpu = max(per_core_max_cpu.values())
+            min_core_cpu = min(per_core_max_cpu.values())
+            metrics["cpu_imbalance_pct"] = round(max_core_cpu - min_core_cpu, 2)
+
+        # Trace duration
+        if len(timestamps) >= 2:
+            metrics["trace_duration_s"] = round(max(timestamps) - min(timestamps), 2)
+        else:
+            metrics["trace_duration_s"] = 0
+
+        return metrics
+
+    def _aggregate_resource_traces(self, completed_tests: List) -> None:
+        """
+        Aggregate resource traces from all completed executions into a summary CSV.
+
+        Creates __iops_resource_summary.csv in the run root directory with one row
+        per execution+repetition, containing all user vars and aggregated resource metrics.
+
+        This enables heatmap visualizations correlating variables with resource footprint.
+
+        Args:
+            completed_tests: List of completed ExecutionInstance objects
+        """
+        if not getattr(self.cfg.benchmark, 'trace_resources', False):
+            return
+
+        rows = []
+        fieldnames = None
+
+        # Group tests by execution_id to handle repetitions
+        tests_by_exec = {}
+        for test in completed_tests:
+            exec_id = test.execution_id
+            rep = test.repetition
+            key = (exec_id, rep)
+            tests_by_exec[key] = test
+
+        for (exec_id, rep), test in sorted(tests_by_exec.items()):
+            if test.execution_dir is None:
+                self.logger.debug(f"Skipping exec_{exec_id} rep_{rep}: no execution_dir")
+                continue
+
+            # Find trace files for this execution
+            trace_pattern = str(test.execution_dir / f"{TRACE_FILENAME_PREFIX}*.csv")
+            trace_files = [Path(f) for f in glob.glob(trace_pattern)]
+
+            if not trace_files:
+                self.logger.debug(f"No trace files found for exec_{exec_id} rep_{rep}")
+                continue
+
+            try:
+                # Compute metrics from trace files
+                metrics = self._compute_trace_metrics(trace_files)
+
+                # Build row with all vars + metrics
+                row = {
+                    "execution_id": f"exec_{exec_id:04d}",
+                    "repetition": rep,
+                }
+
+                # Add all user vars (filter out internal keys)
+                for k, v in test.vars.items():
+                    if not k.startswith("__"):
+                        row[k] = v
+
+                # Add computed metrics
+                row.update(metrics)
+
+                rows.append(row)
+
+                # Capture fieldnames from first row
+                if fieldnames is None:
+                    fieldnames = list(row.keys())
+
+            except Exception as e:
+                self.logger.warning(f"Failed to aggregate traces for exec_{exec_id} rep_{rep}: {e}")
+                continue
+
+        if not rows:
+            self.logger.info("No resource traces to aggregate")
+            return
+
+        # Write summary CSV
+        summary_path = Path(self.cfg.benchmark.workdir) / RESOURCE_SUMMARY_FILENAME
+        try:
+            with open(summary_path, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            self.logger.info(f"Resource trace summary: {summary_path} ({len(rows)} rows)")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to write resource summary: {e}")
 
     def _signal_handler(self, signum, frame):
         """Handle Ctrl+C (SIGINT) to cancel all submitted SLURM jobs."""
@@ -1090,6 +1294,9 @@ class IOPSRunner(HasLogger):
             # Record completed test (used by Bayesian planner for optimization)
             self.planner.record_completed_test(test)
 
+            # Track completed tests for resource trace aggregation
+            self.completed_tests.append(test)
+
             # Track core-hours budget if enabled
             if self.max_core_hours is not None and not used_cache:
                 core_hours_used = self._compute_core_hours(test)
@@ -1183,6 +1390,9 @@ class IOPSRunner(HasLogger):
             benchmark_end_time=benchmark_end_time,
             planner_stats=self._get_planner_stats()
         )
+
+        # Aggregate resource traces if enabled
+        self._aggregate_resource_traces(self.completed_tests)
 
         # Save report config template for easy regeneration
         save_report_config_template(self.cfg, logger=self.logger)

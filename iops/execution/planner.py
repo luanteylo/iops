@@ -99,6 +99,130 @@ _iops_collect_sysinfo() {{
 trap '_iops_collect_sysinfo' EXIT
 '''
 
+# Filename for the resource sampler script (written to execution directory)
+SAMPLER_FILENAME = "__iops_sampler.sh"
+
+# Filename for the resource trace output (written by sampler during execution)
+TRACE_FILENAME_PREFIX = "__iops_trace_"
+
+# Resource sampler script template - runs in background during execution
+# Collects per-core CPU utilization and memory usage at configurable intervals
+# Uses EXIT trap to ensure clean shutdown when main script completes
+RESOURCE_SAMPLER_TEMPLATE = '''#!/bin/bash
+# IOPS Resource Sampler - Collects CPU and memory utilization during execution
+# This file is auto-generated and sourced by the main script.
+# It runs a background sampling loop that is killed on script exit.
+
+_IOPS_TRACE_FILE="{execution_dir}/{trace_prefix}$(hostname).csv"
+_IOPS_INTERVAL={trace_interval}
+_IOPS_SAMPLER_PID=""
+
+# Previous CPU stats for delta calculation (associative array: cpu_id -> "user nice system idle iowait irq softirq")
+declare -A _iops_prev_cpu
+
+_iops_sample() {{
+    local ts=$(date +%s.%N 2>/dev/null || date +%s)
+    local host=$(hostname 2>/dev/null || echo "unknown")
+
+    # Memory stats (single sample per iteration)
+    local mem_total=$(awk '/MemTotal/{{print $2}}' /proc/meminfo 2>/dev/null || echo 0)
+    local mem_avail=$(awk '/MemAvailable/{{print $2}}' /proc/meminfo 2>/dev/null || echo 0)
+
+    # CPU stats per core (from /proc/stat)
+    while read -r line; do
+        # Parse lines like: cpu0 1234 567 890 12345 678 90 12 0 0 0
+        local cpu_id=$(echo "$line" | awk '{{print $1}}')
+        local user=$(echo "$line" | awk '{{print $2}}')
+        local nice=$(echo "$line" | awk '{{print $3}}')
+        local system=$(echo "$line" | awk '{{print $4}}')
+        local idle=$(echo "$line" | awk '{{print $5}}')
+        local iowait=$(echo "$line" | awk '{{print $6}}')
+        local irq=$(echo "$line" | awk '{{print $7}}')
+        local softirq=$(echo "$line" | awk '{{print $8}}')
+
+        # Skip if this is the aggregate "cpu" line (we want per-core)
+        [[ "$cpu_id" == "cpu" ]] && continue
+
+        # Extract core number (cpu0 -> 0, cpu1 -> 1, etc.)
+        local core="${{cpu_id#cpu}}"
+
+        # Get previous values
+        local prev="${{_iops_prev_cpu[$cpu_id]:-}}"
+
+        if [[ -n "$prev" ]]; then
+            # Calculate deltas
+            local prev_user=$(echo "$prev" | awk '{{print $1}}')
+            local prev_nice=$(echo "$prev" | awk '{{print $2}}')
+            local prev_system=$(echo "$prev" | awk '{{print $3}}')
+            local prev_idle=$(echo "$prev" | awk '{{print $4}}')
+            local prev_iowait=$(echo "$prev" | awk '{{print $5}}')
+            local prev_irq=$(echo "$prev" | awk '{{print $6}}')
+            local prev_softirq=$(echo "$prev" | awk '{{print $7}}')
+
+            local d_user=$((user - prev_user))
+            local d_nice=$((nice - prev_nice))
+            local d_system=$((system - prev_system))
+            local d_idle=$((idle - prev_idle))
+            local d_iowait=$((iowait - prev_iowait))
+            local d_irq=$((irq - prev_irq))
+            local d_softirq=$((softirq - prev_softirq))
+
+            local d_total=$((d_user + d_nice + d_system + d_idle + d_iowait + d_irq + d_softirq))
+
+            if [[ $d_total -gt 0 ]]; then
+                # Calculate percentages (using awk for floating point)
+                local cpu_user_pct=$(awk "BEGIN {{printf \\"%.2f\\", ($d_user + $d_nice) / $d_total * 100}}")
+                local cpu_system_pct=$(awk "BEGIN {{printf \\"%.2f\\", ($d_system + $d_irq + $d_softirq) / $d_total * 100}}")
+                local cpu_idle_pct=$(awk "BEGIN {{printf \\"%.2f\\", ($d_idle + $d_iowait) / $d_total * 100}}")
+
+                # Output CSV line
+                echo "$ts,$host,$core,$cpu_user_pct,$cpu_system_pct,$cpu_idle_pct,$mem_total,$mem_avail"
+            fi
+        fi
+
+        # Store current values for next iteration
+        _iops_prev_cpu[$cpu_id]="$user $nice $system $idle $iowait $irq $softirq"
+
+    done < <(grep '^cpu[0-9]' /proc/stat 2>/dev/null)
+}}
+
+_iops_sampler_loop() {{
+    # Write CSV header
+    echo "timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,mem_available_kb" > "$_IOPS_TRACE_FILE"
+
+    # Initial read to populate baseline (first sample won't produce output)
+    _iops_sample > /dev/null 2>&1
+
+    # Main sampling loop
+    while true; do
+        sleep "$_IOPS_INTERVAL"
+        _iops_sample >> "$_IOPS_TRACE_FILE" 2>/dev/null
+    done
+}}
+
+_iops_start_sampler() {{
+    # Start sampler in background with low priority
+    ( nice -n 19 _iops_sampler_loop ) &
+    _IOPS_SAMPLER_PID=$!
+}}
+
+_iops_stop_sampler() {{
+    if [[ -n "$_IOPS_SAMPLER_PID" ]]; then
+        kill "$_IOPS_SAMPLER_PID" 2>/dev/null || true
+        wait "$_IOPS_SAMPLER_PID" 2>/dev/null || true
+    fi
+}}
+
+# Export functions for use in subshells
+export -f _iops_sample _iops_sampler_loop
+
+# Start the sampler immediately when sourced
+_iops_start_sampler
+
+# Register cleanup on script exit
+trap '_iops_stop_sampler' EXIT
+'''
+
 # Optional imports for Bayesian optimization
 try:
     from skopt import Optimizer
@@ -285,6 +409,12 @@ class BasePlanner(ABC, HasLogger):
         # Get the rendered script text
         script_text = test.script_text
 
+        # Inject resource sampler if enabled (default: False)
+        # The sampler runs in background collecting CPU/memory utilization
+        # Must be injected BEFORE user code so it starts immediately
+        if getattr(self.cfg.benchmark, 'trace_resources', False):
+            script_text = self._inject_resource_sampler(script_text, exec_dir)
+
         # Inject system probe if enabled (default: True)
         # The probe uses an EXIT trap to collect system info after the script completes
         # Note: bash compatibility is checked once at config load time in loader.py
@@ -332,6 +462,48 @@ class BasePlanner(ABC, HasLogger):
             script_text += '\n'
 
         script_text += f'\n# Source IOPS system probe (collects node info on exit)\n# To disable, set collect_system_info: false in benchmark config\nsource "{probe_file}"\n'
+
+        return script_text
+
+    def _inject_resource_sampler(self, script_text: str, exec_dir: Path) -> str:
+        """
+        Set up resource sampler for a script.
+
+        Writes the sampler to a separate file and adds a source line to the user
+        script. The sampler runs in the background collecting CPU and memory
+        utilization at configurable intervals. It is automatically stopped when
+        the script exits.
+
+        Args:
+            script_text: Original script content
+            exec_dir: Execution directory where sampler script will be written
+
+        Returns:
+            Script text with source line prepended (sampler starts before user code)
+        """
+        # Get trace interval from config
+        trace_interval = getattr(self.cfg.benchmark, 'trace_interval', 1.0)
+
+        # Write sampler script to separate file
+        sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
+            execution_dir=str(exec_dir),
+            trace_prefix=TRACE_FILENAME_PREFIX,
+            trace_interval=trace_interval
+        )
+        sampler_file = exec_dir / SAMPLER_FILENAME
+        with open(sampler_file, "w") as f:
+            f.write(sampler_script)
+
+        # Prepend source line to user script (sampler needs to start BEFORE user code)
+        source_line = f'# Source IOPS resource sampler (collects CPU/memory during execution)\n# To disable, set trace_resources: false in benchmark config\nsource "{sampler_file}"\n\n'
+
+        # Find insertion point after shebang (if present)
+        lines = script_text.split('\n')
+        if lines and lines[0].startswith('#!'):
+            # Insert after shebang
+            script_text = lines[0] + '\n' + source_line + '\n'.join(lines[1:])
+        else:
+            script_text = source_line + script_text
 
         return script_text
 

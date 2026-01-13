@@ -442,6 +442,34 @@ def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> Non
             )
 
 
+def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) -> None:
+    """
+    Check if resource sampler is compatible with the configured scripts.
+
+    If any script uses a non-bash shell and trace_resources is enabled,
+    disable it and warn the user.
+
+    Args:
+        cfg: The configuration object (may be modified)
+        logger: Logger instance for warnings
+    """
+    if not cfg.benchmark.trace_resources:
+        return  # Already disabled, nothing to check
+
+    incompatible_scripts = []
+    for script in cfg.scripts:
+        if not _is_bash_compatible(script.script_template, script.submit):
+            incompatible_scripts.append(script.name)
+
+    if incompatible_scripts:
+        cfg.benchmark.trace_resources = False
+        if logger:
+            logger.warning(
+                f"Resource sampler disabled: non-bash shell detected in script(s): {incompatible_scripts}. "
+                f"The sampler requires bash features. Set trace_resources: false to silence this warning."
+            )
+
+
 # ----------------- Main loading function ----------------- #
 
 def _validate_structure(config_path: Path) -> Tuple[Optional[Dict[str, Any]], List[str]]:
@@ -581,6 +609,8 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         collect_system_info=b.get("collect_system_info", True),
         track_executions=b.get("track_executions", True),
         create_folders_upfront=b.get("create_folders_upfront", False),
+        trace_resources=b.get("trace_resources", False),
+        trace_interval=b.get("trace_interval", 1.0),
     )
 
     # ---- vars ----
@@ -997,6 +1027,12 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if cfg.benchmark.executor not in ("slurm", "local"):
         raise ConfigValidationError(
             f"benchmark.executor must be one of: slurm, local (got '{cfg.benchmark.executor}')"
+        )
+
+    # trace_interval validation
+    if cfg.benchmark.trace_interval is not None and cfg.benchmark.trace_interval <= 0:
+        raise ConfigValidationError(
+            f"benchmark.trace_interval must be a positive number (got '{cfg.benchmark.trace_interval}')"
         )
 
     # random_config validation (required when search_method is "random")
