@@ -4,6 +4,32 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [3.4.0] - 2026-01-13
+
+### Added
+- Archive module for workdir portability (`iops archive create/extract`)
+- Progress bars for archive operations
+- Conditional variables with `when`/`default` fields
+- Watch mode for real-time execution monitoring (`iops watch`)
+- Metrics display and filtering in watch mode
+- Cache indicator and `--cached` filter for find/watch commands
+- `fallback_to_exhaustive` option for Bayesian planner
+- `create_folders_upfront` benchmark option
+- Client-side search for documentation site
+
+### Changed
+- Centralized validation logic in loader.py
+- Restructured documentation for v3.0
+- Reorganized code structure to align with CLI commands
+
+### Fixed
+- Archive progress bar performance with compression level tuning
+- Metrics not showing when using `--hide` in watch mode
+- Duration tracking to use cached sysinfo
+- Bayesian planner edge case bugs
+- Search index to include full page content
+- File permission test when running as root
+
 ## [3.3.0] - 2026-01-09
 
 - Subcommand-based CLI structure (`run`, `check`, `generate`, `report`, `find`)
