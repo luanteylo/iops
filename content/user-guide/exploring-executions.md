@@ -490,6 +490,50 @@ Archives include:
   - Run information (names, execution counts)
   - SHA256 checksums for integrity verification
 
+### Partial Archives (Live Extraction)
+
+When running large benchmark campaigns, you may want to extract and analyze completed tests before the entire run finishes. Use `--partial` to create an archive containing only filtered executions:
+
+```bash
+# Archive only completed (successful) tests from a running campaign
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED -o snapshot.tar.gz
+```
+
+This is useful for:
+- **Analyzing partial results** while a long benchmark is still running
+- **Extracting specific configurations** from a large parameter sweep
+- **Creating focused archives** with only relevant test cases
+
+**Filtering options:**
+
+```bash
+# By status - archive only successful tests
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED
+
+# By parameters - archive specific configurations
+iops archive create ./workdir/run_001 --partial nodes=4 ppn=8
+
+# By cache status - archive only freshly executed (non-cached) results
+iops archive create ./workdir/run_001 --partial --cached no
+
+# Combine filters
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED nodes=4 -o subset.tar.gz
+```
+
+**What partial archives contain:**
+
+- Only execution directories matching the filters
+- Filtered result files (CSV/Parquet/SQLite) with rows for included executions only
+- Filtered `__iops_index.json` reflecting only included executions
+- Manifest metadata indicating it's a partial archive with filters applied
+
+**Non-interference guarantee:**
+
+Partial archive creation is completely read-only and safe to use while benchmarks are running:
+- Only reads from execution directories that have completed
+- Copies and filters result files (never modifies originals)
+- Creates filtered versions of metadata files in a temporary location
+
 ### Use Cases
 
 **Sharing results with collaborators:**
@@ -519,5 +563,22 @@ iops archive create ./scratch/benchmark_results -o results.tar.gz
 
 # Extract on cluster B
 iops archive extract results.tar.gz -o ./gpfs/restored_results
+```
+
+**Extracting partial results from running campaigns:**
+```bash
+# While benchmark is still running, extract completed tests
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED -o progress_snapshot.tar.gz
+
+# Transfer and analyze on another machine
+scp progress_snapshot.tar.gz analysis-node:/data/
+ssh analysis-node "iops report /data/progress_snapshot.tar.gz"
+```
+
+**Creating focused archives for specific analyses:**
+```bash
+# Extract only large-scale configurations for scaling analysis
+iops archive create ./workdir/run_001 --partial nodes=8 -o large_scale.tar.gz
+iops archive create ./workdir/run_001 --partial nodes=16 -o larger_scale.tar.gz
 ```
 
