@@ -7,7 +7,7 @@ IOPS can optionally trace CPU and memory utilization during benchmark execution.
 
 **Warning: Performance Impact**
 
-Resource tracing runs a background process that periodically reads `/proc/stat` and `/proc/meminfo` and writes to a CSV file. While designed to minimize interference (runs at `nice -n 19`), this may still affect benchmark results:
+Resource tracing runs a background process that periodically reads `/proc/stat` and `/proc/meminfo` and writes to a CSV file. While designed to minimize interference (runs at low priority via `renice`), this may still affect benchmark results:
 
 - **CPU overhead**: The sampler consumes a small amount of CPU time for reading proc files and computing deltas
 - **I/O overhead**: Each sample appends a row to the trace CSV file
@@ -30,7 +30,7 @@ benchmark:
 
 When `trace_resources: true`, IOPS injects a lightweight background sampler into each benchmark script. The sampler:
 
-1. **Runs with low priority** (`nice -n 19`) to minimize interference
+1. **Runs with low priority** (`renice -n 19`) to minimize interference
 2. **Samples at configurable intervals** from `/proc/stat` and `/proc/meminfo`
 3. **Writes per-node trace files** with hostname in filename (supports multi-node jobs)
 4. **Stops automatically** via EXIT trap when the benchmark completes

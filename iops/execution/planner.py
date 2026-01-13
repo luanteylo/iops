@@ -107,15 +107,15 @@ TRACE_FILENAME_PREFIX = "__iops_trace_"
 
 # Resource sampler script template - runs in background during execution
 # Collects per-core CPU utilization and memory usage at configurable intervals
-# Uses EXIT trap to ensure clean shutdown when main script completes
+# Self-terminates when parent process exits (no EXIT trap needed)
 RESOURCE_SAMPLER_TEMPLATE = '''#!/bin/bash
 # IOPS Resource Sampler - Collects CPU and memory utilization during execution
 # This file is auto-generated and sourced by the main script.
-# It runs a background sampling loop that is killed on script exit.
+# It runs a background sampling loop that self-terminates when parent exits.
 
 _IOPS_TRACE_FILE="{execution_dir}/{trace_prefix}$(hostname).csv"
 _IOPS_INTERVAL={trace_interval}
-_IOPS_SAMPLER_PID=""
+_IOPS_PARENT_PID=$$  # Capture parent PID when sourced (before backgrounding)
 
 # Previous CPU stats for delta calculation (associative array: cpu_id -> "user nice system idle iowait irq softirq")
 declare -A _iops_prev_cpu
@@ -193,34 +193,23 @@ _iops_sampler_loop() {{
     # Initial read to populate baseline (first sample won't produce output)
     _iops_sample > /dev/null 2>&1
 
-    # Main sampling loop
-    while true; do
+    # Main sampling loop - exits automatically when parent process dies
+    while kill -0 "$_IOPS_PARENT_PID" 2>/dev/null; do
         sleep "$_IOPS_INTERVAL"
         _iops_sample >> "$_IOPS_TRACE_FILE" 2>/dev/null
     done
 }}
 
 _iops_start_sampler() {{
-    # Start sampler in background with low priority
-    ( nice -n 19 _iops_sampler_loop ) &
-    _IOPS_SAMPLER_PID=$!
+    # Start sampler in background with stdout/stderr redirected to /dev/null
+    # This prevents the sampler from blocking the executor (which waits for pipes to close)
+    _iops_sampler_loop </dev/null >/dev/null 2>&1 &
+    # Lower priority of sampler process (nice can't run shell functions directly)
+    renice -n 19 -p "$!" >/dev/null 2>&1 || true
 }}
-
-_iops_stop_sampler() {{
-    if [[ -n "$_IOPS_SAMPLER_PID" ]]; then
-        kill "$_IOPS_SAMPLER_PID" 2>/dev/null || true
-        wait "$_IOPS_SAMPLER_PID" 2>/dev/null || true
-    fi
-}}
-
-# Export functions for use in subshells
-export -f _iops_sample _iops_sampler_loop
 
 # Start the sampler immediately when sourced
 _iops_start_sampler
-
-# Register cleanup on script exit
-trap '_iops_stop_sampler' EXIT
 '''
 
 # Optional imports for Bayesian optimization
@@ -494,18 +483,25 @@ class BasePlanner(ABC, HasLogger):
         with open(sampler_file, "w") as f:
             f.write(sampler_script)
 
-        # Prepend source line to user script (sampler needs to start BEFORE user code)
-        source_line = f'# Source IOPS resource sampler (collects CPU/memory during execution)\n# To disable, set trace_resources: false in benchmark config\nsource "{sampler_file}"\n\n'
+        # Source line to inject (sampler needs to start BEFORE user code)
+        source_line = '# Source IOPS resource sampler (collects CPU/memory during execution)\n# To disable, set trace_resources: false in benchmark config\nsource "{sampler_file}"\n'.format(sampler_file=sampler_file)
 
-        # Find insertion point after shebang (if present)
+        # Find insertion point after shebang and SLURM directives
+        # SLURM requires #SBATCH lines to come immediately after shebang
         lines = script_text.split('\n')
-        if lines and lines[0].startswith('#!'):
-            # Insert after shebang
-            script_text = lines[0] + '\n' + source_line + '\n'.join(lines[1:])
-        else:
-            script_text = source_line + script_text
+        insert_idx = 0
 
-        return script_text
+        # Skip shebang if present
+        if lines and lines[0].startswith('#!'):
+            insert_idx = 1
+
+        # Skip all #SBATCH directives (must stay at top for SLURM)
+        while insert_idx < len(lines) and lines[insert_idx].startswith('#SBATCH'):
+            insert_idx += 1
+
+        # Insert source line at the found position
+        lines.insert(insert_idx, '\n' + source_line)
+        return '\n'.join(lines)
 
     def _write_params_file(self, test: ExecutionInstance, exec_parent_dir: Path) -> None:
         """

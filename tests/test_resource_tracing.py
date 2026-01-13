@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import load_config
+from conftest import load_config
 
 
 # ============================================================================ #
@@ -105,10 +105,10 @@ class TestResourceSamplerTemplate:
         from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE
         assert RESOURCE_SAMPLER_TEMPLATE.startswith("#!/bin/bash")
 
-    def test_sampler_template_uses_nice(self):
-        """Test that sampler runs with low priority (nice)."""
+    def test_sampler_template_uses_renice(self):
+        """Test that sampler runs with low priority (renice)."""
         from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE
-        assert "nice" in RESOURCE_SAMPLER_TEMPLATE
+        assert "renice -n 19" in RESOURCE_SAMPLER_TEMPLATE
 
     def test_sampler_template_has_csv_header(self):
         """Test that sampler outputs CSV with header."""
@@ -125,11 +125,74 @@ class TestResourceSamplerTemplate:
         from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE
         assert "/proc/meminfo" in RESOURCE_SAMPLER_TEMPLATE
 
-    def test_sampler_template_has_cleanup_trap(self):
-        """Test that sampler registers EXIT trap for cleanup."""
+    def test_sampler_template_self_terminates_on_parent_exit(self):
+        """Test that sampler self-terminates when parent process exits."""
         from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE
-        assert "trap" in RESOURCE_SAMPLER_TEMPLATE
-        assert "_iops_stop_sampler" in RESOURCE_SAMPLER_TEMPLATE
+        # Sampler captures parent PID and checks if it's still alive
+        assert "_IOPS_PARENT_PID=$$" in RESOURCE_SAMPLER_TEMPLATE
+        assert 'kill -0 "$_IOPS_PARENT_PID"' in RESOURCE_SAMPLER_TEMPLATE
+
+    def test_sampler_actually_terminates_when_parent_exits(self, tmp_path):
+        """Behavioral test: sampler process terminates when parent script exits."""
+        import subprocess
+        import time
+        import os
+        from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE, TRACE_FILENAME_PREFIX
+
+        # Create sampler script
+        sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
+            execution_dir=str(tmp_path),
+            trace_prefix=TRACE_FILENAME_PREFIX,
+            trace_interval=0.1
+        )
+        sampler_file = tmp_path / "__iops_sampler.sh"
+        sampler_file.write_text(sampler_script)
+
+        pid_file = tmp_path / "sampler_pid"
+        parent_pid_file = tmp_path / "parent_pid"
+
+        # Create a parent script that sources sampler and exits quickly
+        # Close stdout/stderr in background job to avoid blocking subprocess.run
+        parent_script = tmp_path / "parent.sh"
+        parent_script.write_text(f'''#!/bin/bash
+echo $$ > "{parent_pid_file}"
+source "{sampler_file}"
+sleep 0.3
+# Parent exits here - sampler should detect this and terminate
+''')
+        parent_script.chmod(0o755)
+
+        # Run the parent script with stdout/stderr redirected to /dev/null
+        # This prevents subprocess.run from blocking on background job's pipes
+        result = subprocess.run(
+            ["bash", str(parent_script)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5
+        )
+        assert result.returncode == 0
+
+        # Get the parent PID to find background jobs
+        parent_pid = int(parent_pid_file.read_text().strip())
+
+        # Wait for sampler to detect parent death and exit
+        # The sampler checks every trace_interval (0.1s), so wait a bit longer
+        time.sleep(0.5)
+
+        # Check that no process with parent as PPID is still running
+        # Use pgrep to find any children of the parent process
+        try:
+            result = subprocess.run(
+                ["pgrep", "-P", str(parent_pid)],
+                capture_output=True,
+                timeout=1
+            )
+            # If pgrep finds processes, they're still running - that's a bug
+            if result.returncode == 0 and result.stdout.strip():
+                child_pids = result.stdout.decode().strip().split('\n')
+                pytest.fail(f"Background processes still running after parent exited: {child_pids}")
+        except subprocess.TimeoutExpired:
+            pytest.fail("pgrep timed out - background processes may be stuck")
 
 
 # ============================================================================ #
@@ -251,6 +314,45 @@ class TestResourceSamplerInjection:
         # Check sampler file was NOT created
         sampler_file = test.execution_dir / SAMPLER_FILENAME
         assert not sampler_file.exists()
+
+    def test_inject_sampler_preserves_slurm_directives(self, sample_config_dict, tmp_path):
+        """Test that sampler injection preserves SLURM #SBATCH directives at top."""
+        from iops.execution.planner import BasePlanner
+
+        sample_config_dict["benchmark"]["trace_resources"] = True
+        config_file = tmp_path / "test_config.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(sample_config_dict, f)
+
+        config = load_config(config_file)
+        planner = BasePlanner.build(config)
+
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir(parents=True)
+
+        # Script with SLURM directives
+        script_text = """#!/bin/bash
+#SBATCH --job-name=test
+#SBATCH --nodes=4
+#SBATCH --time=01:00:00
+
+echo "Running benchmark"
+"""
+        modified_script = planner._inject_resource_sampler(script_text, exec_dir)
+
+        lines = modified_script.split('\n')
+
+        # Shebang must be first
+        assert lines[0] == "#!/bin/bash"
+
+        # #SBATCH lines must come immediately after shebang
+        assert lines[1] == "#SBATCH --job-name=test"
+        assert lines[2] == "#SBATCH --nodes=4"
+        assert lines[3] == "#SBATCH --time=01:00:00"
+
+        # Source line should come after #SBATCH directives
+        source_line_idx = next(i for i, line in enumerate(lines) if "source" in line and "__iops_sampler" in line)
+        assert source_line_idx > 3  # After all SBATCH lines
 
 
 # ============================================================================ #
