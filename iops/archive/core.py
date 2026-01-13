@@ -11,9 +11,15 @@ import tempfile
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from iops.archive.manifest import ArchiveManifest, RunInfo
+from iops.archive.filter import (
+    filter_executions,
+    filter_result_file,
+    create_filtered_index,
+    get_result_file_paths,
+)
 from iops.logger import HasLogger
 
 # Try to import rich for progress bars
@@ -100,12 +106,23 @@ def _load_version() -> str:
 class ArchiveWriter(HasLogger):
     """Creates IOPS archives with manifest."""
 
-    def __init__(self, source_path: Path):
+    def __init__(
+        self,
+        source_path: Path,
+        partial: bool = False,
+        status_filter: Optional[str] = None,
+        cached_filter: Optional[bool] = None,
+        param_filters: Optional[Dict[str, str]] = None,
+    ):
         """
         Initialize the archive writer.
 
         Args:
             source_path: Path to a run directory or workdir to archive.
+            partial: If True, create a partial archive with only filtered executions.
+            status_filter: Filter by execution status (e.g., "SUCCEEDED", "FAILED").
+            cached_filter: Filter by cache status (True=cached only, False=non-cached).
+            param_filters: Filter by parameter values (e.g., {"nodes": "4"}).
 
         Raises:
             ValueError: If source_path is not a valid IOPS run or workdir.
@@ -121,6 +138,16 @@ class ArchiveWriter(HasLogger):
 
         self.archive_type = self._detect_type()
         self.logger.debug(f"Detected archive type: {self.archive_type}")
+
+        # Partial archive settings
+        self.partial = partial
+        self.status_filter = status_filter
+        self.cached_filter = cached_filter
+        self.param_filters = param_filters or {}
+
+        # Will be populated when filtering
+        self._filtered_runs: Optional[Dict[str, Set[str]]] = None  # run_path -> exec_ids
+        self._original_execution_count: int = 0
 
     def _detect_type(self) -> str:
         """
@@ -147,6 +174,158 @@ class ArchiveWriter(HasLogger):
             "Expected either a run directory (with __iops_index.json) "
             "or a workdir (with run_* subdirectories containing __iops_index.json)."
         )
+
+    def _filter_all_runs(self) -> Dict[str, Set[str]]:
+        """
+        Apply filters to all runs and return matching execution IDs.
+
+        Returns:
+            Dictionary mapping run path (relative) to set of matching execution IDs.
+
+        Raises:
+            ValueError: If no executions match the filters.
+        """
+        filtered_runs: Dict[str, Set[str]] = {}
+        total_original = 0
+        total_filtered = 0
+
+        if self.archive_type == "run":
+            run_paths = [(".", self.source_path)]
+        else:
+            run_paths = [
+                (run_dir.name, run_dir)
+                for run_dir in sorted(self.source_path.glob("run_*"))
+                if (run_dir / "__iops_index.json").exists()
+            ]
+
+        for rel_path, run_path in run_paths:
+            matching_ids, total_count = filter_executions(
+                run_path,
+                status_filter=self.status_filter,
+                cached_filter=self.cached_filter,
+                param_filters=self.param_filters,
+            )
+            total_original += total_count
+            total_filtered += len(matching_ids)
+
+            if matching_ids:
+                filtered_runs[rel_path] = matching_ids
+
+        self._original_execution_count = total_original
+
+        if total_filtered == 0:
+            filter_desc = []
+            if self.status_filter:
+                filter_desc.append(f"status={self.status_filter}")
+            if self.cached_filter is not None:
+                filter_desc.append(f"cached={'yes' if self.cached_filter else 'no'}")
+            if self.param_filters:
+                filter_desc.extend(f"{k}={v}" for k, v in self.param_filters.items())
+            raise ValueError(
+                f"No executions match the specified filters ({', '.join(filter_desc)}). "
+                f"Total executions: {total_original}"
+            )
+
+        self.logger.info(
+            f"Filtering: {total_filtered} of {total_original} executions match filters"
+        )
+        return filtered_runs
+
+    def _prepare_filtered_content(self, temp_dir: Path) -> None:
+        """
+        Prepare filtered content in a temporary directory.
+
+        Creates filtered index files and result files in temp_dir.
+
+        Args:
+            temp_dir: Temporary directory to store filtered content.
+        """
+        if self._filtered_runs is None:
+            self._filtered_runs = self._filter_all_runs()
+
+        if self.archive_type == "run":
+            run_paths = [(".", self.source_path)]
+        else:
+            run_paths = [
+                (run_dir.name, run_dir)
+                for run_dir in sorted(self.source_path.glob("run_*"))
+                if (run_dir / "__iops_index.json").exists()
+            ]
+
+        for rel_path, run_path in run_paths:
+            if rel_path not in self._filtered_runs:
+                continue
+
+            exec_ids = self._filtered_runs[rel_path]
+
+            # Create filtered index
+            index_file = run_path / "__iops_index.json"
+            if index_file.exists():
+                with open(index_file) as f:
+                    original_index = json.load(f)
+
+                filtered_index = create_filtered_index(original_index, exec_ids)
+
+                if rel_path == ".":
+                    temp_index_path = temp_dir / "__iops_index.json"
+                else:
+                    temp_index_path = temp_dir / rel_path / "__iops_index.json"
+
+                temp_index_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(temp_index_path, "w") as f:
+                    json.dump(filtered_index, f, indent=2)
+
+            # Create filtered result files
+            result_files = get_result_file_paths(run_path)
+            # Convert exec_ids to integers for result file filtering
+            exec_ids_int = {int(eid.replace("exec_", "")) for eid in exec_ids}
+
+            for result_file in result_files:
+                if rel_path == ".":
+                    temp_result_path = temp_dir / result_file.name
+                else:
+                    temp_result_path = temp_dir / rel_path / result_file.name
+
+                filter_result_file(result_file, temp_result_path, exec_ids_int)
+
+    def _should_include_item(self, item: Path) -> bool:
+        """
+        Check if an item should be included in a partial archive.
+
+        Args:
+            item: Path to the item (file or directory) to check.
+
+        Returns:
+            True if the item should be included, False otherwise.
+        """
+        if self._filtered_runs is None:
+            return True
+
+        item_name = item.name
+
+        # Always skip result files and index files (we use filtered versions)
+        if item_name == "__iops_index.json":
+            return False
+
+        # Check if this is a result file
+        if item.is_file() and item.suffix.lower() in (".csv", ".parquet", ".db", ".sqlite", ".sqlite3"):
+            if not item_name.startswith("__iops_"):
+                return False
+
+        # Check if this is an execution directory
+        if item.is_dir() and item_name.startswith("exec_"):
+            # For single run, check directly
+            if self.archive_type == "run":
+                return item_name in self._filtered_runs.get(".", set())
+            # For workdir, need to check parent
+            parent_name = item.parent.name
+            return item_name in self._filtered_runs.get(parent_name, set())
+
+        # For workdir, check if run directory has any matching executions
+        if self.archive_type == "workdir" and item.is_dir() and item_name.startswith("run_"):
+            return item_name in self._filtered_runs
+
+        return True
 
     def _get_run_info(self, run_path: Path, relative_path: str = ".") -> RunInfo:
         """
@@ -185,6 +364,11 @@ class ArchiveWriter(HasLogger):
                     benchmark_name = benchmark_info["name"]
             except (json.JSONDecodeError, KeyError) as e:
                 self.logger.warning(f"Failed to parse {metadata_file}: {e}")
+
+        # For partial archives, use filtered execution count
+        if self.partial and self._filtered_runs is not None:
+            filtered_ids = self._filtered_runs.get(relative_path, set())
+            execution_count = len(filtered_ids)
 
         return RunInfo(
             name=run_path.name,
@@ -237,16 +421,33 @@ class ArchiveWriter(HasLogger):
 
         if self.archive_type == "run":
             # Single run - use "." as path since it's the root
-            run_info = self._get_run_info(self.source_path, ".")
-            runs.append(run_info)
+            # For partial archives, only include if there are matching executions
+            if not self.partial or (self._filtered_runs and "." in self._filtered_runs):
+                run_info = self._get_run_info(self.source_path, ".")
+                runs.append(run_info)
         else:
             # Workdir with multiple runs
             for run_dir in sorted(self.source_path.glob("run_*")):
                 if (run_dir / "__iops_index.json").exists():
+                    # For partial archives, only include runs with matching executions
+                    if self.partial and self._filtered_runs:
+                        if run_dir.name not in self._filtered_runs:
+                            continue
                     run_info = self._get_run_info(run_dir, run_dir.name)
                     runs.append(run_info)
 
         checksums = self._compute_checksums()
+
+        # Build filters_applied dict for partial archives
+        filters_applied = None
+        if self.partial:
+            filters_applied = {}
+            if self.status_filter:
+                filters_applied["status"] = self.status_filter
+            if self.cached_filter is not None:
+                filters_applied["cached"] = self.cached_filter
+            if self.param_filters:
+                filters_applied["params"] = self.param_filters
 
         return ArchiveManifest(
             iops_version=_load_version(),
@@ -256,6 +457,9 @@ class ArchiveWriter(HasLogger):
             original_path=str(self.source_path),
             runs=runs,
             checksums=checksums,
+            partial=self.partial,
+            original_execution_count=self._original_execution_count if self.partial else None,
+            filters_applied=filters_applied,
         )
 
     def _count_files(self) -> int:
@@ -277,7 +481,7 @@ class ArchiveWriter(HasLogger):
             Path to the created archive.
 
         Raises:
-            ValueError: If compression type is invalid.
+            ValueError: If compression type is invalid or no executions match filters.
         """
         if compression not in COMPRESSION_MODES:
             raise ValueError(
@@ -295,65 +499,143 @@ class ArchiveWriter(HasLogger):
         self.logger.info(f"Creating archive: {output_path}")
         self.logger.info(f"Source: {self.source_path} (type: {self.archive_type})")
 
-        # Build manifest
-        manifest = self._build_manifest()
-        self.logger.info(
-            f"Archive contains {len(manifest.runs)} run(s) "
-            f"with {manifest.total_executions} total execution(s)"
-        )
+        # For partial archives, filter executions first
+        temp_dir = None
+        if self.partial:
+            self._filtered_runs = self._filter_all_runs()
+            temp_dir = Path(tempfile.mkdtemp(prefix="iops_partial_"))
+            self._prepare_filtered_content(temp_dir)
 
-        # Count files for progress tracking
-        total_files = self._count_files() if show_progress and RICH_AVAILABLE else 0
+        try:
+            # Build manifest (uses filtered counts if partial)
+            manifest = self._build_manifest()
 
-        # Open compressed file with appropriate compression level
-        # Use level 6 for gz/bz2 (matching system tar defaults) for better speed
-        if compression == "gz":
-            fileobj = gzip.open(output_path, "wb", compresslevel=6)
-        elif compression == "bz2":
-            fileobj = bz2.open(output_path, "wb", compresslevel=6)
-        elif compression == "xz":
-            fileobj = lzma.open(output_path, "wb", preset=6)
-        else:
-            fileobj = None
+            if self.partial:
+                excluded = self._original_execution_count - manifest.total_executions
+                self.logger.info(
+                    f"Partial archive: {manifest.total_executions} executions "
+                    f"({excluded} excluded by filters)"
+                )
+            else:
+                self.logger.info(
+                    f"Archive contains {len(manifest.runs)} run(s) "
+                    f"with {manifest.total_executions} total execution(s)"
+                )
 
-        # Create the archive
-        with tarfile.open(
-            output_path if fileobj is None else None,
-            mode="w",
-            fileobj=fileobj,
-        ) as tar:
-            # Add manifest first
-            manifest_json = json.dumps(manifest.to_dict(), indent=2)
-            manifest_bytes = manifest_json.encode("utf-8")
+            # Count files for progress tracking
+            total_files = self._count_files() if show_progress and RICH_AVAILABLE else 0
 
-            # Create a tarinfo for the manifest
-            manifest_info = tarfile.TarInfo(name=ArchiveManifest.MANIFEST_FILENAME)
-            manifest_info.size = len(manifest_bytes)
-            manifest_info.mtime = int(datetime.now().timestamp())
+            # Open compressed file with appropriate compression level
+            # Use level 6 for gz/bz2 (matching system tar defaults) for better speed
+            if compression == "gz":
+                fileobj = gzip.open(output_path, "wb", compresslevel=6)
+            elif compression == "bz2":
+                fileobj = bz2.open(output_path, "wb", compresslevel=6)
+            elif compression == "xz":
+                fileobj = lzma.open(output_path, "wb", preset=6)
+            else:
+                fileobj = None
 
-            import io
+            # Create the archive
+            with tarfile.open(
+                output_path if fileobj is None else None,
+                mode="w",
+                fileobj=fileobj,
+            ) as tar:
+                # Add manifest first
+                manifest_json = json.dumps(manifest.to_dict(), indent=2)
+                manifest_bytes = manifest_json.encode("utf-8")
 
-            tar.addfile(manifest_info, io.BytesIO(manifest_bytes))
+                # Create a tarinfo for the manifest
+                manifest_info = tarfile.TarInfo(name=ArchiveManifest.MANIFEST_FILENAME)
+                manifest_info.size = len(manifest_bytes)
+                manifest_info.mtime = int(datetime.now().timestamp())
 
-            # Add all files from source directory with progress
-            with _get_progress_context(show_progress, "Creating archive", total_files) as (progress, task):
-                # Use filter to track progress while keeping recursive add for performance
-                def progress_filter(tarinfo):
-                    if progress is not None:
-                        progress.advance(task)
-                    return tarinfo
+                import io
 
-                for item in self.source_path.iterdir():
-                    arcname = item.name
-                    self.logger.debug(f"Adding: {arcname}")
-                    tar.add(item, arcname=arcname, filter=progress_filter)
+                tar.addfile(manifest_info, io.BytesIO(manifest_bytes))
 
-        # Close the compression file object if we created one
-        if fileobj is not None:
-            fileobj.close()
+                # Add files from source directory with progress
+                with _get_progress_context(show_progress, "Creating archive", total_files) as (progress, task):
+                    # Use filter to track progress while keeping recursive add for performance
+                    def progress_filter(tarinfo):
+                        if progress is not None:
+                            progress.advance(task)
+                        return tarinfo
 
-        self.logger.info(f"Archive created successfully: {output_path}")
-        return output_path
+                    if self.partial:
+                        # For partial archives, add files selectively
+                        self._add_partial_content(tar, temp_dir, progress_filter)
+                    else:
+                        # For full archives, add everything
+                        for item in self.source_path.iterdir():
+                            arcname = item.name
+                            self.logger.debug(f"Adding: {arcname}")
+                            tar.add(item, arcname=arcname, filter=progress_filter)
+
+            # Close the compression file object if we created one
+            if fileobj is not None:
+                fileobj.close()
+
+            self.logger.info(f"Archive created successfully: {output_path}")
+            return output_path
+
+        finally:
+            # Clean up temp directory
+            if temp_dir and temp_dir.exists():
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _add_partial_content(
+        self,
+        tar: tarfile.TarFile,
+        temp_dir: Path,
+        progress_filter,
+    ) -> None:
+        """
+        Add content for a partial archive.
+
+        Adds filtered files from temp_dir and selected files from source.
+
+        Args:
+            tar: The tarfile to add content to.
+            temp_dir: Temporary directory with filtered content.
+            progress_filter: Filter function for progress tracking.
+        """
+        added_from_temp = set()
+
+        # First, add filtered content from temp_dir
+        for item in temp_dir.rglob("*"):
+            if item.is_file():
+                rel_path = item.relative_to(temp_dir)
+                arcname = str(rel_path)
+                self.logger.debug(f"Adding (filtered): {arcname}")
+                tar.add(item, arcname=arcname, filter=progress_filter)
+                added_from_temp.add(arcname)
+
+        # Then, add non-filtered content from source
+        def add_item_recursive(item: Path, arcname: str):
+            """Recursively add items, skipping filtered content."""
+            if not self._should_include_item(item):
+                return
+
+            # Skip if we already added a filtered version
+            if arcname in added_from_temp:
+                return
+
+            if item.is_file():
+                self.logger.debug(f"Adding: {arcname}")
+                tar.add(item, arcname=arcname, filter=progress_filter)
+            elif item.is_dir():
+                # For directories, recurse but don't add the dir itself
+                # (tar.add with recursive=False would add empty dir)
+                for child in item.iterdir():
+                    child_arcname = f"{arcname}/{child.name}"
+                    add_item_recursive(child, child_arcname)
+
+        for item in self.source_path.iterdir():
+            arcname = item.name
+            add_item_recursive(item, arcname)
 
 
 class ArchiveReader(HasLogger):

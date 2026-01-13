@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -45,13 +45,17 @@ class ArchiveManifest:
     original_path: str  # Original absolute path of the source
     runs: List[RunInfo] = field(default_factory=list)
     checksums: Dict[str, str] = field(default_factory=dict)  # file path -> SHA256
+    # Partial archive fields
+    partial: bool = False  # True if this is a partial archive
+    original_execution_count: Optional[int] = None  # Total executions before filtering
+    filters_applied: Optional[Dict[str, Any]] = None  # Filters used to create partial archive
 
     # Manifest file name constant
     MANIFEST_FILENAME = "__iops_archive_manifest.json"
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
-        return {
+        result = {
             "iops_version": self.iops_version,
             "created_at": self.created_at,
             "source_hostname": self.source_hostname,
@@ -60,6 +64,12 @@ class ArchiveManifest:
             "runs": [run.to_dict() for run in self.runs],
             "checksums": self.checksums,
         }
+        # Only include partial archive fields if this is a partial archive
+        if self.partial:
+            result["partial"] = self.partial
+            result["original_execution_count"] = self.original_execution_count
+            result["filters_applied"] = self.filters_applied
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "ArchiveManifest":
@@ -72,6 +82,9 @@ class ArchiveManifest:
             original_path=data["original_path"],
             runs=[RunInfo.from_dict(r) for r in data.get("runs", [])],
             checksums=data.get("checksums", {}),
+            partial=data.get("partial", False),
+            original_execution_count=data.get("original_execution_count"),
+            filters_applied=data.get("filters_applied"),
         )
 
     def validate(self) -> List[str]:
