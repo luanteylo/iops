@@ -154,6 +154,7 @@ class ArchiveWriter(HasLogger):
         self._filtered_runs: Optional[Dict[str, Set[str]]] = None  # run_path -> exec_ids
         self._completed_reps_map: Optional[Dict[str, Dict[str, Set[int]]]] = None  # run_path -> exec_id -> rep_indices
         self._original_execution_count: int = 0
+        self._filtered_rep_count: int = 0  # Total completed repetitions in filtered set
 
     def _detect_type(self) -> str:
         """
@@ -223,6 +224,13 @@ class ArchiveWriter(HasLogger):
         self._original_execution_count = total_original
         self._completed_reps_map = completed_reps_map
 
+        # Calculate total completed repetitions
+        total_reps = 0
+        for run_reps in completed_reps_map.values():
+            for exec_reps in run_reps.values():
+                total_reps += len(exec_reps)
+        self._filtered_rep_count = total_reps
+
         if total_filtered == 0:
             filter_desc = []
             if self.status_filter:
@@ -239,7 +247,8 @@ class ArchiveWriter(HasLogger):
             )
 
         self.logger.info(
-            f"Filtering: {total_filtered} of {total_original} executions match filters"
+            f"Filtering: {total_filtered} of {total_original} executions "
+            f"({total_reps} repetitions) match filters"
         )
         return filtered_runs
 
@@ -537,6 +546,7 @@ class ArchiveWriter(HasLogger):
                 excluded = self._original_execution_count - manifest.total_executions
                 self.logger.info(
                     f"Partial archive: {manifest.total_executions} executions "
+                    f"with {self._filtered_rep_count} repetitions "
                     f"({excluded} excluded by filters)"
                 )
             else:
@@ -547,6 +557,12 @@ class ArchiveWriter(HasLogger):
 
             # Count files for progress tracking
             total_files = self._count_files() if show_progress and RICH_AVAILABLE else 0
+
+            # For partial archives, include rep count in description
+            if self.partial:
+                progress_desc = f"Creating archive ({self._filtered_rep_count} reps)"
+            else:
+                progress_desc = "Creating archive"
 
             # Open compressed file with appropriate compression level
             # Use level 6 for gz/bz2 (matching system tar defaults) for better speed
@@ -579,7 +595,7 @@ class ArchiveWriter(HasLogger):
                 tar.addfile(manifest_info, io.BytesIO(manifest_bytes))
 
                 # Add files from source directory with progress
-                with _get_progress_context(show_progress, "Creating archive", total_files) as (progress, task):
+                with _get_progress_context(show_progress, progress_desc, total_files) as (progress, task):
                     # Use filter to track progress while keeping recursive add for performance
                     def progress_filter(tarinfo):
                         if progress is not None:
