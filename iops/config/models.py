@@ -96,6 +96,7 @@ class BayesianConfig:
             Higher values favor exploration
         objective: Optimization direction - "minimize" or "maximize" (default: "minimize")
         objective_metric: Metric name to optimize (required)
+        fallback_to_exhaustive: If True and n_iterations >= total space, use exhaustive search
     """
     n_initial_points: int = 5
     n_iterations: int = 20
@@ -105,6 +106,7 @@ class BayesianConfig:
     kappa: float = 1.96
     objective: Literal["minimize", "maximize"] = "minimize"
     objective_metric: Optional[str] = None
+    fallback_to_exhaustive: bool = True
 
 
 @dataclass
@@ -128,6 +130,7 @@ class BenchmarkConfig:
     random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
     collect_system_info: bool = True  # Collect system info (hostname, CPU, memory, etc.) from compute nodes
     track_executions: bool = True  # Write execution metadata files for 'iops find' command
+    create_folders_upfront: bool = False  # Create all exec folders at start (enables SKIPPED status visibility)
 
 
 @dataclass
@@ -146,6 +149,8 @@ class VarConfig:
     type: str                 # "int", "float", "str", etc.
     sweep: Optional[SweepConfig] = None
     expr: Optional[str] = None  # for derived vars
+    when: Optional[str] = None  # condition for conditional variables
+    default: Optional[Any] = None  # value when condition is false
 
 
 @dataclass

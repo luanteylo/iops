@@ -31,10 +31,11 @@ class TestLoadVersion:
         version = load_version()
         assert version is not None
         assert isinstance(version, str)
-        # Version should be in format X.Y.Z
+        # Version should be in format X.Y.Z or X.Y.Z.devN (PEP 440)
         parts = version.split('.')
-        assert len(parts) == 3
-        assert all(part.isdigit() for part in parts)
+        assert len(parts) >= 3
+        # First three parts should be numeric (major.minor.patch)
+        assert all(part.isdigit() for part in parts[:3])
 
     def test_load_version_missing_file(self):
         """Test error when VERSION file is missing."""
@@ -45,6 +46,43 @@ class TestLoadVersion:
 
             with pytest.raises(FileNotFoundError, match="Version file not found"):
                 load_version()
+
+
+class TestModuleExecution:
+    """Test that iops can be run as a module (python -m iops)."""
+
+    def test_module_execution_version(self):
+        """Test running 'python -m iops --version' works."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, '-m', 'iops', '--version'],
+            capture_output=True,
+            text=True
+        )
+        assert result.returncode == 0
+        assert 'IOPS Tool v' in result.stdout
+
+    def test_module_execution_help(self):
+        """Test running 'python -m iops --help' works."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, '-m', 'iops', '--help'],
+            capture_output=True,
+            text=True
+        )
+        assert result.returncode == 0
+        assert 'iops' in result.stdout.lower()
+
+    def test_module_execution_run_help(self):
+        """Test running 'python -m iops run --help' works."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, '-m', 'iops', 'run', '--help'],
+            capture_output=True,
+            text=True
+        )
+        assert result.returncode == 0
+        assert '--dry-run' in result.stdout
 
 
 class TestParseArguments:

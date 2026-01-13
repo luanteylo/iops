@@ -50,12 +50,8 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
     if not parser.file:
         raise ParserContractError("parser.file is empty after rendering.")
 
-    if not parser.parser_script:
-        raise ParserContractError("parser.parser_script is empty.")
-
-    metric_names = [m.name for m in (parser.metrics or [])]
-    if not metric_names:
-        raise ParserContractError("parser.metrics is empty.")
+    # Note: parser_script and metrics validation is handled by loader.py
+    metric_names = [m.name for m in parser.metrics]
 
     parse_fn = _build_parse_fn(parser.parser_script)
 

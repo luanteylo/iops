@@ -77,6 +77,7 @@ benchmark:
   cache_exclude_vars: list          # Optional: vars to exclude from cache hash
   collect_system_info: boolean      # Optional: collect system info (default: true)
   track_executions: boolean         # Optional: write metadata files (default: true)
+  create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
   exhaustive_vars: list             # Optional: vars to test exhaustively
   report_vars: list                 # Optional: vars to include in reports
   max_core_hours: float             # Optional: CPU core-hours budget limit
@@ -136,7 +137,11 @@ benchmark:
     base_estimator: "RF"             # "RF", "GP", "ET", or "GBRT"
     xi: 0.01                         # Exploration trade-off for EI/PI
     kappa: 1.96                      # Exploration parameter for LCB
+    fallback_to_exhaustive: true     # Use exhaustive if n_iterations >= total space
 ```
+
+**Options:**
+- `fallback_to_exhaustive` (default: true): When `n_iterations >= total_space_size`, automatically switches to exhaustive search to avoid Bayesian optimization overhead for small parameter spaces.
 
 **Surrogate models:**
 - `RF`: Random Forest (default) - Best for categorical/mixed spaces
@@ -186,6 +191,21 @@ Collect hardware/environment info from compute nodes.
 #### `track_executions` (optional, default: true)
 Write metadata files for `iops find` command.
 
+#### `create_folders_upfront` (optional, default: false)
+Create all execution folders at run start instead of lazily during execution.
+
+When enabled:
+- All `exec_XXXX` folders are created before execution begins
+- Tests that will be skipped (due to constraints or planner selection) get a `SKIPPED` status
+- Full visibility into parameter space from the start
+- Useful for debugging constraints and planner behavior
+
+When disabled (default):
+- Folders are created lazily as each test executes
+- SKIPPED tests have no folder (current behavior)
+
+Note: Requires `track_executions: true` to write status files.
+
 #### `exhaustive_vars` (optional)
 Variables to test exhaustively at each search point (for hybrid strategies).
 
@@ -224,6 +244,15 @@ vars:
       start: 8
       end: 32
       step: 8
+
+  # Conditional variable (swept only when condition is true)
+  variable_name:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+    when: "other_var == true"   # Optional: condition expression
+    default: 0                  # Required if 'when' is specified
 
   # Derived variable
   variable_name:
@@ -321,6 +350,88 @@ Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, 
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory |
+
+</details>
+
+#### `when` (for conditional variables, optional)
+Condition expression for conditional sweep. When true, the variable is swept normally. When false, the variable uses the `default` value. Only valid for swept variables.
+
+This eliminates redundant test combinations where a variable is irrelevant based on another variable's value.
+
+#### `default` (required if `when` is specified)
+Value to use when the `when` condition is false. Must be compatible with the variable's `type`.
+
+<details>
+<summary><strong>Conditional Variable Examples</strong></summary>
+
+**Basic conditional:**
+```yaml
+vars:
+  use_compression:
+    type: bool
+    sweep:
+      mode: list
+      values: [true, false]
+
+  compression_level:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 5, 9]
+    when: "use_compression"    # Only sweep when use_compression is true
+    default: 0                 # Use 0 when use_compression is false
+```
+
+Without `when`: 2 × 3 = 6 combinations
+With `when`: 3 (true) + 1 (false) = 4 combinations
+
+**Complex condition:**
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  advanced_threads:
+    type: int
+    sweep:
+      mode: list
+      values: [2, 4, 8]
+    when: "nodes > 2"          # Only sweep for larger node counts
+    default: 1
+```
+
+**Dependency chain:**
+```yaml
+vars:
+  enable_feature:
+    type: bool
+    sweep:
+      mode: list
+      values: [true, false]
+
+  feature_mode:
+    type: str
+    sweep:
+      mode: list
+      values: ["fast", "balanced", "accurate"]
+    when: "enable_feature"
+    default: "disabled"
+
+  feature_intensity:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 3]
+    when: "feature_mode != 'disabled'"   # Depends on feature_mode
+    default: 0
+```
+
+**Available operators:** `==`, `!=`, `<`, `>`, `<=`, `>=`, `and`, `or`, `not`
+
+**Available functions:** `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`
 
 </details>
 

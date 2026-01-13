@@ -22,6 +22,7 @@ iops <subcommand> [arguments] [options]
 | `iops generate [path]` | Create config template |
 | `iops report <path>` | Generate HTML report |
 | `iops find <path> [filters...]` | Explore executions |
+| `iops archive <create\|extract>` | Archive and extract workdirs |
 
 ## Subcommand Reference
 
@@ -164,6 +165,7 @@ The path can be:
 - A run root directory (containing `__iops_index.json`)
 - A workdir containing multiple `run_XXX` folders
 - A specific execution folder (containing `__iops_params.json`)
+- A tar archive (`.tar.gz`, `.tar.bz2`, `.tar.xz`, or `.tar`) created by `iops archive create`
 
 **Filters:**
 
@@ -179,7 +181,12 @@ Only executions matching all specified filters will be displayed.
 - `--show-command` - Display the command column in output
 - `--full` - Show full parameter values without truncation (default truncates at 30 chars)
 - `--hide COL1,COL2` - Hide specific columns (comma-separated list)
-- `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING)
+- `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING, SKIPPED)
+- `--cached {yes,no}` - Filter by cache status (yes=only cached, no=only executed)
+- `--watch, -w` - Enable watch mode for real-time monitoring (requires `rich` library)
+- `--interval N` - Refresh interval in seconds for watch mode (default: 5)
+- `--metrics, -m` - Show metric columns with average values (watch mode only)
+- `--filter-metric METRIC<OP>VALUE` - Filter by metric value, e.g., `bwMiB>1000` (watch mode only, can repeat)
 
 **Examples:**
 
@@ -216,7 +223,122 @@ iops find ./workdir/run_001 nodes=4 --status SUCCEEDED --show-command
 
 # Complex filter
 iops find ./workdir block_size=1024 threads=8
+
+# Watch mode - monitor execution progress in real-time
+iops find ./workdir/run_001 --watch
+
+# Watch mode with custom refresh interval (2 seconds)
+iops find ./workdir/run_001 --watch --interval 2
+
+# Watch mode with filters
+iops find ./workdir/run_001 nodes=4 --watch
+
+# Show only cached results (from --use-cache runs)
+iops find ./workdir/run_001 --cached yes
+
+# Show only freshly executed results (not from cache)
+iops find ./workdir/run_001 --cached no
+
+# Watch mode with metrics display
+iops find ./workdir/run_001 --watch --metrics
+
+# Filter by metric values (show only results with bwMiB > 1000)
+iops find ./workdir/run_001 --watch --metrics --filter-metric "bwMiB>1000"
+
+# Multiple metric filters
+iops find ./workdir/run_001 --watch -m --filter-metric "bwMiB>1000" --filter-metric "latency<=0.5"
+
+# Inspect executions in a tar archive (without extraction)
+iops find study.tar.gz
+
+# Filter executions in an archive
+iops find study.tar.gz nodes=4 --status SUCCEEDED
 ```
+
+### archive - Archive and Extract Workdirs
+
+Create and extract IOPS archives for portability. Archives preserve all metadata, execution results, and directory structure, allowing you to move benchmark data between systems.
+
+The `archive` command has two subcommands:
+
+#### archive create
+
+Create a compressed archive from a run directory or workdir:
+
+```bash
+iops archive create <source> [options]
+```
+
+The source can be:
+- A **run directory** (containing `__iops_index.json`) - archives a single run
+- A **workdir** (containing `run_*` subdirectories) - archives all runs together
+
+IOPS automatically detects whether the source is a run or workdir.
+
+**Options:**
+- `-o, --output PATH` - Output archive path (default: `<source>.tar.gz`)
+- `--compression {gz,bz2,xz,none}` - Compression format (default: gz)
+- `--no-progress` - Disable progress bar
+
+**Examples:**
+
+```bash
+# Archive a single run (auto-detects as run)
+iops archive create ./workdir/run_001
+
+# Archive with custom output path
+iops archive create ./workdir/run_001 -o my_study.tar.gz
+
+# Archive entire workdir with all runs
+iops archive create ./workdir -o all_studies.tar.gz
+
+# Use different compression formats
+iops archive create ./workdir/run_001 --compression xz -o study.tar.xz
+iops archive create ./workdir/run_001 --compression bz2 -o study.tar.bz2
+iops archive create ./workdir/run_001 --compression none -o study.tar
+```
+
+#### archive extract
+
+Extract an IOPS archive to a directory:
+
+```bash
+iops archive extract <archive> [options]
+```
+
+**Options:**
+- `-o, --output PATH` - Output directory (default: current directory)
+- `--no-verify` - Skip integrity verification
+- `--no-progress` - Disable progress bar
+
+By default, IOPS verifies the integrity of extracted files using SHA256 checksums stored in the archive manifest. Use `--no-verify` to skip this check.
+
+Progress bars are shown by default when the `rich` library is installed. Use `--no-progress` to disable them.
+
+**Examples:**
+
+```bash
+# Extract to current directory
+iops archive extract study.tar.gz
+
+# Extract to specific directory
+iops archive extract study.tar.gz -o ./extracted
+
+# Skip integrity verification
+iops archive extract study.tar.gz -o ./extracted --no-verify
+```
+
+#### Archive Contents
+
+Archives include:
+- All execution directories and their contents
+- IOPS metadata files (`__iops_index.json`, `__iops_params.json`, etc.)
+- An archive manifest (`__iops_archive_manifest.json`) with:
+  - IOPS version used to create the archive
+  - Creation timestamp and source hostname
+  - Archive type (run or workdir)
+  - Run information (benchmark names, execution counts)
+  - SHA256 checksums for integrity verification
 
 ### --version - Show Version
 
@@ -242,4 +364,7 @@ iops check --help
 iops generate --help
 iops report --help
 iops find --help
+iops archive --help
+iops archive create --help
+iops archive extract --help
 ```

@@ -13,11 +13,12 @@ Use the `find` command to locate and display execution folders with their parame
 iops find /path/to/workdir
 ```
 
-The `find` command works with three types of paths:
+The `find` command works with four types of paths:
 
 1. **Run root directory** - Contains `__iops_index.json`
 2. **Workdir with multiple runs** - Contains `run_001/`, `run_002/`, etc.
 3. **Specific execution folder** - Contains `__iops_params.json`
+4. **Tar archive** - Created by `iops archive create` (supports `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tar`)
 
 ### List All Executions in a Run
 
@@ -146,8 +147,28 @@ iops find ./workdir/run_001 --status PENDING
 - `SUCCEEDED` - Execution completed successfully
 - `FAILED` - Execution failed with non-zero exit code
 - `ERROR` - Execution encountered an error during setup
+- `SKIPPED` - Execution was skipped (constraint violation or planner selection)
 - `UNKNOWN` - Status could not be determined
 - `PENDING` - Execution has not yet completed
+
+### Filter by Cache Status
+
+When using `--use-cache` with `iops run`, some results may come from the cache rather than being freshly executed. You can filter executions based on their cache status:
+
+```bash
+# Show only cached results
+iops find ./workdir/run_001 --cached yes
+
+# Show only freshly executed results (not from cache)
+iops find ./workdir/run_001 --cached no
+```
+
+**Cache indicators in output:**
+
+When displaying results, IOPS shows cache status next to the execution status:
+- `SUCCEEDED [C]` - Result was retrieved from cache
+- `SUCCEEDED [C*]` - Partially cached (some repetitions from cache, others executed)
+- `SUCCEEDED` - Freshly executed (not from cache)
 
 ### Combining Options
 
@@ -164,106 +185,339 @@ iops find ./workdir/run_001 nodes=4 ppn=8 --full --show-command
 iops find ./workdir/run_001 --hide block_size --status SUCCEEDED
 ```
 
+## Watch Mode
+
+Watch mode provides real-time monitoring of benchmark execution progress. It displays a live-updating table showing execution status, parameters, and progress.
+
+### Enabling Watch Mode
+
+```bash
+iops find ./workdir/run_001 --watch
+```
+
+Or using the short flag:
+
+```bash
+iops find ./workdir/run_001 -w
+```
+
+### Requirements
+
+Watch mode requires the `rich` library. Install it with:
+
+```bash
+pip install iops-benchmark[watch]
+```
+
+Or install `rich` directly:
+
+```bash
+pip install rich
+```
+
+### Display Features
+
+The watch mode display includes:
+
+- **Progress bar** showing overall completion percentage
+- **Status summary** with counts for each status (RUNNING, PENDING, SUCCEEDED, etc.)
+- **Live table** with execution parameters and status
+- **Repetition tracking** showing status of each repetition (e.g., `SSS` for 3 succeeded)
+- **Auto-refresh** at configurable intervals
+
+![Watch Mode Interface](../../images/watch_feature.png)
+
+### Watch Mode Options
+
+```bash
+# Custom refresh interval (default: 5 seconds)
+iops find ./workdir/run_001 --watch --interval 2
+
+# Watch with parameter filters
+iops find ./workdir/run_001 nodes=4 --watch
+
+# Watch with status filter
+iops find ./workdir/run_001 --watch --status RUNNING
+
+# Watch with hidden columns
+iops find ./workdir/run_001 --watch --hide block_size,transfer_size
+
+# Watch only cached or non-cached results
+iops find ./workdir/run_001 --watch --cached yes
+```
+
+In watch mode, cached results are indicated with a cyan `C` next to the status (e.g., `OK C` for a cached successful result).
+
+### Displaying Metrics
+
+Watch mode can display collected metrics (e.g., throughput, IOPS, latency) as additional columns. Metrics are averaged across completed repetitions:
+
+```bash
+# Show metrics in watch mode
+iops find ./workdir/run_001 --watch --metrics
+
+# Short flag
+iops find ./workdir/run_001 -w -m
+```
+
+When metrics are enabled, the table will include columns for each metric defined in your parser configuration. Values are displayed as averages across all completed repetitions for each test.
+
+### Filtering by Metrics
+
+You can filter executions based on metric values using the `--filter-metric` flag. This is useful for finding high-performing or problematic configurations:
+
+```bash
+# Show only results with bandwidth > 1000 MiB/s
+iops find ./workdir/run_001 --watch --metrics --filter-metric "bwMiB>1000"
+
+# Filter by latency
+iops find ./workdir/run_001 --watch --metrics --filter-metric "latency<=0.5"
+
+# Multiple metric filters (AND logic)
+iops find ./workdir/run_001 --watch -m --filter-metric "bwMiB>1000" --filter-metric "iops>=5000"
+```
+
+**Supported operators:**
+- `>` - Greater than
+- `>=` - Greater than or equal
+- `<` - Less than
+- `<=` - Less than or equal
+- `=` - Equal to
+
+Metric filters only match executions that have completed with metric values. Pending or failed executions without metrics are excluded when metric filters are active.
+
+### Status Indicators
+
+In watch mode, status is displayed using compact symbols:
+
+| Symbol | Status | Meaning |
+|--------|--------|---------|
+| `S` | SUCCEEDED | Execution completed successfully |
+| `R` | RUNNING | Currently executing |
+| `W` | PENDING | Waiting to execute |
+| `F` | FAILED | Execution failed |
+| `E` | ERROR | Error during setup |
+| `X` | SKIPPED | Skipped (constraint or planner) |
+| `?` | UNKNOWN | Status unknown |
+
+For multiple repetitions, status is shown as a sequence (e.g., `SRW` means repetition 1 succeeded, repetition 2 is running, repetition 3 is pending).
+
+### Exiting Watch Mode
+
+Press `Ctrl+C` to exit watch mode and return to the terminal.
+
 ## IOPS Metadata Files
 
-IOPS generates metadata files with the `__iops_` prefix to enable fast execution lookup without parsing full result databases:
+The `iops find` command relies on metadata files that IOPS generates during benchmark execution. These files have the `__iops_` prefix and enable fast execution lookup without parsing full result databases.
 
-### `__iops_index.json`
+Key files used by `iops find`:
 
-Created in the run root directory. Contains an index of all executions with their parameters and relative paths.
+| File | Location | Purpose |
+|------|----------|---------|
+| `__iops_index.json` | Run root | Indexes all executions with parameters |
+| `__iops_params.json` | Each exec folder | Stores parameter values |
+| `__iops_status.json` | Each exec/rep folder | Tracks execution status, cache flag, and metrics |
 
-**Location:** `workdir/run_001/__iops_index.json`
+All paths in `__iops_index.json` are stored as relative paths, making workdirs **portable** across systems. You can archive, move, or share workdirs and the `find` command will work correctly.
 
-**Structure:**
-```json
-{
-  "benchmark": "IOR Performance Study",
-  "executions": {
-    "exec_001": {
-      "path": "exec_001",
-      "params": {
-        "nodes": 1,
-        "ppn": 4,
-        "block_size": 1024
-      },
-      "command": "mpirun -np 4 ./benchmark --nodes 1"
-    },
-    "exec_002": {
-      "path": "exec_002",
-      "params": {
-        "nodes": 1,
-        "ppn": 4,
-        "block_size": 4096
-      },
-      "command": "mpirun -np 4 ./benchmark --nodes 1"
-    }
-  }
-}
+For complete documentation on all metadata files, I/O overhead considerations, and configuration options, see the **[Metadata Files](../metadata-files)** guide.
+
+## Inspecting Archives
+
+The `iops find` command can inspect tar archives directly without extracting them first. This is useful for quickly checking what's inside an archive before extraction:
+
+```bash
+# List executions in an archive
+iops find study.tar.gz
 ```
 
-All paths are relative to the run root, making workdirs portable across systems.
+Output:
+```
+Archive: study.tar.gz
+----------------------------------------
+IOPS Version:     3.4.0
+Created:          2024-01-15T10:30:00
+Source Host:      login-node.cluster
+Archive Type:     run
+Original Path:    /scratch/user/workdir/run_001
+Total Executions: 3
+Checksums:        12 files
 
-### `__iops_params.json`
+Runs:
+  - run_001: "IOR Performance Study" (3 executions)
 
-Created in each execution folder. Stores the parameter values for that specific execution.
 
-**Location:** `workdir/run_001/exec_042/__iops_params.json`
+Path       Status     nodes  ppn  block_size
+--------------------------------------------
+exec_0001  SUCCEEDED  1      4    1024
+exec_0002  SUCCEEDED  1      4    4096
+exec_0003  FAILED     1      8    1024
 
-**Structure:**
-```json
-{
-  "nodes": 4,
-  "ppn": 8,
-  "block_size": 4096
-}
+Found 3 execution(s)
 ```
 
-### `__iops_status.json`
+The header shows archive metadata including the IOPS version used to create it, creation timestamp, source hostname, and integrity checksum count.
 
-Created in each execution folder after execution completes. Stores execution status and error information.
+All filtering options work with archives:
 
-**Location:** `workdir/run_001/exec_042/__iops_status.json`
+```bash
+# Filter by parameters
+iops find study.tar.gz nodes=4
 
-**Structure:**
-```json
-{
-  "status": "SUCCEEDED",
-  "error": null,
-  "end_time": "2026-01-09T14:23:45.678901"
-}
+# Filter by status
+iops find study.tar.gz --status FAILED
+
+# Combine filters
+iops find study.tar.gz nodes=4 ppn=8 --status SUCCEEDED
+
+# Show command column
+iops find study.tar.gz --show-command
+
+# Show full parameter values
+iops find study.tar.gz --full
 ```
 
-The `error` field contains the error message when status is FAILED or ERROR.
+For workdir archives containing multiple runs, the output groups executions by run:
 
-### `__iops_sysinfo.json`
-
-Created by the system probe (if enabled). Contains system information about the execution environment.
-
-**Location:** `workdir/run_001/exec_001/repetition_1/__iops_sysinfo.json`
-
-This file includes CPU, memory, and OS information collected when the execution runs.
-
-## Disabling Metadata Generation
-
-If file I/O overhead is a concern or you don't need the `iops find` functionality, you can disable metadata generation:
-
-```yaml
-benchmark:
-  track_executions: false
+```bash
+iops find all_studies.tar.gz
 ```
 
-When disabled, IOPS will not create `__iops_index.json`, `__iops_params.json`, or `__iops_status.json` files, and the `iops find` command will not work for those runs.
+Output:
+```
+Archive: all_studies.tar.gz
+----------------------------------------
+IOPS Version:     3.4.0
+Created:          2024-01-15T10:30:00
+Source Host:      login-node.cluster
+Archive Type:     workdir
+Original Path:    /scratch/user/workdir
+Total Executions: 3
+Checksums:        18 files
 
+Runs:
+  - run_001: "IOR Performance Study" (2 executions)
+  - run_002: "mdtest Scaling" (1 executions)
 
+=== run_001 ===
 
-## Portable Workdirs
+Path       Status     nodes  ppn
+--------------------------------
+exec_0001  SUCCEEDED  1      4
+exec_0002  SUCCEEDED  2      4
 
-All paths in `__iops_index.json` are stored as relative paths. This means you can:
+=== run_002 ===
 
-- **Archive workdirs** and unpack them anywhere
-- **Move workdirs** between systems
-- **Share results** with collaborators
-- **Access workdirs** from different mount points
+Path       Status     size
+--------------------------
+exec_0001  SUCCEEDED  1024
 
-The `find` command will work correctly regardless of where the workdir is located.
+Found 3 execution(s)
+```
+
+## Archiving Workdirs
+
+IOPS provides built-in support for archiving and extracting workdirs, making it easy to share benchmark results between systems or create backups.
+
+### Creating Archives
+
+Use `iops archive create` to create a compressed archive:
+
+```bash
+# Archive a single run
+iops archive create ./workdir/run_001 -o my_study.tar.gz
+
+# Archive entire workdir with all runs
+iops archive create ./workdir -o all_studies.tar.gz
+```
+
+IOPS automatically detects whether you're archiving a single run or an entire workdir based on the directory structure.
+
+**Compression options:**
+
+```bash
+# Default: gzip compression
+iops archive create ./workdir/run_001 -o study.tar.gz
+
+# Better compression with xz
+iops archive create ./workdir/run_001 --compression xz -o study.tar.xz
+
+# Faster compression with bz2
+iops archive create ./workdir/run_001 --compression bz2 -o study.tar.bz2
+
+# No compression (fastest, largest)
+iops archive create ./workdir/run_001 --compression none -o study.tar
+```
+
+**Progress bar:**
+
+By default, a progress bar is shown during archive creation and extraction (requires the `rich` library). Disable it with `--no-progress`:
+
+```bash
+# Create archive without progress bar
+iops archive create ./workdir/run_001 -o study.tar.gz --no-progress
+
+# Extract without progress bar
+iops archive extract study.tar.gz -o ./restored --no-progress
+```
+
+### Extracting Archives
+
+Use `iops archive extract` to restore an archive:
+
+```bash
+# Extract to current directory
+iops archive extract study.tar.gz
+
+# Extract to specific location
+iops archive extract study.tar.gz -o ./restored_data
+```
+
+By default, IOPS verifies file integrity using SHA256 checksums stored in the archive. Skip verification with `--no-verify` if needed:
+
+```bash
+iops archive extract study.tar.gz -o ./restored --no-verify
+```
+
+### Archive Contents
+
+Archives include:
+- All execution directories with output files
+- IOPS metadata files (`__iops_index.json`, `__iops_params.json`, `__iops_status.json`, etc.)
+- An archive manifest (`__iops_archive_manifest.json`) containing:
+  - IOPS version and creation timestamp
+  - Source hostname and original path
+  - Run information (names, execution counts)
+  - SHA256 checksums for integrity verification
+
+### Use Cases
+
+**Sharing results with collaborators:**
+```bash
+# On source system
+iops archive create ./workdir/run_001 -o ior_scaling_study.tar.gz
+
+# Transfer the archive
+scp ior_scaling_study.tar.gz collaborator@remote:/data/
+
+# On remote system
+iops archive extract ior_scaling_study.tar.gz -o ./shared_results
+iops find ./shared_results  # Works immediately
+iops report ./shared_results  # Generate report from shared data
+```
+
+**Backing up completed studies:**
+```bash
+# Archive with maximum compression for long-term storage
+iops archive create ./workdir --compression xz -o backup_2024.tar.xz
+```
+
+**Moving data between clusters:**
+```bash
+# Archive on cluster A
+iops archive create ./scratch/benchmark_results -o results.tar.gz
+
+# Extract on cluster B
+iops archive extract results.tar.gz -o ./gpfs/restored_results
+```
 

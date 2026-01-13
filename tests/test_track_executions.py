@@ -240,9 +240,8 @@ class TestRunnerTrackExecutions:
         # Write status file
         runner._write_status_file(test)
 
-        # Status file should be created in exec_XXXX folder (parent of repetition_XXX)
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be created in the repetition folder (execution_dir)
+        status_file = test.execution_dir / "__iops_status.json"
 
         assert status_file.exists(), "Status file should be created when track_executions=True"
 
@@ -278,8 +277,8 @@ class TestRunnerTrackExecutions:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
@@ -311,8 +310,8 @@ class TestRunnerTrackExecutions:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
@@ -342,8 +341,8 @@ class TestRunnerTrackExecutions:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
@@ -428,9 +427,8 @@ class TestRunnerTrackExecutions:
         # Call _write_status_file
         runner._write_status_file(test)
 
-        # Verify status file was created
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Verify status file was created in repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
         assert status_file.exists()
 
     def test_run_skips_write_status_file_when_disabled(
@@ -458,8 +456,8 @@ class TestRunnerTrackExecutions:
         # (the method itself doesn't check track_executions, the caller does)
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         # The _write_status_file method itself always writes
         # The gating happens in the caller (runner.run)
@@ -505,7 +503,8 @@ class TestTrackExecutionsIntegration:
         }
         runner._write_status_file(test)
 
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
         assert status_file.exists()
 
         # 3. Verify both files have correct content
@@ -635,17 +634,20 @@ class TestTrackExecutionsEdgeCases:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         with open(status_file, 'r') as f:
             status_data = json.load(f)
 
-        # Should have exactly these three fields
+        # Should have exactly these six fields
         assert "status" in status_data
         assert "error" in status_data
         assert "end_time" in status_data
-        assert len(status_data) == 3
+        assert "cached" in status_data
+        assert "duration_seconds" in status_data
+        assert "metrics" in status_data
+        assert len(status_data) == 6
 
         # Status should be a string
         assert isinstance(status_data["status"], str)
@@ -653,6 +655,12 @@ class TestTrackExecutionsEdgeCases:
         assert status_data["error"] is None or isinstance(status_data["error"], str)
         # end_time can be None or string
         assert status_data["end_time"] is None or isinstance(status_data["end_time"], str)
+        # cached should be a boolean
+        assert isinstance(status_data["cached"], bool)
+        # duration_seconds can be None or number
+        assert status_data["duration_seconds"] is None or isinstance(status_data["duration_seconds"], (int, float))
+        # metrics can be None or dict
+        assert status_data["metrics"] is None or isinstance(status_data["metrics"], dict)
 
     def test_track_executions_with_cache(self, sample_config_file, tmp_path):
         """Test that track_executions works correctly with cached executions."""
@@ -680,7 +688,7 @@ class TestTrackExecutionsEdgeCases:
 
         runner._write_status_file(test)
 
-        exec_dir = test.execution_dir.parent
-        status_file = exec_dir / "__iops_status.json"
+        # Status file should be in the repetition folder
+        status_file = test.execution_dir / "__iops_status.json"
 
         assert status_file.exists()

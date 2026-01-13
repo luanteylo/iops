@@ -135,14 +135,14 @@ def filter_execution_matrix(
     instances: List["ExecutionInstance"],
     constraints: List[ConstraintConfig],
     logger: Optional[logging.Logger] = None
-) -> Tuple[List["ExecutionInstance"], List[ConstraintViolation]]:
+) -> Tuple[List["ExecutionInstance"], List["ExecutionInstance"], List[ConstraintViolation]]:
     """
     Filter execution instances based on constraints.
 
     For each instance:
     - Evaluate all constraints against instance.vars
     - Handle violations based on violation_policy:
-        - "skip": Remove instance from list
+        - "skip": Remove instance from kept list, add to skipped list with metadata
         - "error": Raise ConfigValidationError immediately
         - "warn": Log warning but keep instance
 
@@ -152,20 +152,23 @@ def filter_execution_matrix(
         logger: Optional logger for warnings and info messages
 
     Returns:
-        (filtered_instances, violations):
-            - filtered_instances: List of instances that pass all constraints
+        (kept_instances, skipped_instances, violations):
+            - kept_instances: List of instances that pass all constraints
+            - skipped_instances: List of instances skipped due to constraint violations
+              (with metadata: __skipped, __skip_reason, __skip_message)
             - violations: List of ConstraintViolation records
 
     Raises:
         ConfigValidationError: If any constraint has violation_policy="error" and is violated
     """
     if not constraints:
-        return instances, []
+        return instances, [], []
 
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    filtered_instances = []
+    kept_instances = []
+    skipped_instances = []
     all_violations = []
 
     for instance in instances:
@@ -174,6 +177,7 @@ def filter_execution_matrix(
 
         # Track if this instance should be kept
         keep_instance = True
+        skip_message = None
 
         # Evaluate all constraints for this instance
         for constraint in constraints:
@@ -201,25 +205,26 @@ def filter_execution_matrix(
                 elif constraint.violation_policy == "skip":
                     # Mark this instance to be filtered out
                     keep_instance = False
+                    skip_message = error_msg
                     logger.debug(
                         f"Skipping execution {instance.execution_id}: {error_msg}"
                     )
-                elif constraint.violation_policy == "warn":
+                else:  # violation_policy == "warn"
                     # Log warning but keep instance
+                    # Note: violation_policy validation is handled by loader.py
                     logger.warning(
                         f"Execution {instance.execution_id}: {error_msg}. "
                         f"Proceeding anyway (violation_policy=warn)."
                     )
-                else:
-                    # Unknown policy (shouldn't happen if validation is correct)
-                    logger.error(
-                        f"Unknown violation_policy '{constraint.violation_policy}' "
-                        f"for constraint '{constraint.name}'"
-                    )
 
         # Keep instance if no "skip" violations occurred
         if keep_instance:
-            filtered_instances.append(instance)
+            kept_instances.append(instance)
+        else:
+            # Add skip metadata to the instance
+            instance.metadata["__skipped"] = True
+            instance.metadata["__skip_reason"] = "constraint"
+            instance.metadata["__skip_message"] = skip_message
+            skipped_instances.append(instance)
 
-
-    return filtered_instances, all_violations
+    return kept_instances, skipped_instances, all_violations

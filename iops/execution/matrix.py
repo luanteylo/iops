@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ast
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Set, Tuple, Optional
 
 import itertools
 import math
@@ -109,24 +111,12 @@ def _eval_expr(expr: str, vartype: str, context: Dict[str, Any]) -> Any:
 def _build_sweep_values(name: str, vcfg: VarConfig) -> List[Any]:
     """
     From a VarConfig with a 'sweep', return the list of values for this var.
-    """
-    if vcfg.sweep is None:
-        raise ConfigValidationError(
-            f"Variable '{name}' has no sweep defined but is treated as swept."
-        )
 
+    Note: Input validation (sweep existence, mode, range params, step!=0, non-empty values)
+    is handled by loader.py's validate_generic_config(). This function assumes valid input.
+    """
     mode = vcfg.sweep.mode
     if mode == "range":
-        if vcfg.sweep.start is None or vcfg.sweep.end is None or vcfg.sweep.step is None:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'range' must have start, end, step."
-            )
-
-        if vcfg.sweep.step == 0:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'range' cannot have step=0"
-            )
-
         values = list(
             range(
                 vcfg.sweep.start,
@@ -136,17 +126,129 @@ def _build_sweep_values(name: str, vcfg: VarConfig) -> List[Any]:
         )
         return [_cast_value(vcfg.type, v) for v in values]
 
-    elif mode == "list":
-        if not vcfg.sweep.values:
-            raise ConfigValidationError(
-                f"Variable '{name}' with mode 'list' must have non-empty 'values'."
-            )
+    else:  # mode == "list"
         return [_cast_value(vcfg.type, v) for v in vcfg.sweep.values]
 
-    else:
+
+# ----------------- Conditional variable helpers ----------------- #
+
+def _extract_variable_references(expr: str) -> Set[str]:
+    """
+    Extract variable names referenced in a when expression.
+
+    Handles both Jinja2-style ({{ var }}) and Python-style (var) references.
+    """
+    refs: Set[str] = set()
+
+    # Find Jinja-style references: {{ var }} or {{ var.attr }}
+    jinja_pattern = r'\{\{\s*(\w+)'
+    refs.update(re.findall(jinja_pattern, expr))
+
+    # Parse as Python expression for direct variable references
+    try:
+        tree = ast.parse(expr, mode='eval')
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                refs.add(node.id)
+    except SyntaxError:
+        pass  # Not valid Python, rely on Jinja matches
+
+    # Filter out known functions/builtins
+    builtins = {
+        'min', 'max', 'abs', 'round', 'floor', 'ceil',
+        'int', 'float', 'str', 'bool',
+        'True', 'False', 'true', 'false', 'None',
+        'and', 'or', 'not', 'in',
+    }
+    return refs - builtins
+
+
+def _topological_sort_variables(
+    vars_cfg: Dict[str, VarConfig]
+) -> List[str]:
+    """
+    Topologically sort variables so dependencies come before dependents.
+
+    Only considers swept variables. Variables with `when` clauses depend
+    on the variables referenced in their `when` expression.
+
+    Returns:
+        List of variable names in dependency order
+
+    Raises:
+        ConfigValidationError: If circular dependency detected
+    """
+    # Build dependency graph from when expressions
+    dependencies: Dict[str, Set[str]] = {}
+    for name, vcfg in vars_cfg.items():
+        if vcfg.when:
+            deps = _extract_variable_references(vcfg.when)
+            # Only include dependencies that are actually in our variable set
+            dependencies[name] = deps & set(vars_cfg.keys())
+        else:
+            dependencies[name] = set()
+
+    # Kahn's algorithm for topological sort
+    in_degree = {name: 0 for name in vars_cfg}
+    for name, deps in dependencies.items():
+        in_degree[name] = len(deps)
+
+    # Start with variables that have no dependencies
+    queue = [name for name, deg in in_degree.items() if deg == 0]
+    result: List[str] = []
+
+    while queue:
+        node = queue.pop(0)
+        result.append(node)
+
+        # Reduce in-degree for variables that depend on this one
+        for name, deps in dependencies.items():
+            if node in deps:
+                in_degree[name] -= 1
+                if in_degree[name] == 0:
+                    queue.append(name)
+
+    if len(result) != len(vars_cfg):
+        remaining = set(vars_cfg.keys()) - set(result)
         raise ConfigValidationError(
-            f"Variable '{name}' has invalid sweep mode: {mode}"
+            f"Circular dependency detected in conditional variables: {remaining}"
         )
+
+    return result
+
+
+def _evaluate_when_condition(when_expr: str, context: Dict[str, Any]) -> bool:
+    """
+    Evaluate a when condition against current variable values.
+
+    Uses the same restricted eval pattern as constraint evaluation.
+
+    Args:
+        when_expr: The condition expression (Python-style)
+        context: Dictionary of variable values
+
+    Returns:
+        Boolean result of the condition
+
+    Raises:
+        ConfigValidationError: If evaluation fails
+    """
+    allowed_funcs = {
+        "min": min,
+        "max": max,
+        "abs": abs,
+        "round": round,
+        "floor": math.floor,
+        "ceil": math.ceil,
+        "int": int,
+        "float": float,
+    }
+
+    try:
+        result = eval(when_expr, {"__builtins__": {}}, {**allowed_funcs, **context})
+        return bool(result)
+    except Exception as e:
+        raise ConfigValidationError(f"Error evaluating 'when={when_expr}': {e}")
 
 
 # ----------------- Execution instance ----------------- #
@@ -273,11 +375,8 @@ class ExecutionInstance:
         all_vars: Dict[str, Any] = dict(self.base_vars)
 
         # derived_var_cfgs preserves insertion order (from build_execution_matrix)
+        # Note: expr validation is handled by loader.py's validate_generic_config()
         for name, (expr, vartype) in self.derived_var_cfgs.items():
-            if not expr:
-                raise ConfigValidationError(
-                    f"Derived variable '{name}' must define 'expr'."
-                )
             val = _eval_expr(expr, vartype, {**ctx0, **all_vars})
             all_vars[name] = val
 
@@ -662,13 +761,10 @@ def create_execution_instance(
     repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
 
     # Build derived var configs from cfg.vars
+    # Note: expr validation is handled by loader.py's validate_generic_config()
     derived_var_cfgs: Dict[str, Tuple[str, str]] = {}
     for name, vcfg in cfg.vars.items():
         if vcfg.sweep is None and vcfg.expr is not None:
-            if not vcfg.expr:
-                raise ConfigValidationError(
-                    f"Derived variable '{name}' must define 'expr'."
-                )
             derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
 
     # Command/metadata templates from cfg
@@ -739,10 +835,10 @@ def create_execution_instance(
 def build_execution_matrix(
     cfg: GenericBenchmarkConfig,
     start_execution_id: int = 0,
-) -> List[ExecutionInstance]:
+) -> Tuple[List[ExecutionInstance], List[ExecutionInstance]]:
     """
-    Build the Cartesian product of swept variables and return a list of
-    ExecutionInstance objects.
+    Build the Cartesian product of swept variables and return lists of
+    ExecutionInstance objects (kept and skipped).
 
     IMPORTANT:
     - No Jinja rendering is done here.
@@ -753,6 +849,12 @@ def build_execution_matrix(
     Behaviour:
     - Sweep over all vars that have a `sweep` defined.
     - repetitions is 1 by default (or benchmark.repetitions if present).
+
+    Returns:
+        (kept_instances, skipped_instances):
+            - kept_instances: Instances that passed constraint filtering
+            - skipped_instances: Instances skipped due to constraint violations
+              (with metadata: __skipped, __skip_reason, __skip_message)
     """
 
     # ----------------- split vars ----------------- #
@@ -806,76 +908,130 @@ def build_execution_matrix(
 
     # ----------------- build sweep products ----------------- #
 
-    # Build search space (variables that the planner optimizes over)
-    search_value_lists: List[Tuple[str, List[Any]]] = []
-    for name, vcfg in search_vars:
-        values = _build_sweep_values(name, vcfg)
-        if not values:
-            raise ConfigValidationError(f"Variable '{name}' produced an empty sweep.")
-        search_value_lists.append((name, values))
+    # Check if any conditional variables exist
+    has_conditional = any(v.when for _, v in swept_vars)
 
-    search_names = [name for name, _ in search_value_lists]
-    search_values_product = itertools.product(
-        *[vals for _, vals in search_value_lists]
-    )
+    # Prepare variable name lists for ExecutionInstance
+    search_names = [name for name, _ in search_vars]
+    exhaustive_names = [name for name, _ in exhaustive_swept_vars]
 
-    # Build exhaustive space (variables fully expanded for each search point)
-    exhaustive_value_lists: List[Tuple[str, List[Any]]] = []
-    for name, vcfg in exhaustive_swept_vars:
-        values = _build_sweep_values(name, vcfg)
-        if not values:
-            raise ConfigValidationError(f"Exhaustive variable '{name}' produced an empty sweep.")
-        exhaustive_value_lists.append((name, values))
+    if has_conditional:
+        # ----------------- Iterative building for conditional variables ----------------- #
 
-    exhaustive_names = [name for name, _ in exhaustive_value_lists]
+        # Get all swept variable configs for topological sort
+        swept_var_cfgs = {name: vcfg for name, vcfg in swept_vars}
 
-    # If there are exhaustive vars, build their product; otherwise single empty combination
-    if exhaustive_value_lists:
-        exhaustive_values_product = list(itertools.product(
-            *[vals for _, vals in exhaustive_value_lists]
-        ))
+        # Topologically sort to ensure dependencies are processed first
+        sorted_var_names = _topological_sort_variables(swept_var_cfgs)
+
+        # Build combinations iteratively
+        combinations: List[Dict[str, Any]] = [{}]
+
+        for name in sorted_var_names:
+            vcfg = swept_var_cfgs[name]
+            values = _build_sweep_values(name, vcfg)
+            if not values:
+                raise ConfigValidationError(f"Variable '{name}' produced an empty sweep.")
+
+            new_combinations: List[Dict[str, Any]] = []
+
+            if vcfg.when:
+                # Conditional variable: evaluate condition for each combination
+                for combo in combinations:
+                    if _evaluate_when_condition(vcfg.when, combo):
+                        # Condition true: expand with all sweep values
+                        for val in values:
+                            new_combinations.append({**combo, name: val})
+                    else:
+                        # Condition false: use default value
+                        default_val = _cast_value(vcfg.type, vcfg.default)
+                        new_combinations.append({**combo, name: default_val})
+            else:
+                # Unconditional variable: standard Cartesian expansion
+                for combo in combinations:
+                    for val in values:
+                        new_combinations.append({**combo, name: val})
+
+            combinations = new_combinations
+
+        # Deduplicate combinations (conditional vars may create duplicates)
+        seen: set = set()
+        unique_combinations: List[Dict[str, Any]] = []
+        for combo in combinations:
+            key = tuple(sorted(combo.items()))
+            if key not in seen:
+                seen.add(key)
+                unique_combinations.append(combo)
+
+        combinations = unique_combinations
+
     else:
-        exhaustive_values_product = [()]  # Single empty combination
+        # ----------------- Standard Cartesian product (no conditional vars) ----------------- #
+
+        # Build search space (variables that the planner optimizes over)
+        search_value_lists: List[Tuple[str, List[Any]]] = []
+        for name, vcfg in search_vars:
+            values = _build_sweep_values(name, vcfg)
+            if not values:
+                raise ConfigValidationError(f"Variable '{name}' produced an empty sweep.")
+            search_value_lists.append((name, values))
+
+        search_values_product = itertools.product(
+            *[vals for _, vals in search_value_lists]
+        )
+
+        # Build exhaustive space (variables fully expanded for each search point)
+        exhaustive_value_lists: List[Tuple[str, List[Any]]] = []
+        for name, vcfg in exhaustive_swept_vars:
+            values = _build_sweep_values(name, vcfg)
+            if not values:
+                raise ConfigValidationError(f"Exhaustive variable '{name}' produced an empty sweep.")
+            exhaustive_value_lists.append((name, values))
+
+        # If there are exhaustive vars, build their product; otherwise single empty combination
+        if exhaustive_value_lists:
+            exhaustive_values_product = list(itertools.product(
+                *[vals for _, vals in exhaustive_value_lists]
+            ))
+        else:
+            exhaustive_values_product = [()]  # Single empty combination
+
+        # Build all combinations
+        combinations = []
+        for search_combo in search_values_product:
+            search_assignment = dict(zip(search_names, search_combo))
+            for exhaustive_combo in exhaustive_values_product:
+                exhaustive_assignment = dict(zip(exhaustive_names, exhaustive_combo)) if exhaustive_names else {}
+                combinations.append({**search_assignment, **exhaustive_assignment})
 
     # ----------------- build ExecutionInstance objects ----------------- #
 
     executions: List[ExecutionInstance] = []
     exec_id = start_execution_id
 
-    # Build execution instances as cross-product of search and exhaustive spaces
-    for search_combo in search_values_product:
-        # Search vars assignment
-        search_assignment = dict(zip(search_names, search_combo))
+    for base_vars in combinations:
+        # For each script, build an ExecutionInstance
+        for script_idx in range(len(cfg.scripts)):
+            exec_id += 1
 
-        # For each search point, expand with all exhaustive var combinations
-        for exhaustive_combo in exhaustive_values_product:
-            # Exhaustive vars assignment (empty dict if no exhaustive vars)
-            exhaustive_assignment = dict(zip(exhaustive_names, exhaustive_combo)) if exhaustive_names else {}
+            exec_instance = create_execution_instance(
+                cfg=cfg,
+                base_vars=base_vars,
+                execution_id=exec_id,
+                script_index=script_idx,
+                search_var_names=search_names,
+                exhaustive_var_names=exhaustive_names,
+            )
 
-            # Combine: search vars + exhaustive vars
-            base_vars = {**search_assignment, **exhaustive_assignment}
-
-            # For each script, build an ExecutionInstance
-            for script_idx in range(len(cfg.scripts)):
-                exec_id += 1
-
-                exec_instance = create_execution_instance(
-                    cfg=cfg,
-                    base_vars=base_vars,
-                    execution_id=exec_id,
-                    script_index=script_idx,
-                    search_var_names=search_names,
-                    exhaustive_var_names=exhaustive_names,
-                )
-
-                executions.append(exec_instance)
+            executions.append(exec_instance)
 
     # Apply constraints if defined
+    skipped_instances: List[ExecutionInstance] = []
     if cfg.constraints:
         import logging
         logger = logging.getLogger(__name__)
 
-        executions, violations = filter_execution_matrix(
+        executions, skipped_instances, violations = filter_execution_matrix(
             executions,
             cfg.constraints,
             logger
@@ -883,11 +1039,11 @@ def build_execution_matrix(
 
         # Log summary of constraint filtering
         if violations:
-            skipped = sum(1 for v in violations if v.violation_policy == "skip")
-            warned = sum(1 for v in violations if v.violation_policy == "warn")
+            skipped_count = sum(1 for v in violations if v.violation_policy == "skip")
+            warned_count = sum(1 for v in violations if v.violation_policy == "warn")
             logger.info(
                 f"Constraint filtering complete: {len(executions)} instances remaining after filtering. "
-                f"({skipped} skipped, {warned} warned)"
+                f"({skipped_count} skipped, {warned_count} warned)"
             )
 
-    return executions
+    return executions, skipped_instances

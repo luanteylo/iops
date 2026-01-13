@@ -143,6 +143,16 @@ benchmark:
   # Set to false to disable if file I/O overhead is a concern (e.g., interference with benchmarks)
   track_executions: true
 
+  # Optional: Create all execution folders upfront at run start (default: false)
+  # When enabled, IOPS creates all exec_XXXX folders before execution begins, including
+  # folders for tests that will be skipped (due to constraints or planner selection).
+  # Benefits:
+  #   - Full visibility into parameter space from the start
+  #   - SKIPPED tests are visible in 'iops find' and watch mode
+  #   - Better debugging of constraints and planner behavior
+  # When disabled (default), folders are created lazily as tests execute.
+  # create_folders_upfront: true
+
   # Optional: Variables to test exhaustively at each search point
   # For Bayesian/random search: these variables are fully expanded for each selected point
   # Use case: Analyze the impact of specific variables (e.g., ost_num) across all values
@@ -232,6 +242,42 @@ vars:
     sweep:
       mode: list
       values: [1, 2,  4, 8]
+
+  # ---------------------------------------------------------------------------
+  # CONDITIONAL VARIABLES (swept only when condition is true)
+  # ---------------------------------------------------------------------------
+  # Use 'when' to make a swept variable conditional on another variable.
+  # When condition is false, the variable uses the 'default' value instead.
+  # This eliminates redundant test combinations where the variable is irrelevant.
+  #
+  # Example: use_compression controls whether compression_level is swept
+  # Without conditional: 2 * 3 = 6 combinations
+  # With conditional: 3 (when true) + 1 (when false) = 4 combinations
+  # ---------------------------------------------------------------------------
+
+  # Uncomment to enable conditional variable example:
+  # use_compression:
+  #   type: bool
+  #   sweep:
+  #     mode: list
+  #     values: [true, false]
+  #
+  # compression_level:
+  #   type: int
+  #   sweep:
+  #     mode: list
+  #     values: [1, 5, 9]
+  #   when: "use_compression"    # Only sweep when use_compression is true
+  #   default: 0                 # Use 0 when use_compression is false
+  #
+  # More complex condition example:
+  # advanced_option:
+  #   type: int
+  #   sweep:
+  #     mode: list
+  #     values: [1, 2, 4]
+  #   when: "nodes > 4 and processes_per_node >= 8"
+  #   default: 1
 
   # ---------------------------------------------------------------------------
   # DERIVED VARIABLES (computed from other variables)

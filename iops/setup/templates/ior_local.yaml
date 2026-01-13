@@ -30,16 +30,16 @@ vars:
       values: [1, 2, 4, 8]
 
   # Data volume size in GB
-  volume_size_gb:
+  volume_gb:
     type: int
     sweep:
       mode: list
       values: [1, 2, 4]
 
   # Computed block size (ensures each process writes equal share)
-  block_size_mb:
+  block_mb:
     type: int
-    expr: "(volume_size_gb * 1024) // processes"
+    expr: "(volume_gb * 1024) // processes"
 
   # Output file for IOR JSON summary
   summary_file:
@@ -48,7 +48,7 @@ vars:
 
 command:
   template: >
-    ior -w -r -b {{ block_size_mb }}m -t 1m
+    ior -w -r -b {{ block_mb }}m -t 1m
     -O summaryFile={{ summary_file }} -O summaryFormat=JSON
     -o ./testfile.ior
 

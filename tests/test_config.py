@@ -5,7 +5,7 @@ import yaml
 from pathlib import Path
 
 from conftest import load_config
-from iops.config.models import GenericBenchmarkConfig
+from iops.config.models import GenericBenchmarkConfig, ConfigValidationError
 
 
 def test_load_valid_config(sample_config_file):
@@ -23,7 +23,7 @@ def test_load_valid_config(sample_config_file):
 
 def test_config_missing_file():
     """Test loading non-existent config file."""
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ConfigValidationError, match="not found"):
         load_config(Path("nonexistent.yaml"))
 
 
@@ -32,7 +32,7 @@ def test_config_invalid_yaml(tmp_path):
     invalid_file = tmp_path / "invalid.yaml"
     invalid_file.write_text("{ invalid yaml content [")
 
-    with pytest.raises(yaml.YAMLError):
+    with pytest.raises(ConfigValidationError, match="YAML syntax error"):
         load_config(invalid_file)
 
 
@@ -134,3 +134,43 @@ def test_config_report_vars_invalid(tmp_path, sample_config_dict):
 
     assert "report_vars" in str(exc_info.value)
     assert "nonexistent_var" in str(exc_info.value)
+
+
+def test_config_create_folders_upfront_default(sample_config_file):
+    """Test that create_folders_upfront defaults to False."""
+    config = load_config(sample_config_file)
+    assert config.benchmark.create_folders_upfront is False
+
+
+def test_config_create_folders_upfront_enabled(tmp_path, sample_config_dict):
+    """Test that create_folders_upfront can be enabled via YAML."""
+    config_file = tmp_path / "upfront.yaml"
+
+    # Enable create_folders_upfront
+    sample_config_dict["benchmark"]["create_folders_upfront"] = True
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert config.benchmark.create_folders_upfront is True
+
+
+def test_config_track_executions_default(sample_config_file):
+    """Test that track_executions defaults to True."""
+    config = load_config(sample_config_file)
+    assert config.benchmark.track_executions is True
+
+
+def test_config_track_executions_disabled(tmp_path, sample_config_dict):
+    """Test that track_executions can be disabled via YAML."""
+    config_file = tmp_path / "no_track.yaml"
+
+    # Disable track_executions
+    sample_config_dict["benchmark"]["track_executions"] = False
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert config.benchmark.track_executions is False

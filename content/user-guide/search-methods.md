@@ -31,6 +31,7 @@ benchmark:
     n_iterations: 20
     acquisition_func: "EI"  # Expected Improvement
     base_estimator: "RF"    # Random Forest (default)
+    fallback_to_exhaustive: true  # Use exhaustive if n_iterations >= total space
 ```
 
 ### Configuration Options
@@ -50,6 +51,7 @@ benchmark:
   - `GBRT`: Gradient Boosted Regression Trees
 - **xi**: Exploration trade-off for EI/PI (default: 0.01)
 - **kappa**: Exploration parameter for LCB (default: 1.96)
+- **fallback_to_exhaustive** (bool, default: true): Use exhaustive search if n_iterations >= total space
 
 
 

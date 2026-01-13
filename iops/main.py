@@ -50,7 +50,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -58,6 +58,25 @@ def _preprocess_args():
     if first_arg.endswith('.yaml') or first_arg.endswith('.yml'):
         sys.argv.insert(1, 'run')
 
+
+def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser):
+    """
+    Validate command-line arguments for specific commands.
+    Uses parser.error() for clean error messages.
+    """
+    if args.command == 'run':
+        if args.max_core_hours is not None and args.max_core_hours <= 0:
+            parser.error("--max-core-hours must be positive")
+
+        if args.time_estimate is not None:
+            for part in args.time_estimate.split(','):
+                part = part.strip()
+                try:
+                    val = float(part)
+                    if val <= 0:
+                        raise ValueError
+                except ValueError:
+                    parser.error(f"Invalid --time-estimate value: '{part}' (expected positive number)")
 
 def parse_arguments():
     _preprocess_args()
@@ -109,6 +128,16 @@ Examples:
                              help="Hide specific columns (comma-separated, e.g., --hide path,command)")
     find_parser.add_argument('--status', type=str, default=None, metavar='STATUS',
                              help="Filter by execution status (SUCCEEDED, FAILED, ERROR, UNKNOWN, PENDING)")
+    find_parser.add_argument('--cached', type=str, default=None, choices=['yes', 'no'],
+                             help="Filter by cache status (yes=only cached, no=only executed)")
+    find_parser.add_argument('--watch', '-w', action='store_true',
+                             help="Continuously monitor execution status (requires: pip install iops-benchmark[watch])")
+    find_parser.add_argument('--interval', type=int, default=5, metavar='SECONDS',
+                             help="Refresh interval in seconds for watch mode (default: 5)")
+    find_parser.add_argument('--metrics', '-m', action='store_true',
+                             help="Show metric columns with average values (watch mode only)")
+    find_parser.add_argument('--filter-metric', type=str, action='append', metavar='METRIC<OP>VALUE',
+                             help="Filter by metric value, e.g., 'bwMiB>1000' (watch mode only, can repeat)")
     _add_common_args(find_parser)
 
     # ---- report command ----
@@ -155,12 +184,45 @@ Examples:
     check_parser.add_argument('config_file', type=Path, help="Path to the YAML configuration file")
     _add_common_args(check_parser)
 
+    # ---- archive command with subcommands ----
+    archive_parser = subparsers.add_parser('archive', help='Archive and extract IOPS workdirs',
+                                            description='Create and extract IOPS archives for portability.')
+    archive_subparsers = archive_parser.add_subparsers(dest='archive_command', title='archive commands',
+                                                        metavar='<archive-command>')
+
+    # archive create
+    archive_create_parser = archive_subparsers.add_parser('create', help='Create archive from workdir or run',
+                                                           description='Create a compressed archive from an IOPS run or workdir.')
+    archive_create_parser.add_argument('source', type=Path, help='Path to workdir or run directory')
+    archive_create_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                       help='Output archive path (default: <source>.tar.gz)')
+    archive_create_parser.add_argument('--compression', choices=['gz', 'bz2', 'xz', 'none'],
+                                       default='gz', help='Compression format (default: gz)')
+    archive_create_parser.add_argument('--no-progress', action='store_true',
+                                       help='Disable progress bar')
+    _add_common_args(archive_create_parser)
+
+    # archive extract
+    archive_extract_parser = archive_subparsers.add_parser('extract', help='Extract archive to directory',
+                                                            description='Extract an IOPS archive to a directory.')
+    archive_extract_parser.add_argument('archive', type=Path, help='Path to archive file')
+    archive_extract_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                        help='Output directory (default: current directory)')
+    archive_extract_parser.add_argument('--no-verify', action='store_true',
+                                        help='Skip integrity verification')
+    archive_extract_parser.add_argument('--no-progress', action='store_true',
+                                        help='Disable progress bar')
+    _add_common_args(archive_extract_parser)
+
     args = parser.parse_args()
 
     # Show help if no command provided
     if args.command is None:
         parser.print_help()
         parser.exit()
+    
+    # validate args for specific commands
+    _validate_args(args, parser)
 
     return args
 
@@ -392,14 +454,40 @@ def main():
         if args.hide:
             hide_columns = {col.strip() for col in args.hide.split(',')}
 
-        find_executions(
-            args.path,
-            args.filter,
-            show_command=args.show_command,
-            show_full=args.full,
-            hide_columns=hide_columns,
-            status_filter=args.status
-        )
+        # Parse cached filter (convert string to bool)
+        cached_filter = None
+        if args.cached:
+            cached_filter = args.cached == 'yes'
+
+        if args.watch:
+            # Watch mode - requires rich library
+            from iops.results.watch import watch_executions, WatchModeError
+            try:
+                watch_executions(
+                    args.path,
+                    args.filter,
+                    show_command=args.show_command,
+                    show_full=args.full,
+                    hide_columns=hide_columns,
+                    status_filter=args.status,
+                    interval=args.interval,
+                    cached_filter=cached_filter,
+                    show_metrics=args.metrics,
+                    metric_filters=getattr(args, 'filter_metric', None)
+                )
+            except WatchModeError as e:
+                logger.error(str(e))
+                return
+        else:
+            find_executions(
+                args.path,
+                args.filter,
+                show_command=args.show_command,
+                show_full=args.full,
+                hide_columns=hide_columns,
+                status_filter=args.status,
+                cached_filter=cached_filter
+            )
         return
 
     # ---- report command ----
@@ -456,6 +544,63 @@ def main():
             logger.info("Configuration is valid.")
             return
 
+    # ---- archive command ----
+    if args.command == 'archive':
+        from iops.archive import create_archive, extract_archive
+        from iops.archive.core import COMPRESSION_EXTENSIONS
+
+        if args.archive_command == 'create':
+            try:
+                # Determine output path
+                if args.output:
+                    output_path = args.output
+                else:
+                    ext = COMPRESSION_EXTENSIONS.get(args.compression, ".tar.gz")
+                    output_path = Path(f"{args.source.name}{ext}")
+
+                archive_path = create_archive(args.source, output_path, args.compression,
+                                              show_progress=not args.no_progress)
+                logger.info(f"Archive created: {archive_path}")
+            except FileNotFoundError as e:
+                logger.error(f"Source not found: {e}")
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(f"Archive creation failed: {e}")
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error creating archive: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        elif args.archive_command == 'extract':
+            try:
+                dest = args.output or Path.cwd()
+                extracted_path = extract_archive(args.archive, dest, verify=not args.no_verify,
+                                                 show_progress=not args.no_progress)
+                logger.info(f"Extracted to: {extracted_path}")
+            except FileNotFoundError as e:
+                logger.error(f"Archive not found: {e}")
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(f"Extraction failed: {e}")
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error extracting archive: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        else:
+            # No subcommand provided
+            logger.error("No archive subcommand specified. Use 'iops archive create' or 'iops archive extract'.")
+            logger.info("Run 'iops archive --help' for more information.")
+            return
+
     # ---- run command ----
     if args.command == 'run':
         try:
@@ -484,6 +629,9 @@ def main():
                 runner.run_dry()
             else:
                 runner.run()
+        except KeyboardInterrupt:
+            logger.info("\n\nExecution interrupted by user (Ctrl+C)")
+            return
         except ConfigValidationError as e:
             logger.error(f"Configuration error: {e}")
             if args.verbose:
