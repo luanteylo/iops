@@ -1,0 +1,130 @@
+---
+title: "Resource Tracing"
+weight: 66
+---
+
+IOPS can optionally trace CPU and memory utilization during benchmark execution. This feature helps correlate parameter configurations with resource footprint, enabling heatmap analysis of how different parameters affect system resource usage.
+
+**Warning: Performance Impact**
+
+Resource tracing runs a background process that periodically reads `/proc/stat` and `/proc/meminfo` and writes to a CSV file. While designed to minimize interference (runs at `nice -n 19`), this may still affect benchmark results:
+
+- **CPU overhead**: The sampler consumes a small amount of CPU time for reading proc files and computing deltas
+- **I/O overhead**: Each sample appends a row to the trace CSV file
+- **Memory**: The background process uses minimal memory (~1-2 MB)
+
+For performance-critical measurements, run your benchmark **without tracing first** to establish a baseline, then enable tracing in a separate run to collect resource data.
+
+## Quick Start
+
+Enable resource tracing in your configuration:
+
+```yaml
+benchmark:
+  name: "My Benchmark"
+  trace_resources: true    # Enable tracing (default: false)
+  trace_interval: 1.0      # Sample every 1 second (default)
+```
+
+## How It Works
+
+When `trace_resources: true`, IOPS injects a lightweight background sampler into each benchmark script. The sampler:
+
+1. **Runs with low priority** (`nice -n 19`) to minimize interference
+2. **Samples at configurable intervals** from `/proc/stat` and `/proc/meminfo`
+3. **Writes per-node trace files** with hostname in filename (supports multi-node jobs)
+4. **Stops automatically** via EXIT trap when the benchmark completes
+
+## Output Files
+
+### Per-Execution Trace Files
+
+Each execution produces one CSV file per node:
+
+**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_trace_<hostname>.csv`
+
+**Format:**
+```csv
+timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,mem_available_kb
+1705123456.123,node01,0,45.2,5.1,49.7,128000000,64000000
+1705123456.123,node01,1,42.1,4.8,53.1,128000000,64000000
+1705123457.123,node01,0,47.8,5.3,46.9,128000000,63000000
+```
+
+**Fields:**
+| Field | Description |
+|-------|-------------|
+| `timestamp` | Unix timestamp with milliseconds |
+| `hostname` | Node hostname |
+| `core` | CPU core number (0-indexed) |
+| `cpu_user_pct` | User CPU utilization (%) |
+| `cpu_system_pct` | System CPU utilization (%) |
+| `cpu_idle_pct` | Idle CPU (%) |
+| `mem_total_kb` | Total memory in KB |
+| `mem_available_kb` | Available memory in KB |
+
+### Run-Level Summary
+
+After all executions complete, IOPS aggregates traces into a summary CSV:
+
+**Location:** `workdir/run_001/__iops_resource_summary.csv`
+
+**Format:**
+```csv
+execution_id,repetition,nodes,ppn,block_size,...,mem_peak_gb,mem_avg_gb,cpu_avg_pct,cpu_max_pct,cpu_imbalance_pct,nodes_traced,samples_collected,trace_duration_s
+exec_0001,1,4,8,1024,64.2,58.1,78.5,95.2,12.3,4,120,120.5
+exec_0001,2,4,8,1024,63.8,57.9,77.9,94.8,11.8,4,118,118.2
+```
+
+This file includes:
+- `execution_id` and `repetition`
+- **All user variables** (for correlation analysis)
+- **Aggregated resource metrics**
+
+### Aggregated Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `mem_peak_gb` | Maximum memory used across all nodes (GB) |
+| `mem_avg_gb` | Average memory during execution (GB) |
+| `mem_peak_per_node_gb` | Peak memory per node (GB) |
+| `cpu_avg_pct` | Average CPU utilization across all cores |
+| `cpu_max_pct` | Peak CPU utilization |
+| `cpu_imbalance_pct` | Difference between most and least utilized cores |
+| `nodes_traced` | Number of nodes with trace data |
+| `samples_collected` | Total number of samples |
+| `trace_duration_s` | Time span of trace data (seconds) |
+
+
+## Configuration Reference
+
+```yaml
+benchmark:
+  # Enable resource tracing (default: false)
+  trace_resources: true
+
+  # Sampling interval in seconds (default: 1.0)
+  # Lower = finer granularity but more data
+  trace_interval: 0.5
+```
+
+## Multi-Node Support
+
+For SLURM multi-node jobs, each node runs its own sampler independently. The hostname is included in the trace filename (`__iops_trace_node01.csv`, `__iops_trace_node02.csv`, etc.), and the aggregation automatically combines data from all nodes.
+
+## Fault Tolerance
+
+Resource tracing is designed to never break your benchmark:
+
+- All sampler commands use `|| true` to suppress errors
+- Missing or malformed trace files are skipped during aggregation
+- If no trace files exist, the summary is simply not created
+
+## I/O Considerations
+
+Trace files are written to the execution directory. For benchmarks testing storage performance:
+
+- Place workdir on a separate filesystem from the test target
+- Or accept the minimal I/O overhead (one CSV append per sample interval)
+
+The sampler uses buffered writes and runs at lowest scheduling priority to minimize impact.

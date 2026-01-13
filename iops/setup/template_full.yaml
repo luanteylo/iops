@@ -143,6 +143,21 @@ benchmark:
   # Set to false to disable if file I/O overhead is a concern (e.g., interference with benchmarks)
   track_executions: true
 
+  # Optional: Enable resource tracing during execution (default: false)
+  # When enabled, IOPS samples CPU utilization (per-core) and memory usage during benchmark
+  # execution. A background sampler runs with low priority (nice) to minimize interference.
+  # Output files:
+  #   - Per-execution: __iops_trace_<hostname>.csv (one per node)
+  #   - Run-level: __iops_resource_summary.csv (aggregated metrics with all vars)
+  # The summary CSV enables heatmap analysis correlating parameters with resource footprint.
+  # Use case: Run once without tracing (baseline), then with tracing to measure footprint.
+  # trace_resources: true
+
+  # Optional: Sampling interval for resource tracing in seconds (default: 1.0)
+  # Lower values provide finer granularity but generate more data.
+  # Only used when trace_resources is enabled.
+  # trace_interval: 0.5
+
   # Optional: Create all execution folders upfront at run start (default: false)
   # When enabled, IOPS creates all exec_XXXX folders before execution begins, including
   # folders for tests that will be skipped (due to constraints or planner selection).

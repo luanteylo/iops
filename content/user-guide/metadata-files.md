@@ -27,10 +27,13 @@ Metadata files are written to the **workdir** during benchmark execution. While 
 |------|----------|--------------|---------|
 | `__iops_run_metadata.json` | Run root | End of benchmark | Report generation |
 | `__iops_index.json` | Run root | During execution | Fast execution lookup |
+| `__iops_resource_summary.csv` | Run root | End of benchmark | Aggregated resource metrics |
 | `__iops_params.json` | Each exec folder | Before test runs | Parameter storage |
 | `__iops_status.json` | Each exec/rep folder | After test completes | Status and cache tracking |
 | `__iops_probe.sh` | Each repetition folder | Before test runs | System info collection |
 | `__iops_sysinfo.json` | Each repetition folder | After test completes | Hardware/environment info |
+| `__iops_sampler.sh` | Each repetition folder | Before test runs | Resource tracing script |
+| `__iops_trace_<host>.csv` | Each repetition folder | During test execution | Per-node resource trace |
 
 ## Controlling Metadata Generation
 

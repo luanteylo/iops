@@ -77,6 +77,8 @@ benchmark:
   cache_exclude_vars: list          # Optional: vars to exclude from cache hash
   collect_system_info: boolean      # Optional: collect system info (default: true)
   track_executions: boolean         # Optional: write metadata files (default: true)
+  trace_resources: boolean          # Optional: enable resource tracing (default: false)
+  trace_interval: float             # Optional: sampling interval in seconds (default: 1.0)
   create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
   exhaustive_vars: list             # Optional: vars to test exhaustively
   report_vars: list                 # Optional: vars to include in reports
@@ -190,6 +192,12 @@ Collect hardware/environment info from compute nodes.
 
 #### `track_executions` (optional, default: true)
 Write metadata files for `iops find` command.
+
+#### `trace_resources` (optional, default: false)
+Enable CPU and memory tracing during execution. See [Resource Tracing](resource-tracing.md).
+
+#### `trace_interval` (optional, default: 1.0)
+Sampling interval in seconds for resource tracing. Only used when `trace_resources: true`.
 
 #### `create_folders_upfront` (optional, default: false)
 Create all execution folders at run start instead of lazily during execution.
