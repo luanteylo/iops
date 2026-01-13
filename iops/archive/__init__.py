@@ -25,6 +25,7 @@ def create_archive(
     status_filter: Optional[str] = None,
     cached_filter: Optional[bool] = None,
     param_filters: Optional[Dict[str, str]] = None,
+    min_completed_reps: Optional[int] = None,
 ) -> Path:
     """
     Create an IOPS archive from a run directory or workdir.
@@ -38,6 +39,8 @@ def create_archive(
         status_filter: Filter by execution status (e.g., "SUCCEEDED", "FAILED").
         cached_filter: Filter by cache status (True=cached only, False=non-cached).
         param_filters: Filter by parameter values (e.g., {"nodes": "4"}).
+        min_completed_reps: Minimum number of completed repetitions required.
+                           Includes executions with at least this many finished reps.
 
     Returns:
         Path to the created archive.
@@ -57,13 +60,22 @@ def create_archive(
         >>> create_archive("./workdir/run_001", "partial.tar.gz",
         ...                partial=True, status_filter="SUCCEEDED")
         PosixPath('/path/to/partial.tar.gz')
+
+        >>> create_archive("./workdir/run_001", "partial.tar.gz",
+        ...                partial=True, min_completed_reps=1)
+        PosixPath('/path/to/partial.tar.gz')
     """
+    # min_completed_reps implies partial=True
+    if min_completed_reps is not None:
+        partial = True
+
     writer = ArchiveWriter(
         Path(source),
         partial=partial,
         status_filter=status_filter,
         cached_filter=cached_filter,
         param_filters=param_filters,
+        min_completed_reps=min_completed_reps,
     )
     return writer.write(Path(output), compression, show_progress=show_progress)
 

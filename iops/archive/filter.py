@@ -20,12 +20,67 @@ from iops.results.find import (
 )
 
 
+def _count_completed_repetitions(exec_path: Path) -> Tuple[int, int, Set[int]]:
+    """
+    Count completed repetitions for an execution.
+
+    A repetition is considered "completed" if it has SUCCEEDED or FAILED status
+    (i.e., it finished running, regardless of outcome).
+
+    Args:
+        exec_path: Path to the execution directory
+
+    Returns:
+        Tuple of (completed_count, total_count, set of completed repetition indices)
+    """
+    rep_dirs = sorted(exec_path.glob("repetition_*"))
+
+    if not rep_dirs:
+        # No repetition folders - check exec-level status
+        status_file = exec_path / STATUS_FILENAME
+        if status_file.exists():
+            try:
+                with open(status_file, "r") as f:
+                    status_data = json.load(f)
+                    status = status_data.get("status", "UNKNOWN")
+                    if status in ("SUCCEEDED", "FAILED"):
+                        return 1, 1, {0}
+            except (json.JSONDecodeError, OSError):
+                pass
+        return 0, 1, set()
+
+    completed_count = 0
+    completed_indices: Set[int] = set()
+
+    for rep_dir in rep_dirs:
+        # Extract repetition index from folder name (e.g., "repetition_001" -> 0)
+        try:
+            rep_idx = int(rep_dir.name.split("_")[1]) - 1
+        except (IndexError, ValueError):
+            rep_idx = 0
+
+        status_file = rep_dir / STATUS_FILENAME
+        if status_file.exists():
+            try:
+                with open(status_file, "r") as f:
+                    status_data = json.load(f)
+                    status = status_data.get("status", "UNKNOWN")
+                    if status in ("SUCCEEDED", "FAILED"):
+                        completed_count += 1
+                        completed_indices.add(rep_idx)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    return completed_count, len(rep_dirs), completed_indices
+
+
 def filter_executions(
     run_root: Path,
     status_filter: Optional[str] = None,
     cached_filter: Optional[bool] = None,
     param_filters: Optional[Dict[str, str]] = None,
-) -> Tuple[Set[str], int]:
+    min_completed_reps: Optional[int] = None,
+) -> Tuple[Set[str], int, Dict[str, Set[int]]]:
     """
     Filter executions based on criteria.
 
@@ -34,9 +89,11 @@ def filter_executions(
         status_filter: Filter by status (e.g., "SUCCEEDED", "FAILED")
         cached_filter: Filter by cache status (True=cached only, False=non-cached only)
         param_filters: Filter by parameter values (e.g., {"nodes": "4"})
+        min_completed_reps: Minimum number of completed repetitions required
 
     Returns:
-        Tuple of (set of execution_ids matching filters, total execution count)
+        Tuple of (set of execution_ids matching filters, total execution count,
+                  dict mapping exec_id to set of completed repetition indices)
 
     Raises:
         FileNotFoundError: If index file doesn't exist
@@ -52,26 +109,36 @@ def filter_executions(
     executions = index_data.get("executions", {})
     total_count = len(executions)
     matching_ids: Set[str] = set()
+    completed_reps_map: Dict[str, Set[int]] = {}
 
     for exec_id, exec_info in executions.items():
         exec_path = run_root / exec_info.get("path", exec_id)
         params = exec_info.get("params", {})
 
-        # Read status
-        status_info = _read_status(exec_path)
-        status = status_info.get("status", "UNKNOWN")
-        cached = status_info.get("cached", False)
+        # Count completed repetitions
+        completed_count, total_reps, completed_indices = _count_completed_repetitions(exec_path)
 
-        # Apply status filter
-        if status_filter and status.upper() != status_filter.upper():
-            continue
+        # Apply min_completed_reps filter
+        if min_completed_reps is not None:
+            if completed_count < min_completed_reps:
+                continue
+        else:
+            # If no min_completed_reps specified, use status filter logic
+            # Read status
+            status_info = _read_status(exec_path)
+            status = status_info.get("status", "UNKNOWN")
+            cached = status_info.get("cached", False)
 
-        # Apply cache filter
-        if cached_filter is not None:
-            if cached_filter and not cached:
+            # Apply status filter
+            if status_filter and status.upper() != status_filter.upper():
                 continue
-            if not cached_filter and cached:
-                continue
+
+            # Apply cache filter
+            if cached_filter is not None:
+                if cached_filter and not cached:
+                    continue
+                if not cached_filter and cached:
+                    continue
 
         # Apply parameter filters
         if param_filters:
@@ -87,8 +154,9 @@ def filter_executions(
                 continue
 
         matching_ids.add(exec_id)
+        completed_reps_map[exec_id] = completed_indices
 
-    return matching_ids, total_count
+    return matching_ids, total_count, completed_reps_map
 
 
 def create_filtered_index(
@@ -121,17 +189,21 @@ def filter_result_file(
     source_path: Path,
     output_path: Path,
     execution_ids: Set[int],
+    completed_reps_map: Optional[Dict[int, Set[int]]] = None,
 ) -> bool:
     """
     Create a filtered copy of a result file.
 
     Supports CSV, Parquet, and SQLite formats.
-    Sanitizes the file (removes broken rows) and filters by execution_id.
+    Sanitizes the file (removes broken rows) and filters by execution_id
+    and optionally by repetition index.
 
     Args:
         source_path: Path to the source result file
         output_path: Path for the filtered output file
         execution_ids: Set of execution IDs (as integers) to include
+        completed_reps_map: Optional dict mapping exec_id to set of completed
+                           repetition indices. If provided, also filters by repetition.
 
     Returns:
         True if file was created with data, False if empty or failed
@@ -142,21 +214,58 @@ def filter_result_file(
     suffix = source_path.suffix.lower()
 
     if suffix == ".csv":
-        return _filter_csv(source_path, output_path, execution_ids)
+        return _filter_csv(source_path, output_path, execution_ids, completed_reps_map)
     elif suffix == ".parquet":
-        return _filter_parquet(source_path, output_path, execution_ids)
+        return _filter_parquet(source_path, output_path, execution_ids, completed_reps_map)
     elif suffix in (".db", ".sqlite", ".sqlite3"):
-        return _filter_sqlite(source_path, output_path, execution_ids)
+        return _filter_sqlite(source_path, output_path, execution_ids, completed_reps_map)
     else:
         # Unknown format - just copy the file
         shutil.copy2(source_path, output_path)
         return True
 
 
+def _filter_dataframe(
+    df: pd.DataFrame,
+    execution_ids: Set[int],
+    completed_reps_map: Optional[Dict[int, Set[int]]] = None,
+) -> pd.DataFrame:
+    """
+    Filter a DataFrame by execution_id and optionally by repetition.
+
+    Args:
+        df: DataFrame to filter
+        execution_ids: Set of execution IDs to include
+        completed_reps_map: Optional dict mapping exec_id to completed rep indices
+
+    Returns:
+        Filtered DataFrame
+    """
+    exec_col = "execution.execution_id"
+    rep_col = "execution.repetition"
+
+    if exec_col not in df.columns:
+        return df
+
+    # Filter by execution_id
+    df = df[df[exec_col].astype(int).isin(execution_ids)]
+
+    # Filter by repetition if map provided
+    if completed_reps_map is not None and rep_col in df.columns:
+        mask = df.apply(
+            lambda row: int(row[rep_col]) in completed_reps_map.get(int(row[exec_col]), set()),
+            axis=1
+        )
+        df = df[mask]
+
+    return df
+
+
 def _filter_csv(
     source_path: Path,
     output_path: Path,
     execution_ids: Set[int],
+    completed_reps_map: Optional[Dict[int, Set[int]]] = None,
 ) -> bool:
     """Filter a CSV result file."""
     try:
@@ -170,11 +279,8 @@ def _filter_csv(
     if df.empty:
         return False
 
-    # Filter by execution_id if column exists
-    exec_col = "execution.execution_id"
-    if exec_col in df.columns:
-        # Convert to int for comparison
-        df = df[df[exec_col].astype(int).isin(execution_ids)]
+    # Filter by execution_id and optionally by repetition
+    df = _filter_dataframe(df, execution_ids, completed_reps_map)
 
     if df.empty:
         return False
@@ -188,6 +294,7 @@ def _filter_parquet(
     source_path: Path,
     output_path: Path,
     execution_ids: Set[int],
+    completed_reps_map: Optional[Dict[int, Set[int]]] = None,
 ) -> bool:
     """Filter a Parquet result file."""
     try:
@@ -198,10 +305,8 @@ def _filter_parquet(
     if df.empty:
         return False
 
-    # Filter by execution_id if column exists
-    exec_col = "execution.execution_id"
-    if exec_col in df.columns:
-        df = df[df[exec_col].astype(int).isin(execution_ids)]
+    # Filter by execution_id and optionally by repetition
+    df = _filter_dataframe(df, execution_ids, completed_reps_map)
 
     if df.empty:
         return False
@@ -215,15 +320,14 @@ def _filter_sqlite(
     source_path: Path,
     output_path: Path,
     execution_ids: Set[int],
+    completed_reps_map: Optional[Dict[int, Set[int]]] = None,
     table: str = "results",
 ) -> bool:
     """Filter a SQLite result file."""
     try:
-        # Copy the database first
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, output_path)
-
-        with sqlite3.connect(output_path) as conn:
+        # For SQLite, read into DataFrame, filter, and write back
+        # This is simpler than complex SQL for repetition filtering
+        with sqlite3.connect(source_path) as conn:
             # Check if table exists
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -232,28 +336,21 @@ def _filter_sqlite(
             if not cursor.fetchone():
                 return False
 
-            # Get column names
-            cursor = conn.execute(f'PRAGMA table_info("{table}")')
-            columns = [row[1] for row in cursor.fetchall()]
+            df = pd.read_sql(f'SELECT * FROM "{table}"', conn)
 
-            exec_col = "execution.execution_id"
-            if exec_col in columns:
-                # Delete rows not in execution_ids
-                placeholders = ",".join("?" * len(execution_ids))
-                conn.execute(
-                    f'DELETE FROM "{table}" WHERE "{exec_col}" NOT IN ({placeholders})',
-                    list(execution_ids),
-                )
+        if df.empty:
+            return False
 
-            # Check if any rows remain
-            cursor = conn.execute(f'SELECT COUNT(*) FROM "{table}"')
-            count = cursor.fetchone()[0]
+        # Filter by execution_id and optionally by repetition
+        df = _filter_dataframe(df, execution_ids, completed_reps_map)
 
-            if count == 0:
-                output_path.unlink()
-                return False
+        if df.empty:
+            return False
 
-            conn.execute("VACUUM")
+        # Write filtered data to new database
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(output_path) as conn:
+            df.to_sql(table, conn, if_exists="replace", index=False)
 
         return True
     except Exception:

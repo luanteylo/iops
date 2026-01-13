@@ -208,6 +208,8 @@ Examples:
                                        help='Filter by execution status (SUCCEEDED, FAILED, etc.)')
     archive_create_parser.add_argument('--cached', type=str, choices=['yes', 'no'], default=None,
                                        help='Filter by cache status')
+    archive_create_parser.add_argument('--min-reps', type=int, default=None, metavar='N',
+                                       help='Include executions with at least N completed repetitions')
     _add_common_args(archive_create_parser)
 
     # archive extract
@@ -564,15 +566,6 @@ def main():
 
         if args.archive_command == 'create':
             try:
-                # Determine output path
-                if args.output:
-                    output_path = args.output
-                else:
-                    ext = COMPRESSION_EXTENSIONS.get(args.compression, ".tar.gz")
-                    # Add -partial suffix for partial archives
-                    suffix = "-partial" if args.partial else ""
-                    output_path = Path(f"{args.source.name}{suffix}{ext}")
-
                 # Parse parameter filters from VAR=VALUE arguments
                 param_filters = {}
                 if hasattr(args, 'filter') and args.filter:
@@ -588,15 +581,29 @@ def main():
                 if args.cached:
                     cached_filter = args.cached == 'yes'
 
+                # --min-reps implies --partial
+                min_reps = getattr(args, 'min_reps', None)
+                is_partial = args.partial or min_reps is not None
+
+                # Determine output path
+                if args.output:
+                    output_path = args.output
+                else:
+                    ext = COMPRESSION_EXTENSIONS.get(args.compression, ".tar.gz")
+                    # Add -partial suffix for partial archives
+                    suffix = "-partial" if is_partial else ""
+                    output_path = Path(f"{args.source.name}{suffix}{ext}")
+
                 archive_path = create_archive(
                     args.source,
                     output_path,
                     args.compression,
                     show_progress=not args.no_progress,
-                    partial=args.partial,
+                    partial=is_partial,
                     status_filter=args.status,
                     cached_filter=cached_filter,
                     param_filters=param_filters if param_filters else None,
+                    min_completed_reps=min_reps,
                 )
                 logger.info(f"Archive created: {archive_path}")
             except FileNotFoundError as e:

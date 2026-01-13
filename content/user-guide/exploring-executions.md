@@ -516,9 +516,32 @@ iops archive create ./workdir/run_001 --partial nodes=4 ppn=8
 # By cache status - archive only freshly executed (non-cached) results
 iops archive create ./workdir/run_001 --partial --cached no
 
+# By minimum completed repetitions - include tests with at least N finished reps
+iops archive create ./workdir/run_001 --min-reps 1
+
 # Combine filters
 iops archive create ./workdir/run_001 --partial --status SUCCEEDED nodes=4 -o subset.tar.gz
+
+# Combine min-reps with parameter filters
+iops archive create ./workdir/run_001 --min-reps 2 nodes=4 -o subset.tar.gz
 ```
+
+**Repetition-level filtering with `--min-reps`:**
+
+The `--min-reps N` option is particularly useful when running benchmarks with multiple repetitions. It includes any execution that has at least N completed repetitions, regardless of whether all repetitions have finished:
+
+```bash
+# Include executions with at least 1 completed repetition
+iops archive create ./workdir/run_001 --min-reps 1
+
+# Include executions with at least 2 completed repetitions
+iops archive create ./workdir/run_001 --min-reps 2
+```
+
+When using `--min-reps`:
+- The result files (CSV/Parquet/SQLite) are filtered to include only rows from completed repetitions
+- An execution is included if it has at least N repetitions with SUCCEEDED or FAILED status
+- The `--min-reps` flag implies `--partial`, so you don't need to specify both
 
 **What partial archives contain:**
 

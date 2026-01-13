@@ -282,6 +282,7 @@ IOPS automatically detects whether the source is a run or workdir.
 - `--partial` - Create partial archive with only filtered executions
 - `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, etc.)
 - `--cached {yes,no}` - Filter by cache status
+- `--min-reps N` - Include executions with at least N completed repetitions (implies `--partial`)
 
 **Filters:**
 
@@ -319,6 +320,12 @@ iops archive create ./workdir/run_001 --partial --status SUCCEEDED nodes=4 -o fi
 
 # Archive only non-cached (freshly executed) results
 iops archive create ./workdir/run_001 --partial --cached no -o fresh_results.tar.gz
+
+# Archive executions with at least 2 completed repetitions
+iops archive create ./workdir/run_001 --min-reps 2 -o partial.tar.gz
+
+# Combine min-reps with parameter filters
+iops archive create ./workdir/run_001 --min-reps 1 nodes=4 -o filtered.tar.gz
 ```
 
 #### archive extract

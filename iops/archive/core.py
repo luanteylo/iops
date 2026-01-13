@@ -113,6 +113,7 @@ class ArchiveWriter(HasLogger):
         status_filter: Optional[str] = None,
         cached_filter: Optional[bool] = None,
         param_filters: Optional[Dict[str, str]] = None,
+        min_completed_reps: Optional[int] = None,
     ):
         """
         Initialize the archive writer.
@@ -123,6 +124,9 @@ class ArchiveWriter(HasLogger):
             status_filter: Filter by execution status (e.g., "SUCCEEDED", "FAILED").
             cached_filter: Filter by cache status (True=cached only, False=non-cached).
             param_filters: Filter by parameter values (e.g., {"nodes": "4"}).
+            min_completed_reps: Minimum number of completed repetitions required.
+                               If specified, includes executions with at least this many
+                               completed reps, regardless of overall status.
 
         Raises:
             ValueError: If source_path is not a valid IOPS run or workdir.
@@ -144,9 +148,11 @@ class ArchiveWriter(HasLogger):
         self.status_filter = status_filter
         self.cached_filter = cached_filter
         self.param_filters = param_filters or {}
+        self.min_completed_reps = min_completed_reps
 
         # Will be populated when filtering
         self._filtered_runs: Optional[Dict[str, Set[str]]] = None  # run_path -> exec_ids
+        self._completed_reps_map: Optional[Dict[str, Dict[str, Set[int]]]] = None  # run_path -> exec_id -> rep_indices
         self._original_execution_count: int = 0
 
     def _detect_type(self) -> str:
@@ -186,6 +192,7 @@ class ArchiveWriter(HasLogger):
             ValueError: If no executions match the filters.
         """
         filtered_runs: Dict[str, Set[str]] = {}
+        completed_reps_map: Dict[str, Dict[str, Set[int]]] = {}
         total_original = 0
         total_filtered = 0
 
@@ -199,19 +206,22 @@ class ArchiveWriter(HasLogger):
             ]
 
         for rel_path, run_path in run_paths:
-            matching_ids, total_count = filter_executions(
+            matching_ids, total_count, exec_reps_map = filter_executions(
                 run_path,
                 status_filter=self.status_filter,
                 cached_filter=self.cached_filter,
                 param_filters=self.param_filters,
+                min_completed_reps=self.min_completed_reps,
             )
             total_original += total_count
             total_filtered += len(matching_ids)
 
             if matching_ids:
                 filtered_runs[rel_path] = matching_ids
+                completed_reps_map[rel_path] = exec_reps_map
 
         self._original_execution_count = total_original
+        self._completed_reps_map = completed_reps_map
 
         if total_filtered == 0:
             filter_desc = []
@@ -219,6 +229,8 @@ class ArchiveWriter(HasLogger):
                 filter_desc.append(f"status={self.status_filter}")
             if self.cached_filter is not None:
                 filter_desc.append(f"cached={'yes' if self.cached_filter else 'no'}")
+            if self.min_completed_reps is not None:
+                filter_desc.append(f"min_reps={self.min_completed_reps}")
             if self.param_filters:
                 filter_desc.extend(f"{k}={v}" for k, v in self.param_filters.items())
             raise ValueError(
@@ -280,13 +292,22 @@ class ArchiveWriter(HasLogger):
             # Convert exec_ids to integers for result file filtering
             exec_ids_int = {int(eid.replace("exec_", "")) for eid in exec_ids}
 
+            # Build completed_reps_map for result file filtering (only when min_reps specified)
+            completed_reps_int = None
+            if self.min_completed_reps is not None and self._completed_reps_map:
+                run_reps_map = self._completed_reps_map.get(rel_path, {})
+                completed_reps_int = {
+                    int(eid.replace("exec_", "")): reps
+                    for eid, reps in run_reps_map.items()
+                }
+
             for result_file in result_files:
                 if rel_path == ".":
                     temp_result_path = temp_dir / result_file.name
                 else:
                     temp_result_path = temp_dir / rel_path / result_file.name
 
-                filter_result_file(result_file, temp_result_path, exec_ids_int)
+                filter_result_file(result_file, temp_result_path, exec_ids_int, completed_reps_int)
 
     def _should_include_item(self, item: Path) -> bool:
         """
@@ -446,6 +467,8 @@ class ArchiveWriter(HasLogger):
                 filters_applied["status"] = self.status_filter
             if self.cached_filter is not None:
                 filters_applied["cached"] = self.cached_filter
+            if self.min_completed_reps is not None:
+                filters_applied["min_completed_reps"] = self.min_completed_reps
             if self.param_filters:
                 filters_applied["params"] = self.param_filters
 
