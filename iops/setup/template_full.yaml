@@ -522,7 +522,8 @@ output:
 
     # Optional: Exclude specific fields from output
     # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB
-    # Wildcards supported: "vars.*", "metadata.*", "metrics.*"
+    # Wildcards supported: "vars.*", "metadata.*", "metrics.*", "benchmark.*", "execution.*"
+    # Note: execution.execution_id and execution.repetition are protected and always included
     # Useful for removing verbose fields like descriptions
     exclude: ["benchmark.description"]
 

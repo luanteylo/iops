@@ -695,11 +695,7 @@ output:
     type: string              # Required: "csv" | "parquet" | "sqlite"
     path: string              # Required: output file path (Jinja2)
     mode: string              # Optional: "append" | "overwrite" (default: append)
-    include:                  # Optional: fields to include (mutually exclusive with exclude)
-      - "execution.*"
-      - "vars.*"
-      - "metrics.*"
-    exclude:                  # Optional: fields to exclude (mutually exclusive with include)
+    exclude:                  # Optional: fields to exclude from output
       - "benchmark.description"
     table: string             # Optional: table name for SQLite (default: "results")
 ```
@@ -713,16 +709,18 @@ Output file path. Can use templates.
 #### `mode` (optional, default: "append")
 Write mode: `append` or `overwrite`.
 
-#### `include` / `exclude` (optional)
-Field filtering using dot notation. Mutually exclusive.
+#### `exclude` (optional)
+Exclude specific fields from output using dot notation. Wildcards are supported.
 
 | Prefix | Fields |
 |--------|--------|
 | `benchmark.*` | `name`, `description`, `workdir` |
-| `execution.*` | `execution_id`, `repetition`, `execution_dir` |
+| `execution.*` | `workdir`, `execution_dir` (note: `execution_id` and `repetition` are protected) |
 | `vars.*` | All variable names |
 | `metadata.*` | All command metadata keys |
 | `metrics.*` | All parser metric names |
+
+**Protected fields:** `execution.execution_id` and `execution.repetition` cannot be excluded as they are required for identifying results.
 
 #### `table` (optional, SQLite only)
 Table name (default: "results").

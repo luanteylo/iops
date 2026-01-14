@@ -66,6 +66,10 @@ def _matches(field: str, selector: str) -> bool:
     return field == sel
 
 
+# Fields that cannot be excluded - essential for identifying results
+PROTECTED_FIELDS = {"execution.execution_id", "execution.repetition"}
+
+
 def _apply_exclude(
     row: Dict[str, Any],
     exclude: List[str],
@@ -74,6 +78,8 @@ def _apply_exclude(
 
     if exclude:
         drop = {k for k in keys if any(_matches(k, s) for s in exclude)}
+        # Never drop protected fields
+        drop -= PROTECTED_FIELDS
         return {k: row[k] for k in keys if k not in drop}
 
     return row
@@ -132,6 +138,7 @@ def build_output_row(test) -> Dict[str, Any]:
     else:
         metadata = dict(meta)
     metrics_obj = metadata.pop("metrics", None)  # keep separate
+    metadata.pop("repetition", None)  # already in execution.repetition
     _flatten("metadata", metadata, row)
 
     # metrics (safe even if missing)

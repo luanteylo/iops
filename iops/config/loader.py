@@ -1268,6 +1268,17 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if sink.exclude:
         _validate_output_field_list(cfg, sink.exclude, "output.sink.exclude")
 
+        # Check for protected fields that cannot be explicitly excluded
+        # (wildcards like "execution.*" are allowed - runtime will protect the fields)
+        protected = {"execution.execution_id", "execution.repetition"}
+        for selector in sink.exclude:
+            sel = selector.strip()
+            if sel in protected:
+                raise ConfigValidationError(
+                    f"output.sink.exclude cannot contain '{sel}' - "
+                    f"execution_id and repetition are required for identifying results"
+                )
+
     if sink.type == "sqlite":
         if not sink.table or not str(sink.table).strip():
             raise ConfigValidationError("output.sink.table must not be empty when type=sqlite")
