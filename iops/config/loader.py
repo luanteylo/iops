@@ -241,25 +241,20 @@ def _load_script_content(content: str, config_dir: Path) -> str:
 
 def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
     """
-    Collect all valid field names that can be used in output include/exclude lists.
+    Collect all valid field names that can be used in output exclude lists.
 
     Returns a set of allowed dotted field names like 'vars.nodes', 'metrics.bwMiB', etc.
     """
     allowed: Set[str] = set()
 
-    # --- benchmark.* ---
+    # --- benchmark.* (static info about the benchmark) ---
     allowed.update({
         "benchmark.name",
         "benchmark.description",
-        "benchmark.workdir",
-        "benchmark.repetitions",
-        "benchmark.cache_file",
-        "benchmark.search_method",
-        "benchmark.executor",
-        "benchmark.random_seed",
     })
 
-    # --- execution.* (decide the contract) ---
+    # --- execution.* (per-execution info) ---
+    # Note: execution_id and repetition are protected and cannot be excluded
     allowed.update({
         "execution.execution_id",
         "execution.repetition",
@@ -274,9 +269,9 @@ def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
         # optional shorthand support
         allowed.add(vname)
 
-    # --- metadata.<key> from command.metadata ---
-    for k in (cfg.command.metadata or {}).keys():
-        allowed.add(f"metadata.{k}")
+    # --- labels.<key> from command.labels (user-defined) ---
+    for k in (cfg.command.labels or {}).keys():
+        allowed.add(f"labels.{k}")
         # optional shorthand support
         allowed.add(k)
 
@@ -301,15 +296,32 @@ def _validate_output_field_list(
     """
     Validate that all fields in the list are valid output field names.
 
+    Supports wildcards like "benchmark.*", "vars.*", "metadata.*", "metrics.*".
+
     Raises ConfigValidationError if any field is invalid.
     """
     allowed = _collect_allowed_output_fields(cfg)
+
+    # Valid prefixes for wildcards
+    valid_prefixes = {"benchmark", "execution", "vars", "labels", "metadata", "metrics", "round"}
 
     bad: list[str] = []
     for f in fields:
         if not isinstance(f, str) or not f.strip():
             bad.append(str(f))
             continue
+
+        # Check for wildcard patterns like "benchmark.*" or "benchmark"
+        stripped = f.strip()
+        if stripped.endswith(".*"):
+            prefix = stripped[:-2]
+            if prefix in valid_prefixes:
+                continue  # Valid wildcard
+        elif stripped in valid_prefixes:
+            # Bare prefix like "benchmark" treated as wildcard
+            continue
+
+        # Check exact match
         if f not in allowed:
             bad.append(f)
 
@@ -326,6 +338,7 @@ def _validate_output_field_list(
         raise ConfigValidationError(
             f"{where} contains unknown field(s): {bad}\n"
             f"Allowed examples: {sorted(list(allowed))[:25]}...\n"
+            f"Wildcards: benchmark.*, execution.*, vars.*, metadata.*, metrics.*\n"
             f"{hint}"
         )
 
@@ -439,6 +452,34 @@ def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> Non
             logger.warning(
                 f"System probe disabled: non-bash shell detected in script(s): {incompatible_scripts}. "
                 f"The probe requires bash features. Set collect_system_info: false to silence this warning."
+            )
+
+
+def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) -> None:
+    """
+    Check if resource sampler is compatible with the configured scripts.
+
+    If any script uses a non-bash shell and trace_resources is enabled,
+    disable it and warn the user.
+
+    Args:
+        cfg: The configuration object (may be modified)
+        logger: Logger instance for warnings
+    """
+    if not cfg.benchmark.trace_resources:
+        return  # Already disabled, nothing to check
+
+    incompatible_scripts = []
+    for script in cfg.scripts:
+        if not _is_bash_compatible(script.script_template, script.submit):
+            incompatible_scripts.append(script.name)
+
+    if incompatible_scripts:
+        cfg.benchmark.trace_resources = False
+        if logger:
+            logger.warning(
+                f"Resource sampler disabled: non-bash shell detected in script(s): {incompatible_scripts}. "
+                f"The sampler requires bash features. Set trace_resources: false to silence this warning."
             )
 
 
@@ -581,6 +622,8 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         collect_system_info=b.get("collect_system_info", True),
         track_executions=b.get("track_executions", True),
         create_folders_upfront=b.get("create_folders_upfront", False),
+        trace_resources=b.get("trace_resources", False),
+        trace_interval=b.get("trace_interval", 1.0),
     )
 
     # ---- vars ----
@@ -612,7 +655,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     c = data["command"]
     command = CommandConfig(
         template=c["template"],
-        metadata=c.get("metadata", {}),
+        labels=c.get("labels", {}),
         env=c.get("env", {}),
     )
 
@@ -666,12 +709,21 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
     # ---- output ----
     out = data["output"]["sink"]
+    output_type = out["type"]
+
+    # Default path based on output type
+    default_paths = {
+        "csv": "{{ workdir }}/results.csv",
+        "parquet": "{{ workdir }}/results.parquet",
+        "sqlite": "{{ workdir }}/results.db",
+    }
+    default_path = default_paths.get(output_type, "{{ workdir }}/results.csv")
+
     output = OutputConfig(
         sink=OutputSinkConfig(
-            type=out["type"],
-            path=out["path"],
+            type=output_type,
+            path=out.get("path", default_path),
             mode=out.get("mode", "append"),
-            include=out.get("include", []) or [],
             exclude=out.get("exclude", []) or [],
             table=out.get("table", "results"),
         )
@@ -999,6 +1051,12 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             f"benchmark.executor must be one of: slurm, local (got '{cfg.benchmark.executor}')"
         )
 
+    # trace_interval validation
+    if cfg.benchmark.trace_interval is not None and cfg.benchmark.trace_interval <= 0:
+        raise ConfigValidationError(
+            f"benchmark.trace_interval must be a positive number (got '{cfg.benchmark.trace_interval}')"
+        )
+
     # random_config validation (required when search_method is "random")
     if cfg.benchmark.search_method == "random":
         rc = cfg.benchmark.random_config
@@ -1223,20 +1281,23 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             "Or install iops with parquet support: pip install iops-benchmark[parquet]"
         )
 
-    if not sink.path or not str(sink.path).strip():
-        raise ConfigValidationError("output.sink.path must not be empty")
-
     if sink.mode not in ("append", "overwrite"):
         raise ConfigValidationError("output.sink.mode must be append or overwrite")
 
-    if sink.include and sink.exclude:
-        raise ConfigValidationError("output.sink cannot define both 'include' and 'exclude'")
-
     # Validate that requested fields exist in config (static check)
-    if sink.include:
-        _validate_output_field_list(cfg, sink.include, "output.sink.include")
     if sink.exclude:
         _validate_output_field_list(cfg, sink.exclude, "output.sink.exclude")
+
+        # Check for protected fields that cannot be explicitly excluded
+        # (wildcards like "execution.*" are allowed - runtime will protect the fields)
+        protected = {"execution.execution_id", "execution.repetition"}
+        for selector in sink.exclude:
+            sel = selector.strip()
+            if sel in protected:
+                raise ConfigValidationError(
+                    f"output.sink.exclude cannot contain '{sel}' - "
+                    f"execution_id and repetition are required for identifying results"
+                )
 
     if sink.type == "sqlite":
         if not sink.table or not str(sink.table).strip():

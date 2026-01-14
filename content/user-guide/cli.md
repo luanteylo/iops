@@ -266,7 +266,7 @@ The `archive` command has two subcommands:
 Create a compressed archive from a run directory or workdir:
 
 ```bash
-iops archive create <source> [options]
+iops archive create <source> [filters...] [options]
 ```
 
 The source can be:
@@ -279,6 +279,18 @@ IOPS automatically detects whether the source is a run or workdir.
 - `-o, --output PATH` - Output archive path (default: `<source>.tar.gz`)
 - `--compression {gz,bz2,xz,none}` - Compression format (default: gz)
 - `--no-progress` - Disable progress bar
+- `--partial` - Create partial archive with only filtered executions
+- `--status STATUS` - Filter by execution status (SUCCEEDED, FAILED, etc.)
+- `--cached {yes,no}` - Filter by cache status
+- `--min-reps N` - Include executions with at least N completed repetitions (implies `--partial`)
+
+**Filters:**
+
+When using `--partial`, you can filter executions by parameter values using positional arguments:
+
+```bash
+iops archive create <source> --partial VAR1=VALUE1 VAR2=VALUE2
+```
 
 **Examples:**
 
@@ -296,6 +308,24 @@ iops archive create ./workdir -o all_studies.tar.gz
 iops archive create ./workdir/run_001 --compression xz -o study.tar.xz
 iops archive create ./workdir/run_001 --compression bz2 -o study.tar.bz2
 iops archive create ./workdir/run_001 --compression none -o study.tar
+
+# Create partial archive with only completed tests
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED -o snapshot.tar.gz
+
+# Partial archive filtered by parameters
+iops archive create ./workdir/run_001 --partial nodes=4 ppn=8 -o subset.tar.gz
+
+# Combine status and parameter filters
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED nodes=4 -o filtered.tar.gz
+
+# Archive only non-cached (freshly executed) results
+iops archive create ./workdir/run_001 --partial --cached no -o fresh_results.tar.gz
+
+# Archive executions with at least 2 completed repetitions
+iops archive create ./workdir/run_001 --min-reps 2 -o partial.tar.gz
+
+# Combine min-reps with parameter filters
+iops archive create ./workdir/run_001 --min-reps 1 nodes=4 -o filtered.tar.gz
 ```
 
 #### archive extract
@@ -331,14 +361,16 @@ iops archive extract study.tar.gz -o ./extracted --no-verify
 #### Archive Contents
 
 Archives include:
-- All execution directories and their contents
+- All execution directories and their contents (or filtered subset for partial archives)
 - IOPS metadata files (`__iops_index.json`, `__iops_params.json`, etc.)
+- Result files (CSV, Parquet, SQLite) - filtered for partial archives
 - An archive manifest (`__iops_archive_manifest.json`) with:
   - IOPS version used to create the archive
   - Creation timestamp and source hostname
   - Archive type (run or workdir)
   - Run information (benchmark names, execution counts)
   - SHA256 checksums for integrity verification
+  - For partial archives: filters applied and original execution count
 
 ### --version - Show Version
 

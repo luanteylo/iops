@@ -36,7 +36,7 @@ def simple_integration_config(tmp_path):
         },
         "command": {
             "template": "echo 'size={{ size }}'",
-            "metadata": {"operation": "test"}
+            "labels": {"operation": "test"}
         },
         "scripts": [
             {
@@ -164,7 +164,7 @@ def test_integration_with_post_script(tmp_path):
         },
         "command": {
             "template": "echo 'value={{ value }}'",
-            "metadata": {"operation": "test"}
+            "labels": {"operation": "test"}
         },
         "scripts": [
             {

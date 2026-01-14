@@ -16,14 +16,15 @@ Comprehensive guide to using IOPS features and capabilities.
 - **[Search Methods](search-methods)** - Parameter space exploration: exhaustive, random sampling, and Bayesian optimization
 - **[Execution Backends](execution-backends)** - Run locally or on SLURM clusters
 - **[Result Caching](caching)** - Skip redundant tests with smart caching
+- **[Resource Tracing](resource-tracing)** - Trace CPU and memory utilization during benchmark execution
 
 ## Results & Analysis
 
 - **[Exploring Executions](exploring-executions)** - Use `iops find` to locate, filter, and monitor executions
 - **[Archiving Workdirs](exploring-executions#archiving-workdirs)** - Create portable archives with `iops archive` for sharing and backup
-- **[Metadata Files](metadata-files)** - `__iops_*` files: structure, I/O overhead, and how to disable them
 - **[Custom Reports & Visualization](reporting)** - Generate interactive HTML reports with Plotly charts
 
 ## Reference
 
 - **[Command Line Interface](cli)** - Complete CLI reference for `iops run`, `iops find`, `iops report`, and more
+- **[Metadata Files](metadata-files)** - `__iops_*` files: structure, I/O overhead, and how to disable them

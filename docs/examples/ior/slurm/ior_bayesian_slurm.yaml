@@ -120,7 +120,7 @@ command:
     -O summaryFile={{summary_file}} -O summaryFormat=JSON
     -o {{ost_count}}/output.ior
 
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"

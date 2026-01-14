@@ -60,7 +60,7 @@ command:
     -O summaryFile={{summary_file}} -O summaryFormat=JSON
     -o /home/luan/filesystem/output.ior 
 
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
@@ -95,7 +95,6 @@ output:
     type: csv          # parquet | csv | sqlite
     path: "{{ workdir }}/results.csv"
     mode: append           # append | overwrite
-    include: []            # optional, mutually exclusive with exclude
-    exclude: ["benchmark.name", "benchmark.description"]            # optional, mutually exclusive with include
+    exclude: ["benchmark.name", "benchmark.description"]            # optional, exclude fields from output
     table: results         # only for sqlite
 

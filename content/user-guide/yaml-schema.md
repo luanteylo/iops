@@ -27,7 +27,7 @@ See also: [Jinja2 Templating](jinja2-templating.md) for dynamic values, conditio
 benchmark:       # Global configuration (name, workdir, executor, search method)
 vars:            # Variable definitions (swept and derived)
 constraints:     # (Optional) Parameter validation rules
-command:         # Command template and metadata
+command:         # Command template and labels
 scripts:         # Execution scripts and parsers
 output:          # Output configuration (CSV, Parquet, SQLite)
 reporting:       # (Optional) Report generation settings
@@ -77,6 +77,8 @@ benchmark:
   cache_exclude_vars: list          # Optional: vars to exclude from cache hash
   collect_system_info: boolean      # Optional: collect system info (default: true)
   track_executions: boolean         # Optional: write metadata files (default: true)
+  trace_resources: boolean          # Optional: enable resource tracing (default: false)
+  trace_interval: float             # Optional: sampling interval in seconds (default: 1.0)
   create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
   exhaustive_vars: list             # Optional: vars to test exhaustively
   report_vars: list                 # Optional: vars to include in reports
@@ -190,6 +192,12 @@ Collect hardware/environment info from compute nodes.
 
 #### `track_executions` (optional, default: true)
 Write metadata files for `iops find` command.
+
+#### `trace_resources` (optional, default: false)
+Enable CPU and memory tracing during execution. See [Resource Tracing](resource-tracing.md).
+
+#### `trace_interval` (optional, default: 1.0)
+Sampling interval in seconds for resource tracing. Only used when `trace_resources: true`.
 
 #### `create_folders_upfront` (optional, default: false)
 Create all execution folders at run start instead of lazily during execution.
@@ -493,12 +501,12 @@ constraints:
 
 ## `command`
 
-Defines the benchmark command template and metadata.
+Defines the benchmark command template and labels.
 
 ```yaml
 command:
   template: string              # Required: command template (Jinja2)
-  metadata:                     # Optional: arbitrary metadata
+  labels:                       # Optional: user-defined labels
     key: value
   env:                          # Optional: environment variables
     VAR_NAME: value
@@ -515,12 +523,14 @@ command:
     -o {{ output_path }}/data.ior
 ```
 
-#### `metadata` (optional)
-Key-value metadata stored with results. Appears as `metadata.*` columns.
+#### `labels` (optional)
+User-defined key-value labels stored with results. Appears as `labels.*` columns in output.
+
+Note: `metadata.*` is reserved for IOPS internal fields (executor status, timing, errors).
 
 ```yaml
 command:
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
@@ -685,13 +695,9 @@ Defines where and how to store execution results.
 output:
   sink:
     type: string              # Required: "csv" | "parquet" | "sqlite"
-    path: string              # Required: output file path (Jinja2)
+    path: string              # Optional: output file path (Jinja2), has sensible defaults
     mode: string              # Optional: "append" | "overwrite" (default: append)
-    include:                  # Optional: fields to include (mutually exclusive with exclude)
-      - "execution.*"
-      - "vars.*"
-      - "metrics.*"
-    exclude:                  # Optional: fields to exclude (mutually exclusive with include)
+    exclude:                  # Optional: fields to exclude from output
       - "benchmark.description"
     table: string             # Optional: table name for SQLite (default: "results")
 ```
@@ -699,22 +705,30 @@ output:
 #### `type` (required)
 Output format: `csv`, `parquet`, or `sqlite`.
 
-#### `path` (required)
-Output file path. Can use templates.
+#### `path` (optional)
+Output file path. Can use Jinja2 templates.
+
+**Defaults by type:**
+- `csv` → `{{ workdir }}/results.csv`
+- `parquet` → `{{ workdir }}/results.parquet`
+- `sqlite` → `{{ workdir }}/results.db`
 
 #### `mode` (optional, default: "append")
 Write mode: `append` or `overwrite`.
 
-#### `include` / `exclude` (optional)
-Field filtering using dot notation. Mutually exclusive.
+#### `exclude` (optional)
+Exclude specific fields from output using dot notation. Wildcards are supported.
 
 | Prefix | Fields |
 |--------|--------|
-| `benchmark.*` | `name`, `description`, `workdir` |
-| `execution.*` | `execution_id`, `repetition`, `execution_dir` |
+| `benchmark.*` | `name`, `description` |
+| `execution.*` | `repetitions`, `workdir`, `execution_dir` (note: `execution_id` and `repetition` are protected) |
 | `vars.*` | All variable names |
-| `metadata.*` | All command metadata keys |
+| `labels.*` | All user-defined labels from `command.labels` |
+| `metadata.*` | IOPS internal fields (executor_status, start, end, error, jobid) |
 | `metrics.*` | All parser metric names |
+
+**Protected fields:** `execution.execution_id` and `execution.repetition` cannot be excluded as they are required for identifying results.
 
 #### `table` (optional, SQLite only)
 Table name (default: "results").
@@ -723,14 +737,19 @@ Table name (default: "results").
 <summary><strong>Examples</strong></summary>
 
 ```yaml
-# CSV with exclusions
+# CSV with default path ({{ workdir }}/results.csv)
 output:
   sink:
     type: csv
-    path: "{{ workdir }}/results.csv"
-    mode: append
     exclude:
       - "benchmark.description"
+
+# CSV with custom path
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/custom_results.csv"
+    mode: overwrite
 ```
 
 </details>

@@ -66,19 +66,20 @@ def _matches(field: str, selector: str) -> bool:
     return field == sel
 
 
-def _apply_include_exclude(
+# Fields that cannot be excluded - essential for identifying results
+PROTECTED_FIELDS = {"execution.execution_id", "execution.repetition"}
+
+
+def _apply_exclude(
     row: Dict[str, Any],
-    include: List[str],
     exclude: List[str],
 ) -> Dict[str, Any]:
     keys = list(row.keys())
 
-    if include:
-        keep = {k for k in keys if any(_matches(k, s) for s in include)}
-        return {k: row[k] for k in keys if k in keep}
-
     if exclude:
         drop = {k for k in keys if any(_matches(k, s) for s in exclude)}
+        # Never drop protected fields
+        drop -= PROTECTED_FIELDS
         return {k: row[k] for k in keys if k not in drop}
 
     return row
@@ -113,11 +114,16 @@ def build_output_row(test) -> Dict[str, Any]:
         "description": getattr(test, "benchmark_description", None),
     }, row)
 
-    # execution identifiers
+    # execution identifiers and paths
     meta = getattr(test, "metadata", {}) or {}
+    workdir = getattr(test, "workdir", None)
+    execution_dir = getattr(test, "execution_dir", None)
     _flatten("execution", {
         "execution_id": getattr(test, "execution_id", None),
         "repetition": meta.get("repetition", getattr(test, "repetition", None)),
+        "repetitions": getattr(test, "repetitions", None),
+        "workdir": str(workdir) if workdir else None,
+        "execution_dir": str(execution_dir) if execution_dir else None,
     }, row)
 
     # round
@@ -129,18 +135,28 @@ def build_output_row(test) -> Dict[str, Any]:
     # vars
     _flatten("vars", dict(getattr(test, "vars", {}) or {}), row)
 
-    # metadata (exclude metrics to avoid duplicating columns)
-    # Use command_metadata property if available (includes rendered metadata_templates)
-    # Fall back to raw metadata dict for backward compatibility
-    if hasattr(test, "command_metadata"):
-        metadata = dict(test.command_metadata)
-    else:
-        metadata = dict(meta)
-    metrics_obj = metadata.pop("metrics", None)  # keep separate
-    _flatten("metadata", metadata, row)
+    # labels: user-defined fields from command.labels (Jinja-rendered)
+    if hasattr(test, "command_labels"):
+        _flatten("labels", dict(test.command_labels), row)
+
+    # metadata: IOPS internal fields (executor status, timing, errors, etc.)
+    # These are fields with __ prefix stored in test.metadata dict
+    iops_metadata = {}
+    metrics_obj = None
+    for k, v in meta.items():
+        if k == "metrics":
+            metrics_obj = v
+        elif k == "repetition":
+            pass  # already in execution.repetition
+        elif k.startswith("__"):
+            # Strip __ prefix for cleaner output (e.g., __executor_status -> executor_status)
+            clean_key = k[2:]
+            iops_metadata[clean_key] = v
+        # Ignore other keys that aren't internal metadata
+    _flatten("metadata", iops_metadata, row)
 
     # metrics (safe even if missing)
-    _flatten("metrics", metrics_obj or meta.get("metrics", {}) or {}, row)
+    _flatten("metrics", metrics_obj or {}, row)
 
     # normalize
     row = {k: _jsonify_if_needed(v) for k, v in row.items()}
@@ -236,7 +252,7 @@ def save_test_execution(test) -> Path:
         raise ValueError("test.output_path is None (output_path_template not set?)")
 
     row = build_output_row(test)
-    row = _apply_include_exclude(row, getattr(test, "output_include", []) or [], getattr(test, "output_exclude", []) or [])
+    row = _apply_exclude(row, getattr(test, "output_exclude", []) or [])
 
     df = pd.DataFrame([row])
 

@@ -5,11 +5,13 @@ title: "Execution Cache Usage Guide"
 
 ## Overview
 
-IOPS now supports intelligent caching of execution results using SQLite. This allows you to:
+IOPS supports intelligent caching of execution results using SQLite. This allows you to:
 - Skip re-running tests with identical parameters
 - Speed up iterative development and testing
 - Safely retry failed runs without re-executing successful tests
 - Handle repetitions correctly (each repetition is cached separately)
+
+**Warning: Use caching with caution.** The cache key is computed only from variable values, not from the command template. If you change your command (e.g., from `./benchmark {{ var1 }}` to `./benchmark -F {{ var1 }}`), the cache will still return old results because the parameters haven't changed. This can lead to incorrect results. See [Command Changes Are Not Detected](#important-command-changes-are-not-detected) for details and workarounds.
 
 ## Configuration
 

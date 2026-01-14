@@ -4,7 +4,7 @@ from pathlib import Path
 
 from iops.logger import setup_logger
 from iops.execution.runner import IOPSRunner
-from iops.config.loader import load_generic_config, validate_generic_config, check_system_probe_compatibility
+from iops.config.loader import load_generic_config, validate_generic_config, check_system_probe_compatibility, check_resource_sampler_compatibility
 from iops.config.models import ConfigValidationError, GenericBenchmarkConfig
 from iops.execution.matrix import build_execution_matrix
 from iops.results.find import find_executions
@@ -194,12 +194,22 @@ Examples:
     archive_create_parser = archive_subparsers.add_parser('create', help='Create archive from workdir or run',
                                                            description='Create a compressed archive from an IOPS run or workdir.')
     archive_create_parser.add_argument('source', type=Path, help='Path to workdir or run directory')
+    archive_create_parser.add_argument('filter', type=str, nargs='*', metavar='VAR=VALUE',
+                                       help='Filter by variable values (e.g., nodes=4)')
     archive_create_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
                                        help='Output archive path (default: <source>.tar.gz)')
     archive_create_parser.add_argument('--compression', choices=['gz', 'bz2', 'xz', 'none'],
                                        default='gz', help='Compression format (default: gz)')
     archive_create_parser.add_argument('--no-progress', action='store_true',
                                        help='Disable progress bar')
+    archive_create_parser.add_argument('--partial', action='store_true',
+                                       help='Create partial archive with only filtered executions')
+    archive_create_parser.add_argument('--status', type=str, default=None, metavar='STATUS',
+                                       help='Filter by execution status (SUCCEEDED, FAILED, etc.)')
+    archive_create_parser.add_argument('--cached', type=str, choices=['yes', 'no'], default=None,
+                                       help='Filter by cache status')
+    archive_create_parser.add_argument('--min-reps', type=int, default=None, metavar='N',
+                                       help='Include executions with at least N completed repetitions')
     _add_common_args(archive_create_parser)
 
     # archive extract
@@ -343,9 +353,9 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
         for k, v in cfg.command.env.items():
             logger.debug(f"    {k}={v}")
 
-    if cfg.command.metadata:
-        logger.debug("  Metadata:")
-        for k, v in cfg.command.metadata.items():
+    if cfg.command.labels:
+        logger.debug("  Labels:")
+        for k, v in cfg.command.labels.items():
             logger.debug(f"    {k}: {v}")
 
     # ------------------------------------------------------------------
@@ -398,12 +408,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
         logger.debug(f"  Table: {sink.table}")
 
     # Field selection policy
-    if sink.include:
-        logger.debug("  Selection: include-only (only these fields will be saved)")
-        logger.debug("  Include:")
-        for field in sink.include:
-            logger.debug(f"    - {field}")
-    elif sink.exclude:
+    if sink.exclude:
         logger.debug("  Selection: exclude (all fields will be saved except these)")
         logger.debug("  Exclude:")
         for field in sink.exclude:
@@ -556,15 +561,45 @@ def main():
 
         if args.archive_command == 'create':
             try:
+                # Parse parameter filters from VAR=VALUE arguments
+                param_filters = {}
+                if hasattr(args, 'filter') and args.filter:
+                    for f in args.filter:
+                        if '=' in f:
+                            key, value = f.split('=', 1)
+                            param_filters[key] = value
+                        else:
+                            logger.warning(f"Ignoring invalid filter (expected VAR=VALUE): {f}")
+
+                # Parse cached filter
+                cached_filter = None
+                if args.cached:
+                    cached_filter = args.cached == 'yes'
+
+                # --min-reps implies --partial
+                min_reps = getattr(args, 'min_reps', None)
+                is_partial = args.partial or min_reps is not None
+
                 # Determine output path
                 if args.output:
                     output_path = args.output
                 else:
                     ext = COMPRESSION_EXTENSIONS.get(args.compression, ".tar.gz")
-                    output_path = Path(f"{args.source.name}{ext}")
+                    # Add -partial suffix for partial archives
+                    suffix = "-partial" if is_partial else ""
+                    output_path = Path(f"{args.source.name}{suffix}{ext}")
 
-                archive_path = create_archive(args.source, output_path, args.compression,
-                                              show_progress=not args.no_progress)
+                archive_path = create_archive(
+                    args.source,
+                    output_path,
+                    args.compression,
+                    show_progress=not args.no_progress,
+                    partial=is_partial,
+                    status_filter=args.status,
+                    cached_filter=cached_filter,
+                    param_filters=param_filters if param_filters else None,
+                    min_completed_reps=min_reps,
+                )
                 logger.info(f"Archive created: {archive_path}")
             except FileNotFoundError as e:
                 logger.error(f"Source not found: {e}")
@@ -625,6 +660,9 @@ def main():
 
         # Check system probe compatibility (warns and disables if non-bash shell detected)
         check_system_probe_compatibility(cfg, logger)
+
+        # Check resource sampler compatibility (warns and disables if non-bash shell detected)
+        check_resource_sampler_compatibility(cfg, logger)
 
         runner = IOPSRunner(cfg=cfg, args=args)
 

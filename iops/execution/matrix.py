@@ -301,10 +301,10 @@ class ExecutionInstance:
 
     # ---------- Template fields (stored from cfg, rendered lazily) ---------- #
 
-    # Command template and env/metadata templates
+    # Command template and env/labels templates
     command_template: str = ""
     env_templates: Dict[str, Any] = field(default_factory=dict)
-    metadata_templates: Dict[str, Any] = field(default_factory=dict)
+    labels_templates: Dict[str, Any] = field(default_factory=dict)
 
     # Script metadata
     script_name: str = ""
@@ -325,7 +325,6 @@ class ExecutionInstance:
     output_mode: str = "append"    # append | overwrite
     output_table: str = "results"  # sqlite only
 
-    output_include: List[str] = field(default_factory=list)
     output_exclude: List[str] = field(default_factory=list)
 
    
@@ -458,20 +457,18 @@ class ExecutionInstance:
         return rendered
 
     @property
-    def command_metadata(self) -> Dict[str, Any]:
+    def command_labels(self) -> Dict[str, Any]:
         """
-        Render metadata from metadata_templates and merge with runtime metadata.
-        Runtime metadata overwrites template-based keys.
+        Render user-defined labels from labels_templates.
+        These go into the 'labels.*' namespace in output.
         """
         ctx = self._render_context()
         rendered: Dict[str, Any] = {}
-        for k, v in self.metadata_templates.items():
+        for k, v in self.labels_templates.items():
             if isinstance(v, str):
                 rendered[k] = _render_template(v, ctx)
             else:
                 rendered[k] = v
-        # runtime metadata has priority
-        rendered.update(self.metadata)
         return rendered
 
     @property
@@ -504,7 +501,7 @@ class ExecutionInstance:
         - {{ vars.* }}
         - {{ command }}
         - {{ command_env }}
-        - {{ command_metadata }}
+        - {{ command_labels }}
         - plus the standard context.
         """
         if not self.script_template:
@@ -521,7 +518,7 @@ class ExecutionInstance:
             "vars": self.vars,
             "command": command_obj,
             "command_env": self.env,
-            "command_metadata": self.command_metadata,
+            "command_labels": self.command_labels,
         }
 
         return _render_template(self.script_template, script_ctx)
@@ -544,7 +541,7 @@ class ExecutionInstance:
             "vars": self.vars,
             "command": command_obj,
             "command_env": self.env,
-            "command_metadata": self.command_metadata,
+            "command_labels": self.command_labels,
         }
 
         return _render_template(self.post_script_template, script_ctx)
@@ -627,11 +624,11 @@ class ExecutionInstance:
         # Repetitions
         lines.append(f"Repeats: {self.repetitions}")
 
-        # Metadata (rendered)
-        effective_metadata = self.command_metadata
-        if effective_metadata:
-            meta_items = ", ".join(f"{k}={v!r}" for k, v in effective_metadata.items())
-            lines.append(f"Metadata: {meta_items}")
+        # Labels (rendered)
+        effective_labels = self.command_labels
+        if effective_labels:
+            label_items = ", ".join(f"{k}={v!r}" for k, v in effective_labels.items())
+            lines.append(f"Labels: {label_items}")
 
         # Output
         if self.output_path:
@@ -639,12 +636,10 @@ class ExecutionInstance:
             lines.append(
                 f"Output: type={self.output_type}, mode={self.output_mode}, path={self.output_path}{extra}"
             )
-            if self.output_include:
-                lines.append(f"Output fields (include): {', '.join(self.output_include)}")
-            elif self.output_exclude:
+            if self.output_exclude:
                 lines.append(f"Output fields (exclude): {', '.join(self.output_exclude)}")
             else:
-                lines.append("Output fields: default (everything)")
+                lines.append("Output fields: default (all)")
 
 
         # Parser
@@ -701,10 +696,10 @@ class ExecutionInstance:
             for k, v in env_rendered.items():
                 lines.append(f"  {k}={v}")
 
-        effective_metadata = self.command_metadata
-        if effective_metadata:
-            lines.extend([sep, "Metadata:"])
-            for k, v in effective_metadata.items():
+        effective_labels = self.command_labels
+        if effective_labels:
+            lines.extend([sep, "Labels:"])
+            for k, v in effective_labels.items():
                 lines.append(f"  {k}: {v}")
 
         if self.output_path:
@@ -717,12 +712,10 @@ class ExecutionInstance:
             if self.output_type == "sqlite":
                 lines.append(f"Output table: {self.output_table}")
 
-            if self.output_include:
-                lines.append(f"Fields (include): {', '.join(self.output_include)}")
-            elif self.output_exclude:
+            if self.output_exclude:
                 lines.append(f"Fields (exclude): {', '.join(self.output_exclude)}")
             else:
-                lines.append("Fields: default (everything)")
+                lines.append("Fields: default (all)")
 
 
         parser_obj = self.parser
@@ -791,17 +784,16 @@ def create_execution_instance(
         if vcfg.sweep is None and vcfg.expr is not None:
             derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
 
-    # Command/env/metadata templates from cfg
+    # Command/env/labels templates from cfg
     command_template = cfg.command.template
     env_templates = dict(cfg.command.env) if cfg.command.env else {}
-    metadata_templates = dict(cfg.command.metadata) if cfg.command.metadata else {}
+    labels_templates = dict(cfg.command.labels) if cfg.command.labels else {}
 
     # Output sink templates
     output_path_template = cfg.output.sink.path
     output_type = cfg.output.sink.type
     output_mode = cfg.output.sink.mode
     output_table = cfg.output.sink.table
-    output_include = list(cfg.output.sink.include)
     output_exclude = list(cfg.output.sink.exclude)
 
     # Script templates
@@ -841,7 +833,7 @@ def create_execution_instance(
         metadata={},
         command_template=command_template,
         env_templates=env_templates,
-        metadata_templates=metadata_templates,
+        labels_templates=labels_templates,
         script_name=script_cfg.name,
         script_template=script_template,
         submit_cmd_template=submit_cmd_template,
@@ -851,7 +843,6 @@ def create_execution_instance(
         output_type=output_type,
         output_mode=output_mode,
         output_table=output_table,
-        output_include=output_include,
         output_exclude=output_exclude,
     )
 

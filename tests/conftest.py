@@ -53,7 +53,7 @@ def sample_config_dict(tmp_workdir):
         },
         "command": {
             "template": "echo 'nodes={{ nodes }} ppn={{ ppn }}'",
-            "metadata": {
+            "labels": {
                 "operation": "test"
             }
         },

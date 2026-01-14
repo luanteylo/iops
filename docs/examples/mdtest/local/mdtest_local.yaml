@@ -128,8 +128,8 @@ command:
     -z {{ tree_depth }} -b {{ branch_factor }}
     -w {{ file_size_bytes }} -F -C -T -r
 
-  # Optional: Additional metadata to attach to results
-  metadata:
+  # Optional: User-defined labels to attach to results
+  labels:
     benchmark_type: "metadata"
     operations: "create,stat,remove"
     execution_mode: "local"

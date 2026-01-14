@@ -276,9 +276,10 @@ command:
     -z {{ tree_depth }} -b {{ branch_factor }}
     -w {{ file_size_bytes }} -F -C -T -r
 
-  # Optional: Additional metadata to attach to results
-  # This appears in output as metadata.* columns
-  metadata:
+  # Optional: User-defined labels to attach to results
+  # These appear in output as labels.* columns
+  # (metadata.* is reserved for IOPS internal fields)
+  labels:
     benchmark_type: "metadata"
     operations: "create,stat,remove"
 
@@ -468,11 +469,9 @@ output:
     #   - overwrite: Replace existing file
     mode: append
 
-    # Optional: Include only specific fields (mutually exclusive with 'exclude')
+    # Optional: Exclude specific fields from output
     # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB
-    # include: ["execution.execution_id", "vars.*", "metrics.*"]
-
-    # Optional: Exclude specific fields (mutually exclusive with 'include')
+    # Wildcards supported: "vars.*", "labels.*", "metadata.*", "metrics.*"
     # Useful for removing verbose fields like descriptions
     exclude: ["benchmark.description"]
 
@@ -624,7 +623,7 @@ reporting:
 #   - {{ round_name }}            - Round name (if using rounds)
 #   - {{ round_index }}           - Round index (if using rounds)
 #   - {{ vars.variable_name }}    - Any variable from 'vars' section
-#   - {{ metadata.key }}          - Any metadata from 'command.metadata'
+#   - {{ labels.key }}            - Any label from 'command.labels'
 #   - {{ command.template }}      - The rendered command
 #   - {{ benchmark.name }}        - Benchmark name
 #

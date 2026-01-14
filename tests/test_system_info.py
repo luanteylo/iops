@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
 
 from iops.config.models import GenericBenchmarkConfig, BenchmarkConfig
-from iops.execution.planner import BasePlanner, ExhaustivePlanner, SYSTEM_PROBE_TEMPLATE, PROBE_FILENAME
+from iops.execution.planner import BasePlanner, ExhaustivePlanner, SYSTEM_PROBE_TEMPLATE, ATEXIT_SYSINFO_FILENAME
 from iops.execution.executors import BaseExecutor, SYSINFO_FILENAME
 from iops.execution.matrix import ExecutionInstance
 from iops.execution.runner import IOPSRunner
@@ -79,7 +79,8 @@ def test_system_probe_template_structure():
     """Test that SYSTEM_PROBE_TEMPLATE contains expected content."""
     # Verify key components of the probe
     assert "_iops_collect_sysinfo" in SYSTEM_PROBE_TEMPLATE
-    assert "trap '_iops_collect_sysinfo' EXIT" in SYSTEM_PROBE_TEMPLATE
+    # Probe now registers with exit handler instead of setting its own trap
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in SYSTEM_PROBE_TEMPLATE
     assert "__iops_sysinfo.json" in SYSTEM_PROBE_TEMPLATE
     assert "hostname" in SYSTEM_PROBE_TEMPLATE
     assert "cpu_model" in SYSTEM_PROBE_TEMPLATE
@@ -93,37 +94,35 @@ def test_system_probe_template_structure():
     # Verify duration_seconds uses $SECONDS (bash built-in)
     # Note: Template uses ${{SECONDS}} to escape Python string formatting
     assert "${{SECONDS}}" in SYSTEM_PROBE_TEMPLATE
-    # Verify it uses EXIT trap
-    assert "EXIT" in SYSTEM_PROBE_TEMPLATE
     # Verify error handling (never fail)
     assert "2>/dev/null" in SYSTEM_PROBE_TEMPLATE
     assert "|| true" in SYSTEM_PROBE_TEMPLATE
 
 
-def test_inject_system_probe_creates_separate_file(sample_config_file, tmp_path):
-    """Test that system probe is written to a separate file."""
+def test_inject_iops_scripts_creates_probe_file(sample_config_file, tmp_path):
+    """Test that _inject_iops_scripts creates probe file when system info collection is enabled."""
     config = load_config(sample_config_file)
+    config.benchmark.collect_system_info = True
     planner = ExhaustivePlanner(config)
 
     script_text = "#!/bin/bash\necho 'test'\necho 'more content'"
     exec_dir = tmp_path / "test_exec"
     exec_dir.mkdir(parents=True, exist_ok=True)
 
-    result = planner._inject_system_probe(script_text, exec_dir)
+    result = planner._inject_iops_scripts(script_text, exec_dir)
 
     # Probe file should be created
-    probe_file = exec_dir / PROBE_FILENAME
+    probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
     assert probe_file.exists(), "Probe file should be created"
 
     # Probe file should contain the probe content
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
     assert str(exec_dir) in probe_content
 
     # User script should NOT contain probe functions (only source line)
     assert "_iops_collect_sysinfo" not in result
-    assert "trap '_iops_collect_sysinfo' EXIT" not in result
 
     # User script should contain source line
     assert f'source "{probe_file}"' in result
@@ -134,9 +133,10 @@ def test_inject_system_probe_creates_separate_file(sample_config_file, tmp_path)
     assert "echo 'more content'" in result
 
 
-def test_inject_system_probe_preserves_slurm_directives(sample_config_file, tmp_path):
-    """Test that system probe doesn't interfere with SLURM #SBATCH directives."""
+def test_inject_iops_scripts_preserves_slurm_directives(sample_config_file, tmp_path):
+    """Test that IOPS scripts injection doesn't interfere with SLURM #SBATCH directives."""
     config = load_config(sample_config_file)
+    config.benchmark.collect_system_info = True
     planner = ExhaustivePlanner(config)
 
     script_text = """#!/bin/bash
@@ -149,36 +149,43 @@ mpirun ./my_app"""
     exec_dir = tmp_path / "test_exec"
     exec_dir.mkdir(parents=True, exist_ok=True)
 
-    result = planner._inject_system_probe(script_text, exec_dir)
+    result = planner._inject_iops_scripts(script_text, exec_dir)
 
-    # Source line should be at the end
-    source_pos = result.find("source")
-    for directive in ["#SBATCH --job-name", "#SBATCH --nodes", "#SBATCH --constraint"]:
-        directive_pos = result.find(directive)
-        assert directive_pos < source_pos, f"{directive} should be before source line"
+    # SBATCH directives should be at the top (after shebang)
+    lines = result.split('\n')
+    shebang_idx = 0
+    assert lines[shebang_idx] == "#!/bin/bash"
 
-    # Original user commands should also be before source line
-    assert result.find("module load mpi") < source_pos
-    assert result.find("mpirun ./my_app") < source_pos
+    # Find first SBATCH and first source line
+    first_sbatch_idx = next(i for i, line in enumerate(lines) if line.startswith('#SBATCH'))
+    first_source_idx = next(i for i, line in enumerate(lines) if line.startswith('source'))
+
+    # SBATCH should come before source
+    assert first_sbatch_idx < first_source_idx, "SBATCH directives should come before source lines"
+
+    # User commands should still be in the script
+    assert "module load mpi" in result
+    assert "mpirun ./my_app" in result
 
 
-def test_inject_system_probe_empty_script(sample_config_file, tmp_path):
-    """Test probe injection with empty script."""
+def test_inject_iops_scripts_empty_script(sample_config_file, tmp_path):
+    """Test IOPS script injection with empty script."""
     config = load_config(sample_config_file)
+    config.benchmark.collect_system_info = True
     planner = ExhaustivePlanner(config)
 
     script_text = ""
     exec_dir = tmp_path / "test_exec"
     exec_dir.mkdir(parents=True, exist_ok=True)
 
-    result = planner._inject_system_probe(script_text, exec_dir)
+    result = planner._inject_iops_scripts(script_text, exec_dir)
 
     # Probe file should be created even with empty script
-    probe_file = exec_dir / PROBE_FILENAME
+    probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
     assert probe_file.exists()
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
 
     # User script should have source line
     assert "source" in result
@@ -198,19 +205,19 @@ def test_prepare_execution_artifacts_injects_probe_when_enabled(sample_config_fi
     planner._prepare_execution_artifacts(test, repetition=1)
 
     # Probe file should be created
-    probe_file = test.execution_dir / PROBE_FILENAME
+    probe_file = test.execution_dir / ATEXIT_SYSINFO_FILENAME
     assert probe_file.exists(), "Probe file should be created"
 
     # Probe file should contain probe content
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
     assert "__iops_sysinfo.json" in probe_content
 
     # User script should have source line (not inline probe)
     script_content = test.script_file.read_text()
     assert "source" in script_content
-    assert PROBE_FILENAME in script_content
+    assert ATEXIT_SYSINFO_FILENAME in script_content
 
 
 def test_prepare_execution_artifacts_skips_probe_when_disabled(sample_config_file, tmp_path):
@@ -227,12 +234,12 @@ def test_prepare_execution_artifacts_skips_probe_when_disabled(sample_config_fil
     planner._prepare_execution_artifacts(test, repetition=1)
 
     # Probe file should NOT be created
-    probe_file = test.execution_dir / PROBE_FILENAME
+    probe_file = test.execution_dir / ATEXIT_SYSINFO_FILENAME
     assert not probe_file.exists(), "Probe file should not be created when disabled"
 
     # User script should NOT have source line for probe
     script_content = test.script_file.read_text()
-    assert PROBE_FILENAME not in script_content
+    assert ATEXIT_SYSINFO_FILENAME not in script_content
 
 
 def test_prepare_execution_artifacts_probe_default_behavior(sample_config_file, tmp_path):
@@ -249,12 +256,12 @@ def test_prepare_execution_artifacts_probe_default_behavior(sample_config_file, 
     planner._prepare_execution_artifacts(test, repetition=1)
 
     # Probe file should be created (default behavior)
-    probe_file = test.execution_dir / PROBE_FILENAME
+    probe_file = test.execution_dir / ATEXIT_SYSINFO_FILENAME
     assert probe_file.exists(), "Probe file should be created by default"
 
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
 
 
 # ============================================================================ #
@@ -375,7 +382,7 @@ def test_prepare_execution_artifacts_injects_probe_for_bash_script(sample_config
     planner._prepare_execution_artifacts(test, repetition=1)
 
     # Probe file SHOULD be created
-    probe_file = test.execution_dir / PROBE_FILENAME
+    probe_file = test.execution_dir / ATEXIT_SYSINFO_FILENAME
     assert probe_file.exists(), "Probe file should be created for bash scripts"
 
 
@@ -812,14 +819,14 @@ def test_system_info_end_to_end_enabled(sample_config_file, tmp_path):
     planner._prepare_execution_artifacts(test, repetition=1)
 
     # Verify probe file is created and script sources it
-    probe_file = test.execution_dir / PROBE_FILENAME
+    probe_file = test.execution_dir / ATEXIT_SYSINFO_FILENAME
     assert probe_file.exists()
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
 
     script_content = test.script_file.read_text()
     assert "source" in script_content
-    assert PROBE_FILENAME in script_content
+    assert ATEXIT_SYSINFO_FILENAME in script_content
 
     # 2. Simulate executor collecting sysinfo
     sysinfo_data = {
@@ -873,12 +880,12 @@ def test_system_info_end_to_end_disabled(sample_config_file, tmp_path):
     planner._prepare_execution_artifacts(test, repetition=1)
 
     # Verify probe file is NOT created
-    probe_file = test.execution_dir / PROBE_FILENAME
+    probe_file = test.execution_dir / ATEXIT_SYSINFO_FILENAME
     assert not probe_file.exists()
 
     # Verify script has NO source line for probe
     script_content = test.script_file.read_text()
-    assert PROBE_FILENAME not in script_content
+    assert ATEXIT_SYSINFO_FILENAME not in script_content
 
     # 2. Runner should not have any system info
     args = Mock()
@@ -970,16 +977,17 @@ def test_aggregate_system_info_with_empty_strings(mock_runner):
 def test_probe_template_is_safe_bash(sample_config_file, tmp_path):
     """Test that probe template generates valid, safe bash."""
     config = load_config(sample_config_file)
+    config.benchmark.collect_system_info = True
     planner = ExhaustivePlanner(config)
 
     script_text = "#!/bin/bash\necho 'test'"
     exec_dir = tmp_path / "test"
     exec_dir.mkdir(parents=True, exist_ok=True)
 
-    planner._inject_system_probe(script_text, exec_dir)
+    planner._inject_iops_scripts(script_text, exec_dir)
 
     # Read the probe file content
-    probe_file = exec_dir / PROBE_FILENAME
+    probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
     probe_content = probe_file.read_text()
 
     # Verify bash safety features
@@ -990,7 +998,7 @@ def test_probe_template_is_safe_bash(sample_config_file, tmp_path):
     # Verify it won't break scripts
     assert "set -e" not in probe_content  # Doesn't set strict mode
     # Verify EXIT trap is used (not explicit exit commands in the probe itself)
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
     # The word "exit" in "EXIT" (trap) is okay, but no standalone "exit" commands
     assert "\nexit " not in probe_content and "\nexit\n" not in probe_content
 
@@ -998,16 +1006,17 @@ def test_probe_template_is_safe_bash(sample_config_file, tmp_path):
 def test_system_probe_with_path_containing_spaces(sample_config_file, tmp_path):
     """Test probe injection with execution_dir containing spaces."""
     config = load_config(sample_config_file)
+    config.benchmark.collect_system_info = True
     planner = ExhaustivePlanner(config)
 
     script_text = "#!/bin/bash\necho 'test'"
     exec_dir = tmp_path / "test dir with spaces" / "exec_001"
     exec_dir.mkdir(parents=True, exist_ok=True)
 
-    result = planner._inject_system_probe(script_text, exec_dir)
+    result = planner._inject_iops_scripts(script_text, exec_dir)
 
     # Probe file should be created
-    probe_file = exec_dir / PROBE_FILENAME
+    probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
     assert probe_file.exists()
 
     # Probe file should contain the path with spaces

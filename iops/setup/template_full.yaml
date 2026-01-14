@@ -143,6 +143,21 @@ benchmark:
   # Set to false to disable if file I/O overhead is a concern (e.g., interference with benchmarks)
   track_executions: true
 
+  # Optional: Enable resource tracing during execution (default: false)
+  # When enabled, IOPS samples CPU utilization (per-core) and memory usage during benchmark
+  # execution. A background sampler runs with low priority (nice) to minimize interference.
+  # Output files:
+  #   - Per-execution: __iops_trace_<hostname>.csv (one per node)
+  #   - Run-level: __iops_resource_summary.csv (aggregated metrics with all vars)
+  # The summary CSV enables heatmap analysis correlating parameters with resource footprint.
+  # Use case: Run once without tracing (baseline), then with tracing to measure footprint.
+  # trace_resources: true
+
+  # Optional: Sampling interval for resource tracing in seconds (default: 1.0)
+  # Lower values provide finer granularity but generate more data.
+  # Only used when trace_resources is enabled.
+  # trace_interval: 0.5
+
   # Optional: Create all execution folders upfront at run start (default: false)
   # When enabled, IOPS creates all exec_XXXX folders before execution begins, including
   # folders for tests that will be skipped (due to constraints or planner selection).
@@ -348,9 +363,10 @@ command:
 
 
 
-  # Optional: Additional metadata to attach to results
-  # This appears in output as metadata.* columns
-  metadata:
+  # Optional: User-defined labels to attach to results
+  # These appear in output as labels.* columns
+  # (metadata.* is reserved for IOPS internal fields)
+  labels:
     operation: "write"
     filestrategy: "shared-file"
     spatiality: "contiguous"
@@ -497,19 +513,21 @@ output:
     # Output format: csv | parquet | sqlite
     type: csv
 
-    # Output path (supports Jinja2 templating)
-    path: "{{ workdir }}/results.csv"
+    # Optional: Output path (supports Jinja2 templating)
+    # Defaults: csv -> {{ workdir }}/results.csv
+    #           parquet -> {{ workdir }}/results.parquet
+    #           sqlite -> {{ workdir }}/results.db
+    # path: "{{ workdir }}/results.csv"
 
     # Write mode:
     #   - append: Add to existing file (creates if missing)
     #   - overwrite: Replace existing file
     mode: append
 
-    # Optional: Include only specific fields (mutually exclusive with 'exclude')
+    # Optional: Exclude specific fields from output
     # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB
-    # include: ["execution.execution_id", "vars.*", "metrics.*"]
-
-    # Optional: Exclude specific fields (mutually exclusive with 'include')
+    # Wildcards supported: "vars.*", "metadata.*", "metrics.*", "benchmark.*", "execution.*"
+    # Note: execution.execution_id and execution.repetition are protected and always included
     # Useful for removing verbose fields like descriptions
     exclude: ["benchmark.description"]
 
@@ -585,7 +603,7 @@ output:
 #   - {{ execution_dir }}         - Per-execution working directory
 #   - {{ workdir }}               - Base working directory
 #   - {{ vars.variable_name }}    - Any variable from 'vars' section
-#   - {{ metadata.key }}          - Any metadata from 'command.metadata'
+#   - {{ labels.key }}            - Any label from 'command.labels'
 #   - {{ command.template }}      - The rendered command
 #   - {{ benchmark.name }}        - Benchmark name
 #
