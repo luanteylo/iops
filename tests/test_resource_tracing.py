@@ -141,7 +141,8 @@ class TestResourceSamplerTemplate:
         import os
         from iops.execution.planner import (
             RESOURCE_SAMPLER_TEMPLATE, EXIT_HANDLER_TEMPLATE,
-            TRACE_FILENAME_PREFIX, SAMPLER_SENTINEL_FILENAME
+            TRACE_FILENAME_PREFIX, SAMPLER_SENTINEL_FILENAME,
+            RUNTIME_SAMPLER_FILENAME
         )
 
         # Create exit handler script
@@ -216,11 +217,12 @@ sleep 0.3
 class TestResourceSamplerInjection:
     """Tests for resource sampler injection into scripts."""
 
-    def test_inject_sampler_creates_separate_file(self, sample_config_dict, tmp_path):
-        """Test that _inject_resource_sampler creates a separate sampler file."""
-        from iops.execution.planner import BasePlanner, SAMPLER_FILENAME
+    def test_inject_iops_scripts_creates_sampler_file(self, sample_config_dict, tmp_path):
+        """Test that _inject_iops_scripts creates a sampler file when trace_resources is enabled."""
+        from iops.execution.planner import BasePlanner, RUNTIME_SAMPLER_FILENAME
 
         sample_config_dict["benchmark"]["trace_resources"] = True
+        sample_config_dict["benchmark"]["collect_system_info"] = False  # Disable to test sampler only
         config_file = tmp_path / "test_config.yaml"
         with open(config_file, "w") as f:
             yaml.dump(sample_config_dict, f)
@@ -232,17 +234,17 @@ class TestResourceSamplerInjection:
         exec_dir.mkdir(parents=True)
 
         script_text = "#!/bin/bash\necho hello"
-        modified_script = planner._inject_resource_sampler(script_text, exec_dir)
+        modified_script = planner._inject_iops_scripts(script_text, exec_dir)
 
         # Check sampler file was created
-        sampler_file = exec_dir / SAMPLER_FILENAME
+        sampler_file = exec_dir / RUNTIME_SAMPLER_FILENAME
         assert sampler_file.exists()
 
         # Check source line was added
         assert f'source "{sampler_file}"' in modified_script
 
-    def test_inject_sampler_preserves_shebang(self, sample_config_dict, tmp_path):
-        """Test that sampler injection preserves the original shebang."""
+    def test_inject_iops_scripts_preserves_shebang(self, sample_config_dict, tmp_path):
+        """Test that IOPS script injection preserves the original shebang."""
         from iops.execution.planner import BasePlanner
 
         sample_config_dict["benchmark"]["trace_resources"] = True
@@ -257,14 +259,14 @@ class TestResourceSamplerInjection:
         exec_dir.mkdir(parents=True)
 
         script_text = "#!/bin/bash\necho hello"
-        modified_script = planner._inject_resource_sampler(script_text, exec_dir)
+        modified_script = planner._inject_iops_scripts(script_text, exec_dir)
 
         # Shebang should be first line
         assert modified_script.startswith("#!/bin/bash")
 
-    def test_inject_sampler_uses_config_interval(self, sample_config_dict, tmp_path):
+    def test_inject_iops_scripts_uses_config_interval(self, sample_config_dict, tmp_path):
         """Test that sampler uses the configured interval."""
-        from iops.execution.planner import BasePlanner, SAMPLER_FILENAME
+        from iops.execution.planner import BasePlanner, RUNTIME_SAMPLER_FILENAME
 
         sample_config_dict["benchmark"]["trace_resources"] = True
         sample_config_dict["benchmark"]["trace_interval"] = 2.5
@@ -279,16 +281,16 @@ class TestResourceSamplerInjection:
         exec_dir.mkdir(parents=True)
 
         script_text = "#!/bin/bash\necho hello"
-        planner._inject_resource_sampler(script_text, exec_dir)
+        planner._inject_iops_scripts(script_text, exec_dir)
 
         # Check interval in sampler script
-        sampler_file = exec_dir / SAMPLER_FILENAME
+        sampler_file = exec_dir / RUNTIME_SAMPLER_FILENAME
         content = sampler_file.read_text()
         assert "_IOPS_INTERVAL=2.5" in content
 
     def test_prepare_artifacts_injects_sampler_when_enabled(self, sample_config_dict, tmp_path):
         """Test that _prepare_execution_artifacts injects sampler when enabled."""
-        from iops.execution.planner import BasePlanner, SAMPLER_FILENAME
+        from iops.execution.planner import BasePlanner, RUNTIME_SAMPLER_FILENAME
 
         sample_config_dict["benchmark"]["trace_resources"] = True
         config_file = tmp_path / "test_config.yaml"
@@ -302,17 +304,17 @@ class TestResourceSamplerInjection:
         test = planner.next_test()
 
         # Check sampler file was created
-        sampler_file = test.execution_dir / SAMPLER_FILENAME
+        sampler_file = test.execution_dir / RUNTIME_SAMPLER_FILENAME
         assert sampler_file.exists()
 
         # Check source line in script
         script_content = test.script_file.read_text()
         assert "source" in script_content
-        assert SAMPLER_FILENAME in script_content
+        assert RUNTIME_SAMPLER_FILENAME in script_content
 
     def test_prepare_artifacts_skips_sampler_when_disabled(self, sample_config_dict, tmp_path):
         """Test that _prepare_execution_artifacts skips sampler when disabled."""
-        from iops.execution.planner import BasePlanner, SAMPLER_FILENAME
+        from iops.execution.planner import BasePlanner, RUNTIME_SAMPLER_FILENAME
 
         sample_config_dict["benchmark"]["trace_resources"] = False
         config_file = tmp_path / "test_config.yaml"
@@ -326,12 +328,12 @@ class TestResourceSamplerInjection:
         test = planner.next_test()
 
         # Check sampler file was NOT created
-        sampler_file = test.execution_dir / SAMPLER_FILENAME
+        sampler_file = test.execution_dir / RUNTIME_SAMPLER_FILENAME
         assert not sampler_file.exists()
 
-    def test_inject_sampler_preserves_slurm_directives(self, sample_config_dict, tmp_path):
-        """Test that sampler injection preserves SLURM #SBATCH directives at top."""
-        from iops.execution.planner import BasePlanner
+    def test_inject_iops_scripts_preserves_slurm_directives(self, sample_config_dict, tmp_path):
+        """Test that IOPS script injection preserves SLURM #SBATCH directives at top."""
+        from iops.execution.planner import BasePlanner, RUNTIME_SAMPLER_FILENAME
 
         sample_config_dict["benchmark"]["trace_resources"] = True
         config_file = tmp_path / "test_config.yaml"
@@ -352,7 +354,7 @@ class TestResourceSamplerInjection:
 
 echo "Running benchmark"
 """
-        modified_script = planner._inject_resource_sampler(script_text, exec_dir)
+        modified_script = planner._inject_iops_scripts(script_text, exec_dir)
 
         lines = modified_script.split('\n')
 
@@ -364,9 +366,9 @@ echo "Running benchmark"
         assert lines[2] == "#SBATCH --nodes=4"
         assert lines[3] == "#SBATCH --time=01:00:00"
 
-        # Source line should come after #SBATCH directives
-        source_line_idx = next(i for i, line in enumerate(lines) if "source" in line and "__iops_sampler" in line)
-        assert source_line_idx > 3  # After all SBATCH lines
+        # Source lines should come after #SBATCH directives
+        first_source_idx = next(i for i, line in enumerate(lines) if line.startswith("source"))
+        assert first_source_idx > 3  # After all SBATCH lines
 
 
 # ============================================================================ #

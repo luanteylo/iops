@@ -52,8 +52,9 @@ import warnings
 # Filename for the exit handler script (written to execution directory)
 EXIT_HANDLER_FILENAME = "__iops_exit_handler.sh"
 
-# Filename for the system probe script (written to execution directory)
-PROBE_FILENAME = "__iops_probe.sh"
+# Filename for the system probe script - runs at exit to collect node info
+# Naming convention: __iops_atexit_* for scripts that run via the exit trap
+ATEXIT_SYSINFO_FILENAME = "__iops_atexit_sysinfo.sh"
 
 # Filename for the execution parameters (written to exec_XXXX directory)
 PARAMS_FILENAME = "__iops_params.json"
@@ -149,8 +150,9 @@ _iops_collect_sysinfo() {{
 _iops_register_exit "_iops_collect_sysinfo"
 '''
 
-# Filename for the resource sampler script (written to execution directory)
-SAMPLER_FILENAME = "__iops_sampler.sh"
+# Filename for the resource sampler script - runs during execution to collect metrics
+# Naming convention: __iops_runtime_* for scripts that run during benchmark execution
+RUNTIME_SAMPLER_FILENAME = "__iops_runtime_sampler.sh"
 
 # Filename for the sentinel file (signals samplers to stop)
 SAMPLER_SENTINEL_FILENAME = "__iops_trace_running"
@@ -483,27 +485,9 @@ class BasePlanner(ABC, HasLogger):
         # Get the rendered script text
         script_text = test.script_text
 
-        # Check which IOPS features are enabled
-        trace_resources = getattr(self.cfg.benchmark, 'trace_resources', False)
-        collect_system_info = getattr(self.cfg.benchmark, 'collect_system_info', True)
-
-        # Inject exit handler FIRST if any feature needs it
-        # The exit handler provides a centralized EXIT trap for all features
-        if trace_resources or collect_system_info:
-            script_text = self._inject_exit_handler(script_text, exec_dir)
-
-        # Inject resource sampler if enabled (default: False)
-        # The sampler runs in background collecting CPU/memory utilization
-        # For SLURM multi-node, it uses srun to launch on all nodes
-        # Must be injected early so it starts before user code
-        if trace_resources:
-            script_text = self._inject_resource_sampler(script_text, exec_dir)
-
-        # Inject system probe if enabled (default: True)
-        # The probe registers with the exit handler to collect system info after the script completes
-        # Injected at the END so it runs after user code completes
-        if collect_system_info:
-            script_text = self._inject_system_probe(script_text, exec_dir)
+        # Inject IOPS helper scripts (exit handler, runtime monitors, atexit scripts)
+        # All sources are injected at a single point after shebang/#SBATCH directives
+        script_text = self._inject_iops_scripts(script_text, exec_dir)
 
         # Write script files inside repetition dir
         test.script_file = exec_dir / f"run_{test.script_name}.sh"
@@ -520,31 +504,75 @@ class BasePlanner(ABC, HasLogger):
 
         self.logger.debug(f"  [Prepare] Scripts written: {script_info}")
 
-    def _inject_exit_handler(self, script_text: str, exec_dir: Path) -> str:
+    def _inject_iops_scripts(self, script_text: str, exec_dir: Path) -> str:
         """
-        Inject the centralized exit handler into a script.
+        Inject all IOPS helper scripts into a user script.
 
-        The exit handler provides a single EXIT trap that other IOPS features
-        can register their cleanup actions with. This must be injected FIRST,
-        before any features that need to register cleanup actions.
+        This method handles all IOPS script injection at a single point, right after
+        the shebang and #SBATCH directives. Scripts are organized into two categories:
+
+        1. Runtime scripts (__iops_runtime_*): Run during benchmark execution
+           - Resource sampler: Collects CPU/memory metrics in background
+
+        2. At-exit scripts (__iops_atexit_*): Run via EXIT trap when script completes
+           - System info probe: Collects node information
+
+        The exit handler coordinates all at-exit scripts via a single EXIT trap.
+        Runtime scripts that need cleanup (like the sampler) register their cleanup
+        functions with the exit handler.
+
+        Injection order (all at single point after shebang/#SBATCH):
+        1. Exit handler (sets up trap, must be first)
+        2. Runtime scripts (start monitors before user code)
+        3. At-exit scripts (register functions to run on exit)
 
         Args:
             script_text: Original script content
-            exec_dir: Execution directory where handler script will be written
+            exec_dir: Execution directory where helper scripts will be written
 
         Returns:
-            Script text with exit handler source line inserted after shebang/#SBATCH
+            Script text with all IOPS sources injected after shebang/#SBATCH
         """
-        # Write exit handler script to separate file
+        # Check which features are enabled
+        trace_resources = getattr(self.cfg.benchmark, 'trace_resources', False)
+        collect_system_info = getattr(self.cfg.benchmark, 'collect_system_info', True)
+
+        # If no features enabled, return script unchanged
+        if not trace_resources and not collect_system_info:
+            return script_text
+
+        # Build list of source lines to inject
+        source_lines = ['\n# IOPS Helper Scripts - injected for monitoring and data collection']
+
+        # 1. Exit handler (always needed if any feature is enabled)
         handler_file = exec_dir / EXIT_HANDLER_FILENAME
         with open(handler_file, "w") as f:
             f.write(EXIT_HANDLER_TEMPLATE)
+        source_lines.append(f'source "{handler_file}"  # Exit trap coordinator')
 
-        # Source line to inject
-        source_line = (
-            '\n# Source IOPS exit handler (centralized cleanup coordinator)\n'
-            f'source "{handler_file}"\n'
-        )
+        # 2. Runtime scripts (run during execution)
+        if trace_resources:
+            trace_interval = getattr(self.cfg.benchmark, 'trace_interval', 1.0)
+            sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
+                execution_dir=str(exec_dir),
+                trace_prefix=TRACE_FILENAME_PREFIX,
+                trace_interval=trace_interval,
+                sentinel_filename=SAMPLER_SENTINEL_FILENAME
+            )
+            sampler_file = exec_dir / RUNTIME_SAMPLER_FILENAME
+            with open(sampler_file, "w") as f:
+                f.write(sampler_script)
+            source_lines.append(f'source "{sampler_file}"  # CPU/memory monitoring')
+
+        # 3. At-exit scripts (run on script exit via trap)
+        if collect_system_info:
+            probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
+            probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
+            with open(probe_file, "w") as f:
+                f.write(probe_script)
+            source_lines.append(f'source "{probe_file}"  # System info collection')
+
+        source_lines.append('')  # Empty line after IOPS block
 
         # Find insertion point after shebang and SLURM directives
         lines = script_text.split('\n')
@@ -558,113 +586,10 @@ class BasePlanner(ABC, HasLogger):
         while insert_idx < len(lines) and lines[insert_idx].startswith('#SBATCH'):
             insert_idx += 1
 
-        # Insert source line at the found position
-        lines.insert(insert_idx, source_line)
-        return '\n'.join(lines)
+        # Insert all source lines at the found position
+        for i, source_line in enumerate(source_lines):
+            lines.insert(insert_idx + i, source_line)
 
-    def _inject_system_probe(self, script_text: str, exec_dir: Path) -> str:
-        """
-        Set up system probe for a script.
-
-        Writes the probe to a separate file and adds a source line to the user
-        script. The probe registers its cleanup action with the centralized
-        exit handler.
-
-        Args:
-            script_text: Original script content
-            exec_dir: Execution directory where probe script will be written
-
-        Returns:
-            Script text with source line appended (runs at end of script)
-        """
-        # Write probe script to separate file
-        probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
-        probe_file = exec_dir / PROBE_FILENAME
-        with open(probe_file, "w") as f:
-            f.write(probe_script)
-
-        # Add source line to END of user script (so it registers just before exit)
-        if script_text and not script_text.endswith('\n'):
-            script_text += '\n'
-
-        script_text += (
-            '\n# Source IOPS system probe (collects node info on exit)\n'
-            '# To disable, set collect_system_info: false in benchmark config\n'
-            f'source "{probe_file}"\n'
-        )
-
-        return script_text
-
-    def _inject_resource_sampler(self, script_text: str, exec_dir: Path) -> str:
-        """
-        Set up resource sampler for a script.
-
-        Writes the sampler to a separate file and adds a source line to the user
-        script. The sampler runs in the background collecting CPU and memory
-        utilization at configurable intervals.
-
-        For SLURM multi-node jobs, the sampler uses srun to launch on all nodes.
-        Termination is handled via a sentinel file that is removed by the
-        centralized exit handler.
-
-        Args:
-            script_text: Original script content
-            exec_dir: Execution directory where sampler script will be written
-
-        Returns:
-            Script text with source line inserted (sampler starts before user code)
-        """
-        # Get trace interval from config
-        trace_interval = getattr(self.cfg.benchmark, 'trace_interval', 1.0)
-
-        # Write sampler script to separate file
-        sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
-            execution_dir=str(exec_dir),
-            trace_prefix=TRACE_FILENAME_PREFIX,
-            trace_interval=trace_interval,
-            sentinel_filename=SAMPLER_SENTINEL_FILENAME
-        )
-        sampler_file = exec_dir / SAMPLER_FILENAME
-        with open(sampler_file, "w") as f:
-            f.write(sampler_script)
-
-        # Source line to inject (sampler needs to start BEFORE user code)
-        source_line = (
-            '\n# Source IOPS resource sampler (collects CPU/memory during execution)\n'
-            '# For SLURM multi-node, samplers run on all nodes via srun\n'
-            '# To disable, set trace_resources: false in benchmark config\n'
-            f'source "{sampler_file}"\n'
-        )
-
-        # Find insertion point after shebang, SLURM directives, AND exit handler
-        # The exit handler must be sourced before the sampler (sampler registers with it)
-        lines = script_text.split('\n')
-        insert_idx = 0
-
-        # Skip shebang if present
-        if lines and lines[0].startswith('#!'):
-            insert_idx = 1
-
-        # Skip all #SBATCH directives (must stay at top for SLURM)
-        while insert_idx < len(lines) and lines[insert_idx].startswith('#SBATCH'):
-            insert_idx += 1
-
-        # Skip past the exit handler source block (if present)
-        # Look for the exit handler source line and skip past it
-        while insert_idx < len(lines):
-            line = lines[insert_idx].strip()
-            if 'exit handler' in line.lower() or EXIT_HANDLER_FILENAME in line:
-                insert_idx += 1
-            elif line.startswith('source') and EXIT_HANDLER_FILENAME in line:
-                insert_idx += 1
-                break
-            elif line == '' or line.startswith('#'):
-                insert_idx += 1
-            else:
-                break
-
-        # Insert source line at the found position
-        lines.insert(insert_idx, source_line)
         return '\n'.join(lines)
 
     def _write_params_file(self, test: ExecutionInstance, exec_parent_dir: Path) -> None:
