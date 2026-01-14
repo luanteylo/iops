@@ -95,7 +95,6 @@ output:
     type: csv          # parquet | csv | sqlite
     path: "{{ workdir }}/results.csv"
     mode: append           # append | overwrite
-    include: []            # optional, mutually exclusive with exclude
-    exclude: ["benchmark.name", "benchmark.description"]            # optional, mutually exclusive with include
+    exclude: ["benchmark.name", "benchmark.description"]            # optional, exclude fields from output
     table: results         # only for sqlite
 

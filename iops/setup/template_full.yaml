@@ -520,11 +520,9 @@ output:
     #   - overwrite: Replace existing file
     mode: append
 
-    # Optional: Include only specific fields (mutually exclusive with 'exclude')
+    # Optional: Exclude specific fields from output
     # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB
-    # include: ["execution.execution_id", "vars.*", "metrics.*"]
-
-    # Optional: Exclude specific fields (mutually exclusive with 'include')
+    # Wildcards supported: "vars.*", "metadata.*", "metrics.*"
     # Useful for removing verbose fields like descriptions
     exclude: ["benchmark.description"]
 

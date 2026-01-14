@@ -206,7 +206,6 @@ class OutputSinkConfig:
     type: Literal["csv", "parquet", "sqlite"]
     path: str
     mode: Literal["append", "overwrite"] = "append"
-    include: List[str] = field(default_factory=list)
     exclude: List[str] = field(default_factory=list)
     table: str = "results"  # sqlite only
 

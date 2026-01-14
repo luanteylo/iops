@@ -241,7 +241,7 @@ def _load_script_content(content: str, config_dir: Path) -> str:
 
 def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
     """
-    Collect all valid field names that can be used in output include/exclude lists.
+    Collect all valid field names that can be used in output exclude lists.
 
     Returns a set of allowed dotted field names like 'vars.nodes', 'metrics.bwMiB', etc.
     """
@@ -701,7 +701,6 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             type=out["type"],
             path=out["path"],
             mode=out.get("mode", "append"),
-            include=out.get("include", []) or [],
             exclude=out.get("exclude", []) or [],
             table=out.get("table", "results"),
         )
@@ -1265,12 +1264,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if sink.mode not in ("append", "overwrite"):
         raise ConfigValidationError("output.sink.mode must be append or overwrite")
 
-    if sink.include and sink.exclude:
-        raise ConfigValidationError("output.sink cannot define both 'include' and 'exclude'")
-
     # Validate that requested fields exist in config (static check)
-    if sink.include:
-        _validate_output_field_list(cfg, sink.include, "output.sink.include")
     if sink.exclude:
         _validate_output_field_list(cfg, sink.exclude, "output.sink.exclude")
 

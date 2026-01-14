@@ -325,7 +325,6 @@ class ExecutionInstance:
     output_mode: str = "append"    # append | overwrite
     output_table: str = "results"  # sqlite only
 
-    output_include: List[str] = field(default_factory=list)
     output_exclude: List[str] = field(default_factory=list)
 
    
@@ -639,12 +638,10 @@ class ExecutionInstance:
             lines.append(
                 f"Output: type={self.output_type}, mode={self.output_mode}, path={self.output_path}{extra}"
             )
-            if self.output_include:
-                lines.append(f"Output fields (include): {', '.join(self.output_include)}")
-            elif self.output_exclude:
+            if self.output_exclude:
                 lines.append(f"Output fields (exclude): {', '.join(self.output_exclude)}")
             else:
-                lines.append("Output fields: default (everything)")
+                lines.append("Output fields: default (all)")
 
 
         # Parser
@@ -717,12 +714,10 @@ class ExecutionInstance:
             if self.output_type == "sqlite":
                 lines.append(f"Output table: {self.output_table}")
 
-            if self.output_include:
-                lines.append(f"Fields (include): {', '.join(self.output_include)}")
-            elif self.output_exclude:
+            if self.output_exclude:
                 lines.append(f"Fields (exclude): {', '.join(self.output_exclude)}")
             else:
-                lines.append("Fields: default (everything)")
+                lines.append("Fields: default (all)")
 
 
         parser_obj = self.parser
@@ -801,7 +796,6 @@ def create_execution_instance(
     output_type = cfg.output.sink.type
     output_mode = cfg.output.sink.mode
     output_table = cfg.output.sink.table
-    output_include = list(cfg.output.sink.include)
     output_exclude = list(cfg.output.sink.exclude)
 
     # Script templates
@@ -851,7 +845,6 @@ def create_execution_instance(
         output_type=output_type,
         output_mode=output_mode,
         output_table=output_table,
-        output_include=output_include,
         output_exclude=output_exclude,
     )
 

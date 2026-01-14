@@ -408,12 +408,7 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
         logger.debug(f"  Table: {sink.table}")
 
     # Field selection policy
-    if sink.include:
-        logger.debug("  Selection: include-only (only these fields will be saved)")
-        logger.debug("  Include:")
-        for field in sink.include:
-            logger.debug(f"    - {field}")
-    elif sink.exclude:
+    if sink.exclude:
         logger.debug("  Selection: exclude (all fields will be saved except these)")
         logger.debug("  Exclude:")
         for field in sink.exclude:

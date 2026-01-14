@@ -66,16 +66,11 @@ def _matches(field: str, selector: str) -> bool:
     return field == sel
 
 
-def _apply_include_exclude(
+def _apply_exclude(
     row: Dict[str, Any],
-    include: List[str],
     exclude: List[str],
 ) -> Dict[str, Any]:
     keys = list(row.keys())
-
-    if include:
-        keep = {k for k in keys if any(_matches(k, s) for s in include)}
-        return {k: row[k] for k in keys if k in keep}
 
     if exclude:
         drop = {k for k in keys if any(_matches(k, s) for s in exclude)}
@@ -236,7 +231,7 @@ def save_test_execution(test) -> Path:
         raise ValueError("test.output_path is None (output_path_template not set?)")
 
     row = build_output_row(test)
-    row = _apply_include_exclude(row, getattr(test, "output_include", []) or [], getattr(test, "output_exclude", []) or [])
+    row = _apply_exclude(row, getattr(test, "output_exclude", []) or [])
 
     df = pd.DataFrame([row])
 

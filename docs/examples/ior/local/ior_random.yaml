@@ -154,14 +154,10 @@ output:
     type: "csv"
     path: "{{ workdir }}/results_random.csv"
     mode: "append"
-
-  # Include specific fields in output
-  include:
-    - "benchmark.name"
-    - "execution.*"
-    - "vars.*"
-    - "metrics.*"
-    - "metadata.operation"
+    # Exclude verbose fields from output
+    exclude:
+      - "benchmark.description"
+      - "round.*"
 
 ---
 # Alternative Configuration: Multi-Round Random Sampling
