@@ -23,19 +23,44 @@ Metadata files are written to the **workdir** during benchmark execution. While 
 
 ## Metadata Files Overview
 
-| File | Location | Written When | Purpose |
-|------|----------|--------------|---------|
-| `__iops_run_metadata.json` | Run root | End of benchmark | Report generation |
-| `__iops_index.json` | Run root | During execution | Fast execution lookup |
-| `__iops_resource_summary.csv` | Run root | End of benchmark | Aggregated resource metrics |
-| `__iops_params.json` | Each exec folder | Before test runs | Parameter storage |
-| `__iops_status.json` | Each exec/rep folder | After test completes | Status and cache tracking |
-| `__iops_exit_handler.sh` | Each repetition folder | Before test runs | Centralized EXIT trap coordinator |
-| `__iops_atexit_sysinfo.sh` | Each repetition folder | Before test runs | System info collection |
-| `__iops_sysinfo.json` | Each repetition folder | After test completes | Hardware/environment info |
-| `__iops_runtime_sampler.sh` | Each repetition folder | Before test runs | Resource tracing script |
-| `__iops_trace_running` | Each repetition folder | During test execution | Sentinel file for sampler |
-| `__iops_trace_<host>.csv` | Each repetition folder | During test execution | Per-node resource trace |
+### Run-Level Files
+
+Located in `workdir/run_XXX/`:
+
+| File | Purpose |
+|------|---------|
+| `__iops_run_metadata.json` | Report generation (config, timing, variables) |
+| `__iops_index.json` | Fast execution lookup for `iops find` |
+| `__iops_resource_summary.csv` | Aggregated CPU/memory metrics |
+
+### Execution Tracking Files
+
+Located in `workdir/run_XXX/exec_XXXX/`:
+
+| File | Purpose |
+|------|---------|
+| `__iops_params.json` | Parameter values for this execution |
+| `__iops_status.json` | Execution status (also in repetition folders) |
+
+### System Info Files
+
+Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
+
+| File | Purpose |
+|------|---------|
+| `__iops_exit_handler.sh` | Centralized EXIT trap coordinator |
+| `__iops_atexit_sysinfo.sh` | System info collection script |
+| `__iops_sysinfo.json` | Hardware/environment info (generated at exit) |
+
+### Resource Tracing Files
+
+Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
+
+| File | Purpose |
+|------|---------|
+| `__iops_runtime_sampler.sh` | CPU/memory sampling script |
+| `__iops_trace_running` | Sentinel file (signals samplers to run) |
+| `__iops_trace_<host>.csv` | Per-node resource trace data |
 
 ## Controlling Metadata Generation
 
