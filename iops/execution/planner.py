@@ -542,16 +542,20 @@ class BasePlanner(ABC, HasLogger):
             return script_text
 
         # Build list of source lines to inject
-        source_lines = ['\n# IOPS Helper Scripts - injected for monitoring and data collection']
+        source_lines = [
+            '',
+            '# ===== IOPS INJECTION START =====',
+        ]
 
         # 1. Exit handler (always needed if any feature is enabled)
         handler_file = exec_dir / EXIT_HANDLER_FILENAME
         with open(handler_file, "w") as f:
             f.write(EXIT_HANDLER_TEMPLATE)
-        source_lines.append(f'source "{handler_file}"  # Exit trap coordinator')
+        source_lines.append(f'source "{handler_file}"')
 
         # 2. Runtime scripts (run during execution)
         if trace_resources:
+            # To disable: set benchmark.trace_resources: false in config
             trace_interval = getattr(self.cfg.benchmark, 'trace_interval', 1.0)
             sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
                 execution_dir=str(exec_dir),
@@ -562,19 +566,22 @@ class BasePlanner(ABC, HasLogger):
             sampler_file = exec_dir / RUNTIME_SAMPLER_FILENAME
             with open(sampler_file, "w") as f:
                 f.write(sampler_script)
-            source_lines.append(f'source "{sampler_file}"  # CPU/memory monitoring')
+            source_lines.append(f'source "{sampler_file}"  # disable: trace_resources: false')
 
         # 3. At-exit scripts (run on script exit via trap)
         if collect_system_info:
+            # To disable: set benchmark.collect_system_info: false in config
             probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
             probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
             with open(probe_file, "w") as f:
                 f.write(probe_script)
-            source_lines.append(f'source "{probe_file}"  # System info collection')
+            source_lines.append(f'source "{probe_file}"  # disable: collect_system_info: false')
 
-        source_lines.append('')  # Empty line after IOPS block
+        source_lines.append('# ===== IOPS INJECTION END =====')
 
-        # Find insertion point after shebang and SLURM directives
+        # Find insertion point after the SLURM header block
+        # SLURM reads #SBATCH directives through blank lines and comments until it
+        # hits an actual command. We must inject AFTER all #SBATCH directives.
         lines = script_text.split('\n')
         insert_idx = 0
 
@@ -582,9 +589,17 @@ class BasePlanner(ABC, HasLogger):
         if lines and lines[0].startswith('#!'):
             insert_idx = 1
 
-        # Skip all #SBATCH directives (must stay at top for SLURM)
-        while insert_idx < len(lines) and lines[insert_idx].startswith('#SBATCH'):
-            insert_idx += 1
+        # Skip the entire SLURM header block: #SBATCH directives, comments, blank lines
+        # Stop when we hit an actual command (non-comment, non-blank line)
+        while insert_idx < len(lines):
+            line = lines[insert_idx]
+            stripped = line.strip()
+            if stripped == '':  # Blank line - continue
+                insert_idx += 1
+            elif stripped.startswith('#'):  # Comment or #SBATCH - continue
+                insert_idx += 1
+            else:  # Actual command - stop here
+                break
 
         # Insert all source lines at the found position
         for i, source_line in enumerate(source_lines):
