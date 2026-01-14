@@ -79,7 +79,8 @@ def test_system_probe_template_structure():
     """Test that SYSTEM_PROBE_TEMPLATE contains expected content."""
     # Verify key components of the probe
     assert "_iops_collect_sysinfo" in SYSTEM_PROBE_TEMPLATE
-    assert "trap '_iops_collect_sysinfo' EXIT" in SYSTEM_PROBE_TEMPLATE
+    # Probe now registers with exit handler instead of setting its own trap
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in SYSTEM_PROBE_TEMPLATE
     assert "__iops_sysinfo.json" in SYSTEM_PROBE_TEMPLATE
     assert "hostname" in SYSTEM_PROBE_TEMPLATE
     assert "cpu_model" in SYSTEM_PROBE_TEMPLATE
@@ -93,8 +94,6 @@ def test_system_probe_template_structure():
     # Verify duration_seconds uses $SECONDS (bash built-in)
     # Note: Template uses ${{SECONDS}} to escape Python string formatting
     assert "${{SECONDS}}" in SYSTEM_PROBE_TEMPLATE
-    # Verify it uses EXIT trap
-    assert "EXIT" in SYSTEM_PROBE_TEMPLATE
     # Verify error handling (never fail)
     assert "2>/dev/null" in SYSTEM_PROBE_TEMPLATE
     assert "|| true" in SYSTEM_PROBE_TEMPLATE
@@ -118,7 +117,7 @@ def test_inject_system_probe_creates_separate_file(sample_config_file, tmp_path)
     # Probe file should contain the probe content
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
     assert str(exec_dir) in probe_content
 
     # User script should NOT contain probe functions (only source line)
@@ -178,7 +177,7 @@ def test_inject_system_probe_empty_script(sample_config_file, tmp_path):
     assert probe_file.exists()
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
 
     # User script should have source line
     assert "source" in result
@@ -204,7 +203,7 @@ def test_prepare_execution_artifacts_injects_probe_when_enabled(sample_config_fi
     # Probe file should contain probe content
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
     assert "__iops_sysinfo.json" in probe_content
 
     # User script should have source line (not inline probe)
@@ -254,7 +253,7 @@ def test_prepare_execution_artifacts_probe_default_behavior(sample_config_file, 
 
     probe_content = probe_file.read_text()
     assert "_iops_collect_sysinfo" in probe_content
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
 
 
 # ============================================================================ #
@@ -990,7 +989,7 @@ def test_probe_template_is_safe_bash(sample_config_file, tmp_path):
     # Verify it won't break scripts
     assert "set -e" not in probe_content  # Doesn't set strict mode
     # Verify EXIT trap is used (not explicit exit commands in the probe itself)
-    assert "trap '_iops_collect_sysinfo' EXIT" in probe_content
+    assert '_iops_register_exit "_iops_collect_sysinfo"' in probe_content
     # The word "exit" in "EXIT" (trap) is okay, but no standalone "exit" commands
     assert "\nexit " not in probe_content and "\nexit\n" not in probe_content
 

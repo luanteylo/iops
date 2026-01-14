@@ -125,40 +125,50 @@ class TestResourceSamplerTemplate:
         from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE
         assert "/proc/meminfo" in RESOURCE_SAMPLER_TEMPLATE
 
-    def test_sampler_template_self_terminates_on_parent_exit(self):
-        """Test that sampler self-terminates when parent process exits."""
+    def test_sampler_template_self_terminates_on_sentinel_removal(self):
+        """Test that sampler self-terminates when sentinel file is removed."""
         from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE
-        # Sampler captures parent PID and checks if it's still alive
-        assert "_IOPS_PARENT_PID=$$" in RESOURCE_SAMPLER_TEMPLATE
-        assert 'kill -0 "$_IOPS_PARENT_PID"' in RESOURCE_SAMPLER_TEMPLATE
+        # Sampler uses sentinel file for termination (supports SLURM multi-node)
+        assert "_IOPS_SENTINEL=" in RESOURCE_SAMPLER_TEMPLATE
+        assert '[[ -f "$_IOPS_SENTINEL" ]]' in RESOURCE_SAMPLER_TEMPLATE
+        # Sampler registers cleanup with exit handler
+        assert '_iops_register_exit "_iops_stop_samplers"' in RESOURCE_SAMPLER_TEMPLATE
 
-    def test_sampler_actually_terminates_when_parent_exits(self, tmp_path):
-        """Behavioral test: sampler process terminates when parent script exits."""
+    def test_sampler_actually_terminates_when_sentinel_removed(self, tmp_path):
+        """Behavioral test: sampler process terminates when sentinel file is removed."""
         import subprocess
         import time
         import os
-        from iops.execution.planner import RESOURCE_SAMPLER_TEMPLATE, TRACE_FILENAME_PREFIX
+        from iops.execution.planner import (
+            RESOURCE_SAMPLER_TEMPLATE, EXIT_HANDLER_TEMPLATE,
+            TRACE_FILENAME_PREFIX, SAMPLER_SENTINEL_FILENAME
+        )
+
+        # Create exit handler script
+        exit_handler_file = tmp_path / "__iops_exit_handler.sh"
+        exit_handler_file.write_text(EXIT_HANDLER_TEMPLATE)
 
         # Create sampler script
         sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
             execution_dir=str(tmp_path),
             trace_prefix=TRACE_FILENAME_PREFIX,
-            trace_interval=0.1
+            trace_interval=0.1,
+            sentinel_filename=SAMPLER_SENTINEL_FILENAME
         )
         sampler_file = tmp_path / "__iops_sampler.sh"
         sampler_file.write_text(sampler_script)
 
-        pid_file = tmp_path / "sampler_pid"
         parent_pid_file = tmp_path / "parent_pid"
 
-        # Create a parent script that sources sampler and exits quickly
-        # Close stdout/stderr in background job to avoid blocking subprocess.run
+        # Create a parent script that sources exit handler then sampler, and exits
+        # The exit handler's trap will remove the sentinel file, causing sampler to stop
         parent_script = tmp_path / "parent.sh"
         parent_script.write_text(f'''#!/bin/bash
 echo $$ > "{parent_pid_file}"
+source "{exit_handler_file}"
 source "{sampler_file}"
 sleep 0.3
-# Parent exits here - sampler should detect this and terminate
+# Parent exits here - exit handler removes sentinel, sampler should terminate
 ''')
         parent_script.chmod(0o755)
 
@@ -175,7 +185,7 @@ sleep 0.3
         # Get the parent PID to find background jobs
         parent_pid = int(parent_pid_file.read_text().strip())
 
-        # Wait for sampler to detect parent death and exit
+        # Wait for sampler to detect sentinel removal and exit
         # The sampler checks every trace_interval (0.1s), so wait a bit longer
         time.sleep(0.5)
 
@@ -193,6 +203,10 @@ sleep 0.3
                 pytest.fail(f"Background processes still running after parent exited: {child_pids}")
         except subprocess.TimeoutExpired:
             pytest.fail("pgrep timed out - background processes may be stuck")
+
+        # Verify sentinel file was removed by exit handler
+        sentinel_file = tmp_path / SAMPLER_SENTINEL_FILENAME
+        assert not sentinel_file.exists(), "Sentinel file should be removed by exit handler"
 
 
 # ============================================================================ #
