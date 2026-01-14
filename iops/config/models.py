@@ -167,7 +167,7 @@ class ConstraintConfig:
 @dataclass
 class CommandConfig:
     template: str
-    metadata: Dict[str, Any]
+    labels: Dict[str, Any]
     env: Dict[str, str]
 
 

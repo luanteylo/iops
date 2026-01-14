@@ -269,9 +269,9 @@ def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
         # optional shorthand support
         allowed.add(vname)
 
-    # --- metadata.<key> from command.metadata ---
-    for k in (cfg.command.metadata or {}).keys():
-        allowed.add(f"metadata.{k}")
+    # --- labels.<key> from command.labels (user-defined) ---
+    for k in (cfg.command.labels or {}).keys():
+        allowed.add(f"labels.{k}")
         # optional shorthand support
         allowed.add(k)
 
@@ -303,7 +303,7 @@ def _validate_output_field_list(
     allowed = _collect_allowed_output_fields(cfg)
 
     # Valid prefixes for wildcards
-    valid_prefixes = {"benchmark", "execution", "vars", "metadata", "metrics", "round"}
+    valid_prefixes = {"benchmark", "execution", "vars", "labels", "metadata", "metrics", "round"}
 
     bad: list[str] = []
     for f in fields:
@@ -655,7 +655,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     c = data["command"]
     command = CommandConfig(
         template=c["template"],
-        metadata=c.get("metadata", {}),
+        labels=c.get("labels", {}),
         env=c.get("env", {}),
     )
 

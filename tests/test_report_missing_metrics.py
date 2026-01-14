@@ -88,7 +88,7 @@ class TestMissingMetricsHandling:
             },
             "command": {
                 "template": "mdtest -n {{ files_per_task }} -p {{ mpi_processes }}",
-                "metadata": {},
+                "labels": {},
             },
             "reporting": {
                 "enabled": True,

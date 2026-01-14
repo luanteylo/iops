@@ -67,7 +67,7 @@ command:
   template: |
     echo "Running with nodes={{ nodes }}, ppn={{ processes_per_node }}, ost_num={{ ost_num }}"
     echo "Total processes: {{ total_processes }}"
-  metadata:
+  labels:
     operation: "ost_impact_test"
 
 scripts:

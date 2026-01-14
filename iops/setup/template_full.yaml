@@ -363,9 +363,10 @@ command:
 
 
 
-  # Optional: Additional metadata to attach to results
-  # This appears in output as metadata.* columns
-  metadata:
+  # Optional: User-defined labels to attach to results
+  # These appear in output as labels.* columns
+  # (metadata.* is reserved for IOPS internal fields)
+  labels:
     operation: "write"
     filestrategy: "shared-file"
     spatiality: "contiguous"
@@ -602,7 +603,7 @@ output:
 #   - {{ execution_dir }}         - Per-execution working directory
 #   - {{ workdir }}               - Base working directory
 #   - {{ vars.variable_name }}    - Any variable from 'vars' section
-#   - {{ metadata.key }}          - Any metadata from 'command.metadata'
+#   - {{ labels.key }}            - Any label from 'command.labels'
 #   - {{ command.template }}      - The rendered command
 #   - {{ benchmark.name }}        - Benchmark name
 #

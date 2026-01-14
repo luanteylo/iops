@@ -71,7 +71,7 @@ command:
     -O summaryFormat=JSON
     -o {{ output_file }}
 
-  metadata:
+  labels:
     operation: "write"
     io_api: "POSIX"
     transfer_size: "1MB"

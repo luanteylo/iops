@@ -27,7 +27,7 @@ See also: [Jinja2 Templating](jinja2-templating.md) for dynamic values, conditio
 benchmark:       # Global configuration (name, workdir, executor, search method)
 vars:            # Variable definitions (swept and derived)
 constraints:     # (Optional) Parameter validation rules
-command:         # Command template and metadata
+command:         # Command template and labels
 scripts:         # Execution scripts and parsers
 output:          # Output configuration (CSV, Parquet, SQLite)
 reporting:       # (Optional) Report generation settings
@@ -501,12 +501,12 @@ constraints:
 
 ## `command`
 
-Defines the benchmark command template and metadata.
+Defines the benchmark command template and labels.
 
 ```yaml
 command:
   template: string              # Required: command template (Jinja2)
-  metadata:                     # Optional: arbitrary metadata
+  labels:                       # Optional: user-defined labels
     key: value
   env:                          # Optional: environment variables
     VAR_NAME: value
@@ -523,12 +523,14 @@ command:
     -o {{ output_path }}/data.ior
 ```
 
-#### `metadata` (optional)
-Key-value metadata stored with results. Appears as `metadata.*` columns.
+#### `labels` (optional)
+User-defined key-value labels stored with results. Appears as `labels.*` columns in output.
+
+Note: `metadata.*` is reserved for IOPS internal fields (executor status, timing, errors).
 
 ```yaml
 command:
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
@@ -722,7 +724,8 @@ Exclude specific fields from output using dot notation. Wildcards are supported.
 | `benchmark.*` | `name`, `description` |
 | `execution.*` | `repetitions`, `workdir`, `execution_dir` (note: `execution_id` and `repetition` are protected) |
 | `vars.*` | All variable names |
-| `metadata.*` | All command metadata keys |
+| `labels.*` | All user-defined labels from `command.labels` |
+| `metadata.*` | IOPS internal fields (executor_status, start, end, error, jobid) |
 | `metrics.*` | All parser metric names |
 
 **Protected fields:** `execution.execution_id` and `execution.repetition` cannot be excluded as they are required for identifying results.

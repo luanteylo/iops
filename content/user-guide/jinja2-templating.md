@@ -13,7 +13,7 @@ Templates have access to:
 | **Execution** | `execution_id`, `repetition`, `repetitions` |
 | **Benchmark** | `workdir`, `execution_dir` |
 | **Variables** | All vars (swept and derived) |
-| **Metadata** | All command.metadata keys |
+| **Labels** | All command.labels keys |
 | **Command** | `command.template` |
 
 ## 1. Variable Substitution
@@ -116,10 +116,10 @@ script_template: |
 Filters transform values using the `|` operator:
 
 ```yaml
-# Default value for optional metadata
+# Default value for optional label
 command:
   template: "benchmark --config {{ config_path | default('./default.conf') }}"
-  metadata:
+  labels:
     config_path: ""  # Empty string uses default
 
 # String manipulation

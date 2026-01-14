@@ -783,7 +783,7 @@ class IOPSRunner(HasLogger):
                 },
                 "command": {
                     "template": self.cfg.command.template,
-                    "metadata": self.cfg.command.metadata or {},
+                    "labels": self.cfg.command.labels or {},
                 },
                 "reporting": serialize_reporting_config(self.cfg.reporting),
             }

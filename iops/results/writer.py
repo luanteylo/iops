@@ -135,19 +135,28 @@ def build_output_row(test) -> Dict[str, Any]:
     # vars
     _flatten("vars", dict(getattr(test, "vars", {}) or {}), row)
 
-    # metadata (exclude metrics to avoid duplicating columns)
-    # Use command_metadata property if available (includes rendered metadata_templates)
-    # Fall back to raw metadata dict for backward compatibility
-    if hasattr(test, "command_metadata"):
-        metadata = dict(test.command_metadata)
-    else:
-        metadata = dict(meta)
-    metrics_obj = metadata.pop("metrics", None)  # keep separate
-    metadata.pop("repetition", None)  # already in execution.repetition
-    _flatten("metadata", metadata, row)
+    # labels: user-defined fields from command.labels (Jinja-rendered)
+    if hasattr(test, "command_labels"):
+        _flatten("labels", dict(test.command_labels), row)
+
+    # metadata: IOPS internal fields (executor status, timing, errors, etc.)
+    # These are fields with __ prefix stored in test.metadata dict
+    iops_metadata = {}
+    metrics_obj = None
+    for k, v in meta.items():
+        if k == "metrics":
+            metrics_obj = v
+        elif k == "repetition":
+            pass  # already in execution.repetition
+        elif k.startswith("__"):
+            # Strip __ prefix for cleaner output (e.g., __executor_status -> executor_status)
+            clean_key = k[2:]
+            iops_metadata[clean_key] = v
+        # Ignore other keys that aren't internal metadata
+    _flatten("metadata", iops_metadata, row)
 
     # metrics (safe even if missing)
-    _flatten("metrics", metrics_obj or meta.get("metrics", {}) or {}, row)
+    _flatten("metrics", metrics_obj or {}, row)
 
     # normalize
     row = {k: _jsonify_if_needed(v) for k, v in row.items()}
