@@ -114,11 +114,16 @@ def build_output_row(test) -> Dict[str, Any]:
         "description": getattr(test, "benchmark_description", None),
     }, row)
 
-    # execution identifiers
+    # execution identifiers and paths
     meta = getattr(test, "metadata", {}) or {}
+    workdir = getattr(test, "workdir", None)
+    execution_dir = getattr(test, "execution_dir", None)
     _flatten("execution", {
         "execution_id": getattr(test, "execution_id", None),
         "repetition": meta.get("repetition", getattr(test, "repetition", None)),
+        "repetitions": getattr(test, "repetitions", None),
+        "workdir": str(workdir) if workdir else None,
+        "execution_dir": str(execution_dir) if execution_dir else None,
     }, row)
 
     # round

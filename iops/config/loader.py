@@ -247,19 +247,14 @@ def _collect_allowed_output_fields(cfg: GenericBenchmarkConfig) -> Set[str]:
     """
     allowed: Set[str] = set()
 
-    # --- benchmark.* ---
+    # --- benchmark.* (static info about the benchmark) ---
     allowed.update({
         "benchmark.name",
         "benchmark.description",
-        "benchmark.workdir",
-        "benchmark.repetitions",
-        "benchmark.cache_file",
-        "benchmark.search_method",
-        "benchmark.executor",
-        "benchmark.random_seed",
     })
 
-    # --- execution.* (decide the contract) ---
+    # --- execution.* (per-execution info) ---
+    # Note: execution_id and repetition are protected and cannot be excluded
     allowed.update({
         "execution.execution_id",
         "execution.repetition",
@@ -301,15 +296,32 @@ def _validate_output_field_list(
     """
     Validate that all fields in the list are valid output field names.
 
+    Supports wildcards like "benchmark.*", "vars.*", "metadata.*", "metrics.*".
+
     Raises ConfigValidationError if any field is invalid.
     """
     allowed = _collect_allowed_output_fields(cfg)
+
+    # Valid prefixes for wildcards
+    valid_prefixes = {"benchmark", "execution", "vars", "metadata", "metrics", "round"}
 
     bad: list[str] = []
     for f in fields:
         if not isinstance(f, str) or not f.strip():
             bad.append(str(f))
             continue
+
+        # Check for wildcard patterns like "benchmark.*" or "benchmark"
+        stripped = f.strip()
+        if stripped.endswith(".*"):
+            prefix = stripped[:-2]
+            if prefix in valid_prefixes:
+                continue  # Valid wildcard
+        elif stripped in valid_prefixes:
+            # Bare prefix like "benchmark" treated as wildcard
+            continue
+
+        # Check exact match
         if f not in allowed:
             bad.append(f)
 
@@ -326,6 +338,7 @@ def _validate_output_field_list(
         raise ConfigValidationError(
             f"{where} contains unknown field(s): {bad}\n"
             f"Allowed examples: {sorted(list(allowed))[:25]}...\n"
+            f"Wildcards: benchmark.*, execution.*, vars.*, metadata.*, metrics.*\n"
             f"{hint}"
         )
 
@@ -696,10 +709,20 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
     # ---- output ----
     out = data["output"]["sink"]
+    output_type = out["type"]
+
+    # Default path based on output type
+    default_paths = {
+        "csv": "{{ workdir }}/results.csv",
+        "parquet": "{{ workdir }}/results.parquet",
+        "sqlite": "{{ workdir }}/results.db",
+    }
+    default_path = default_paths.get(output_type, "{{ workdir }}/results.csv")
+
     output = OutputConfig(
         sink=OutputSinkConfig(
-            type=out["type"],
-            path=out["path"],
+            type=output_type,
+            path=out.get("path", default_path),
             mode=out.get("mode", "append"),
             exclude=out.get("exclude", []) or [],
             table=out.get("table", "results"),
@@ -1257,9 +1280,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             "Install it with: pip install pyarrow\n"
             "Or install iops with parquet support: pip install iops-benchmark[parquet]"
         )
-
-    if not sink.path or not str(sink.path).strip():
-        raise ConfigValidationError("output.sink.path must not be empty")
 
     if sink.mode not in ("append", "overwrite"):
         raise ConfigValidationError("output.sink.mode must be append or overwrite")

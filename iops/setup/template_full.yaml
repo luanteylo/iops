@@ -512,8 +512,11 @@ output:
     # Output format: csv | parquet | sqlite
     type: csv
 
-    # Output path (supports Jinja2 templating)
-    path: "{{ workdir }}/results.csv"
+    # Optional: Output path (supports Jinja2 templating)
+    # Defaults: csv -> {{ workdir }}/results.csv
+    #           parquet -> {{ workdir }}/results.parquet
+    #           sqlite -> {{ workdir }}/results.db
+    # path: "{{ workdir }}/results.csv"
 
     # Write mode:
     #   - append: Add to existing file (creates if missing)

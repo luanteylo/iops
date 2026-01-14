@@ -693,7 +693,7 @@ Defines where and how to store execution results.
 output:
   sink:
     type: string              # Required: "csv" | "parquet" | "sqlite"
-    path: string              # Required: output file path (Jinja2)
+    path: string              # Optional: output file path (Jinja2), has sensible defaults
     mode: string              # Optional: "append" | "overwrite" (default: append)
     exclude:                  # Optional: fields to exclude from output
       - "benchmark.description"
@@ -703,8 +703,13 @@ output:
 #### `type` (required)
 Output format: `csv`, `parquet`, or `sqlite`.
 
-#### `path` (required)
-Output file path. Can use templates.
+#### `path` (optional)
+Output file path. Can use Jinja2 templates.
+
+**Defaults by type:**
+- `csv` → `{{ workdir }}/results.csv`
+- `parquet` → `{{ workdir }}/results.parquet`
+- `sqlite` → `{{ workdir }}/results.db`
 
 #### `mode` (optional, default: "append")
 Write mode: `append` or `overwrite`.
@@ -714,8 +719,8 @@ Exclude specific fields from output using dot notation. Wildcards are supported.
 
 | Prefix | Fields |
 |--------|--------|
-| `benchmark.*` | `name`, `description`, `workdir` |
-| `execution.*` | `workdir`, `execution_dir` (note: `execution_id` and `repetition` are protected) |
+| `benchmark.*` | `name`, `description` |
+| `execution.*` | `repetitions`, `workdir`, `execution_dir` (note: `execution_id` and `repetition` are protected) |
 | `vars.*` | All variable names |
 | `metadata.*` | All command metadata keys |
 | `metrics.*` | All parser metric names |
@@ -729,14 +734,19 @@ Table name (default: "results").
 <summary><strong>Examples</strong></summary>
 
 ```yaml
-# CSV with exclusions
+# CSV with default path ({{ workdir }}/results.csv)
 output:
   sink:
     type: csv
-    path: "{{ workdir }}/results.csv"
-    mode: append
     exclude:
       - "benchmark.description"
+
+# CSV with custom path
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/custom_results.csv"
+    mode: overwrite
 ```
 
 </details>
