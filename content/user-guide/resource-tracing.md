@@ -28,12 +28,13 @@ benchmark:
 
 ## How It Works
 
-When `trace_resources: true`, IOPS injects a lightweight background sampler into each benchmark script. The sampler:
+When `trace_resources: true`, IOPS injects a resource sampler (`__iops_runtime_sampler.sh`) into each benchmark script. The sampler:
 
 1. **Runs with low priority** (`renice -n 19`) to minimize interference
 2. **Samples at configurable intervals** from `/proc/stat` and `/proc/meminfo`
-3. **Writes per-node trace files** with hostname in filename (supports multi-node jobs)
-4. **Stops automatically** via EXIT trap when the benchmark completes
+3. **Writes per-node trace files** with hostname in filename (`__iops_trace_<hostname>.csv`)
+4. **Uses a sentinel file** (`__iops_trace_running`) for graceful termination
+5. **Stops automatically** when the exit handler removes the sentinel file
 
 ## Output Files
 
@@ -110,7 +111,14 @@ benchmark:
 
 ## Multi-Node Support
 
-For SLURM multi-node jobs, each node runs its own sampler independently. The hostname is included in the trace filename (`__iops_trace_node01.csv`, `__iops_trace_node02.csv`, etc.), and the aggregation automatically combines data from all nodes.
+For SLURM multi-node jobs, IOPS automatically launches samplers on all allocated nodes:
+
+1. **Detection**: The sampler detects multi-node jobs via `SLURM_NNODES > 1`
+2. **Launch**: Uses `srun --overlap --ntasks-per-node=1` to start one sampler per node
+3. **Coordination**: All samplers share the same sentinel file on the shared filesystem
+4. **Termination**: When the exit handler removes the sentinel file, all node samplers stop
+
+Each node produces its own trace file (`__iops_trace_node01.csv`, `__iops_trace_node02.csv`, etc.), and the aggregation automatically combines data from all nodes.
 
 ## Fault Tolerance
 

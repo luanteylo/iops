@@ -22,9 +22,9 @@ Comprehensive guide to using IOPS features and capabilities.
 
 - **[Exploring Executions](exploring-executions)** - Use `iops find` to locate, filter, and monitor executions
 - **[Archiving Workdirs](exploring-executions#archiving-workdirs)** - Create portable archives with `iops archive` for sharing and backup
-- **[Metadata Files](metadata-files)** - `__iops_*` files: structure, I/O overhead, and how to disable them
 - **[Custom Reports & Visualization](reporting)** - Generate interactive HTML reports with Plotly charts
 
 ## Reference
 
 - **[Command Line Interface](cli)** - Complete CLI reference for `iops run`, `iops find`, `iops report`, and more
+- **[Metadata Files](metadata-files)** - `__iops_*` files: structure, I/O overhead, and how to disable them

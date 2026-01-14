@@ -30,9 +30,11 @@ Metadata files are written to the **workdir** during benchmark execution. While 
 | `__iops_resource_summary.csv` | Run root | End of benchmark | Aggregated resource metrics |
 | `__iops_params.json` | Each exec folder | Before test runs | Parameter storage |
 | `__iops_status.json` | Each exec/rep folder | After test completes | Status and cache tracking |
-| `__iops_probe.sh` | Each repetition folder | Before test runs | System info collection |
+| `__iops_exit_handler.sh` | Each repetition folder | Before test runs | Centralized EXIT trap coordinator |
+| `__iops_atexit_sysinfo.sh` | Each repetition folder | Before test runs | System info collection |
 | `__iops_sysinfo.json` | Each repetition folder | After test completes | Hardware/environment info |
-| `__iops_sampler.sh` | Each repetition folder | Before test runs | Resource tracing script |
+| `__iops_runtime_sampler.sh` | Each repetition folder | Before test runs | Resource tracing script |
+| `__iops_trace_running` | Each repetition folder | During test execution | Sentinel file for sampler |
 | `__iops_trace_<host>.csv` | Each repetition folder | During test execution | Per-node resource trace |
 
 ## Controlling Metadata Generation
@@ -53,7 +55,7 @@ benchmark:
 
 ### Disable System Information Collection
 
-To disable `__iops_probe.sh` and `__iops_sysinfo.json`:
+To disable `__iops_atexit_sysinfo.sh` and `__iops_sysinfo.json`:
 
 ```yaml
 benchmark:
@@ -63,7 +65,7 @@ benchmark:
 **Impact:**
 - System environment info will not appear in HTML reports
 - Reduces I/O by 1 small JSON write per repetition
-- Removes the probe script injection from generated scripts
+- Removes the system info script injection from generated scripts
 
 ### Disable All Metadata
 
@@ -252,19 +254,40 @@ For skipped tests, a `reason` field explains why:
 
 ---
 
-### `__iops_probe.sh`
+### `__iops_exit_handler.sh`
 
-**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_probe.sh`
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_exit_handler.sh`
 
 **Written:** When the repetition folder is created, before the test runs
 
-**Purpose:** A shell script that collects system information from compute nodes. It is automatically sourced by the generated benchmark script and uses an EXIT trap to collect information after the benchmark completes.
+**Purpose:** Provides a centralized EXIT trap that coordinates cleanup for all IOPS features. Other scripts register their cleanup functions with this handler rather than setting their own traps.
 
 **How it works:**
-1. IOPS writes `__iops_probe.sh` to the repetition folder
-2. The generated benchmark script sources this file at the start
-3. The probe registers an EXIT trap
-4. When the benchmark script exits (success or failure), the trap executes
+1. IOPS writes `__iops_exit_handler.sh` to the repetition folder
+2. The generated benchmark script sources this file first
+3. The handler sets a single EXIT trap for the entire script
+4. Other IOPS scripts register cleanup functions via `_iops_register_exit`
+5. When the script exits, all registered functions are called in order
+
+This architecture avoids trap conflicts between multiple IOPS features.
+
+**Always written** when any IOPS feature is enabled.
+
+---
+
+### `__iops_atexit_sysinfo.sh`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_atexit_sysinfo.sh`
+
+**Written:** When the repetition folder is created, before the test runs
+
+**Purpose:** A shell script that collects system information from compute nodes. It registers with the exit handler to collect information after the benchmark completes.
+
+**How it works:**
+1. IOPS writes `__iops_atexit_sysinfo.sh` to the repetition folder
+2. The generated benchmark script sources this file after the exit handler
+3. The script registers `_iops_collect_sysinfo` with the exit handler
+4. When the benchmark script exits (success or failure), the function executes
 5. System information is written to `__iops_sysinfo.json`
 
 This approach ensures system info is collected even if the benchmark fails, and it runs on the actual compute node (important for SLURM jobs).
@@ -277,7 +300,7 @@ This approach ensures system info is collected even if the benchmark fails, and 
 
 **Location:** `workdir/run_001/exec_0001/repetition_1/__iops_sysinfo.json`
 
-**Written:** At the end of script execution (via EXIT trap in probe script)
+**Written:** At the end of script execution (via exit handler)
 
 **Purpose:** Contains hardware and environment information from the compute node where the test ran.
 
@@ -313,6 +336,60 @@ This approach ensures system info is collected even if the benchmark fails, and 
 **Detected parallel filesystems:** Lustre, GPFS, BeeGFS, CephFS, PanFS, WekaFS, PVFS2, OrangeFS, GlusterFS
 
 **Controlled by:** `benchmark.collect_system_info`
+
+---
+
+### `__iops_runtime_sampler.sh`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_runtime_sampler.sh`
+
+**Written:** When the repetition folder is created, before the test runs
+
+**Purpose:** A shell script that collects CPU and memory utilization during benchmark execution. For multi-node SLURM jobs, it launches samplers on all nodes using `srun`.
+
+**How it works:**
+1. IOPS writes `__iops_runtime_sampler.sh` to the repetition folder
+2. The generated benchmark script sources this file after the exit handler
+3. The script creates a sentinel file (`__iops_trace_running`) and starts sampling
+4. For single-node: runs the sampling loop locally in the background
+5. For multi-node SLURM: uses `srun --overlap` to launch samplers on all nodes
+6. Each node writes to its own trace file (`__iops_trace_<hostname>.csv`)
+7. When the script exits, the exit handler removes the sentinel file, stopping all samplers
+
+**Controlled by:** `benchmark.trace_resources`
+
+---
+
+### `__iops_trace_running`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_trace_running`
+
+**Written:** When resource tracing starts (before benchmark runs)
+
+**Removed:** When benchmark script exits (via exit handler)
+
+**Purpose:** A sentinel file that signals resource samplers to keep running. When removed, all samplers (including those on remote nodes in multi-node SLURM jobs) terminate gracefully.
+
+**Controlled by:** `benchmark.trace_resources`
+
+---
+
+### `__iops_trace_<host>.csv`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_trace_<hostname>.csv`
+
+**Written:** Continuously during benchmark execution by the resource sampler
+
+**Purpose:** Contains per-core CPU and memory utilization samples. For multi-node jobs, each node produces its own file with its hostname in the filename.
+
+**Format:**
+```csv
+timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,mem_available_kb
+1705123456.123,node01,0,45.2,5.1,49.7,128000000,64000000
+1705123456.123,node01,1,42.1,4.8,53.1,128000000,64000000
+```
+
+**Controlled by:** `benchmark.trace_resources`
 
 ## Best Practices
 
