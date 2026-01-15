@@ -935,31 +935,68 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"✓ Generated {total_tests} test scripts in: {self.cfg.benchmark.workdir}")
         self.logger.info("")
 
+        # Check cache for each test if --use-cache is enabled
+        cached_tests = set()  # Set of (execution_id, repetition) tuples
+        if self.cache and self.use_cache_reads:
+            self.logger.info("Checking cache for existing results...")
+            for test in all_tests:
+                cached_result = self.cache.get_cached_result(
+                    params=test.vars,
+                    repetition=test.repetition,
+                )
+                if cached_result and self._validate_cached_metrics(cached_result['metrics']):
+                    cached_tests.add((test.execution_id, test.repetition))
+
+            cached_count = len(cached_tests)
+            to_execute_count = total_tests - cached_count
+            self.logger.info(f"✓ Cache check complete: {cached_count} cached, {to_execute_count} to execute")
+            self.logger.info("")
+
         # Compute cores and core-hours for each test
         cores_list = []
         core_hours_list = []
+        # Separate lists for tests that will actually execute (not cached)
+        exec_cores_list = []
+        exec_core_hours_list = []
         test_details = []
 
         for test in all_tests:
             cores = self._compute_cores(test)
             cores_list.append(cores)
+            is_cached = (test.execution_id, test.repetition) in cached_tests
 
             if self.estimated_time_seconds:
                 time_hours = self.estimated_time_seconds / 3600.0
                 core_hours = cores * time_hours
                 core_hours_list.append(core_hours)
+                if not is_cached:
+                    exec_core_hours_list.append(core_hours)
+
+            if not is_cached:
+                exec_cores_list.append(cores)
 
             test_details.append({
                 'execution_id': test.execution_id,
                 'repetition': test.repetition,
                 'cores': cores,
-                'vars': test.vars
+                'vars': test.vars,
+                'cached': is_cached
             })
 
         # Statistics
         self.logger.info("\n" + "=" * 70)
         self.logger.info("EXECUTION PLAN SUMMARY")
         self.logger.info("=" * 70)
+
+        # Cache summary (if cache checking was performed)
+        if cached_tests:
+            cached_count = len(cached_tests)
+            to_execute_count = total_tests - cached_count
+            cache_hit_rate = (cached_count / total_tests * 100) if total_tests > 0 else 0
+            self.logger.info(f"\nCache Status (--use-cache enabled):")
+            self.logger.info(f"  Total tests: {total_tests}")
+            self.logger.info(f"  Cached (will skip): {cached_count} ({cache_hit_rate:.1f}%)")
+            self.logger.info(f"  To execute: {to_execute_count}")
 
         # Cores statistics
         min_cores = min(cores_list)
@@ -981,31 +1018,59 @@ class IOPSRunner(HasLogger):
             max_core_hours = max(core_hours_list)
             avg_core_hours = total_core_hours / len(core_hours_list)
 
-            self.logger.info(f"\nEstimated Core-Hours:")
+            self.logger.info(f"\nEstimated Core-Hours (all {total_tests} tests):")
             self.logger.info(f"  Estimated time per test: {self.estimated_time_seconds:.1f} seconds ({self.estimated_time_seconds/60:.1f} minutes)")
             self.logger.info(f"  Min core-hours per test: {min_core_hours:.4f}")
             self.logger.info(f"  Max core-hours per test: {max_core_hours:.4f}")
             self.logger.info(f"  Avg core-hours per test: {avg_core_hours:.4f}")
             self.logger.info(f"  Total core-hours: {total_core_hours:.2f}")
 
-            # Estimated wall-clock time (assuming sequential execution)
-            total_time_seconds = total_tests * self.estimated_time_seconds
-            total_time_hours = total_time_seconds / 3600.0
-            self.logger.info(f"\nEstimated Wall-Clock Time (sequential):")
-            self.logger.info(f"  Total: {total_time_hours:.2f} hours ({total_time_hours/24:.2f} days)")
+            # If cache is enabled, show actual execution cost (excluding cached tests)
+            exec_total_core_hours = total_core_hours
+            exec_test_count = total_tests
+            if cached_tests and exec_core_hours_list:
+                exec_total_core_hours = sum(exec_core_hours_list)
+                exec_test_count = len(exec_core_hours_list)
+                exec_avg_core_hours = exec_total_core_hours / exec_test_count if exec_test_count > 0 else 0
 
-            # Budget comparison
+                self.logger.info(f"\nActual Core-Hours (excluding {len(cached_tests)} cached tests):")
+                self.logger.info(f"  Tests to execute: {exec_test_count}")
+                self.logger.info(f"  Total core-hours: {exec_total_core_hours:.2f}")
+                self.logger.info(f"  Savings from cache: {total_core_hours - exec_total_core_hours:.2f} core-hours")
+            elif cached_tests and not exec_core_hours_list:
+                # All tests are cached
+                exec_total_core_hours = 0
+                exec_test_count = 0
+                self.logger.info(f"\nActual Core-Hours (all {len(cached_tests)} tests cached):")
+                self.logger.info(f"  Tests to execute: 0")
+                self.logger.info(f"  Total core-hours: 0.00")
+                self.logger.info(f"  Savings from cache: {total_core_hours:.2f} core-hours (100%)")
+
+            # Estimated wall-clock time (assuming sequential execution)
+            exec_time_seconds = exec_test_count * self.estimated_time_seconds
+            exec_time_hours = exec_time_seconds / 3600.0
+            self.logger.info(f"\nEstimated Wall-Clock Time (sequential):")
+            if cached_tests:
+                self.logger.info(f"  Total (to execute): {exec_time_hours:.2f} hours ({exec_time_hours/24:.2f} days)")
+            else:
+                self.logger.info(f"  Total: {exec_time_hours:.2f} hours ({exec_time_hours/24:.2f} days)")
+
+            # Budget comparison (use actual execution cost when cache is enabled)
             if self.max_core_hours:
-                budget_ratio = (total_core_hours / self.max_core_hours) * 100
-                remaining = self.max_core_hours - total_core_hours
+                budget_ratio = (exec_total_core_hours / self.max_core_hours) * 100
+                remaining = self.max_core_hours - exec_total_core_hours
 
                 self.logger.info(f"\nBudget Analysis:")
                 self.logger.info(f"  Budget limit: {self.max_core_hours:.2f} core-hours")
-                self.logger.info(f"  Estimated usage: {total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
+                if cached_tests:
+                    self.logger.info(f"  Estimated usage (with cache): {exec_total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
+                else:
+                    self.logger.info(f"  Estimated usage: {exec_total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
 
-                if total_core_hours > self.max_core_hours:
-                    excess = total_core_hours - self.max_core_hours
-                    tests_that_fit = int((self.max_core_hours / avg_core_hours))
+                if exec_total_core_hours > self.max_core_hours:
+                    excess = exec_total_core_hours - self.max_core_hours
+                    exec_avg = exec_total_core_hours / exec_test_count if exec_test_count > 0 else avg_core_hours
+                    tests_that_fit = int((self.max_core_hours / exec_avg)) if exec_avg > 0 else 0
                     self.logger.warning(f"  ⚠️  BUDGET EXCEEDED by {excess:.2f} core-hours!")
                     self.logger.warning(f"  ⚠️  Only ~{tests_that_fit} tests will complete before budget limit")
                 else:
@@ -1030,33 +1095,47 @@ class IOPSRunner(HasLogger):
                 ch = detail['cores'] * (self.estimated_time_seconds / 3600.0)
                 core_hours_str = f" | {ch:.4f} core-hrs"
 
+            cache_marker = " [CACHED]" if detail.get('cached') else ""
+
             self.logger.info(
                 f"  [{i+1:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} "
-                f"| {detail['cores']} cores{core_hours_str}"
+                f"| {detail['cores']} cores{core_hours_str}{cache_marker}"
             )
             self.logger.info(f"        {vars_str}")
 
         if total_tests > 10:
-            self.logger.info(f"  ... ({total_tests - 10} more tests)")
+            remaining = total_tests - 10
+            if cached_tests:
+                remaining_cached = sum(1 for d in test_details[10:] if d.get('cached'))
+                self.logger.info(f"  ... ({remaining} more tests, {remaining_cached} of which are cached)")
+            else:
+                self.logger.info(f"  ... ({remaining} more tests)")
 
         # Multiple scenario analysis
         if len(self.estimated_time_scenarios) > 1:
             self.logger.info(f"\n" + "=" * 70)
-            self.logger.info(f"SCENARIO ANALYSIS ({len(self.estimated_time_scenarios)} time estimates)")
+            scenario_label = "SCENARIO ANALYSIS"
+            if cached_tests:
+                scenario_label += " (excluding cached tests)"
+            self.logger.info(f"{scenario_label} ({len(self.estimated_time_scenarios)} time estimates)")
             self.logger.info("=" * 70)
+
+            # Use exec_cores_list if cache is enabled, otherwise use all cores
+            scenario_cores = exec_cores_list if cached_tests else cores_list
+            scenario_test_count = len(scenario_cores) if cached_tests else total_tests
 
             scenario_results = []
             for time_est in self.estimated_time_scenarios:
                 time_hours = time_est / 3600.0
-                total_ch = sum([cores * time_hours for cores in cores_list])
-                total_time_hrs = (total_tests * time_est) / 3600.0
+                total_ch = sum([cores * time_hours for cores in scenario_cores]) if scenario_cores else 0
+                total_time_hrs = (scenario_test_count * time_est) / 3600.0
 
                 scenario_results.append({
                     'time_seconds': time_est,
                     'total_core_hours': total_ch,
                     'total_time_hours': total_time_hrs,
                     'budget_ratio': (total_ch / self.max_core_hours * 100) if self.max_core_hours else None,
-                    'tests_that_fit': int((self.max_core_hours / (total_ch/total_tests))) if self.max_core_hours else total_tests
+                    'tests_that_fit': int((self.max_core_hours / (total_ch/scenario_test_count))) if self.max_core_hours and scenario_test_count > 0 and total_ch > 0 else scenario_test_count
                 })
 
             self.logger.info(f"\n{'Time/Test':<15} {'Core-Hours':<15} {'Wall-Clock':<15} {'Budget %':<12} {'Tests Fit':<12}")
@@ -1066,7 +1145,7 @@ class IOPSRunner(HasLogger):
                 ch_str = f"{sc['total_core_hours']:.2f}"
                 wall_str = f"{sc['total_time_hours']:.2f}h"
                 budget_str = f"{sc['budget_ratio']:.1f}%" if sc['budget_ratio'] else "N/A"
-                fit_str = f"{sc['tests_that_fit']}/{total_tests}"
+                fit_str = f"{sc['tests_that_fit']}/{scenario_test_count}"
 
                 self.logger.info(f"{time_str:<15} {ch_str:<15} {wall_str:<15} {budget_str:<12} {fit_str:<12}")
 
@@ -1087,6 +1166,9 @@ class IOPSRunner(HasLogger):
             f.write("EXECUTION SUMMARY\n")
             f.write("-" * 70 + "\n")
             f.write(f"Total tests: {total_tests}\n")
+            if cached_tests:
+                f.write(f"Cached tests (will skip): {len(cached_tests)}\n")
+                f.write(f"Tests to execute: {total_tests - len(cached_tests)}\n")
             f.write(f"Scripts location: {self.cfg.benchmark.workdir}\n")
             f.write(f"Executor: {self.cfg.benchmark.executor}\n")
             f.write(f"Repetitions: {self.cfg.benchmark.repetitions}\n")
@@ -1102,25 +1184,34 @@ class IOPSRunner(HasLogger):
             f.write(f"Total core-count: {total_cores}\n")
             f.write("\n")
 
-            # Scenario Analysis
+            # Scenario Analysis (uses cache-aware values if --use-cache is enabled)
             if self.estimated_time_scenarios:
-                f.write("SCENARIO ANALYSIS\n")
+                f.write("SCENARIO ANALYSIS")
+                if cached_tests:
+                    f.write(" (excluding cached tests)")
+                f.write("\n")
                 f.write("-" * 70 + "\n")
+
+                # Use cache-aware lists
+                report_cores = exec_cores_list if cached_tests else cores_list
+                report_test_count = len(report_cores) if cached_tests else total_tests
+
                 for i, time_est in enumerate(self.estimated_time_scenarios, 1):
                     time_hours = time_est / 3600.0
-                    total_ch = sum([cores * time_hours for cores in cores_list])
-                    total_time_hrs = (total_tests * time_est) / 3600.0
+                    total_ch = sum([cores * time_hours for cores in report_cores]) if report_cores else 0
+                    total_time_hrs = (report_test_count * time_est) / 3600.0
 
                     f.write(f"\nScenario {i}: {time_est:.0f} seconds ({time_est/60:.1f} minutes) per test\n")
+                    f.write(f"  Tests to execute: {report_test_count}\n")
                     f.write(f"  Total core-hours: {total_ch:.2f}\n")
                     f.write(f"  Wall-clock time: {total_time_hrs:.2f} hours ({total_time_hrs/24:.2f} days)\n")
 
                     if self.max_core_hours:
-                        budget_ratio = (total_ch / self.max_core_hours) * 100
+                        budget_ratio = (total_ch / self.max_core_hours) * 100 if total_ch > 0 else 0
                         f.write(f"  Budget usage: {budget_ratio:.1f}%\n")
                         if total_ch > self.max_core_hours:
                             excess = total_ch - self.max_core_hours
-                            tests_fit = int((self.max_core_hours / (total_ch/total_tests)))
+                            tests_fit = int((self.max_core_hours / (total_ch/report_test_count))) if report_test_count > 0 and total_ch > 0 else 0
                             f.write(f"  ⚠️  EXCEEDS BUDGET by {excess:.2f} core-hours\n")
                             f.write(f"  ⚠️  Only ~{tests_fit} tests will complete\n")
                         else:
@@ -1136,8 +1227,9 @@ class IOPSRunner(HasLogger):
                 if len(detail['vars']) > 5:
                     vars_str += f", ... ({len(detail['vars'])} vars)"
 
+                cache_marker = " [CACHED]" if detail.get('cached') else ""
                 f.write(f"\n[{i:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} ")
-                f.write(f"cores={detail['cores']}\n")
+                f.write(f"cores={detail['cores']}{cache_marker}\n")
                 f.write(f"      {vars_str}\n")
 
         self.logger.info(f"✓ Report saved to: {report_path}")
@@ -1148,6 +1240,9 @@ class IOPSRunner(HasLogger):
         self.logger.info("\n" + "=" * 70)
         self.logger.info("DRY-RUN COMPLETE - No tests were executed")
         self.logger.info(f"  • {total_tests} scripts generated")
+        if cached_tests:
+            self.logger.info(f"  • {len(cached_tests)} tests cached (will be skipped with --use-cache)")
+            self.logger.info(f"  • {total_tests - len(cached_tests)} tests to execute")
         self.logger.info(f"  • Report: {report_path}")
         self.logger.info(f"  • Metadata: {self.cfg.benchmark.workdir / METADATA_FILENAME}")
         self.logger.info("=" * 70)
