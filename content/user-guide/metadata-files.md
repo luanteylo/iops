@@ -5,6 +5,18 @@ weight: 65
 
 IOPS generates metadata files with the `__iops_` prefix to track executions, enable fast lookups, and support report generation. This page documents all metadata files, their purpose, when they are written, and how to control their generation.
 
+---
+
+## Table of Contents
+
+1. [I/O Overhead Considerations](#io-overhead-considerations)
+2. [Metadata Files Overview](#metadata-files-overview)
+3. [Controlling Metadata Generation](#controlling-metadata-generation)
+4. [File Reference](#file-reference)
+5. [Best Practices](#best-practices)
+
+---
+
 ## I/O Overhead Considerations
 
 Metadata files are written to the **workdir** during benchmark execution. While these files are small (typically a few KB each), they can introduce I/O overhead in certain scenarios:

@@ -4,6 +4,20 @@ title: "Jinja2 Templating"
 
 IOPS uses Jinja2 templating throughout the configuration to enable dynamic values, conditional logic, and computed expressions. All string fields in the configuration support Jinja2 syntax.
 
+---
+
+## Table of Contents
+
+1. [Available Context](#available-context)
+2. [Variable Substitution](#1-variable-substitution)
+3. [Conditionals](#2-conditionals)
+4. [Loops](#3-loops)
+5. [Filters](#4-filters)
+6. [Expressions](#5-expressions)
+7. [Where Jinja2 Templates Are Used](#6-where-jinja2-templates-are-used)
+
+---
+
 ## Available Context
 
 Templates have access to:

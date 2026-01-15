@@ -2,8 +2,17 @@
 title: "Command Line Interface"
 ---
 
-
 Complete reference for the IOPS command-line interface.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Basic Usage](#basic-usage)
+3. [Subcommand Reference](#subcommand-reference)
+
+---
 
 ## Overview
 

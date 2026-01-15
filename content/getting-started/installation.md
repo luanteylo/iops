@@ -2,6 +2,18 @@
 title: "Installation"
 ---
 
+---
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Quick Installation (from PyPI)](#quick-installation-from-pypi)
+3. [Installation with Spack (for HPC environments)](#installation-with-spack-for-hpc-environments)
+4. [Offline Installation (Wheelhouse)](#offline-installation-wheelhouse)
+5. [Installation from Source](#installation-from-source)
+6. [Verifying Your Installation](#verifying-your-installation)
+
+---
 
 ## Prerequisites
 

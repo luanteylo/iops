@@ -6,6 +6,21 @@ IOPS includes a comprehensive reporting system that generates interactive HTML r
 
 ---
 
+## Table of Contents
+
+1. [Introduction](#introduction)
+2. [Basic Usage](#basic-usage)
+3. [Report Sections](#report-sections)
+4. [Controlling Sections](#controlling-sections)
+5. [Custom Plots](#custom-plots)
+6. [Default Plots](#default-plots)
+7. [Themes and Styling](#themes-and-styling)
+8. [Plot Sizing and Defaults](#plot-sizing-and-defaults)
+9. [Output Configuration](#output-configuration)
+10. [Examples](#examples)
+
+---
+
 ## Introduction
 
 The reporting feature allows you to:
