@@ -14,15 +14,25 @@ class ParserContractError(ParserError): ...
 
 
 
-def _build_parse_fn(parser_script: str):
+def _build_parse_fn(parser_script: str, context: Dict[str, Any] | None = None):
     """
     Build parse(file_path) from embedded script.
+
+    Args:
+        parser_script: The parser script code defining a parse() function
+        context: Optional dict of variables to inject into the script's namespace.
+                 These will be available as global variables in the parser script.
+                 Typically includes: vars, env, execution_id, repetition
     """
     ns: Dict[str, Any] = {"__builtins__": __builtins__}
 
+    # Inject context variables into the namespace
+    if context:
+        ns.update(context)
+
     try:
         code = compile(parser_script, "<parser_script>", "exec")
-        exec(code, ns, ns)   # <-- THIS IS THE KEY FIX
+        exec(code, ns, ns)
     except Exception as e:
         raise ParserScriptError(
             f"Failed to load parser_script: {e}\n{traceback.format_exc()}"
@@ -42,6 +52,12 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
     """
     Uses test.parser (rendered) and maps returned list values by metric order.
     Returns: {"write_bandwidth": ..., "iops": ..., "_raw": [...]}
+
+    The parser script has access to the following global variables:
+        - vars: Dict of all execution variables (e.g., vars["nodes"], vars["block_size"])
+        - env: Dict of rendered command.env variables
+        - execution_id: The execution ID string
+        - repetition: The current repetition number
     """
     parser = test.parser
     if parser is None:
@@ -53,7 +69,15 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
     # Note: parser_script and metrics validation is handled by loader.py
     metric_names = [m.name for m in parser.metrics]
 
-    parse_fn = _build_parse_fn(parser.parser_script)
+    # Build context with execution variables for the parser script
+    context = {
+        "vars": dict(test.vars),
+        "env": dict(test.env),
+        "execution_id": test.execution_id,
+        "repetition": test.repetition,
+    }
+
+    parse_fn = _build_parse_fn(parser.parser_script, context)
 
     try:
         metrics = parse_fn(parser.file)

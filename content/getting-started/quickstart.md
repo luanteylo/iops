@@ -2,8 +2,20 @@
 title: "Quick Start"
 ---
 
-
 This guide will walk you through running your first benchmark with IOPS in just a few minutes.
+
+---
+
+## Table of Contents
+
+1. [Step 1: Create a Configuration](#step-1-create-a-configuration)
+2. [Step 2: Preview Your Benchmark](#step-2-preview-your-benchmark)
+3. [Step 3: Run the Benchmark](#step-3-run-the-benchmark)
+4. [Step 4: Explore Executions](#step-4-explore-executions)
+5. [Step 5: Analyze Results](#step-5-analyze-results)
+6. [Understanding the Output](#understanding-the-output)
+
+---
 
 ## Step 1: Create a Configuration
 

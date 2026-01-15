@@ -2,8 +2,21 @@
 title: "Exploring Executions"
 ---
 
-
 IOPS provides tools to explore, search, and inspect execution folders after running benchmarks. This is especially useful for large parameter sweeps where you need to find specific configurations or investigate failures.
+
+---
+
+## Table of Contents
+
+1. [Finding Executions](#finding-executions)
+2. [Filtering Executions](#filtering-executions)
+3. [Advanced Options](#advanced-options)
+4. [Watch Mode](#watch-mode)
+5. [IOPS Metadata Files](#iops-metadata-files)
+6. [Inspecting Archives](#inspecting-archives)
+7. [Archiving Workdirs](#archiving-workdirs)
+
+---
 
 ## Finding Executions
 
