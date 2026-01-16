@@ -84,17 +84,24 @@ This file includes:
 
 ### Aggregated Metrics
 
+Metrics are computed from all trace samples across all nodes. A **sample** is one row in the trace CSV - a single measurement at a specific timestamp for a specific core on a specific node.
+
+The following intermediate values are computed per sample:
+
+- `mem_used` = `mem_total_kb - mem_available_kb` (memory used)
+- `cpu_total` = `cpu_user_pct + cpu_system_pct` (CPU utilization)
+
 | Metric | Description | Formula |
 |--------|-------------|---------|
-| `mem_peak_gb` | Maximum memory used across all nodes | `max(mem_total - mem_available) / 1024²` |
-| `mem_avg_gb` | Average memory during execution | `sum(mem_used) / samples / 1024²` |
-| `mem_peak_per_node_gb` | Highest peak memory among all nodes | `max(per_node_peaks) / 1024²` |
-| `cpu_avg_pct` | Average CPU utilization across all cores | `sum(cpu_user + cpu_system) / samples` |
-| `cpu_max_pct` | Peak CPU utilization | `max(cpu_user + cpu_system)` |
-| `cpu_imbalance_pct` | Load balancing indicator | `max(core_cpu) - min(core_cpu)` |
-| `nodes_traced` | Number of nodes with trace data | `count(unique(hostname))` |
-| `samples_collected` | Total number of samples | `count(rows)` |
-| `trace_duration_s` | Time span of trace data (seconds) | `max(timestamp) - min(timestamp)` |
+| `mem_peak_gb` | Maximum memory used across all samples | `max(mem_used) / 1024²` |
+| `mem_avg_gb` | Average memory across all samples | `sum(mem_used) / count(samples) / 1024²` |
+| `mem_peak_per_node_gb` | Highest per-node peak memory | `max(max(mem_used) per node) / 1024²` |
+| `cpu_avg_pct` | Average CPU utilization | `sum(cpu_total) / count(samples)` |
+| `cpu_max_pct` | Peak CPU utilization | `max(cpu_total)` |
+| `cpu_imbalance_pct` | Load balancing indicator | `max(max(cpu_total) per core) - min(max(cpu_total) per core)` |
+| `nodes_traced` | Number of nodes with trace data | `count(distinct hostname)` |
+| `samples_collected` | Total samples across all nodes | `count(rows)` |
+| `trace_duration_s` | Time span of trace data | `max(timestamp) - min(timestamp)` |
 
 
 ## Configuration Reference
