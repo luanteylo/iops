@@ -169,7 +169,7 @@ benchmark:
   executor: "slurm"
   slurm_options:
     commands:
-      submit: "sbatch"
+      submit: "sbatch"                                     # Default submit command
       status: "squeue -j {job_id} --noheader --format=%T"
       info: "scontrol show job {job_id}"
       cancel: "scancel {job_id}"
@@ -590,7 +590,6 @@ Defines execution scripts, submission commands, and result parsers.
 ```yaml
 scripts:
   - name: string                    # Required: script identifier
-    submit: string                  # Required: "bash" | "sbatch"
     script_template: |              # Required: script content (Jinja2)
       #!/bin/bash
       ...
@@ -614,10 +613,6 @@ scripts:
 #### `name` (required)
 Script identifier. Used for file naming.
 
-#### `submit` (required)
-- **Local executor**: `bash` or `sh`
-- **SLURM executor**: `sbatch`
-
 #### `script_template` (required)
 Script content as Jinja2 template. Use `{{ command.template }}` to include the command.
 
@@ -627,7 +622,6 @@ Script content as Jinja2 template. Use `{{ command.template }}` to include the c
 ```yaml
 scripts:
   - name: "ior"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       set -euo pipefail
@@ -644,7 +638,6 @@ scripts:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       #!/bin/bash
       #SBATCH --job-name=iops_{{ execution_id }}
@@ -667,7 +660,6 @@ Post-processing script executed after main script completes:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       ...
 
@@ -689,7 +681,6 @@ Defines how to extract metrics from benchmark output:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       ...
 

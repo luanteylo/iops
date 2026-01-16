@@ -164,7 +164,6 @@ class TestIOPSConfigWithSlurm:
             "command": {"template": "echo {{ x }}"},
             "scripts": [{
                 "name": "test",
-                "submit": "sbatch",
                 "script_template": "#!/bin/bash\necho {{ x }}",
             }],
             "output": {
@@ -207,7 +206,6 @@ class TestIOPSConfigWithSlurm:
             "command": {"template": "echo {{ x }}"},
             "scripts": [{
                 "name": "test",
-                "submit": "bash",
                 "script_template": "#!/bin/bash\necho {{ x }}",
             }],
             "output": {
@@ -237,7 +235,6 @@ class TestIOPSConfigWithSlurm:
                 "search_method": "exhaustive",
                 "slurm_options": {
                     "commands": {
-                        "submit": "custom_sbatch",
                         "status": "custom_squeue -j {job_id}",
                         "info": "custom_scontrol show job {job_id}",
                         "cancel": "custom_scancel {job_id}",
@@ -250,7 +247,6 @@ class TestIOPSConfigWithSlurm:
             "command": {"template": "echo {{ x }}"},
             "scripts": [{
                 "name": "test",
-                "submit": "sbatch",
                 "script_template": "#!/bin/bash\necho {{ x }}",
             }],
             "output": {
@@ -302,7 +298,6 @@ class TestIOPSRunnerWithSlurm:
                 "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
-                        "submit": "docker exec slurmctld sbatch",
                         "status": "docker exec slurmctld squeue -j {job_id} --noheader --format=%T",
                         "info": "docker exec slurmctld scontrol show job {job_id}",
                         "cancel": "docker exec slurmctld scancel {job_id}",
@@ -315,7 +310,6 @@ class TestIOPSRunnerWithSlurm:
             "command": {"template": "echo 'value={{ value }}'"},
             "scripts": [{
                 "name": "test_script",
-                "submit": "docker exec slurmctld sbatch",
                 "script_template": """#!/bin/bash
 #SBATCH --job-name=iops_{{ execution_id }}
 #SBATCH --time=00:02:00
@@ -377,7 +371,6 @@ def parse(file_path):
                 "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
-                        "submit": "docker exec slurmctld sbatch",
                         "status": "docker exec slurmctld squeue -j {job_id} --noheader --format=%T",
                         "info": "docker exec slurmctld scontrol show job {job_id}",
                         "cancel": "docker exec slurmctld scancel {job_id}",
@@ -390,7 +383,6 @@ def parse(file_path):
             "command": {"template": "echo {{ x }}"},
             "scripts": [{
                 "name": "test",
-                "submit": "docker exec slurmctld sbatch",
                 "script_template": """#!/bin/bash
 #SBATCH --job-name=iops_{{ execution_id }}_r{{ repetition }}
 #SBATCH --time=00:02:00
@@ -447,7 +439,6 @@ def parse(file_path):
                 "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
-                        "submit": "docker exec slurmctld sbatch",
                         "status": "docker exec slurmctld squeue -j {job_id} --noheader --format=%T",
                         "info": "docker exec slurmctld scontrol show job {job_id}",
                         "cancel": "docker exec slurmctld scancel {job_id}",
@@ -466,7 +457,6 @@ def parse(file_path):
             "command": {"template": "echo {{ n }}"},
             "scripts": [{
                 "name": "test",
-                "submit": "bash",
                 "script_template": """#!/bin/bash
 echo '{"value": {{ n }} }' > "{{ execution_dir }}/result.json"
 """,
@@ -523,7 +513,6 @@ def parse(file_path):
                 "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
-                        "submit": "docker exec slurmctld sbatch",
                         "status": "docker exec slurmctld squeue -j {job_id} --noheader --format=%T",
                         "info": "docker exec slurmctld scontrol show job {job_id}",
                         "cancel": "docker exec slurmctld scancel {job_id}",
@@ -536,7 +525,6 @@ def parse(file_path):
             "command": {"template": "exit 1"},
             "scripts": [{
                 "name": "failing_script",
-                "submit": "docker exec slurmctld sbatch",
                 "script_template": """#!/bin/bash
 #SBATCH --job-name=iops_fail_{{ execution_id }}
 #SBATCH --time=00:01:00
@@ -591,7 +579,6 @@ exit 1
                 "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
-                        "submit": "docker exec slurmctld sbatch",
                         "status": "docker exec slurmctld squeue -j {job_id} --noheader --format=%T",
                         "info": "docker exec slurmctld scontrol show job {job_id}",
                         "cancel": "docker exec slurmctld scancel {job_id}",
@@ -604,7 +591,6 @@ exit 1
             "command": {"template": "echo {{ v }}"},
             "scripts": [{
                 "name": "test",
-                "submit": "docker exec slurmctld sbatch",
                 "script_template": """#!/bin/bash
 #SBATCH --job-name=iops_cache_{{ execution_id }}
 #SBATCH --time=00:02:00

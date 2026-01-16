@@ -271,49 +271,24 @@ def test_prepare_execution_artifacts_probe_default_behavior(sample_config_file, 
 from iops.config.loader import _is_bash_compatible
 
 
-def test_is_bash_compatible_with_bash_submit():
-    """Test that bash submit command is always compatible."""
-    # bash submit should always be compatible, regardless of shebang
-    assert _is_bash_compatible("#!/bin/sh\necho hello", "bash") is True
-    assert _is_bash_compatible("#!/bin/bash\necho hello", "bash") is True
-    assert _is_bash_compatible("echo hello", "bash") is True
-    assert _is_bash_compatible("#!/bin/sh\necho hello", "BASH") is True
-    assert _is_bash_compatible("#!/bin/sh\necho hello", "/usr/bin/bash") is True
+def test_is_bash_compatible_with_bash_shebang():
+    """Test that bash shebang is compatible."""
+    assert _is_bash_compatible("#!/bin/bash\necho hello") is True
+    assert _is_bash_compatible("#!/usr/bin/env bash\necho hello") is True
 
 
-def test_is_bash_compatible_with_sh_submit():
-    """Test that sh submit command is never compatible."""
-    # sh submit should never be compatible
-    assert _is_bash_compatible("#!/bin/bash\necho hello", "sh") is False
-    assert _is_bash_compatible("#!/bin/sh\necho hello", "sh") is False
-    assert _is_bash_compatible("echo hello", "sh") is False
+def test_is_bash_compatible_with_sh_shebang():
+    """Test that sh shebang is not compatible."""
+    # sh shebang is NOT compatible (SLURM per-test mode respects shebang)
+    assert _is_bash_compatible("#!/bin/sh\necho hello") is False
+    assert _is_bash_compatible("#!/usr/bin/env sh\necho hello") is False
 
 
-def test_is_bash_compatible_with_sbatch_and_bash_shebang():
-    """Test sbatch with bash shebang is compatible."""
-    # sbatch respects shebang - bash shebang is OK
-    assert _is_bash_compatible("#!/bin/bash\necho hello", "sbatch") is True
-    assert _is_bash_compatible("#!/usr/bin/env bash\necho hello", "sbatch") is True
-
-
-def test_is_bash_compatible_with_sbatch_and_sh_shebang():
-    """Test sbatch with sh shebang is not compatible."""
-    # sbatch respects shebang - sh shebang is NOT OK
-    assert _is_bash_compatible("#!/bin/sh\necho hello", "sbatch") is False
-    assert _is_bash_compatible("#!/usr/bin/env sh\necho hello", "sbatch") is False
-
-
-def test_is_bash_compatible_with_unknown_command_and_no_shebang():
-    """Test unknown command with no shebang assumes compatible."""
-    # Unknown command + no shebang → assume OK (most systems default to bash)
-    assert _is_bash_compatible("echo hello", "my_wrapper") is True
-    assert _is_bash_compatible("", "custom_submit") is True
-
-
-def test_is_bash_compatible_with_unknown_command_and_sh_shebang():
-    """Test unknown command with sh shebang is not compatible."""
-    # Unknown command + sh shebang → NOT compatible
-    assert _is_bash_compatible("#!/bin/sh\necho hello", "my_wrapper") is False
+def test_is_bash_compatible_with_no_shebang():
+    """Test that no shebang assumes compatible."""
+    # No shebang → assume OK (defaults to bash in most contexts)
+    assert _is_bash_compatible("echo hello") is True
+    assert _is_bash_compatible("") is True
 
 
 def test_check_system_probe_compatibility_disables_for_sh_script(sample_config_dict, tmp_path):

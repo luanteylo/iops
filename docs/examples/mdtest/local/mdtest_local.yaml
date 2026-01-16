@@ -143,7 +143,6 @@ scripts:
   - name: "mdtest"
 
     # Submission method for local executor
-    submit: "bash"
 
     # Script template for local execution
     script_template: |

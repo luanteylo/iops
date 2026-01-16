@@ -134,7 +134,6 @@ Environment variables are available via `command_env` in your script template:
 ```yaml
 scripts:
   - name: "benchmark"
-    submit: "bash"
     script_template: |
       #!/bin/bash
 
@@ -183,7 +182,6 @@ The main execution script content.
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       #!/bin/bash
       #SBATCH --job-name=iops_{{ execution_id }}
@@ -201,7 +199,6 @@ You can reference an external file instead of inline content:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: /path/to/my_script_template.sh
 ```
 
@@ -210,7 +207,6 @@ Or relative to the YAML config file:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: ./templates/slurm_template.sh
 ```
 
@@ -265,7 +261,6 @@ Same as `script_template`:
 ```yaml
 scripts:
   - name: "benchmark"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       {{ command.template }}
@@ -283,7 +278,6 @@ scripts:
 ```yaml
 scripts:
   - name: "benchmark"
-    submit: "bash"
     script_template: ./templates/main.sh
 
     post:
@@ -591,7 +585,6 @@ command:
 
 scripts:
   - name: "ior"
-    submit: "sbatch"
 
     # Can be inline or file path - Jinja2 supported
     script_template: |

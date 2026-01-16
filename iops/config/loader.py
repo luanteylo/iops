@@ -392,31 +392,21 @@ def create_workdir(cfg: GenericBenchmarkConfig, logger, dry_run: bool = False) -
     cfg.benchmark.workdir = run_root
 
 
-def _is_bash_compatible(script_template: str, submit_cmd: str) -> bool:
+def _is_bash_compatible(script_template: str) -> bool:
     """
-    Check if the script execution environment is bash-compatible.
+    Check if the script is bash-compatible based on shebang.
 
     The system probe requires bash features (e.g., [[ ]], =~, process substitution).
-    This method checks if the submit command and/or shebang indicate bash will be used.
+    Local executor and single-allocation mode always use bash to run scripts.
+    SLURM per-test mode respects the shebang.
 
     Args:
         script_template: The script content (to check shebang)
-        submit_cmd: The command used to submit/run the script
 
     Returns:
         True if bash-compatible, False otherwise
     """
-    submit_lower = submit_cmd.lower().strip()
-
-    # Explicit bash in submit command → always OK (bash ignores shebang)
-    if 'bash' in submit_lower:
-        return True
-
-    # Explicit sh as submit command → never OK
-    if submit_lower == 'sh':
-        return False
-
-    # For other commands (sbatch, srun, wrappers), check the shebang
+    # Check the shebang
     first_line = script_template.split('\n')[0].strip() if script_template else ''
     if first_line.startswith('#!'):
         # Has shebang - check if it explicitly uses non-bash shell
@@ -444,7 +434,7 @@ def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> Non
 
     incompatible_scripts = []
     for script in cfg.scripts:
-        if not _is_bash_compatible(script.script_template, script.submit):
+        if not _is_bash_compatible(script.script_template):
             incompatible_scripts.append(script.name)
 
     if incompatible_scripts:
@@ -472,7 +462,7 @@ def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) ->
 
     incompatible_scripts = []
     for script in cfg.scripts:
-        if not _is_bash_compatible(script.script_template, script.submit):
+        if not _is_bash_compatible(script.script_template):
             incompatible_scripts.append(script.name)
 
     if incompatible_scripts:
@@ -712,7 +702,6 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         scripts.append(
             ScriptConfig(
                 name=s["name"],
-                submit=s["submit"],
                 script_template=script_template,
                 post=post_cfg,
                 parser=parser_cfg,

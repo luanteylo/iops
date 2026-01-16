@@ -468,7 +468,6 @@ def test_full_single_allocation_config(tmp_path, sample_config_dict):
     sample_config_dict["benchmark"]["executor"] = "slurm"
     sample_config_dict["benchmark"]["slurm_options"] = {
         "commands": {
-            "submit": "sbatch",
             "status": "squeue -j {job_id} -h -o %T",
         },
         "poll_interval": 10,
@@ -492,7 +491,7 @@ def test_full_single_allocation_config(tmp_path, sample_config_dict):
     # Verify all settings
     eo = config.benchmark.slurm_options
     assert eo.poll_interval == 10
-    assert eo.commands["submit"] == "sbatch"
+    assert eo.commands["status"] == "squeue -j {job_id} -h -o %T"
 
     alloc = eo.allocation
     assert alloc.mode == "single"

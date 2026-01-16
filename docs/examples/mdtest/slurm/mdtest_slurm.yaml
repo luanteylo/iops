@@ -302,7 +302,6 @@ scripts:
 
     # submission method for this script (required for local and slurm executors)
     #submit: "bash"        # for local executor
-    submit: "sbatch"
 
     # ---------------------------------------------------------------------------
     # SCRIPT OPTIONS:

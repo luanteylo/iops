@@ -152,10 +152,10 @@ def test_local_executor_wait_and_collect(mock_test_instance):
 def test_slurm_executor_submit_success(mock_test_instance):
     """Test SlurmExecutor successful submission."""
     config = Mock()
+    config.benchmark = Mock()
+    config.benchmark.slurm_options = None
     config.execution = Mock()
     config.execution.status_check_delay = 1
-
-    mock_test_instance.submit_cmd = "sbatch test.sh"
 
     executor = SlurmExecutor(config)
 
@@ -337,66 +337,33 @@ def test_slurm_executor_scontrol_uses_custom_command(mock_test_instance):
         assert call_args == ["wrapper", "info", "12345"]
 
 
-def test_slurm_executor_uses_default_submit_when_not_specified(mock_test_instance):
-    """Test that executor uses default submit command when test.submit_cmd is empty."""
+def test_slurm_executor_uses_custom_submit_from_options(mock_test_instance):
+    """Test that executor uses submit command from slurm_options.commands."""
     from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
     config.benchmark.slurm_options = SlurmOptionsConfig(
-        commands={"submit": "custom-sbatch"}
+        commands={"submit": "custom-sbatch --parsable"}
     )
     config.execution = Mock()
-
-    # Test instance with empty submit_cmd
-    mock_test_instance.submit_cmd = ""
 
     executor = SlurmExecutor(config)
 
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = Mock(
             returncode=0,
-            stdout="Submitted batch job 12345",
+            stdout="12345",
             stderr=""
         )
 
         executor.submit(mock_test_instance)
 
-        # Check that the default submit command was used
+        # Check that the custom submit command was used
         call_args = mock_run.call_args[0][0]
         assert call_args[0] == "custom-sbatch"
-        assert str(mock_test_instance.script_file) in call_args
-
-
-def test_slurm_executor_script_submit_overrides_default(mock_test_instance):
-    """Test that script-specific submit command overrides executor default."""
-    from iops.config.models import SlurmOptionsConfig
-
-    config = Mock()
-    config.benchmark = Mock()
-    config.benchmark.slurm_options = SlurmOptionsConfig(
-        commands={"submit": "default-sbatch"}
-    )
-    config.execution = Mock()
-
-    # Test instance with specific submit_cmd
-    mock_test_instance.submit_cmd = "script-specific-sbatch --parsable"
-
-    executor = SlurmExecutor(config)
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="12345;cluster",
-            stderr=""
-        )
-
-        executor.submit(mock_test_instance)
-
-        # Check that the script-specific submit command was used (not the default)
-        call_args = mock_run.call_args[0][0]
-        assert call_args[0] == "script-specific-sbatch"
         assert "--parsable" in call_args
+        assert str(mock_test_instance.script_file) in call_args
 
 
 def test_local_executor_permission_denied_on_script_file(mock_test_instance):

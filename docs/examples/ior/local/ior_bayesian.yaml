@@ -104,7 +104,6 @@ command:
 
 scripts:
   - name: "ior"
-    submit: "bash"  # Use "sbatch" for SLURM clusters
 
     script_template: |
       #!/bin/bash

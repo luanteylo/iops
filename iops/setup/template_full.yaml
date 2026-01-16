@@ -105,8 +105,7 @@ benchmark:
   # ---------------------------------------------------------------------------
   # slurm_options:
   #   commands:
-  #     # Default submit command (default: "sbatch")
-  #     # Can be overridden per-script via scripts[].submit
+  #     # Submit command (default: "sbatch")
   #     submit: "sbatch"
   #
   #     # Command to query job status (default: "squeue -j {job_id} --noheader --format=%T")
@@ -439,10 +438,6 @@ command:
 scripts:
   # Script name (can define multiple scripts)
   - name: "ior"
-
-    # Submission method for this script (required for local and slurm executors)
-    # submit: "bash"      # for local executor
-    submit: "sbatch"      # for SLURM executor
 
     # ---------------------------------------------------------------------------
     # SCRIPT TEMPLATE

@@ -381,7 +381,6 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
 
     for i, script in enumerate(cfg.scripts, start=1):
         logger.debug(f"  Script #{i}: {script.name}")
-        logger.debug(f"    Submit : {script.submit}")
 
         logger.debug("    Script template:")
         logger.debug("    " + script.script_template.replace("\n", "\n    "))

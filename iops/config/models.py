@@ -242,7 +242,6 @@ class ParserConfig:
 @dataclass
 class ScriptConfig:
     name: str
-    submit: str
     script_template: str
     post: Optional[PostConfig] = None      # optional
     parser: Optional[ParserConfig] = None  # optional

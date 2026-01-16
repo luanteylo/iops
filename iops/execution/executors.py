@@ -530,7 +530,7 @@ class SlurmExecutor(BaseExecutor):
     YAML-driven SLURM executor.
 
     Strategy:
-      1) Submit using YAML-driven test.submit_cmd (+ append script if missing)
+      1) Submit using slurm_options.commands.submit (default: sbatch)
       2) Poll status via squeue while present
       3) When job leaves squeue:
            - try scontrol show job <jobid> to get JobState/ExitCode
@@ -539,7 +539,7 @@ class SlurmExecutor(BaseExecutor):
                 * else -> FAILED
 
     Uses:
-      - test.submit_cmd (rendered from YAML scripts[].submit)
+      - slurm_options.commands.submit (or default "sbatch")
       - test.script_file (rendered script already written)
       - test.execution_dir (work dir for the execution)
 
@@ -581,7 +581,6 @@ class SlurmExecutor(BaseExecutor):
 
         # Set command templates with defaults
         # Templates support {job_id} placeholder for runtime substitution
-        # Note: submit can be overridden per-script via scripts[].submit
         self.cmd_submit = custom_commands.get("submit", "sbatch")
         self.cmd_status = custom_commands.get("status", "squeue -j {job_id} --noheader --format=%T")
         self.cmd_info = custom_commands.get("info", "scontrol show job {job_id}")
@@ -616,13 +615,8 @@ class SlurmExecutor(BaseExecutor):
             test.metadata["__error"] = msg
             return
 
-        # Use script-specific submit command, or fall back to executor default
-        submit_cmd = (test.submit_cmd or "").strip()
-        if not submit_cmd:
-            submit_cmd = self.cmd_submit
-            self.logger.debug(f"  [SlurmExec] Using default submit command: {submit_cmd}")
-
-        cmd = shlex.split(submit_cmd)
+        # Use submit command from slurm_options.commands.submit (or default "sbatch")
+        cmd = shlex.split(self.cmd_submit)
 
         # Ensure the script path is included (unless user already put it in submit)
         script_str = str(test.script_file)

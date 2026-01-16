@@ -132,7 +132,6 @@ command:
 
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: ../scripts/ior_slurm.sh
     # Parser: Extract metrics from IOR JSON output
     parser:

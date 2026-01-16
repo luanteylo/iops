@@ -43,7 +43,6 @@ benchmark:
 
 scripts:
   - name: "benchmark"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       set -euo pipefail
@@ -89,7 +88,6 @@ vars:
 
 scripts:
   - name: "mpi_benchmark"
-    submit: "sbatch --parsable"
     script_template: |
       #!/bin/bash
       #SBATCH --job-name=bench_{{ execution_id }}
@@ -142,7 +140,7 @@ benchmark:
   executor: "slurm"
   slurm_options:
     commands:
-      submit: "sbatch"                                      # Default submit command
+      submit: "sbatch"                                      # Submit command
       status: "squeue -j {job_id} --noheader --format=%T"  # Job status query template
       info: "scontrol show job {job_id}"                   # Job information template
       cancel: "scancel {job_id}"                           # Job cancellation template

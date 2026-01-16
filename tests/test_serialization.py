@@ -73,14 +73,14 @@ class TestJsonSerializeHelper:
     def test_serialize_slurm_options_config(self):
         """Test that SlurmOptionsConfig dataclass is properly serialized."""
         config = SlurmOptionsConfig(
-            commands={"submit": "sbatch", "status": "squeue -j {job_id}"},
+            commands={"submit": "custom-sbatch", "status": "squeue -j {job_id}"},
             poll_interval=30,
         )
 
         result = IOPSRunner._json_serialize_helper(config)
 
         assert isinstance(result, dict)
-        assert result["commands"]["submit"] == "sbatch"
+        assert result["commands"]["submit"] == "custom-sbatch"
         assert result["poll_interval"] == 30
 
     def test_serialize_numpy_int64(self):

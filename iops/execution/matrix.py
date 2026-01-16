@@ -309,7 +309,6 @@ class ExecutionInstance:
     # Script metadata
     script_name: str = ""
     script_template: str = ""
-    submit_cmd_template: str = ""
     script_file : Optional[Path] = None
 
     # Optional post-processing script template
@@ -485,16 +484,6 @@ class ExecutionInstance:
 
 
     @property
-    def submit_cmd(self) -> str:
-        """
-        Render the submit command (e.g., sbatch ...) if templated.
-        """
-        if not self.submit_cmd_template:
-            return ""
-        ctx = self._render_context()
-        return _render_template(self.submit_cmd_template, ctx)
-
-    @property
     def script_text(self) -> str:
         """
         Render the main script text from script_template, using:
@@ -613,7 +602,6 @@ class ExecutionInstance:
         # Script info
         lines.append(
             f"Script   : {self.script_name} "
-            f"(submit={self.submit_cmd})"
             f"(file={self.script_file})"
         )
         # post script
@@ -796,9 +784,8 @@ def create_execution_instance(
     output_table = cfg.output.sink.table
     output_exclude = list(cfg.output.sink.exclude)
 
-    # Script templates
+    # Script template
     script_template = script_cfg.script_template
-    submit_cmd_template = script_cfg.submit
 
     # Optional post script template
     post_script_template = None
@@ -836,7 +823,6 @@ def create_execution_instance(
         labels_templates=labels_templates,
         script_name=script_cfg.name,
         script_template=script_template,
-        submit_cmd_template=submit_cmd_template,
         post_script_template=post_script_template,
         parser_template=parser_template,
         output_path_template=output_path_template,

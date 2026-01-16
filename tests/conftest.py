@@ -60,7 +60,6 @@ def sample_config_dict(tmp_workdir):
         "scripts": [
             {
                 "name": "test_script",
-                "submit": "bash",
                 "script_template": "#!/bin/bash\necho 'nodes={{ nodes }} ppn={{ ppn }}'\necho 'result: 100' > {{ execution_dir }}/output.txt",
                 "parser": {
                     "file": "{{ execution_dir }}/output.txt",
