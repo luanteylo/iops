@@ -103,7 +103,7 @@ benchmark:
   # Commands are templates that support {job_id} placeholder for runtime substitution.
   # Useful when running on systems with command wrappers or custom SLURM installations.
   # ---------------------------------------------------------------------------
-  # executor_options:
+  # slurm_options:
   #   commands:
   #     # Default submit command (default: "sbatch")
   #     # Can be overridden per-script via scripts[].submit

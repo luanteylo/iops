@@ -154,7 +154,7 @@ class TestIOPSConfigWithSlurm:
                 "executor": "slurm",
                 "repetitions": 1,
                 "search_method": "exhaustive",
-                "executor_options": {
+                "slurm_options": {
                     "poll_interval": 5,
                 }
             },
@@ -191,7 +191,7 @@ class TestIOPSConfigWithSlurm:
                 "executor": "slurm",
                 "repetitions": 1,
                 "search_method": "exhaustive",
-                "executor_options": {
+                "slurm_options": {
                     "poll_interval": 3,
                     "allocation": {
                         "mode": "single",
@@ -235,7 +235,7 @@ class TestIOPSConfigWithSlurm:
                 "executor": "slurm",
                 "repetitions": 1,
                 "search_method": "exhaustive",
-                "executor_options": {
+                "slurm_options": {
                     "commands": {
                         "submit": "custom_sbatch",
                         "status": "custom_squeue -j {job_id}",
@@ -299,7 +299,7 @@ class TestIOPSRunnerWithSlurm:
                 "search_method": "exhaustive",
                 "track_executions": True,
                 "collect_system_info": False,
-                "executor_options": {
+                "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
                         "submit": "docker exec slurmctld sbatch",
@@ -374,7 +374,7 @@ def parse(file_path):
                 "search_method": "exhaustive",
                 "track_executions": True,
                 "collect_system_info": False,
-                "executor_options": {
+                "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
                         "submit": "docker exec slurmctld sbatch",
@@ -444,7 +444,7 @@ def parse(file_path):
                 "search_method": "exhaustive",
                 "track_executions": True,
                 "collect_system_info": False,
-                "executor_options": {
+                "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
                         "submit": "docker exec slurmctld sbatch",
@@ -520,7 +520,7 @@ def parse(file_path):
                 "search_method": "exhaustive",
                 "track_executions": True,
                 "collect_system_info": False,
-                "executor_options": {
+                "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
                         "submit": "docker exec slurmctld sbatch",
@@ -588,7 +588,7 @@ exit 1
                 "search_method": "exhaustive",
                 "track_executions": True,
                 "collect_system_info": False,
-                "executor_options": {
+                "slurm_options": {
                     "poll_interval": 2,
                     "commands": {
                         "submit": "docker exec slurmctld sbatch",

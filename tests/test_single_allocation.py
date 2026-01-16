@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch, MagicMock
 from iops.config.models import (
     ConfigValidationError,
     AllocationConfig,
-    ExecutorOptionsConfig,
+    SlurmOptionsConfig,
 )
 from iops.execution.executors import (
     BaseExecutor,
@@ -38,7 +38,7 @@ def test_allocation_config_parsing(tmp_path, sample_config_dict):
 
     # Add allocation config
     sample_config_dict["benchmark"]["executor"] = "slurm"
-    sample_config_dict["benchmark"]["executor_options"] = {
+    sample_config_dict["benchmark"]["slurm_options"] = {
         "allocation": {
             "mode": "single",
             "allocation_script": """#SBATCH --nodes=8
@@ -55,8 +55,8 @@ def test_allocation_config_parsing(tmp_path, sample_config_dict):
 
     config = load_config(config_file)
 
-    assert config.benchmark.executor_options is not None
-    alloc = config.benchmark.executor_options.allocation
+    assert config.benchmark.slurm_options is not None
+    alloc = config.benchmark.slurm_options.allocation
     assert alloc is not None
     assert alloc.mode == "single"
     assert "#SBATCH --nodes=8" in alloc.allocation_script
@@ -73,7 +73,7 @@ def test_allocation_config_per_test_mode(tmp_path, sample_config_dict):
 
     # Add allocation config with per-test mode
     sample_config_dict["benchmark"]["executor"] = "slurm"
-    sample_config_dict["benchmark"]["executor_options"] = {
+    sample_config_dict["benchmark"]["slurm_options"] = {
         "allocation": {
             "mode": "per-test"
         }
@@ -84,7 +84,7 @@ def test_allocation_config_per_test_mode(tmp_path, sample_config_dict):
 
     config = load_config(config_file)
 
-    alloc = config.benchmark.executor_options.allocation
+    alloc = config.benchmark.slurm_options.allocation
     assert alloc.mode == "per-test"
     # allocation_script not required for per-test mode
 
@@ -99,7 +99,7 @@ def test_allocation_invalid_mode(tmp_path, sample_config_dict):
     config_file = tmp_path / "invalid_mode.yaml"
 
     sample_config_dict["benchmark"]["executor"] = "slurm"
-    sample_config_dict["benchmark"]["executor_options"] = {
+    sample_config_dict["benchmark"]["slurm_options"] = {
         "allocation": {
             "mode": "invalid"
         }
@@ -121,7 +121,7 @@ def test_allocation_single_requires_slurm(tmp_path, sample_config_dict):
 
     # Local executor with single allocation mode
     sample_config_dict["benchmark"]["executor"] = "local"
-    sample_config_dict["benchmark"]["executor_options"] = {
+    sample_config_dict["benchmark"]["slurm_options"] = {
         "allocation": {
             "mode": "single",
             "allocation_script": "#SBATCH --nodes=4\n#SBATCH --time=01:00:00"
@@ -142,7 +142,7 @@ def test_allocation_single_requires_allocation_script(tmp_path, sample_config_di
     config_file = tmp_path / "no_script.yaml"
 
     sample_config_dict["benchmark"]["executor"] = "slurm"
-    sample_config_dict["benchmark"]["executor_options"] = {
+    sample_config_dict["benchmark"]["slurm_options"] = {
         "allocation": {
             "mode": "single",
             # allocation_script is missing
@@ -163,7 +163,7 @@ def test_allocation_script_requires_sbatch(tmp_path, sample_config_dict):
     config_file = tmp_path / "no_sbatch.yaml"
 
     sample_config_dict["benchmark"]["executor"] = "slurm"
-    sample_config_dict["benchmark"]["executor_options"] = {
+    sample_config_dict["benchmark"]["slurm_options"] = {
         "allocation": {
             "mode": "single",
             "allocation_script": "echo 'no sbatch here'"  # No #SBATCH
@@ -189,7 +189,7 @@ def test_executor_build_returns_slurm_for_per_test():
     config = Mock()
     config.benchmark = Mock()
     config.benchmark.executor = "slurm"
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         allocation=AllocationConfig(mode="per-test")
     )
 
@@ -202,7 +202,7 @@ def test_executor_build_returns_single_alloc_for_single_mode():
     config = Mock()
     config.benchmark = Mock()
     config.benchmark.executor = "slurm"
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         allocation=AllocationConfig(
             mode="single",
             allocation_script="#SBATCH --nodes=4\n#SBATCH --time=01:00:00"
@@ -218,7 +218,7 @@ def test_executor_build_returns_slurm_without_allocation():
     config = Mock()
     config.benchmark = Mock()
     config.benchmark.executor = "slurm"
-    config.benchmark.executor_options = None
+    config.benchmark.slurm_options = None
 
     executor = BaseExecutor.build(config)
     assert isinstance(executor, SlurmExecutor)
@@ -235,7 +235,7 @@ def single_alloc_executor(tmp_path):
     config = Mock()
     config.benchmark = Mock()
     config.benchmark.executor = "slurm"
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         allocation=AllocationConfig(
             mode="single",
             allocation_script="""#SBATCH --nodes=4
@@ -298,7 +298,7 @@ def test_single_alloc_shebang_not_duplicated(tmp_path):
     config = Mock()
     config.benchmark = Mock()
     config.benchmark.executor = "slurm"
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         allocation=AllocationConfig(
             mode="single",
             allocation_script="""#!/bin/bash
@@ -436,7 +436,7 @@ def test_single_alloc_parse_jobid():
     """Test job ID parsing."""
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         allocation=AllocationConfig(
             mode="single",
             allocation_script="#SBATCH --nodes=1\n#SBATCH --time=00:10:00"
@@ -466,7 +466,7 @@ def test_full_single_allocation_config(tmp_path, sample_config_dict):
     config_file = tmp_path / "full_single.yaml"
 
     sample_config_dict["benchmark"]["executor"] = "slurm"
-    sample_config_dict["benchmark"]["executor_options"] = {
+    sample_config_dict["benchmark"]["slurm_options"] = {
         "commands": {
             "submit": "sbatch",
             "status": "squeue -j {job_id} -h -o %T",
@@ -490,7 +490,7 @@ def test_full_single_allocation_config(tmp_path, sample_config_dict):
     config = load_config(config_file)
 
     # Verify all settings
-    eo = config.benchmark.executor_options
+    eo = config.benchmark.slurm_options
     assert eo.poll_interval == 10
     assert eo.commands["submit"] == "sbatch"
 

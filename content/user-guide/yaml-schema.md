@@ -64,7 +64,7 @@ benchmark:
     kappa: float                    #   Exploration parameter for LCB (default: 1.96)
 
   executor: string                  # Optional: "local" | "slurm" (default: "slurm")
-  executor_options:                 # Optional: executor-specific configuration
+  slurm_options:                 # Optional: SLURM-specific configuration
     commands:                       #   SLURM command templates
       submit: string                #     Submit command (default: "sbatch")
       status: string                #     Status template (default: "squeue -j {job_id} ...")
@@ -160,14 +160,14 @@ benchmark:
 Execution backend: `local` or `slurm`.
 
 <details>
-<summary><strong>executor_options</strong> (optional, SLURM only)</summary>
+<summary><strong>slurm_options</strong> (optional, SLURM only)</summary>
 
 Customize SLURM commands and polling behavior:
 
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     commands:
       submit: "sbatch"
       status: "squeue -j {job_id} --noheader --format=%T"
@@ -186,7 +186,7 @@ Run all tests within ONE SLURM allocation instead of submitting individual jobs 
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     allocation:
       mode: "single"
       allocation_script: |

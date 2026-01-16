@@ -225,10 +225,10 @@ def test_executor_truncate_output():
 
 
 def test_slurm_executor_default_commands():
-    """Test SlurmExecutor uses default command templates when executor_options not provided."""
+    """Test SlurmExecutor uses default command templates when slurm_options not provided."""
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = None
+    config.benchmark.slurm_options = None
     config.execution = Mock()
 
     executor = SlurmExecutor(config)
@@ -240,12 +240,12 @@ def test_slurm_executor_default_commands():
 
 
 def test_slurm_executor_custom_commands():
-    """Test SlurmExecutor uses custom command templates from executor_options."""
-    from iops.config.models import ExecutorOptionsConfig
+    """Test SlurmExecutor uses custom command templates from slurm_options."""
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={
             "submit": "lrms-wrapper sbatch",
             "status": "lrms-wrapper -r {job_id} --custom-format",
@@ -265,11 +265,11 @@ def test_slurm_executor_custom_commands():
 
 def test_slurm_executor_partial_custom_commands():
     """Test SlurmExecutor uses default templates for unspecified commands."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={
             "status": "custom-squeue -j {job_id}"
         }
@@ -285,11 +285,11 @@ def test_slurm_executor_partial_custom_commands():
 
 def test_slurm_executor_squeue_uses_custom_command(mock_test_instance):
     """Test that _squeue_state uses custom status template and formats it correctly."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={"status": "wrapper -r {job_id} --custom"}
     )
     config.execution = Mock()
@@ -312,11 +312,11 @@ def test_slurm_executor_squeue_uses_custom_command(mock_test_instance):
 
 def test_slurm_executor_scontrol_uses_custom_command(mock_test_instance):
     """Test that _scontrol_info uses custom info command template and formats it correctly."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={"info": "wrapper info {job_id}"}
     )
     config.execution = Mock()
@@ -339,11 +339,11 @@ def test_slurm_executor_scontrol_uses_custom_command(mock_test_instance):
 
 def test_slurm_executor_uses_default_submit_when_not_specified(mock_test_instance):
     """Test that executor uses default submit command when test.submit_cmd is empty."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={"submit": "custom-sbatch"}
     )
     config.execution = Mock()
@@ -370,11 +370,11 @@ def test_slurm_executor_uses_default_submit_when_not_specified(mock_test_instanc
 
 def test_slurm_executor_script_submit_overrides_default(mock_test_instance):
     """Test that script-specific submit command overrides executor default."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={"submit": "default-sbatch"}
     )
     config.execution = Mock()
@@ -457,7 +457,7 @@ def test_slurm_executor_permission_denied_on_post_script(mock_test_instance, tmp
     config.execution = Mock()
     config.execution.status_check_delay = 1
     config.benchmark = Mock()
-    config.benchmark.executor_options = None
+    config.benchmark.slurm_options = None
 
     executor = SlurmExecutor(config)
 

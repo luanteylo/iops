@@ -69,7 +69,7 @@ class BaseExecutor(ABC, HasLogger):
 
         # Check for single-allocation mode (SLURM only)
         if executor_name == "slurm":
-            eo = cfg.benchmark.executor_options
+            eo = cfg.benchmark.slurm_options
             if eo and eo.allocation and eo.allocation.mode == "single":
                 # Import here to avoid circular import
                 return SingleAllocationSlurmExecutor(cfg)
@@ -553,7 +553,7 @@ class SlurmExecutor(BaseExecutor):
       - If scontrol has no record, fall back to parser success.
 
     Configurable Commands:
-      - Commands can be customized via executor_options.commands in YAML
+      - Commands can be customized via slurm_options.commands in YAML
       - Useful for systems with command wrappers or custom SLURM installations
     """
 
@@ -573,11 +573,11 @@ class SlurmExecutor(BaseExecutor):
         """Initialize SLURM executor with configurable command templates and polling interval."""
         super().__init__(cfg)
 
-        # Extract command overrides from executor_options
-        executor_options = cfg.benchmark.executor_options
+        # Extract command overrides from slurm_options
+        slurm_options = cfg.benchmark.slurm_options
         custom_commands = {}
-        if executor_options and executor_options.commands:
-            custom_commands = executor_options.commands
+        if slurm_options and slurm_options.commands:
+            custom_commands = slurm_options.commands
 
         # Set command templates with defaults
         # Templates support {job_id} placeholder for runtime substitution
@@ -589,11 +589,11 @@ class SlurmExecutor(BaseExecutor):
         self.cmd_cancel = custom_commands.get("cancel", "scancel {job_id}")
 
         # Set polling interval with fallback chain:
-        # 1. executor_options.poll_interval
+        # 1. slurm_options.poll_interval
         # 2. execution.status_check_delay
         # 3. default: 30 seconds
-        if executor_options and executor_options.poll_interval is not None:
-            self.poll_interval = executor_options.poll_interval
+        if slurm_options and slurm_options.poll_interval is not None:
+            self.poll_interval = slurm_options.poll_interval
         else:
             self.poll_interval = getattr(getattr(cfg, "execution", None), "status_check_delay", 30) 
 
@@ -995,7 +995,7 @@ class SingleAllocationSlurmExecutor(SlurmExecutor):
         super().__init__(cfg)
 
         # Extract allocation config (already validated by loader)
-        self.allocation = cfg.benchmark.executor_options.allocation
+        self.allocation = cfg.benchmark.slurm_options.allocation
 
         # Allocation state tracking
         self.allocation_job_id: Optional[str] = None

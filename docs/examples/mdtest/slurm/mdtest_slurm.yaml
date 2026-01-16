@@ -90,7 +90,7 @@ benchmark:
   #
   # Uncomment to customize SLURM commands:
   # ---------------------------------------------------------------------------
-  # executor_options:
+  # slurm_options:
   #   commands:
   #     # Default submit command (default: "sbatch")
   #     # Can be overridden per-script via scripts[].submit

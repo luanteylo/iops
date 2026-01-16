@@ -140,7 +140,7 @@ For systems with command wrappers or custom SLURM installations, you can customi
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     commands:
       submit: "sbatch"                                      # Default submit command
       status: "squeue -j {job_id} --noheader --format=%T"  # Job status query template
@@ -154,7 +154,7 @@ benchmark:
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     commands:
       submit: "lrms-wrapper sbatch"
       status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags: -r instead of -j
@@ -166,7 +166,7 @@ benchmark:
 This allows IOPS to work with various SLURM configurations and wrapper systems commonly found in HPC environments. The `{job_id}` placeholder is replaced with the actual job ID at runtime, giving you complete control over command structure and flags.
 
 **Notes**:
-- The `submit` command specified in `executor_options` is a default. Individual scripts can override it via `scripts[].submit`.
+- The `submit` command specified in `slurm_options` is a default. Individual scripts can override it via `scripts[].submit`.
 - The `{job_id}` placeholder is required for status, info, and cancel commands.
 - The `poll_interval` controls how often (in seconds) IOPS checks job status during execution. Default is 30 seconds.
 
@@ -177,7 +177,7 @@ By default, IOPS submits a separate SLURM job for each test (`per-test` mode). F
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     allocation:
       mode: "single"
       allocation_script: |
@@ -262,7 +262,7 @@ Scripts have access to all SLURM variables from the allocation:
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     poll_interval: 30                   # Status polling interval (seconds)
     allocation:
       mode: "single"                    # "single" or "per-test" (default)

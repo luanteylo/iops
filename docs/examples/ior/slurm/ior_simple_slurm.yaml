@@ -24,7 +24,7 @@ benchmark:
   repetitions: 1 # global repetitions for each test case. It is ignored when rounds has its own value
   search_method: "exhaustive" # used to define the policy for test execution selection
   executor : "slurm" # specify the executor to use : local | slurm
-  # executor_options:  # Optional: customize SLURM commands (useful for wrapper systems)
+  # slurm_options:  # Optional: customize SLURM commands (useful for wrapper systems)
   #   commands:
   #     submit: "sbatch"                                     # default: sbatch (can be overridden per-script)
   #     status: "squeue -j {job_id} --noheader --format=%T" # default (use {job_id} placeholder)

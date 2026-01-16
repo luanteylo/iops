@@ -8,7 +8,7 @@ from pathlib import Path
 from iops.config.models import (
     BayesianConfig,
     RandomSamplingConfig,
-    ExecutorOptionsConfig,
+    SlurmOptionsConfig,
 )
 from iops.execution.runner import IOPSRunner
 
@@ -70,9 +70,9 @@ class TestJsonSerializeHelper:
         assert result["percentage"] is None
         assert result["fallback_to_exhaustive"] is False
 
-    def test_serialize_executor_options_config(self):
-        """Test that ExecutorOptionsConfig dataclass is properly serialized."""
-        config = ExecutorOptionsConfig(
+    def test_serialize_slurm_options_config(self):
+        """Test that SlurmOptionsConfig dataclass is properly serialized."""
+        config = SlurmOptionsConfig(
             commands={"submit": "sbatch", "status": "squeue -j {job_id}"},
             poll_interval=30,
         )

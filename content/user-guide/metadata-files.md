@@ -463,7 +463,7 @@ sleep 2147483647 || sleep 999999 || while true; do sleep 1000; done
 - Allocation stays alive via sleep while tests run
 - Tests execute via `srun --jobid=<id> --overlap bash script.sh`
 
-**Controlled by:** `executor_options.allocation.mode: "single"`
+**Controlled by:** `slurm_options.allocation.mode: "single"`
 
 ## Best Practices
 

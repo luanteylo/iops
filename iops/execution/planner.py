@@ -359,8 +359,8 @@ class BasePlanner(ABC, HasLogger):
             self.logger.info("  estimated_time_seconds: %s", bench.estimated_time_seconds)
         if bench.report_vars:
             self.logger.info("  report_vars: %s", bench.report_vars)
-        if bench.executor_options:
-            self.logger.info("  executor_options: %s", bench.executor_options)
+        if bench.slurm_options:
+            self.logger.info("  slurm_options: %s", bench.slurm_options)
         if bench.bayesian_config:
             self.logger.info("  bayesian_config: %s", bench.bayesian_config)
         if bench.random_config:

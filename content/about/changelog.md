@@ -75,7 +75,7 @@ Major overhaul transforming IOPS into a generic benchmark orchestration framewor
 - Result caching with `--use-cache` flag
 - SLURM cluster support with automatic job management
 - Parameter constraints to filter invalid configurations
-- Configurable SLURM commands via `executor_options`
+- Configurable SLURM commands via `slurm_options`
 - `exhaustive_vars` for hybrid search strategies
 - PyPI packaging as `iops-benchmark`
 

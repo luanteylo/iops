@@ -24,7 +24,7 @@ from iops.config.models import (
     ConfigValidationError,
     GenericBenchmarkConfig,
     BenchmarkConfig,
-    ExecutorOptionsConfig,
+    SlurmOptionsConfig,
     AllocationConfig,
     RandomSamplingConfig,
     BayesianConfig,
@@ -560,10 +560,10 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     # ---- benchmark ----
     b = data["benchmark"]
 
-    # Parse executor_options if present
-    executor_options = None
-    if "executor_options" in b and b["executor_options"] is not None:
-        eo = b["executor_options"]
+    # Parse slurm_options if present
+    slurm_options = None
+    if "slurm_options" in b and b["slurm_options"] is not None:
+        eo = b["slurm_options"]
 
         # Parse allocation config if present
         allocation_config = None
@@ -574,7 +574,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 allocation_script=alloc.get("allocation_script"),
             )
 
-        executor_options = ExecutorOptionsConfig(
+        slurm_options = SlurmOptionsConfig(
             commands=eo.get("commands"),
             poll_interval=eo.get("poll_interval"),
             allocation=allocation_config,
@@ -621,7 +621,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         cache_file=_expand_path(b["cache_file"]) if "cache_file" in b else None,
         search_method=search_method,
         executor=b.get("executor", "slurm"),
-        executor_options=executor_options,
+        slurm_options=slurm_options,
         random_seed=b.get("random_seed", 42),
         cache_exclude_vars=b.get("cache_exclude_vars", []),
         exhaustive_vars=b.get("exhaustive_vars"),
@@ -1064,33 +1064,33 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         )
 
     # allocation config validation (SLURM single-allocation mode)
-    eo = cfg.benchmark.executor_options
+    eo = cfg.benchmark.slurm_options
     if eo and eo.allocation:
         alloc = eo.allocation
 
         # Validate mode
         if alloc.mode not in ("single", "per-test"):
             raise ConfigValidationError(
-                f"executor_options.allocation.mode must be 'single' or 'per-test' (got '{alloc.mode}')"
+                f"slurm_options.allocation.mode must be 'single' or 'per-test' (got '{alloc.mode}')"
             )
 
         # Single allocation mode requires slurm executor
         if alloc.mode == "single" and cfg.benchmark.executor != "slurm":
             raise ConfigValidationError(
-                "executor_options.allocation.mode='single' requires executor='slurm'"
+                "slurm_options.allocation.mode='single' requires executor='slurm'"
             )
 
         # When mode="single", allocation_script is required
         if alloc.mode == "single":
             if not alloc.allocation_script or not alloc.allocation_script.strip():
                 raise ConfigValidationError(
-                    "executor_options.allocation.allocation_script is required when mode='single'"
+                    "slurm_options.allocation.allocation_script is required when mode='single'"
                 )
 
             # Basic sanity check: allocation_script should contain SBATCH directives
             if "#SBATCH" not in alloc.allocation_script:
                 raise ConfigValidationError(
-                    "executor_options.allocation.allocation_script must contain at least one #SBATCH directive"
+                    "slurm_options.allocation.allocation_script must contain at least one #SBATCH directive"
                 )
 
     # trace_interval validation

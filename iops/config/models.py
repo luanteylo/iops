@@ -37,7 +37,7 @@ class AllocationConfig:
         allocation_script: SBATCH directives for the allocation (required when mode="single")
 
     Example:
-        executor_options:
+        slurm_options:
           allocation:
             mode: "single"
             allocation_script: |
@@ -53,16 +53,16 @@ class AllocationConfig:
 
 
 @dataclass
-class ExecutorOptionsConfig:
+class SlurmOptionsConfig:
     """
-    Executor-specific configuration options.
+    SLURM executor configuration options.
 
-    For SLURM executor, you can override the commands used for job management.
+    Override commands used for job management, configure polling, or enable single-allocation mode.
     Commands are templates that support {job_id} placeholder for dynamic substitution.
     This is useful when running on systems with command wrappers or custom SLURM installations.
 
     Example with default SLURM commands:
-        executor_options:
+        slurm_options:
           commands:
             submit: "sbatch"                                      # Default submit (per-script override)
             status: "squeue -j {job_id} --noheader --format=%T"  # Job status query
@@ -71,7 +71,7 @@ class ExecutorOptionsConfig:
           poll_interval: 30                                       # Status check interval (seconds)
 
     Example with wrapper and custom flags:
-        executor_options:
+        slurm_options:
           commands:
             submit: "lrms-wrapper sbatch"
             status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags
@@ -80,7 +80,7 @@ class ExecutorOptionsConfig:
           poll_interval: 10                                       # Check status every 10 seconds
 
     Example with single-allocation mode:
-        executor_options:
+        slurm_options:
           allocation:
             mode: "single"
             allocation_script: |
@@ -165,7 +165,7 @@ class BenchmarkConfig:
     cache_file: Optional[Path] = None
     search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
-    executor_options: Optional[ExecutorOptionsConfig] = None  # executor-specific configuration
+    slurm_options: Optional[SlurmOptionsConfig] = None  # SLURM-specific configuration (commands, polling, allocation)
     random_seed: Optional[int] = None  # seed for any random operations
     cache_exclude_vars: Optional[List[str]] = None  # variables to exclude from cache hash
     exhaustive_vars: Optional[List[str]] = None  # variables to exhaustively test for each search point
