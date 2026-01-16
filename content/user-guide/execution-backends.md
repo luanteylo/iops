@@ -179,11 +179,13 @@ benchmark:
   executor: "slurm"
   executor_options:
     allocation:
-      mode: "single"              # Run all tests in one allocation
-      nodes: 8                    # Total nodes for the allocation
-      time: "02:00:00"            # Total time limit
-      partition: "batch"          # Optional
-      account: "myaccount"        # Optional
+      mode: "single"
+      allocation_script: |
+        #SBATCH --nodes=8
+        #SBATCH --time=02:00:00
+        #SBATCH --partition=batch
+        #SBATCH --account=myaccount
+        #SBATCH --exclusive
 ```
 
 #### When to Use Single-Allocation Mode
@@ -195,51 +197,89 @@ benchmark:
 
 #### How It Works
 
-1. IOPS collects all tests from the planner (respecting cache)
-2. Generates a wrapper script (`__iops_allocation_wrapper.sh`) containing all tests
-3. Submits ONE `sbatch` job for the entire allocation
-4. Tests run sequentially within the allocation
-5. Exit codes are tracked and results are collected after completion
+1. IOPS writes your `allocation_script` to `__iops_allocation.sh`, injecting:
+   - Shebang (`#!/bin/bash`) if not provided
+   - `--job-name=iops_allocation`
+   - `--output` and `--error` paths to `workdir/logs/`
+   - A sleep command to keep the allocation alive
+2. IOPS submits the allocation via `sbatch` and waits for it to start
+3. Tests run via `srun --jobid=<alloc_id> --overlap bash script.sh`
+4. When all tests complete, IOPS cancels the allocation
 
-#### Full Configuration
+#### Script Requirements
+
+Your `script_template` must be compatible with running via `srun`:
+
+**1. No SBATCH directives needed**
+
+```yaml
+# In single-allocation mode, SBATCH directives in scripts are IGNORED
+# The allocation_script controls all resources
+script_template: |
+  #!/bin/bash
+  module load mpi
+  mpirun {{ command.template }}
+```
+
+**2. MPI programs work automatically**
+
+SLURM sets environment variables (`SLURM_JOB_ID`, `SLURM_NODELIST`, etc.) that `mpirun`/`mpiexec` detect:
+
+```yaml
+script_template: |
+  #!/bin/bash
+  module load openmpi
+  # mpirun automatically uses SLURM's allocation
+  mpirun -np {{ ntasks }} ./my_benchmark
+```
+
+**3. Load modules in the script**
+
+Modules must be loaded in the script since `srun` starts a fresh shell:
+
+```yaml
+script_template: |
+  #!/bin/bash
+  module purge
+  module load gcc/12.2 openmpi/4.1 ior/3.3
+
+  mpirun {{ command.template }}
+```
+
+**4. SLURM environment variables are available**
+
+Scripts have access to all SLURM variables from the allocation:
+
+| Variable | Description |
+|----------|-------------|
+| `SLURM_JOB_ID` | Allocation job ID |
+| `SLURM_NODELIST` | List of allocated nodes |
+| `SLURM_JOB_NUM_NODES` | Number of nodes |
+| `SLURM_NTASKS` | Total tasks (if set in allocation) |
+
+#### Configuration Reference
 
 ```yaml
 benchmark:
   executor: "slurm"
   executor_options:
-    poll_interval: 30
+    poll_interval: 30                   # Status polling interval (seconds)
     allocation:
       mode: "single"                    # "single" or "per-test" (default)
-      nodes: 8                          # Required: nodes for allocation
-      ntasks_per_node: 4                # Optional: tasks per node
-      time: "02:00:00"                  # Required: time limit (HH:MM:SS or D-HH:MM:SS)
-      partition: "batch"                # Optional: SLURM partition
-      account: "myaccount"              # Optional: SLURM account
-      extra_sbatch: |                   # Optional: additional directives
+      allocation_script: |              # Required when mode="single"
+        #SBATCH --nodes=8
+        #SBATCH --time=02:00:00
+        #SBATCH --partition=batch
+        #SBATCH --account=myaccount
         #SBATCH --exclusive
         #SBATCH --constraint=ib
-      srun_options: "--nodes={{ nodes }} --ntasks-per-node={{ ppn }}"  # Optional
-```
-
-#### srun_options
-
-The `srun_options` field is a Jinja2 template that controls how each test is launched within the allocation:
-
-- **If provided**: Each test runs with `srun <options> bash script.sh`
-- **If omitted**: Each test runs with `bash script.sh` (suitable when tests manage their own `srun`)
-
-The template has access to all variables from your configuration:
-
-```yaml
-# Example: Each test gets its own subset of nodes
-srun_options: "--nodes={{ nodes }} --ntasks={{ nodes * ppn }}"
 ```
 
 #### Important Notes
 
-- **Script SBATCH directives are ignored**: In single-allocation mode, the allocation wrapper controls all resources. Any `#SBATCH` directives in your `script_template` are ignored.
-- **Sequential execution**: Tests run one after another within the allocation, not in parallel.
-- **Stdout/stderr capture**: Each test's output is still redirected to its own `execution_dir/stdout` and `execution_dir/stderr`.
-- **Caching works normally**: Cached tests are skipped and not included in the allocation.
-- **Folder structure unchanged**: The same `exec_XXXX/repetition_YYY` structure is used.
+- **Script SBATCH directives are ignored**: The `allocation_script` controls all resources
+- **Sequential execution**: Tests run one after another, not in parallel
+- **Stdout/stderr capture**: Each test's output goes to its own `execution_dir/stdout` and `stderr`
+- **Caching works normally**: Cached tests are skipped
+- **Folder structure unchanged**: Same `exec_XXXX/repetition_YYY` structure
 

@@ -44,8 +44,7 @@ Located in `workdir/run_XXX/`:
 | `__iops_run_metadata.json` | Report generation (config, timing, variables) |
 | `__iops_index.json` | Fast execution lookup for `iops find` |
 | `__iops_resource_summary.csv` | Aggregated CPU/memory metrics |
-| `__iops_allocation_wrapper.sh` | Single-allocation mode wrapper script (SLURM only) |
-| `__iops_allocation_status.json` | Exit codes per test in single-allocation mode (SLURM only) |
+| `__iops_allocation.sh` | Single-allocation mode script (SLURM only) |
 
 ### Execution Tracking Files
 
@@ -432,77 +431,37 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 
 ---
 
-### `__iops_allocation_wrapper.sh`
+### `__iops_allocation.sh`
 
-**Location:** `workdir/run_001/__iops_allocation_wrapper.sh`
+**Location:** `workdir/run_001/__iops_allocation.sh`
 
 **Written:** When using single-allocation mode, before submitting to SLURM
 
-**Purpose:** A generated bash script that runs all tests sequentially within a single SLURM allocation. This is the script that gets submitted via `sbatch`.
+**Purpose:** The allocation script submitted via `sbatch` to acquire resources. IOPS keeps this allocation alive while running tests via `srun`.
 
 **Structure:**
 ```bash
 #!/bin/bash
 #SBATCH --nodes=8
-#SBATCH --ntasks-per-node=4
 #SBATCH --time=02:00:00
 #SBATCH --partition=batch
+#SBATCH --account=myaccount
+#SBATCH --exclusive
+
+# IOPS-managed directives
 #SBATCH --job-name=iops_allocation
 #SBATCH --output=/path/to/workdir/logs/allocation_%j.out
 #SBATCH --error=/path/to/workdir/logs/allocation_%j.err
 
-set -o pipefail
-declare -A EXIT_CODES
-
-# === Test: exec_0001_rep_001 ===
-echo '=== Starting exec_0001_rep_001 ==='
-cd '/path/to/workdir/exec_0001/repetition_001'
-bash '/path/to/workdir/exec_0001/repetition_001/run_script.sh' > '/path/to/exec_0001/repetition_001/stdout' 2> '/path/.../stderr'
-EXIT_CODES['exec_0001_rep_001']=$?
-
-# ... more tests ...
-
-# Write exit codes to status file
-echo '{' > '/path/to/workdir/__iops_allocation_status.json'
-echo '  "exec_0001_rep_001": 0,' >> ...
-echo '}' >> ...
+# IOPS-injected: keep allocation alive
+sleep 2147483647 || sleep 999999 || while true; do sleep 1000; done
 ```
 
 **Key features:**
-- Contains all SBATCH directives from `executor_options.allocation`
-- Runs each test sequentially with output redirection to its execution_dir
-- Tracks exit codes per test in an associative array
-- Writes exit codes to `__iops_allocation_status.json` at the end
-
-**Controlled by:** `executor_options.allocation.mode: "single"`
-
----
-
-### `__iops_allocation_status.json`
-
-**Location:** `workdir/run_001/__iops_allocation_status.json`
-
-**Written:** At the end of the allocation wrapper script execution
-
-**Purpose:** Contains the exit code for each test that ran in the single allocation. Used by IOPS to determine which tests succeeded or failed.
-
-**Structure:**
-```json
-{
-  "exec_0001_rep_001": 0,
-  "exec_0001_rep_002": 0,
-  "exec_0002_rep_001": 1,
-  "exec_0002_rep_002": 0
-}
-```
-
-**Key format:** `exec_XXXX_rep_YYY` where:
-- `XXXX` is the zero-padded execution ID
-- `YYY` is the zero-padded repetition number
-
-**Exit code meanings:**
-- `0`: Test succeeded
-- Non-zero: Test failed with that exit code
+- Contains user-provided SBATCH directives from `allocation_script`
+- IOPS adds: shebang (if missing), job-name, output/error paths
+- Allocation stays alive via sleep while tests run
+- Tests execute via `srun --jobid=<id> --overlap bash script.sh`
 
 **Controlled by:** `executor_options.allocation.mode: "single"`
 

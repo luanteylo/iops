@@ -23,39 +23,33 @@ class AllocationConfig:
 
     In single-allocation mode, all tests run within ONE SLURM allocation instead
     of submitting individual jobs per test. This reduces job submission overhead
-    and is useful for HPC systems with job limits.
+    and is useful for HPC systems with job limits or queue wait times.
+
+    The user provides SBATCH directives in `allocation_script`. IOPS will:
+    - Add shebang if not provided
+    - Add job-name, output, and error directives
+    - Inject a sleep command to keep the allocation alive
+
+    Tests run within the allocation via: srun --jobid=<alloc_id> --overlap bash script.sh
 
     Attributes:
         mode: Allocation mode - "single" or "per-test" (default)
-        nodes: Number of nodes for the allocation (required when mode="single")
-        ntasks_per_node: Tasks per node (optional)
-        time: Time limit for allocation in HH:MM:SS or D-HH:MM:SS format (required when mode="single")
-        partition: SLURM partition/queue (optional)
-        account: SLURM account for billing (optional)
-        extra_sbatch: Additional SBATCH directives as multiline string (optional)
-        srun_options: Jinja2 template for srun options per test (optional)
+        allocation_script: SBATCH directives for the allocation (required when mode="single")
 
     Example:
         executor_options:
           allocation:
             mode: "single"
-            nodes: 8
-            ntasks_per_node: 4
-            time: "02:00:00"
-            partition: "batch"
-            account: "myaccount"
-            extra_sbatch: |
+            allocation_script: |
+              #SBATCH --nodes=8
+              #SBATCH --time=02:00:00
+              #SBATCH --partition=compute
+              #SBATCH --account=myproject
               #SBATCH --exclusive
-            srun_options: "--nodes={{ nodes }} --ntasks-per-node={{ ppn }}"
+              #SBATCH --constraint=ib
     """
     mode: str = "per-test"  # "single" or "per-test"
-    nodes: Optional[int] = None
-    ntasks_per_node: Optional[int] = None
-    time: Optional[str] = None
-    partition: Optional[str] = None
-    account: Optional[str] = None
-    extra_sbatch: Optional[str] = None
-    srun_options: Optional[str] = None  # Jinja2 template
+    allocation_script: Optional[str] = None
 
 
 @dataclass
@@ -89,9 +83,11 @@ class ExecutorOptionsConfig:
         executor_options:
           allocation:
             mode: "single"
-            nodes: 8
-            time: "02:00:00"
-            partition: "batch"
+            allocation_script: |
+              #SBATCH --nodes=8
+              #SBATCH --time=02:00:00
+              #SBATCH --partition=batch
+              #SBATCH --account=myaccount
 
     Placeholders:
         {job_id} - Replaced with the SLURM job ID at runtime

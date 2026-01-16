@@ -15,9 +15,7 @@ import subprocess
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Dict, Any, List
-
-from jinja2 import Template
+from typing import TYPE_CHECKING, Optional, Dict, Any
 
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
@@ -523,467 +521,6 @@ class LocalExecutor(BaseExecutor):
 
 
 # ============================================================================ #
-# Single-Allocation SLURM Executor
-# ============================================================================ #
-
-# Filenames for single-allocation mode artifacts
-ALLOCATION_WRAPPER_FILENAME = "__iops_allocation_wrapper.sh"
-ALLOCATION_STATUS_FILENAME = "__iops_allocation_status.json"
-
-
-class SingleAllocationSlurmExecutor(BaseExecutor):
-    """
-    SLURM executor for single-allocation mode.
-
-    In this mode, all tests run within ONE SLURM allocation instead of
-    submitting individual jobs per test. This reduces job submission overhead
-    and is useful for HPC systems with job limits or queue wait times.
-
-    Execution flow:
-    1. queue_test(): Collects tests into a pending list (instead of submitting)
-    2. submit_allocation(): Generates wrapper script and submits via sbatch
-    3. wait_for_allocation(): Polls squeue until allocation completes
-    4. collect_results(): Parses results from each test after allocation ends
-
-    The wrapper script:
-    - Contains all SBATCH directives from allocation config
-    - Runs each test sequentially (with optional srun)
-    - Redirects stdout/stderr to each test's execution_dir
-    - Tracks exit codes and writes status file
-    """
-
-    _LOG_PREFIX = "SingleAlloc"
-
-    # Reuse SLURM states from SlurmExecutor
-    SLURM_ACTIVE_STATES = {
-        "PENDING", "CONFIGURING", "RUNNING", "COMPLETING",
-        "SUSPENDED", "REQUEUED", "RESIZING", "SIGNALING", "STAGE_OUT",
-    }
-
-    SLURM_FAIL_STATES = {
-        "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
-        "PREEMPTED", "BOOT_FAIL",
-    }
-
-    def __init__(self, cfg: GenericBenchmarkConfig):
-        """Initialize single-allocation SLURM executor."""
-        super().__init__(cfg)
-
-        # Extract allocation config (already validated by loader)
-        self.allocation = cfg.benchmark.executor_options.allocation
-
-        # Extract command overrides from executor_options
-        executor_options = cfg.benchmark.executor_options
-        custom_commands = {}
-        if executor_options and executor_options.commands:
-            custom_commands = executor_options.commands
-
-        # Set command templates with defaults
-        self.cmd_submit = custom_commands.get("submit", "sbatch")
-        self.cmd_status = custom_commands.get("status", "squeue -j {job_id} --noheader --format=%T")
-        self.cmd_info = custom_commands.get("info", "scontrol show job {job_id}")
-        self.cmd_cancel = custom_commands.get("cancel", "scancel {job_id}")
-
-        # Set polling interval
-        if executor_options and executor_options.poll_interval is not None:
-            self.poll_interval = executor_options.poll_interval
-        else:
-            self.poll_interval = 30
-
-        # Queue for pending tests
-        self.pending_tests: List[ExecutionInstance] = []
-
-        # Allocation job ID (set after submission)
-        self.allocation_job_id: Optional[str] = None
-
-    def submit(self, test: ExecutionInstance):
-        """
-        Not used directly in single-allocation mode.
-        Tests are queued via queue_test() instead.
-        """
-        raise NotImplementedError(
-            "SingleAllocationSlurmExecutor uses queue_test() instead of submit(). "
-            "Use IOPSRunner._run_single_allocation() for proper execution flow."
-        )
-
-    def wait_and_collect(self, test: ExecutionInstance):
-        """
-        Not used directly in single-allocation mode.
-        Results are collected via collect_results() after allocation completes.
-        """
-        raise NotImplementedError(
-            "SingleAllocationSlurmExecutor uses collect_results() instead of wait_and_collect(). "
-            "Use IOPSRunner._run_single_allocation() for proper execution flow."
-        )
-
-    def queue_test(self, test: ExecutionInstance) -> None:
-        """
-        Queue a test for batch execution within the allocation.
-
-        Args:
-            test: ExecutionInstance to queue
-        """
-        self._init_execution_metadata(test)
-        test.metadata["__executor_status"] = self.STATUS_PENDING
-        self.pending_tests.append(test)
-
-        self.logger.debug(
-            f"  [{self._LOG_PREFIX}] Queued test: exec_id={test.execution_id} "
-            f"rep={test.repetition} (queue size: {len(self.pending_tests)})"
-        )
-
-    def submit_allocation(self) -> str:
-        """
-        Generate wrapper script and submit the allocation via sbatch.
-
-        Returns:
-            SLURM job ID of the allocation
-
-        Raises:
-            RuntimeError: If submission fails
-        """
-        if not self.pending_tests:
-            raise RuntimeError("No tests queued for single-allocation submission")
-
-        workdir = self.cfg.benchmark.workdir
-
-        # Generate wrapper script
-        wrapper_script = self._generate_wrapper_script()
-        wrapper_path = workdir / ALLOCATION_WRAPPER_FILENAME
-
-        # Write wrapper script
-        with open(wrapper_path, 'w') as f:
-            f.write(wrapper_script)
-        wrapper_path.chmod(0o755)
-
-        self.logger.info(
-            f"  [{self._LOG_PREFIX}] Generated allocation wrapper: {wrapper_path}"
-        )
-        self.logger.debug(f"  [{self._LOG_PREFIX}] Wrapper contains {len(self.pending_tests)} tests")
-
-        # Submit via sbatch
-        cmd = shlex.split(self.cmd_submit)
-        cmd.append(str(wrapper_path))
-
-        self.logger.debug(f"  [{self._LOG_PREFIX}] Submit command: {' '.join(cmd)}")
-
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=workdir,
-                capture_output=True,
-                text=True,
-            )
-
-            stdout = (result.stdout or "").strip()
-            stderr = (result.stderr or "").strip()
-
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"SLURM submission failed (rc={result.returncode}): "
-                    f"stderr='{stderr}' stdout='{stdout}'"
-                )
-
-            job_id = self._parse_jobid(stdout)
-            if not job_id:
-                raise RuntimeError(
-                    f"Could not parse SLURM jobid from submission output: "
-                    f"stdout='{stdout}' stderr='{stderr}'"
-                )
-
-            self.allocation_job_id = job_id
-            self.logger.info(
-                f"  [{self._LOG_PREFIX}] Allocation submitted: job_id={job_id} "
-                f"({len(self.pending_tests)} tests queued)"
-            )
-
-            # Mark all tests as running
-            for test in self.pending_tests:
-                test.metadata["__jobid"] = job_id
-                test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-
-            return job_id
-
-        except Exception as e:
-            # Mark all tests as error
-            for test in self.pending_tests:
-                test.metadata["__executor_status"] = self.STATUS_ERROR
-                test.metadata["__error"] = str(e)
-            raise
-
-    def _generate_wrapper_script(self) -> str:
-        """
-        Generate the allocation wrapper script with all tests.
-
-        Returns:
-            Complete wrapper script content
-        """
-        alloc = self.allocation
-        workdir = self.cfg.benchmark.workdir
-
-        # Build SBATCH directives
-        lines = ["#!/bin/bash"]
-        lines.append(f"#SBATCH --nodes={alloc.nodes}")
-
-        if alloc.ntasks_per_node:
-            lines.append(f"#SBATCH --ntasks-per-node={alloc.ntasks_per_node}")
-
-        lines.append(f"#SBATCH --time={alloc.time}")
-
-        if alloc.partition:
-            lines.append(f"#SBATCH --partition={alloc.partition}")
-
-        if alloc.account:
-            lines.append(f"#SBATCH --account={alloc.account}")
-
-        lines.append(f"#SBATCH --job-name=iops_allocation")
-        lines.append(f"#SBATCH --output={workdir}/logs/allocation_%j.out")
-        lines.append(f"#SBATCH --error={workdir}/logs/allocation_%j.err")
-
-        # Add extra SBATCH directives if provided
-        if alloc.extra_sbatch:
-            for line in alloc.extra_sbatch.strip().split('\n'):
-                line = line.strip()
-                if line and not line.startswith('#!'):  # Skip shebang if included
-                    lines.append(line)
-
-        lines.append("")
-        lines.append("# IOPS Single-Allocation Wrapper Script")
-        lines.append("# Generated automatically - do not edit")
-        lines.append("")
-        lines.append("set -o pipefail")
-        lines.append("declare -A EXIT_CODES")
-        lines.append("")
-
-        # Add test execution blocks
-        for test in self.pending_tests:
-            test_key = f"exec_{test.execution_id:04d}_rep_{test.repetition:03d}"
-            exec_dir = test.execution_dir
-            script_path = test.script_file
-
-            lines.append(f"# === Test: {test_key} ===")
-            lines.append(f"echo '=== Starting {test_key} ==='")
-            lines.append(f"cd '{exec_dir}'")
-
-            # Determine how to run the test
-            if alloc.srun_options:
-                # Render srun_options template with test variables
-                try:
-                    srun_template = Template(alloc.srun_options)
-                    srun_opts = srun_template.render(**test.vars)
-                    run_cmd = f"srun {srun_opts} bash '{script_path}'"
-                except Exception as e:
-                    self.logger.warning(
-                        f"  [{self._LOG_PREFIX}] Failed to render srun_options for {test_key}: {e}. "
-                        f"Falling back to bash execution."
-                    )
-                    run_cmd = f"bash '{script_path}'"
-            else:
-                # Run directly with bash (suitable for tests that manage their own srun)
-                run_cmd = f"bash '{script_path}'"
-
-            # Execute with output redirection
-            lines.append(f"{run_cmd} > '{exec_dir}/stdout' 2> '{exec_dir}/stderr'")
-            lines.append(f"EXIT_CODES['{test_key}']=$?")
-            lines.append(f"echo '=== Completed {test_key} (exit code: ${{EXIT_CODES[\"{test_key}\"]}})==='")
-            lines.append("")
-
-        # Write status file at the end
-        status_file = workdir / ALLOCATION_STATUS_FILENAME
-        lines.append("# Write exit codes to status file")
-        lines.append(f"echo '{{' > '{status_file}'")
-
-        for i, test in enumerate(self.pending_tests):
-            test_key = f"exec_{test.execution_id:04d}_rep_{test.repetition:03d}"
-            comma = "," if i < len(self.pending_tests) - 1 else ""
-            lines.append(f'echo "  \\"{test_key}\\": ${{EXIT_CODES[\\"{test_key}\\"]}}{comma}" >> \'{status_file}\'')
-
-        lines.append(f"echo '}}' >> '{status_file}'")
-        lines.append("")
-        lines.append("echo 'Allocation completed'")
-
-        return "\n".join(lines)
-
-    def wait_for_allocation(self) -> None:
-        """
-        Poll squeue until the allocation completes.
-        """
-        job_id = self.allocation_job_id
-        if not job_id:
-            raise RuntimeError("No allocation job ID - call submit_allocation() first")
-
-        self.logger.info(
-            f"  [{self._LOG_PREFIX}] Waiting for allocation {job_id} "
-            f"(poll interval={self.poll_interval}s)"
-        )
-
-        last_state = None
-        while True:
-            state = self._squeue_state(job_id)
-            if state is None:
-                break
-
-            if state != last_state:
-                self.logger.info(f"  [{self._LOG_PREFIX}] Allocation {job_id} state: {state}")
-                last_state = state
-
-                # Update test statuses
-                for test in self.pending_tests:
-                    if state == "PENDING":
-                        test.metadata["__executor_status"] = self.STATUS_PENDING
-                    else:
-                        test.metadata["__executor_status"] = self.STATUS_RUNNING
-
-            time.sleep(self.poll_interval)
-
-        self.logger.info(f"  [{self._LOG_PREFIX}] Allocation {job_id} completed")
-
-    def collect_results(self) -> None:
-        """
-        Parse results from each test after the allocation completes.
-
-        Reads exit codes from status file and parses metrics for each test.
-        """
-        workdir = self.cfg.benchmark.workdir
-        status_file = workdir / ALLOCATION_STATUS_FILENAME
-
-        # Read exit codes from status file
-        exit_codes = {}
-        if self._safe_is_file(status_file):
-            try:
-                with open(status_file, 'r') as f:
-                    exit_codes = json.load(f)
-                self.logger.debug(
-                    f"  [{self._LOG_PREFIX}] Loaded exit codes for {len(exit_codes)} tests"
-                )
-            except Exception as e:
-                self.logger.warning(
-                    f"  [{self._LOG_PREFIX}] Failed to read status file {status_file}: {e}"
-                )
-        else:
-            self.logger.warning(
-                f"  [{self._LOG_PREFIX}] Status file not found: {status_file}"
-            )
-
-        # Process each test
-        for test in self.pending_tests:
-            test_key = f"exec_{test.execution_id:04d}_rep_{test.repetition:03d}"
-            test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-
-            # Get exit code
-            exit_code = exit_codes.get(test_key)
-
-            # Initialize metrics dict (handle parser=None safely)
-            parser = test.parser
-            metric_names = [m.name for m in (parser.metrics if parser else [])]
-            metrics = {name: None for name in metric_names}
-            test.metadata["metrics"] = metrics
-
-            if exit_code is None:
-                # Test may not have run or status file is incomplete
-                test.metadata["__executor_status"] = self.STATUS_UNKNOWN
-                test.metadata["__error"] = "Exit code not found in status file"
-                self.logger.warning(
-                    f"  [{self._LOG_PREFIX}] {test_key}: Exit code not found"
-                )
-                continue
-
-            test.metadata["__returncode"] = exit_code
-
-            if exit_code != 0:
-                # Test failed
-                test.metadata["__executor_status"] = self.STATUS_FAILED
-                test.metadata["__error"] = f"Script exited with code {exit_code}"
-                self.logger.info(
-                    f"  [{self._LOG_PREFIX}] {test_key}: FAILED (exit code {exit_code})"
-                )
-                continue
-
-            # Test succeeded - run post script if present
-            test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
-
-            if self._safe_is_file(test.post_script_file):
-                post_success = self._run_post_script(test)
-                if not post_success:
-                    test.metadata["__executor_status"] = self.STATUS_FAILED
-                    self.logger.info(
-                        f"  [{self._LOG_PREFIX}] {test_key}: FAILED (post-script error)"
-                    )
-                    continue
-
-            # Parse metrics
-            if parser is not None:
-                try:
-                    results = parse_metrics_from_execution(test) or {}
-                    parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
-
-                    for name, value in parsed.items():
-                        if name in metrics:
-                            metrics[name] = value
-
-                    metric_count = len([v for v in metrics.values() if v is not None])
-                    self.logger.debug(
-                        f"  [{self._LOG_PREFIX}] {test_key}: Parsed {metric_count}/{len(metrics)} metrics"
-                    )
-                except Exception as e:
-                    test.metadata["__executor_status"] = self.STATUS_FAILED
-                    test.metadata["__error"] = f"Parser error: {e}"
-                    self.logger.warning(
-                        f"  [{self._LOG_PREFIX}] {test_key}: Parser failed: {e}"
-                    )
-                    continue
-
-            # Collect system info from compute node
-            self._store_system_info(test)
-
-            self.logger.info(
-                f"  [{self._LOG_PREFIX}] {test_key}: SUCCEEDED"
-            )
-
-    # ------------------------------------------------------------------ #
-    # Helper methods (shared with SlurmExecutor)
-    # ------------------------------------------------------------------ #
-
-    def _parse_jobid(self, stdout: str) -> Optional[str]:
-        """Parse job ID from sbatch output."""
-        if not stdout:
-            return None
-
-        token = stdout.splitlines()[-1].strip()
-
-        # parsable form: "<jobid>[;...]"
-        cand = token.split(";", 1)[0].strip()
-        if cand.isdigit():
-            return cand
-
-        # classic form: "... 12345"
-        parts = token.split()
-        if parts and parts[-1].isdigit():
-            return parts[-1]
-
-        return None
-
-    def _squeue_state(self, job_id: str) -> Optional[str]:
-        """Get job state from squeue, or None if not in queue."""
-        try:
-            cmd_str = self.cmd_status.format(job_id=job_id)
-            cmd = shlex.split(cmd_str)
-
-            r = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            out = (r.stdout or "").strip()
-            if not out:
-                return None
-            return out.splitlines()[0].strip()
-        except subprocess.CalledProcessError:
-            return None
-
-
-# ============================================================================ #
 # SLURM Executor
 # ============================================================================ #
 
@@ -1048,6 +585,7 @@ class SlurmExecutor(BaseExecutor):
         self.cmd_submit = custom_commands.get("submit", "sbatch")
         self.cmd_status = custom_commands.get("status", "squeue -j {job_id} --noheader --format=%T")
         self.cmd_info = custom_commands.get("info", "scontrol show job {job_id}")
+        self.cmd_srun = custom_commands.get("srun", "srun")
         self.cmd_cancel = custom_commands.get("cancel", "scancel {job_id}")
 
         # Set polling interval with fallback chain:
@@ -1057,7 +595,7 @@ class SlurmExecutor(BaseExecutor):
         if executor_options and executor_options.poll_interval is not None:
             self.poll_interval = executor_options.poll_interval
         else:
-            self.poll_interval = getattr(getattr(cfg, "execution", None), "status_check_delay", 30)
+            self.poll_interval = getattr(getattr(cfg, "execution", None), "status_check_delay", 30) 
 
     def submit(self, test) -> None:
         self._init_execution_metadata(test)
@@ -1098,26 +636,6 @@ class SlurmExecutor(BaseExecutor):
         self.logger.debug(f"  [SlurmExec] Working directory: {test.execution_dir}")
         self.logger.debug(f"  [SlurmExec] Script file: {test.script_file}")
         self.logger.debug(f"  [SlurmExec] Submit command: {' '.join(cmd)}")
-
-        # Show key SLURM variables if available
-        if hasattr(test, 'vars') and test.vars and isinstance(test.vars, dict):
-            slurm_vars = {k: v for k, v in test.vars.items() if k in ['nodes', 'ntasks', 'processes_per_node', 'ntasks_per_node']}
-            if slurm_vars:
-                vars_str = ", ".join(f"{k}={v}" for k, v in slurm_vars.items())
-                self.logger.debug(f"  [SlurmExec] SLURM variables: {vars_str}")
-
-        # Show first few lines of script for verification
-        try:
-            with open(test.script_file, 'r') as f:
-                script_lines = f.readlines()[:10]  # First 10 lines
-                sbatch_directives = [line.strip() for line in script_lines if line.strip().startswith('#SBATCH')]
-                if sbatch_directives:
-                    self.logger.debug(f"  [SlurmExec] SBATCH directives:")
-                    for directive in sbatch_directives:
-                        self.logger.debug(f"  [SlurmExec]   {directive}")
-        except Exception as e:
-            self.logger.debug(f"  [SlurmExec] Could not read script preview: {e}")
-
         self.logger.debug(f"  [SlurmExec] ═══════════════════════════════════════════════════")
 
         try:
@@ -1435,6 +953,384 @@ class SlurmExecutor(BaseExecutor):
             return False
 
 
+# ============================================================================ #
+# Single-Allocation SLURM Executor
+# ============================================================================ #
+
+# Filename for single-allocation mode artifacts
+ALLOCATION_SCRIPT_FILENAME = "__iops_allocation.sh"
+
+
+class SingleAllocationSlurmExecutor(SlurmExecutor):
+    """
+    SLURM executor for single-allocation mode.
+
+    In this mode, all tests run within ONE SLURM allocation instead of
+    submitting individual jobs per test. This reduces job submission overhead
+    and is useful for HPC systems with job limits or queue wait times.
+
+    The user provides SBATCH directives in allocation_script. IOPS:
+    - Adds shebang if not provided
+    - Adds job-name, output, and error directives
+    - Injects a sleep command to keep the allocation alive
+
+    Execution flow (same interface as other executors):
+    1. First submit(): Creates allocation, waits for RUNNING, runs test via srun
+    2. Subsequent submit(): Runs test via srun using existing allocation
+    3. wait_and_collect(): Parses metrics from test output
+
+    Tests run within the allocation via: srun --jobid=<alloc_id> --overlap bash script.sh
+
+    Inherits from SlurmExecutor:
+    - SLURM_ACTIVE_STATES, SLURM_FAIL_STATES
+    - _parse_jobid(), _squeue_state(), _scontrol_info()
+    - Command setup (cmd_submit, cmd_status, cmd_cancel, poll_interval)
+    """
+
+    _LOG_PREFIX = "SingleAlloc"
+
+    def __init__(self, cfg: GenericBenchmarkConfig):
+        """Initialize single-allocation SLURM executor."""
+        # Initialize parent (sets up commands, poll_interval, etc.)
+        super().__init__(cfg)
+
+        # Extract allocation config (already validated by loader)
+        self.allocation = cfg.benchmark.executor_options.allocation
+
+        # Allocation state tracking
+        self.allocation_job_id: Optional[str] = None
+        self.allocation_submitted: bool = False
+
+    def submit(self, test: ExecutionInstance) -> None:
+        """
+        Submit a test for execution within the single allocation.
+
+        On first call, creates the allocation and waits for it to be RUNNING.
+        Then runs the test via srun within the allocation.
+
+        Args:
+            test: ExecutionInstance to execute
+        """
+        self._init_execution_metadata(test)
+
+        # Validate script_file
+        if test.script_file is None or not isinstance(test.script_file, Path) or not self._safe_is_file(test.script_file):
+            msg = "test.script_file is not set or invalid."
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_ERROR
+            test.metadata["__error"] = msg
+            return
+
+        # Validate execution_dir
+        if test.execution_dir is None or not isinstance(test.execution_dir, Path):
+            msg = "test.execution_dir is not set or invalid."
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_ERROR
+            test.metadata["__error"] = msg
+            return
+
+        # Create allocation on first submit
+        if not self.allocation_submitted:
+            try:
+                self._create_and_submit_allocation()
+                self._wait_for_allocation_running()
+                self.allocation_submitted = True
+            except Exception as e:
+                msg = f"Failed to create allocation: {e}"
+                self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                test.metadata["__executor_status"] = self.STATUS_ERROR
+                test.metadata["__error"] = msg
+                return
+
+        # Check if allocation is still alive
+        state = self._squeue_state(self.allocation_job_id)
+        if state is None or state in self.SLURM_FAIL_STATES:
+            msg = f"Allocation {self.allocation_job_id} is no longer available (state: {state})"
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_FAILED
+            test.metadata["__error"] = msg
+            return
+
+        # Run test via srun within the allocation
+        self._run_test_in_allocation(test)
+
+    def wait_and_collect(self, test: ExecutionInstance) -> None:
+        """
+        Parse metrics from test output.
+
+        The actual execution happens synchronously in submit(), so this method
+        just handles metric parsing (similar to LocalExecutor).
+
+        Args:
+            test: ExecutionInstance to collect results from
+        """
+        # Always create metrics dict early (handle parser=None safely)
+        parser = test.parser
+        metric_names = [m.name for m in (parser.metrics if parser else [])]
+        metrics = {name: None for name in metric_names}
+        test.metadata["metrics"] = metrics
+
+        # Only parse if succeeded
+        if test.metadata.get("__executor_status") == self.STATUS_SUCCEEDED:
+            if parser is not None:
+                self.logger.debug(f"  [{self._LOG_PREFIX}] Parsing metrics from output files")
+                try:
+                    results = parse_metrics_from_execution(test) or {}
+                    parsed = results.get("metrics", {}) if isinstance(results, dict) else {}
+
+                    for name, value in parsed.items():
+                        if name in metrics:
+                            metrics[name] = value
+                except ParserError as e:
+                    self.logger.warning(f"  [{self._LOG_PREFIX}] Parser failed: {e}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = f"Parser error: {e}"
+
+        metric_count = len([v for v in metrics.values() if v is not None])
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Collected {metric_count}/{len(metrics)} metrics: "
+            f"{list(metrics.keys())[:3]}{'...' if len(metrics) > 3 else ''}"
+        )
+
+        # Collect system info from compute node (if probe was enabled)
+        self._store_system_info(test)
+
+    # ------------------------------------------------------------------ #
+    # Allocation management
+    # ------------------------------------------------------------------ #
+
+    def _generate_allocation_script(self) -> str:
+        """
+        Generate the allocation script from user's allocation_script.
+
+        Adds:
+        - Shebang if not provided
+        - job-name, output, error directives
+        - Sleep command to keep allocation alive
+
+        Returns:
+            Complete allocation script content
+        """
+        workdir = self.cfg.benchmark.workdir
+        user_script = self.allocation.allocation_script.strip()
+
+        lines = []
+
+        # Add shebang if user didn't provide one
+        if not user_script.startswith("#!"):
+            lines.append("#!/bin/bash")
+
+        # Add user's SBATCH directives
+        lines.append(user_script)
+
+        # Add IOPS-managed directives
+        lines.append("")
+        lines.append("# IOPS-managed directives")
+        lines.append("#SBATCH --job-name=iops_allocation")
+
+        # Create logs directory if needed
+        logs_dir = workdir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        lines.append(f"#SBATCH --output={logs_dir}/allocation_%j.out")
+        lines.append(f"#SBATCH --error={logs_dir}/allocation_%j.err")
+
+        # Add sleep to keep allocation alive
+        lines.append("")
+        lines.append("# IOPS-injected: keep allocation alive")
+        lines.append("# Sleep will be terminated when runner cancels the allocation")
+        lines.append("sleep 2147483647 || sleep 999999 || while true; do sleep 1000; done")
+
+        return "\n".join(lines)
+
+    def _create_and_submit_allocation(self) -> None:
+        """
+        Generate allocation script and submit via sbatch.
+
+        Sets self.allocation_job_id on success.
+
+        Raises:
+            RuntimeError: If submission fails
+        """
+        workdir = self.cfg.benchmark.workdir
+
+        # Generate allocation script
+        script_content = self._generate_allocation_script()
+        script_path = workdir / ALLOCATION_SCRIPT_FILENAME
+
+        # Write script
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+        script_path.chmod(0o755)
+
+        self.logger.info(f"  [{self._LOG_PREFIX}] Generated allocation script: {script_path}")
+
+        # Submit via sbatch
+        cmd = shlex.split(self.cmd_submit)
+        cmd.append(str(script_path))
+
+        self.logger.debug(f"  [{self._LOG_PREFIX}] Submit command: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+        )
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"SLURM allocation submission failed (rc={result.returncode}): "
+                f"stderr='{stderr}' stdout='{stdout}'"
+            )
+
+        job_id = self._parse_jobid(stdout)
+        if not job_id:
+            raise RuntimeError(
+                f"Could not parse SLURM jobid from submission output: "
+                f"stdout='{stdout}' stderr='{stderr}'"
+            )
+
+        self.allocation_job_id = job_id
+        self.logger.info(f"  [{self._LOG_PREFIX}] Allocation submitted: job_id={job_id}")
+
+        # Register job with runner for cleanup on interrupt (Ctrl+C)
+        if self.runner and hasattr(self.runner, 'register_slurm_job'):
+            self.runner.register_slurm_job(job_id)
+
+    def _wait_for_allocation_running(self) -> None:
+        """
+        Poll squeue until the allocation is RUNNING.
+
+        Raises:
+            RuntimeError: If allocation fails or times out
+        """
+        job_id = self.allocation_job_id
+        if not job_id:
+            raise RuntimeError("No allocation job ID")
+
+        self.logger.info(
+            f"  [{self._LOG_PREFIX}] Waiting for allocation {job_id} to start "
+            f"(poll interval={self.poll_interval}s)"
+        )
+
+        last_state = None
+        while True:
+            state = self._squeue_state(job_id)
+
+            if state is None:
+                # Job left queue - check if it failed before starting
+                raise RuntimeError(
+                    f"Allocation {job_id} left queue before reaching RUNNING state"
+                )
+
+            if state in self.SLURM_FAIL_STATES:
+                raise RuntimeError(
+                    f"Allocation {job_id} failed with state: {state}"
+                )
+
+            if state != last_state:
+                self.logger.info(f"  [{self._LOG_PREFIX}] Allocation {job_id} state: {state}")
+                last_state = state
+
+            if state == "RUNNING":
+                self.logger.info(f"  [{self._LOG_PREFIX}] Allocation {job_id} is now RUNNING")
+                return
+
+            time.sleep(self.poll_interval)
+
+    def _run_test_in_allocation(self, test: ExecutionInstance) -> None:
+        """
+        Run a test within the allocation using srun.
+
+        Args:
+            test: ExecutionInstance to execute
+        """
+        script_path = test.script_file
+        exec_dir = test.execution_dir
+
+        stdout_path = exec_dir / "stdout"
+        stderr_path = exec_dir / "stderr"
+
+        test.metadata["__stdout_path"] = str(stdout_path)
+        test.metadata["__stderr_path"] = str(stderr_path)
+        test.metadata["__jobid"] = self.allocation_job_id
+
+        # Build srun command (cmd_srun may include prefix like "docker exec slurmctld srun")
+        srun_parts = shlex.split(self.cmd_srun)
+        cmd = srun_parts + [
+            f"--jobid={self.allocation_job_id}",
+            "--overlap",
+            "bash",
+            str(script_path),
+        ]
+
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Running test exec_id={test.execution_id} "
+            f"rep={test.repetition}: {' '.join(cmd)}"
+        )
+
+        try:
+            test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+            result = subprocess.run(
+                cmd,
+                cwd=exec_dir,
+                capture_output=True,
+                text=True,
+            )
+
+            test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+            # Save outputs
+            stdout_path.write_text(result.stdout or "", encoding="utf-8", errors="replace")
+            stderr_path.write_text(result.stderr or "", encoding="utf-8", errors="replace")
+
+            test.metadata["__returncode"] = result.returncode
+
+            # Log completion
+            stdout_lines = len(result.stdout.splitlines()) if result.stdout else 0
+            stderr_lines = len(result.stderr.splitlines()) if result.stderr else 0
+            self.logger.debug(
+                f"  [{self._LOG_PREFIX}] Test completed: returncode={result.returncode} "
+                f"stdout={stdout_lines} lines, stderr={stderr_lines} lines"
+            )
+
+            if result.returncode != 0:
+                msg = (
+                    f"Test script failed with code {result.returncode}.\n"
+                    f"stdout: {stdout_path}\n"
+                    f"stderr: {stderr_path}"
+                )
+                self.logger.error(f"  [{self._LOG_PREFIX}] FAILED: {msg}")
+
+                # Show stderr preview
+                if result.stderr:
+                    stderr_preview = self._truncate_output(result.stderr, max_lines=10)
+                    self.logger.debug(f"  [{self._LOG_PREFIX}] stderr preview:\n{stderr_preview}")
+
+                test.metadata["__executor_status"] = self.STATUS_FAILED
+                test.metadata["__error"] = msg
+                return
+
+            test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
+
+            # Execute post-processing script if present
+            if self._safe_is_file(test.post_script_file):
+                post_success = self._run_post_script(test)
+                if not post_success:
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+
+        except Exception as e:
+            msg = f"Error running test in allocation: {e}"
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_ERROR
+            test.metadata["__error"] = msg
+
+
 # Module exports
 __all__ = [
     "BaseExecutor",
@@ -1442,6 +1338,5 @@ __all__ = [
     "SlurmExecutor",
     "SingleAllocationSlurmExecutor",
     "SYSINFO_FILENAME",
-    "ALLOCATION_WRAPPER_FILENAME",
-    "ALLOCATION_STATUS_FILENAME",
+    "ALLOCATION_SCRIPT_FILENAME",
 ]

@@ -571,13 +571,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             alloc = eo["allocation"]
             allocation_config = AllocationConfig(
                 mode=alloc.get("mode", "per-test"),
-                nodes=alloc.get("nodes"),
-                ntasks_per_node=alloc.get("ntasks_per_node"),
-                time=alloc.get("time"),
-                partition=alloc.get("partition"),
-                account=alloc.get("account"),
-                extra_sbatch=alloc.get("extra_sbatch"),
-                srun_options=alloc.get("srun_options"),
+                allocation_script=alloc.get("allocation_script"),
             )
 
         executor_options = ExecutorOptionsConfig(
@@ -1086,40 +1080,18 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 "executor_options.allocation.mode='single' requires executor='slurm'"
             )
 
-        # When mode="single", nodes and time are required
+        # When mode="single", allocation_script is required
         if alloc.mode == "single":
-            if alloc.nodes is None:
+            if not alloc.allocation_script or not alloc.allocation_script.strip():
                 raise ConfigValidationError(
-                    "executor_options.allocation.nodes is required when mode='single'"
-                )
-            if alloc.nodes < 1:
-                raise ConfigValidationError(
-                    f"executor_options.allocation.nodes must be a positive integer (got '{alloc.nodes}')"
-                )
-            if alloc.time is None:
-                raise ConfigValidationError(
-                    "executor_options.allocation.time is required when mode='single'"
+                    "executor_options.allocation.allocation_script is required when mode='single'"
                 )
 
-            # Validate time format (HH:MM:SS or D-HH:MM:SS)
-            import re
-            time_pattern = r'^(\d+-)?(\d{1,2}):(\d{2}):(\d{2})$'
-            if not re.match(time_pattern, alloc.time):
+            # Basic sanity check: allocation_script should contain SBATCH directives
+            if "#SBATCH" not in alloc.allocation_script:
                 raise ConfigValidationError(
-                    f"executor_options.allocation.time must be in HH:MM:SS or D-HH:MM:SS format (got '{alloc.time}')"
+                    "executor_options.allocation.allocation_script must contain at least one #SBATCH directive"
                 )
-
-            # Validate ntasks_per_node if provided
-            if alloc.ntasks_per_node is not None and alloc.ntasks_per_node < 1:
-                raise ConfigValidationError(
-                    f"executor_options.allocation.ntasks_per_node must be a positive integer (got '{alloc.ntasks_per_node}')"
-                )
-
-            # Validate srun_options Jinja2 template if provided
-            if alloc.srun_options:
-                ok, err = _validate_jinja_template(alloc.srun_options, "executor_options.allocation.srun_options")
-                if not ok:
-                    raise ConfigValidationError(err)
 
     # trace_interval validation
     if cfg.benchmark.trace_interval is not None and cfg.benchmark.trace_interval <= 0:

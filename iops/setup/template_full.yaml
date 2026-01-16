@@ -133,45 +133,33 @@ benchmark:
   #   #   - Reducing scheduler load
   #   #
   #   # In single-allocation mode:
-  #   #   - IOPS submits ONE sbatch job with resources for all tests
-  #   #   - Tests run sequentially within the allocation
+  #   #   - IOPS submits ONE sbatch job using your allocation_script
+  #   #   - Tests run via: srun --jobid=<id> --overlap bash script.sh
   #   #   - Each test's stdout/stderr is still captured separately
   #   #   - Caching, parsing, and folder structure work identically
-  #   #   - Individual script #SBATCH directives are ignored (allocation controls resources)
+  #   #   - Individual script #SBATCH directives are ignored
+  #   #
+  #   # IOPS injects: shebang (if missing), job-name, output/error paths,
+  #   # and a sleep command to keep the allocation alive.
+  #   #
+  #   # Script requirements:
+  #   #   - No #SBATCH directives needed (allocation_script controls resources)
+  #   #   - Load modules in the script (srun starts a fresh shell)
+  #   #   - MPI programs work automatically (SLURM env vars are inherited)
   #   # -------------------------------------------------------------------------
   #   allocation:
   #     # Allocation mode: "single" or "per-test" (default)
-  #     # - per-test: Each test submits its own sbatch job (traditional behavior)
-  #     # - single: All tests run within one allocation
   #     mode: "single"
   #
-  #     # Number of nodes for the allocation (required when mode="single")
-  #     nodes: 8
-  #
-  #     # Tasks per node (optional)
-  #     ntasks_per_node: 4
-  #
-  #     # Time limit for the entire allocation (required when mode="single")
-  #     # Format: HH:MM:SS or D-HH:MM:SS
-  #     time: "02:00:00"
-  #
-  #     # SLURM partition/queue (optional)
-  #     partition: "batch"
-  #
-  #     # SLURM account for billing (optional)
-  #     account: "myaccount"
-  #
-  #     # Additional SBATCH directives (optional, multiline string)
-  #     # Added to the allocation wrapper script
-  #     extra_sbatch: |
+  #     # SBATCH directives for the allocation (required when mode="single")
+  #     # Include all resource requests: nodes, time, partition, account, etc.
+  #     allocation_script: |
+  #       #SBATCH --nodes=8
+  #       #SBATCH --time=02:00:00
+  #       #SBATCH --partition=batch
+  #       #SBATCH --account=myaccount
   #       #SBATCH --exclusive
   #       #SBATCH --constraint=ib
-  #
-  #     # srun options for each test (optional, Jinja2 template)
-  #     # If provided, each test runs with: srun <srun_options> bash script.sh
-  #     # If omitted, tests run with: bash script.sh
-  #     # Available variables: all vars from your configuration
-  #     srun_options: "--nodes={{ nodes }} --ntasks-per-node={{ processes_per_node }}"
 
   # ---------------------------------------------------------------------------
   # BUDGET CONFIGURATION (optional)
