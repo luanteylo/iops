@@ -1,11 +1,11 @@
-# iops/execution/cache.py
+# iops/cache/execution_cache.py
 
 """Execution caching for IOPS benchmarks using SQLite."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import sqlite3
 import json
 import hashlib
@@ -308,3 +308,55 @@ class ExecutionCache(HasLogger):
                 'newest_entry': newest,
                 'db_path': str(self.db_path),
             }
+
+
+# Standalone functions for use in rebuild operations
+
+def normalize_params(params: Dict[str, Any], exclude_vars: Optional[set] = None) -> Dict[str, Any]:
+    """
+    Normalize parameters for hashing (standalone function).
+
+    Args:
+        params: Raw parameters dict
+        exclude_vars: Set of variable names to exclude
+
+    Returns:
+        Normalized parameters dict suitable for hashing
+    """
+    exclude_vars = exclude_vars or set()
+    normalized = {}
+
+    for key, value in sorted(params.items()):
+        if key.startswith("__"):
+            continue
+        if key in exclude_vars:
+            continue
+
+        if isinstance(value, Path):
+            value = str(value)
+
+        if isinstance(value, str) and value.isdigit():
+            value = int(value)
+        elif isinstance(value, str):
+            try:
+                value = float(value)
+            except ValueError:
+                pass
+
+        normalized[key] = value
+
+    return normalized
+
+
+def hash_params(params: Dict[str, Any]) -> str:
+    """
+    Generate a hash for parameters (standalone function).
+
+    Args:
+        params: Parameters dict (should be normalized first)
+
+    Returns:
+        MD5 hash of parameters as hex string
+    """
+    params_str = json.dumps(params, sort_keys=True, default=str)
+    return hashlib.md5(params_str.encode()).hexdigest()

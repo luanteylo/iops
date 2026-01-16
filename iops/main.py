@@ -50,7 +50,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -223,6 +223,22 @@ Examples:
     archive_extract_parser.add_argument('--no-progress', action='store_true',
                                         help='Disable progress bar')
     _add_common_args(archive_extract_parser)
+
+    # ---- cache command with subcommands ----
+    cache_parser = subparsers.add_parser('cache', help='Cache management commands',
+                                          description='Manage IOPS execution cache.')
+    cache_subparsers = cache_parser.add_subparsers(dest='cache_command', title='cache commands',
+                                                    metavar='<cache-command>')
+
+    # cache rebuild
+    cache_rebuild_parser = cache_subparsers.add_parser('rebuild', help='Rebuild cache with different excluded variables',
+                                                        description='Rebuild a cache database excluding additional variables from the hash.')
+    cache_rebuild_parser.add_argument('source', type=Path, help='Path to source cache database')
+    cache_rebuild_parser.add_argument('--exclude', type=str, required=True, metavar='VAR1,VAR2',
+                                      help='Comma-separated list of variables to exclude from hash')
+    cache_rebuild_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                      help='Output database path (default: <source>_rebuilt.db)')
+    _add_common_args(cache_rebuild_parser)
 
     args = parser.parse_args()
 
@@ -639,6 +655,56 @@ def main():
             # No subcommand provided
             logger.error("No archive subcommand specified. Use 'iops archive create' or 'iops archive extract'.")
             logger.info("Run 'iops archive --help' for more information.")
+            return
+
+    # ---- cache command ----
+    if args.command == 'cache':
+        from iops.cache import rebuild_cache
+
+        if args.cache_command == 'rebuild':
+            try:
+                # Parse exclude vars
+                exclude_vars = [v.strip() for v in args.exclude.split(',') if v.strip()]
+                if not exclude_vars:
+                    logger.error("No variables specified in --exclude")
+                    return
+
+                # Determine output path
+                if args.output:
+                    output_path = args.output
+                else:
+                    source_stem = args.source.stem
+                    output_path = args.source.parent / f"{source_stem}_rebuilt.db"
+
+                stats = rebuild_cache(
+                    source_db=args.source,
+                    output_db=output_path,
+                    exclude_vars=exclude_vars,
+                    logger=logger,
+                )
+
+                logger.info("")
+                logger.info(stats.summary())
+                logger.info(f"Rebuilt cache saved to: {output_path}")
+
+            except FileNotFoundError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error rebuilding cache: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        else:
+            # No subcommand provided
+            logger.error("No cache subcommand specified. Use 'iops cache rebuild'.")
+            logger.info("Run 'iops cache --help' for more information.")
             return
 
     # ---- run command ----

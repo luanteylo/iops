@@ -2,7 +2,7 @@
 from iops.logger import HasLogger
 from iops.execution.planner import BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX
 from iops.execution.executors import BaseExecutor
-from iops.execution.cache import ExecutionCache
+from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
 from iops.reporting.config_template import serialize_reporting_config, save_report_config_template
