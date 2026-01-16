@@ -474,7 +474,7 @@ class TestPartialArchiveCreation:
         extract_dir.mkdir()
 
         with tarfile.open(output, "r:gz") as tar:
-            tar.extractall(extract_dir)
+            tar.extractall(extract_dir, filter="data")
 
         # Check that only exec_0001 and exec_0002 directories exist
         exec_dirs = list(extract_dir.glob("exec_*"))
@@ -519,7 +519,7 @@ class TestPartialArchiveCreation:
         extract_dir.mkdir()
 
         with tarfile.open(output, "r:gz") as tar:
-            tar.extractall(extract_dir)
+            tar.extractall(extract_dir, filter="data")
 
         results_file = extract_dir / "results.csv"
         assert results_file.exists()
@@ -747,7 +747,7 @@ class TestMinRepsArchiveCreation:
         extract_dir.mkdir()
 
         with tarfile.open(output, "r:gz") as tar:
-            tar.extractall(extract_dir)
+            tar.extractall(extract_dir, filter="data")
 
         results_file = extract_dir / "results.csv"
         assert results_file.exists()

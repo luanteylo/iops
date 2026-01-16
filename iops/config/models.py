@@ -17,6 +17,48 @@ class ConfigValidationError(Exception):
 # ----------------- Core blocks ----------------- #
 
 @dataclass
+class AllocationConfig:
+    """
+    Configuration for single-allocation SLURM mode.
+
+    In single-allocation mode, all tests run within ONE SLURM allocation instead
+    of submitting individual jobs per test. This reduces job submission overhead
+    and is useful for HPC systems with job limits.
+
+    Attributes:
+        mode: Allocation mode - "single" or "per-test" (default)
+        nodes: Number of nodes for the allocation (required when mode="single")
+        ntasks_per_node: Tasks per node (optional)
+        time: Time limit for allocation in HH:MM:SS or D-HH:MM:SS format (required when mode="single")
+        partition: SLURM partition/queue (optional)
+        account: SLURM account for billing (optional)
+        extra_sbatch: Additional SBATCH directives as multiline string (optional)
+        srun_options: Jinja2 template for srun options per test (optional)
+
+    Example:
+        executor_options:
+          allocation:
+            mode: "single"
+            nodes: 8
+            ntasks_per_node: 4
+            time: "02:00:00"
+            partition: "batch"
+            account: "myaccount"
+            extra_sbatch: |
+              #SBATCH --exclusive
+            srun_options: "--nodes={{ nodes }} --ntasks-per-node={{ ppn }}"
+    """
+    mode: str = "per-test"  # "single" or "per-test"
+    nodes: Optional[int] = None
+    ntasks_per_node: Optional[int] = None
+    time: Optional[str] = None
+    partition: Optional[str] = None
+    account: Optional[str] = None
+    extra_sbatch: Optional[str] = None
+    srun_options: Optional[str] = None  # Jinja2 template
+
+
+@dataclass
 class ExecutorOptionsConfig:
     """
     Executor-specific configuration options.
@@ -43,6 +85,14 @@ class ExecutorOptionsConfig:
             cancel: "lrms-wrapper kill {job_id}"
           poll_interval: 10                                       # Check status every 10 seconds
 
+    Example with single-allocation mode:
+        executor_options:
+          allocation:
+            mode: "single"
+            nodes: 8
+            time: "02:00:00"
+            partition: "batch"
+
     Placeholders:
         {job_id} - Replaced with the SLURM job ID at runtime
 
@@ -51,6 +101,7 @@ class ExecutorOptionsConfig:
     """
     commands: Optional[Dict[str, str]] = None
     poll_interval: Optional[int] = None  # Polling interval in seconds for SLURM job status checks
+    allocation: Optional[AllocationConfig] = None  # Single-allocation mode configuration
 
 
 @dataclass

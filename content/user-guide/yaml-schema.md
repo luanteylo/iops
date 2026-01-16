@@ -71,6 +71,15 @@ benchmark:
       info: string                  #     Info template (default: "scontrol show job {job_id}")
       cancel: string                #     Cancel template (default: "scancel {job_id}")
     poll_interval: integer          #   Status polling interval in seconds (default: 30)
+    allocation:                     #   Single-allocation mode (SLURM only)
+      mode: string                  #     "single" | "per-test" (default: "per-test")
+      nodes: integer                #     Nodes for allocation (required if mode: "single")
+      ntasks_per_node: integer      #     Tasks per node (optional)
+      time: string                  #     Time limit HH:MM:SS or D-HH:MM:SS (required if mode: "single")
+      partition: string             #     SLURM partition (optional)
+      account: string               #     SLURM account (optional)
+      extra_sbatch: string          #     Additional #SBATCH directives (optional)
+      srun_options: string          #     Jinja2 template for srun options per test (optional)
 
   random_seed: integer              # Optional: seed for randomization (default: 42)
   cache_file: path                  # Optional: cache file location
@@ -175,6 +184,41 @@ benchmark:
 
 - `{job_id}` placeholder is replaced at runtime
 - Useful for systems with command wrappers or custom SLURM installations
+
+**Single-Allocation Mode:**
+
+Run all tests within ONE SLURM allocation instead of submitting individual jobs per test:
+
+```yaml
+benchmark:
+  executor: "slurm"
+  executor_options:
+    allocation:
+      mode: "single"              # Required: "single" or "per-test" (default)
+      nodes: 8                    # Required when mode="single"
+      time: "02:00:00"            # Required when mode="single" (HH:MM:SS or D-HH:MM:SS)
+      ntasks_per_node: 4          # Optional
+      partition: "batch"          # Optional
+      account: "myaccount"        # Optional
+      extra_sbatch: |             # Optional: additional #SBATCH directives
+        #SBATCH --exclusive
+        #SBATCH --constraint=ib
+      srun_options: "--nodes={{ nodes }} --ntasks-per-node={{ ppn }}"  # Optional
+```
+
+**When to use single-allocation mode:**
+- HPC systems with job limits or long queue wait times
+- Running many small tests efficiently
+- Reducing scheduler load
+
+**How it works:**
+- IOPS submits ONE sbatch job with resources for all tests
+- Tests run sequentially within the allocation
+- Each test's stdout/stderr is still captured separately in its execution_dir
+- Caching, parsing, and folder structure work identically to per-test mode
+- Individual script `#SBATCH` directives are ignored (allocation controls resources)
+
+**srun_options:** Jinja2 template rendered per-test with access to all variables. If provided, each test runs with `srun <options> bash script.sh`. If omitted, tests run with `bash script.sh`.
 
 </details>
 

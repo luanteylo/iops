@@ -2,8 +2,20 @@
 title: "Execution Backends"
 ---
 
-
 IOPS supports two execution backends for running benchmarks: local execution and SLURM cluster submission.
+
+---
+
+## Table of Contents
+
+1. [Local Executor](#local-executor)
+2. [SLURM Executor](#slurm-executor)
+   - [Budget Control](#budget-control)
+   - [Job Monitoring](#job-monitoring)
+   - [Custom SLURM Commands](#custom-slurm-commands)
+   - [Single-Allocation Mode](#single-allocation-mode)
+
+---
 
 ## Local Executor
 
@@ -157,4 +169,77 @@ This allows IOPS to work with various SLURM configurations and wrapper systems c
 - The `submit` command specified in `executor_options` is a default. Individual scripts can override it via `scripts[].submit`.
 - The `{job_id}` placeholder is required for status, info, and cancel commands.
 - The `poll_interval` controls how often (in seconds) IOPS checks job status during execution. Default is 30 seconds.
+
+### Single-Allocation Mode
+
+By default, IOPS submits a separate SLURM job for each test (`per-test` mode). For scenarios where this creates too much scheduler overhead, you can run all tests within a single SLURM allocation:
+
+```yaml
+benchmark:
+  executor: "slurm"
+  executor_options:
+    allocation:
+      mode: "single"              # Run all tests in one allocation
+      nodes: 8                    # Total nodes for the allocation
+      time: "02:00:00"            # Total time limit
+      partition: "batch"          # Optional
+      account: "myaccount"        # Optional
+```
+
+#### When to Use Single-Allocation Mode
+
+- **Job limits**: HPC systems that limit the number of jobs per user
+- **Queue wait times**: Avoid waiting in queue for each individual test
+- **Many small tests**: Running hundreds of short tests more efficiently
+- **Scheduler load**: Reduce load on the SLURM scheduler
+
+#### How It Works
+
+1. IOPS collects all tests from the planner (respecting cache)
+2. Generates a wrapper script (`__iops_allocation_wrapper.sh`) containing all tests
+3. Submits ONE `sbatch` job for the entire allocation
+4. Tests run sequentially within the allocation
+5. Exit codes are tracked and results are collected after completion
+
+#### Full Configuration
+
+```yaml
+benchmark:
+  executor: "slurm"
+  executor_options:
+    poll_interval: 30
+    allocation:
+      mode: "single"                    # "single" or "per-test" (default)
+      nodes: 8                          # Required: nodes for allocation
+      ntasks_per_node: 4                # Optional: tasks per node
+      time: "02:00:00"                  # Required: time limit (HH:MM:SS or D-HH:MM:SS)
+      partition: "batch"                # Optional: SLURM partition
+      account: "myaccount"              # Optional: SLURM account
+      extra_sbatch: |                   # Optional: additional directives
+        #SBATCH --exclusive
+        #SBATCH --constraint=ib
+      srun_options: "--nodes={{ nodes }} --ntasks-per-node={{ ppn }}"  # Optional
+```
+
+#### srun_options
+
+The `srun_options` field is a Jinja2 template that controls how each test is launched within the allocation:
+
+- **If provided**: Each test runs with `srun <options> bash script.sh`
+- **If omitted**: Each test runs with `bash script.sh` (suitable when tests manage their own `srun`)
+
+The template has access to all variables from your configuration:
+
+```yaml
+# Example: Each test gets its own subset of nodes
+srun_options: "--nodes={{ nodes }} --ntasks={{ nodes * ppn }}"
+```
+
+#### Important Notes
+
+- **Script SBATCH directives are ignored**: In single-allocation mode, the allocation wrapper controls all resources. Any `#SBATCH` directives in your `script_template` are ignored.
+- **Sequential execution**: Tests run one after another within the allocation, not in parallel.
+- **Stdout/stderr capture**: Each test's output is still redirected to its own `execution_dir/stdout` and `execution_dir/stderr`.
+- **Caching works normally**: Cached tests are skipped and not included in the allocation.
+- **Folder structure unchanged**: The same `exec_XXXX/repetition_YYY` structure is used.
 

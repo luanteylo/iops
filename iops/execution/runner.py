@@ -1,7 +1,7 @@
 
 from iops.logger import HasLogger
 from iops.execution.planner import BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX
-from iops.execution.executors import BaseExecutor
+from iops.execution.executors import BaseExecutor, SingleAllocationSlurmExecutor
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
@@ -1247,7 +1247,250 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"  • Metadata: {self.cfg.benchmark.workdir / METADATA_FILENAME}")
         self.logger.info("=" * 70)
 
+    def _is_single_allocation_mode(self) -> bool:
+        """Check if single-allocation mode is enabled."""
+        eo = self.cfg.benchmark.executor_options
+        return (
+            self.cfg.benchmark.executor == "slurm" and
+            eo is not None and
+            eo.allocation is not None and
+            eo.allocation.mode == "single"
+        )
+
+    def _run_single_allocation(self):
+        """
+        Run all tests in a single SLURM allocation.
+
+        This method is used when executor_options.allocation.mode = "single".
+        It collects all tests first, then submits them as a single allocation.
+        """
+        benchmark_start_time = datetime.now()
+
+        self.logger.info("=" * 70)
+        self.logger.info(f"Starting IOPS Runner (Single-Allocation Mode): {self.cfg.benchmark.name}")
+        self.logger.info(f"Benchmark start time: {benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info("=" * 70)
+
+        # Phase 1: Collect all tests from planner
+        self.logger.info("Phase 1: Collecting tests from planner...")
+        all_tests = []
+        tests_to_execute = []
+        cached_tests = []
+
+        while True:
+            test = self.planner.next_test()
+            if test is None:
+                break
+
+            all_tests.append(test)
+
+            # Check cache if reads are enabled
+            used_cache = False
+            if self.cache and self.use_cache_reads:
+                cached_result = self.cache.get_cached_result(
+                    params=test.vars,
+                    repetition=test.repetition,
+                )
+
+                if cached_result:
+                    if self._validate_cached_metrics(cached_result['metrics']):
+                        # Use cached result
+                        self.cache_hits += 1
+                        used_cache = True
+
+                        # Populate test with cached data
+                        test.metadata.update(cached_result['metadata'])
+                        test.metadata['metrics'] = cached_result['metrics']
+                        test.metadata['__cached'] = True
+                        test.metadata['__cached_at'] = cached_result['cached_at']
+                        test.metadata['__executor_status'] = BaseExecutor.STATUS_SUCCEEDED
+
+                        cached_tests.append(test)
+                        self.logger.debug(
+                            f"  [Cache] HIT: exec_id={test.execution_id} rep={test.repetition}"
+                        )
+                    else:
+                        self.cache_misses += 1
+                else:
+                    self.cache_misses += 1
+
+            if not used_cache:
+                tests_to_execute.append(test)
+
+        total_tests = len(all_tests)
+        cached_count = len(cached_tests)
+        to_execute_count = len(tests_to_execute)
+
+        self.logger.info(
+            f"  Collected {total_tests} tests: {cached_count} cached, {to_execute_count} to execute"
+        )
+
+        # Phase 2: Queue and submit allocation (if any tests to run)
+        if tests_to_execute:
+            self.logger.info("Phase 2: Queueing tests for single allocation...")
+
+            executor = self.executor
+            if not isinstance(executor, SingleAllocationSlurmExecutor):
+                raise RuntimeError("Single-allocation mode requires SingleAllocationSlurmExecutor")
+
+            for test in tests_to_execute:
+                # Write PENDING status before queueing
+                if getattr(self.cfg.benchmark, 'track_executions', True):
+                    self._write_status_file(test, status="PENDING")
+
+                executor.queue_test(test)
+
+            self.logger.info(f"  Queued {to_execute_count} tests for execution")
+
+            # Submit the allocation
+            self.logger.info("Phase 3: Submitting allocation to SLURM...")
+            try:
+                job_id = executor.submit_allocation()
+                self.submitted_job_ids.add(job_id)
+
+                # Write RUNNING status for all queued tests
+                if getattr(self.cfg.benchmark, 'track_executions', True):
+                    for test in tests_to_execute:
+                        self._write_status_file(test, status="RUNNING")
+
+                # Phase 4: Wait for completion
+                self.logger.info("Phase 4: Waiting for allocation to complete...")
+                executor.wait_for_allocation()
+                self.submitted_job_ids.discard(job_id)
+
+                # Phase 5: Collect results
+                self.logger.info("Phase 5: Collecting results from completed tests...")
+                executor.collect_results()
+
+            except Exception as e:
+                self.logger.error(f"Allocation failed: {e}")
+                # Mark all tests as error
+                for test in tests_to_execute:
+                    test.metadata["__executor_status"] = BaseExecutor.STATUS_ERROR
+                    test.metadata["__error"] = str(e)
+
+        # Phase 6: Save results and update cache
+        self.logger.info("Phase 6: Saving results...")
+        test_count = 0
+
+        for test in all_tests:
+            test_count += 1
+            is_cached = test.metadata.get('__cached', False)
+
+            # Write final status file
+            if getattr(self.cfg.benchmark, 'track_executions', True):
+                self._write_status_file(test)
+
+            # Store in cache if configured and execution succeeded
+            if not is_cached and self.cache:
+                if test.metadata.get("__executor_status") == BaseExecutor.STATUS_SUCCEEDED:
+                    self.cache.store_result(
+                        params=test.vars,
+                        repetition=test.repetition,
+                        metrics=test.metadata.get('metrics', {}),
+                        metadata={
+                            k: v for k, v in test.metadata.items()
+                            if k not in ['metrics']
+                        },
+                    )
+
+            # Save to output file
+            save_test_execution(test)
+
+            # Track system info
+            self._track_system_info(test)
+
+            # Track actual output path from first test
+            if self.actual_output_path is None:
+                self.actual_output_path = getattr(test, "output_path", None)
+
+            # Track completed tests for resource trace aggregation
+            self.completed_tests.append(test)
+
+            # Log progress
+            status = test.metadata.get("__executor_status", "UNKNOWN")
+            cache_marker = "[CACHED]" if is_cached else "[EXECUTED]"
+
+            metrics_str = ""
+            if test.metadata.get('metrics'):
+                metrics = test.metadata['metrics']
+                metrics_preview = ", ".join([f"{k}={v}" for k, v in list(metrics.items())[:3]])
+                if len(metrics) > 3:
+                    metrics_preview += f", ... ({len(metrics)} total)"
+                metrics_str = f" | {metrics_preview}"
+
+            self.logger.info(
+                f"[{test_count:3d}] {test.execution_id} (rep {test.repetition}/{test.repetitions}) "
+                f"→ {status} {cache_marker}{metrics_str}"
+            )
+
+        # Final statistics
+        benchmark_end_time = datetime.now()
+        total_runtime = (benchmark_end_time - benchmark_start_time).total_seconds()
+
+        self.logger.info("=" * 70)
+        self.logger.info(f"Benchmark completed: {test_count} tests total")
+
+        if self.cache and self.use_cache_reads:
+            hit_rate = (self.cache_hits / test_count * 100) if test_count > 0 else 0
+            self.logger.info(
+                f"Cache statistics: {self.cache_hits} hits, {self.cache_misses} misses ({hit_rate:.1f}% hit rate)"
+            )
+        elif self.cache:
+            self.logger.info(f"Cache: {to_execute_count} results written to database")
+
+        # Render output path
+        output_path_display = self.actual_output_path
+        if output_path_display is None:
+            try:
+                template = Template(str(self.cfg.output.sink.path))
+                output_path_display = template.render(workdir=str(self.cfg.benchmark.workdir))
+            except Exception:
+                output_path_display = self.cfg.output.sink.path
+
+        self.logger.info(f"Results saved to: {output_path_display}")
+        self.logger.info("=" * 70)
+
+        # Format runtime for display
+        if total_runtime < 60:
+            runtime_str = f"{total_runtime:.1f}s"
+        elif total_runtime < 3600:
+            runtime_str = f"{total_runtime/60:.1f}m ({total_runtime:.1f}s)"
+        else:
+            runtime_str = f"{total_runtime/3600:.2f}h ({total_runtime/60:.1f}m)"
+
+        # Log timing summary
+        self.logger.info("=" * 70)
+        self.logger.info("BENCHMARK TIMING SUMMARY")
+        self.logger.info("=" * 70)
+        self.logger.info(f"Start time:    {benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"End time:      {benchmark_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"Total runtime: {runtime_str}")
+        self.logger.info("=" * 70)
+
+        # Save runtime metadata
+        self._save_run_metadata(
+            test_count=test_count,
+            benchmark_start_time=benchmark_start_time,
+            benchmark_end_time=benchmark_end_time,
+            planner_stats=self._get_planner_stats()
+        )
+
+        # Aggregate resource traces if enabled
+        self._aggregate_resource_traces(self.completed_tests)
+
+        # Save report config template
+        save_report_config_template(self.cfg, logger=self.logger)
+
+        # Auto-generate report if enabled
+        if self.cfg.reporting and self.cfg.reporting.enabled:
+            self._generate_report()
+
     def run(self):
+        # Check for single-allocation mode
+        if self._is_single_allocation_mode():
+            return self._run_single_allocation()
+
         # Record benchmark start time
         benchmark_start_time = datetime.now()
 

@@ -85,18 +85,23 @@ benchmark:
   # Options:
   #   - "local": Run scripts locally using subprocess
   #   - "slurm": Submit jobs to SLURM cluster via sbatch
-  
+
   # executor: "local"
-  
+
   executor: "slurm"
+
+  # ===========================================================================
+  # SLURM-ONLY CONFIGURATION
+  # ===========================================================================
+  # The following options only apply when executor: "slurm"
+  # ===========================================================================
+
   # ---------------------------------------------------------------------------
   # EXECUTOR OPTIONS (optional)
   # ---------------------------------------------------------------------------
-  # For SLURM executor: Customize commands used for job management
-  # Commands are templates that support {job_id} placeholder for runtime substitution
-  # Useful when running on systems with command wrappers or custom SLURM installations
-  #
-  # Uncomment to customize SLURM commands:
+  # Customize commands used for job management.
+  # Commands are templates that support {job_id} placeholder for runtime substitution.
+  # Useful when running on systems with command wrappers or custom SLURM installations.
   # ---------------------------------------------------------------------------
   # executor_options:
   #   commands:
@@ -118,6 +123,82 @@ benchmark:
   #   # Controls how often IOPS queries job status during wait_and_collect
   #   poll_interval: 30
   #
+  #   # -------------------------------------------------------------------------
+  #   # SINGLE-ALLOCATION MODE (optional)
+  #   # -------------------------------------------------------------------------
+  #   # Run all tests within ONE SLURM allocation instead of submitting individual
+  #   # jobs per test. This reduces job submission overhead and is useful for:
+  #   #   - HPC systems with job limits or long queue wait times
+  #   #   - Running many small tests efficiently
+  #   #   - Reducing scheduler load
+  #   #
+  #   # In single-allocation mode:
+  #   #   - IOPS submits ONE sbatch job with resources for all tests
+  #   #   - Tests run sequentially within the allocation
+  #   #   - Each test's stdout/stderr is still captured separately
+  #   #   - Caching, parsing, and folder structure work identically
+  #   #   - Individual script #SBATCH directives are ignored (allocation controls resources)
+  #   # -------------------------------------------------------------------------
+  #   allocation:
+  #     # Allocation mode: "single" or "per-test" (default)
+  #     # - per-test: Each test submits its own sbatch job (traditional behavior)
+  #     # - single: All tests run within one allocation
+  #     mode: "single"
+  #
+  #     # Number of nodes for the allocation (required when mode="single")
+  #     nodes: 8
+  #
+  #     # Tasks per node (optional)
+  #     ntasks_per_node: 4
+  #
+  #     # Time limit for the entire allocation (required when mode="single")
+  #     # Format: HH:MM:SS or D-HH:MM:SS
+  #     time: "02:00:00"
+  #
+  #     # SLURM partition/queue (optional)
+  #     partition: "batch"
+  #
+  #     # SLURM account for billing (optional)
+  #     account: "myaccount"
+  #
+  #     # Additional SBATCH directives (optional, multiline string)
+  #     # Added to the allocation wrapper script
+  #     extra_sbatch: |
+  #       #SBATCH --exclusive
+  #       #SBATCH --constraint=ib
+  #
+  #     # srun options for each test (optional, Jinja2 template)
+  #     # If provided, each test runs with: srun <srun_options> bash script.sh
+  #     # If omitted, tests run with: bash script.sh
+  #     # Available variables: all vars from your configuration
+  #     srun_options: "--nodes={{ nodes }} --ntasks-per-node={{ processes_per_node }}"
+
+  # ---------------------------------------------------------------------------
+  # BUDGET CONFIGURATION (optional)
+  # ---------------------------------------------------------------------------
+  # Control resource usage with core-hour budgets.
+  # Execution stops when budget is exhausted.
+  # ---------------------------------------------------------------------------
+
+  # Maximum CPU core-hours budget
+  # Can be overridden with --max-core-hours CLI argument
+  # max_core_hours: 1000
+
+  # Jinja expression to compute cores used per execution
+  # Used with max_core_hours for budget tracking
+  # Examples:
+  #   - "{{ ntasks }}" - total tasks across all nodes
+  #   - "{{ nodes * processes_per_node }}" - explicit calculation
+  # cores_expr: "{{ ntasks }}"
+
+  # Estimated execution time per test in seconds
+  # Used for dry-run budget analysis and scheduling estimates
+  # Can be overridden with --estimated-time CLI argument (supports scenarios: "120,240,360")
+  # estimated_time_seconds: 300
+
+  # ===========================================================================
+  # END SLURM-ONLY CONFIGURATION
+  # ===========================================================================
 
   # Optional: Random seed for reproducible random operations (default: None)
   # Used by random and bayesian search methods
@@ -177,23 +258,6 @@ benchmark:
   #   - IOPS tests all ost_num values: (4, 64, ost_num=1), (4, 64, ost_num=2), etc.
   # For exhaustive search: this has no effect (all combinations already tested)
   # exhaustive_vars: ["ost_num"]
-
-  # Optional: Budget configuration (SLURM only)
-  # Maximum CPU core-hours budget - execution stops when budget is exhausted
-  # Can be overridden with --max-core-hours CLI argument
-  # max_core_hours: 1000
-
-  # Optional: Jinja expression to compute cores used per execution (SLURM only)
-  # Used with max_core_hours for budget tracking
-  # Examples:
-  #   - "{{ ntasks }}" - total tasks across all nodes
-  #   - "{{ nodes * processes_per_node }}" - explicit calculation
-  # cores_expr: "{{ ntasks }}"
-
-  # Optional: Estimated execution time per test in seconds (SLURM only)
-  # Used for dry-run budget analysis and scheduling estimates
-  # Can be overridden with --estimated-time CLI argument (supports scenarios: "120,240,360")
-  # estimated_time_seconds: 300
 
   # Optional: Variables to include in analysis reports
   # When using --report, only these variables will be used in plots and Pareto frontier
