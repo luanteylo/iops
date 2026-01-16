@@ -84,17 +84,17 @@ This file includes:
 
 ### Aggregated Metrics
 
-| Metric | Description |
-|--------|-------------|
-| `mem_peak_gb` | Maximum memory used across all nodes (GB) |
-| `mem_avg_gb` | Average memory during execution (GB) |
-| `mem_peak_per_node_gb` | Peak memory per node (GB) |
-| `cpu_avg_pct` | Average CPU utilization across all cores |
-| `cpu_max_pct` | Peak CPU utilization |
-| `cpu_imbalance_pct` | Difference between most and least utilized cores |
-| `nodes_traced` | Number of nodes with trace data |
-| `samples_collected` | Total number of samples |
-| `trace_duration_s` | Time span of trace data (seconds) |
+| Metric | Description | Formula |
+|--------|-------------|---------|
+| `mem_peak_gb` | Maximum memory used across all nodes | `max(mem_total - mem_available) / 1024²` |
+| `mem_avg_gb` | Average memory during execution | `sum(mem_used) / samples / 1024²` |
+| `mem_peak_per_node_gb` | Highest peak memory among all nodes | `max(per_node_peaks) / 1024²` |
+| `cpu_avg_pct` | Average CPU utilization across all cores | `sum(cpu_user + cpu_system) / samples` |
+| `cpu_max_pct` | Peak CPU utilization | `max(cpu_user + cpu_system)` |
+| `cpu_imbalance_pct` | Load balancing indicator | `max(core_cpu) - min(core_cpu)` |
+| `nodes_traced` | Number of nodes with trace data | `count(unique(hostname))` |
+| `samples_collected` | Total number of samples | `count(rows)` |
+| `trace_duration_s` | Time span of trace data (seconds) | `max(timestamp) - min(timestamp)` |
 
 
 ## Configuration Reference
