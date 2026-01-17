@@ -22,6 +22,13 @@ import random
 import json
 import warnings
 
+# Try to import rich for progress bars
+try:
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
 
 # ============================================================================ #
 # IOPS Script Injection Constants
@@ -481,32 +488,57 @@ class BasePlanner(ABC, HasLogger):
 
         self.logger.info("Creating folders and scripts for all tests...")
 
-        for test in kept_instances:
-            for rep in range(1, repetitions + 1):
-                # Prepare execution artifacts (creates folders, writes scripts)
-                self._prepare_execution_artifacts(test, rep)
+        # Prepare all tests with optional progress bar
+        total_preparations = total_tests * repetitions
 
-                # Check cache if available
-                is_cached = False
-                if cache is not None:
-                    cached_result = cache.get_cached_result(
-                        params=test.vars,
-                        repetition=rep,
-                    )
-                    is_cached = cached_result is not None
+        def _prepare_all_tests(progress=None, task=None):
+            """Inner function to prepare tests, optionally updating progress bar."""
+            for test in kept_instances:
+                for rep in range(1, repetitions + 1):
+                    # Prepare execution artifacts (creates folders, writes scripts)
+                    self._prepare_execution_artifacts(test, rep)
 
-                if not is_cached:
-                    # Add to kickoff list
-                    kickoff_tests.append({
-                        'execution_id': test.execution_id,
-                        'repetition': rep,
-                        'execution_dir': str(test.execution_dir),
-                        'script_file': str(test.script_file),
-                    })
-                else:
-                    self.logger.debug(
-                        f"  [Cache] Skipping exec_id={test.execution_id} rep={rep} (cached)"
-                    )
+                    # Check cache if available
+                    is_cached = False
+                    if cache is not None:
+                        cached_result = cache.get_cached_result(
+                            params=test.vars,
+                            repetition=rep,
+                        )
+                        is_cached = cached_result is not None
+
+                    if not is_cached:
+                        # Add to kickoff list
+                        kickoff_tests.append({
+                            'execution_id': test.execution_id,
+                            'repetition': rep,
+                            'execution_dir': str(test.execution_dir),
+                            'script_file': str(test.script_file),
+                        })
+                    else:
+                        self.logger.debug(
+                            f"  [Cache] Skipping exec_id={test.execution_id} rep={rep} (cached)"
+                        )
+
+                    # Update progress bar if available
+                    if progress is not None and task is not None:
+                        progress.update(task, advance=1)
+
+        if RICH_AVAILABLE and total_preparations > 0:
+            # Use rich progress bar
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TextColumn("[dim]{task.completed}/{task.total}"),
+            )
+            with progress:
+                task = progress.add_task("Preparing tests", total=total_preparations)
+                _prepare_all_tests(progress, task)
+        else:
+            # Fall back to simple logging
+            _prepare_all_tests()
 
         # Initialize folders for skipped tests too (for visibility in iops find)
         if skipped_instances:
