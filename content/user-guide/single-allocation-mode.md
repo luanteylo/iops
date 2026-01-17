@@ -51,6 +51,7 @@ benchmark:
   slurm_options:
     allocation:
       mode: "single"
+      test_timeout: 300  # Per-test timeout in seconds (default: 3600)
       allocation_script: |
         #SBATCH --nodes=8
         #SBATCH --time=02:00:00
@@ -58,6 +59,14 @@ benchmark:
         #SBATCH --account=myaccount
         #SBATCH --exclusive
 ```
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `mode` | string | `"per-test"` | `"single"` for single-allocation, `"per-test"` for individual jobs |
+| `test_timeout` | integer | `3600` | Per-test timeout in seconds. Tests exceeding this are marked FAILED |
+| `allocation_script` | string | (required) | SBATCH directives for the allocation |
 
 The `allocation_script` contains your SBATCH directives. IOPS automatically adds:
 - Shebang (`#!/bin/bash`)

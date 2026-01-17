@@ -67,16 +67,16 @@ class BaseExecutor(ABC, HasLogger):
     def build(cls, cfg: GenericBenchmarkConfig, kickoff_path: Path = None) -> "BaseExecutor":
         executor_name = cfg.benchmark.executor.lower()
 
-        # Check for single-allocation or kickoff mode (SLURM only)
+        # Check for single-allocation mode (SLURM only)
         if executor_name == "slurm":
             eo = cfg.benchmark.slurm_options
             if eo and eo.allocation:
-                if eo.allocation.mode == "kickoff":
-                    # Kickoff mode requires pre-generated kickoff path
+                if eo.allocation.mode == "single":
+                    # Single-allocation mode requires pre-generated kickoff path
                     if kickoff_path is None:
                         raise ValueError(
                             "KickoffSingleAllocationExecutor requires kickoff_path. "
-                            "Use runner's kickoff mode initialization."
+                            "Use runner's single-allocation mode initialization."
                         )
                     return KickoffSingleAllocationExecutor(cfg, kickoff_path)
 
@@ -954,37 +954,37 @@ class SlurmExecutor(BaseExecutor):
 
 
 # ============================================================================ #
-# Kickoff Single-Allocation SLURM Executor
+# Single-Allocation SLURM Executor
 # ============================================================================ #
 
-# Filename for the kickoff script (written to run root)
+# Filename for the single-allocation execution script (written to run root)
 KICKOFF_SCRIPT_FILENAME = "__iops_kickoff.sh"
 
-# Kickoff status filename pattern (written by kickoff script to each test dir)
+# Status filename pattern (written by execution script to each test dir)
 KICKOFF_STATUS_FILENAME = "__iops_status.json"
 
 
 class KickoffSingleAllocationExecutor(SlurmExecutor):
     """
-    SLURM executor for kickoff mode.
+    SLURM executor for single-allocation mode.
 
-    In kickoff mode, a pre-generated script runs ALL tests sequentially within
-    a single SLURM allocation. This eliminates per-test job submission overhead
-    and queue wait times.
+    In single-allocation mode, a pre-generated script runs ALL tests sequentially
+    within a single SLURM allocation. This eliminates per-test job submission
+    overhead and queue wait times.
 
     Key features:
     - Tests are prepared upfront (folders, scripts, params) before allocation starts
-    - A kickoff script is generated that sequences all tests
-    - The kickoff script is submitted via sbatch once
+    - An execution script is generated that sequences all tests
+    - The execution script is submitted via sbatch once
     - Runner polls status files to track progress
     - User controls srun directly in script_template (no MPI wrapping)
 
     Execution flow:
-    1. First submit(): Submit kickoff script via sbatch
-    2. Subsequent submit(): Just register test, kickoff already running
+    1. First submit(): Submit execution script via sbatch
+    2. Subsequent submit(): Just register test, allocation already running
     3. wait_and_collect(): Poll status file until test completes
 
-    The kickoff script writes status files as it progresses:
+    The execution script writes status files as it progresses:
     - RUNNING when starting each test
     - SUCCEEDED/FAILED/TIMEOUT when test completes
 
@@ -994,15 +994,15 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
     - Command setup (cmd_submit, cmd_status, cmd_cancel, poll_interval)
     """
 
-    _LOG_PREFIX = "KickoffExec"
+    _LOG_PREFIX = "SingleAllocExec"
 
     def __init__(self, cfg: GenericBenchmarkConfig, kickoff_path: Path):
         """
-        Initialize kickoff executor.
+        Initialize single-allocation executor.
 
         Args:
             cfg: Benchmark configuration
-            kickoff_path: Path to the pre-generated kickoff script
+            kickoff_path: Path to the pre-generated execution script
         """
         # Initialize parent (sets up commands, poll_interval, etc.)
         super().__init__(cfg)
@@ -1024,10 +1024,10 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
 
     def submit(self, test: ExecutionInstance) -> None:
         """
-        Submit a test for execution within the kickoff allocation.
+        Submit a test for execution within the single allocation.
 
-        On first call, submits the kickoff script via sbatch.
-        The kickoff script runs all tests sequentially; this method just
+        On first call, submits the execution script via sbatch.
+        The execution script runs all tests sequentially; this method just
         records that we're waiting for this test.
 
         Args:
@@ -1051,21 +1051,21 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
             test.metadata["__error"] = msg
             return
 
-        # Check if kickoff already failed
+        # Check if allocation already failed
         if self.kickoff_failed:
-            msg = f"Kickoff allocation failed: {self.kickoff_failure_reason}"
+            msg = f"Single allocation failed: {self.kickoff_failure_reason}"
             self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
             test.metadata["__executor_status"] = self.STATUS_FAILED
             test.metadata["__error"] = msg
             return
 
-        # Submit kickoff on first test
+        # Submit execution script on first test
         if not self.kickoff_submitted:
             try:
                 self._submit_kickoff()
                 self.kickoff_submitted = True
             except Exception as e:
-                msg = f"Failed to submit kickoff: {e}"
+                msg = f"Failed to submit single allocation: {e}"
                 self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
                 self.kickoff_failed = True
                 self.kickoff_failure_reason = str(e)
@@ -1080,14 +1080,14 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
 
         self.logger.debug(
             f"  [{self._LOG_PREFIX}] Registered test exec_id={test.execution_id} "
-            f"rep={test.repetition} for kickoff execution"
+            f"rep={test.repetition} for single-allocation execution"
         )
 
     def wait_and_collect(self, test: ExecutionInstance) -> None:
         """
         Wait for test completion by polling its status file.
 
-        The kickoff script writes status files as it progresses through tests.
+        The execution script writes status files as it progresses through tests.
         We poll until we see a terminal status (SUCCEEDED, FAILED, TIMEOUT, ERROR).
 
         Args:
@@ -1099,10 +1099,10 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
         metrics = {name: None for name in metric_names}
         test.metadata["metrics"] = metrics
 
-        # If kickoff failed before this test, bail out
+        # If allocation failed before this test, bail out
         if self.kickoff_failed:
             test.metadata["__executor_status"] = self.STATUS_FAILED
-            test.metadata["__error"] = f"Kickoff failed: {self.kickoff_failure_reason}"
+            test.metadata["__error"] = f"Single allocation failed: {self.kickoff_failure_reason}"
             return
 
         # If test already marked as error (from submit), skip waiting
@@ -1202,14 +1202,14 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
             return False
 
         status = status_data.get("status", "UNKNOWN")
-        test.metadata["__kickoff_status"] = status_data
+        test.metadata["__single_alloc_status"] = status_data
 
         if status == "RUNNING":
             test.metadata["__executor_status"] = self.STATUS_RUNNING
             return False
 
         if status in terminal_statuses:
-            # Map kickoff status to executor status
+            # Map status file status to executor status
             if status == "SUCCEEDED":
                 test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
             elif status in ("FAILED", "TIMEOUT", "ERROR"):
@@ -1234,7 +1234,7 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
 
     def _submit_kickoff(self) -> None:
         """
-        Submit the kickoff script via sbatch.
+        Submit the single-allocation execution script via sbatch.
 
         Sets self.allocation_job_id on success.
 
@@ -1243,12 +1243,12 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
         """
         workdir = self.cfg.benchmark.workdir
 
-        # Use the pre-generated kickoff script
+        # Use the pre-generated execution script
         if not self._safe_is_file(self.kickoff_path):
-            raise RuntimeError(f"Kickoff script not found: {self.kickoff_path}")
+            raise RuntimeError(f"Execution script not found: {self.kickoff_path}")
 
         self.logger.info(
-            f"  [{self._LOG_PREFIX}] Submitting kickoff script: {self.kickoff_path}"
+            f"  [{self._LOG_PREFIX}] Submitting single-allocation script: {self.kickoff_path}"
         )
 
         # Submit via sbatch
@@ -1269,7 +1269,7 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
 
         if result.returncode != 0:
             raise RuntimeError(
-                f"SLURM kickoff submission failed (rc={result.returncode}): "
+                f"SLURM single-allocation submission failed (rc={result.returncode}): "
                 f"stderr='{stderr}' stdout='{stdout}'"
             )
 
@@ -1281,7 +1281,7 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
             )
 
         self.allocation_job_id = job_id
-        self.logger.info(f"  [{self._LOG_PREFIX}] Kickoff submitted: job_id={job_id}")
+        self.logger.info(f"  [{self._LOG_PREFIX}] Single allocation submitted: job_id={job_id}")
 
         # Register job with runner for cleanup on interrupt (Ctrl+C)
         if self.runner and hasattr(self.runner, "register_slurm_job"):

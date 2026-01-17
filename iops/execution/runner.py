@@ -67,17 +67,17 @@ class IOPSRunner(HasLogger):
                 "Cache disabled."
             )
 
-        # Check for kickoff mode (must be done after cache initialization, before executor)
+        # Check for single-allocation mode (must be done after cache initialization, before executor)
         self.kickoff_mode = self._is_kickoff_mode()
         kickoff_path = None
 
         if self.kickoff_mode:
-            # Kickoff mode: prepare all tests upfront and generate kickoff script
+            # Single-allocation mode: prepare all tests upfront and generate execution script
             # Pass cache for filtering out cached tests (if --use-cache is enabled)
             cache_for_kickoff = self.cache if self.use_cache_reads else None
             kickoff_path = self.planner.prepare_kickoff_mode(cache=cache_for_kickoff)
 
-        # Create executor (kickoff mode requires kickoff_path)
+        # Create executor (single-allocation mode requires kickoff_path)
         self.executor = BaseExecutor.build(cfg=self.cfg, kickoff_path=kickoff_path)
 
         # Pass runner reference to executor for job tracking (used by SLURM)
@@ -146,14 +146,14 @@ class IOPSRunner(HasLogger):
 
     def _is_kickoff_mode(self) -> bool:
         """
-        Check if the runner is configured for kickoff mode.
+        Check if the runner is configured for single-allocation mode.
 
-        Kickoff mode is enabled when:
+        Single-allocation mode is enabled when:
         - executor is "slurm"
-        - slurm_options.allocation.mode is "kickoff"
+        - slurm_options.allocation.mode is "single"
 
         Returns:
-            True if kickoff mode is enabled, False otherwise
+            True if single-allocation mode is enabled, False otherwise
         """
         if self.cfg.benchmark.executor != "slurm":
             return False
@@ -166,7 +166,7 @@ class IOPSRunner(HasLogger):
         if allocation is None:
             return False
 
-        return allocation.mode == "kickoff"
+        return allocation.mode == "single"
 
     def _get_expected_metrics(self) -> set:
         """Get set of expected metric names from configuration."""

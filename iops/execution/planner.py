@@ -429,30 +429,30 @@ class BasePlanner(ABC, HasLogger):
         }
 
     # ------------------------------------------------------------------ #
-    # Kickoff Mode Support
+    # Single-Allocation Mode Support
     # ------------------------------------------------------------------ #
 
     def prepare_kickoff_mode(self, cache=None) -> Path:
         """
-        Prepare all test folders and generate the kickoff script.
+        Prepare all test folders and generate the single-allocation execution script.
 
-        This method is called by the runner when allocation.mode='kickoff'.
+        This method is called by the runner when allocation.mode='single'.
         It generates ALL test folders and scripts upfront, then creates
-        a kickoff script that runs uncached tests sequentially.
+        an execution script that runs uncached tests sequentially.
 
-        The kickoff script is a dispatcher that calls existing per-test scripts,
+        The execution script is a dispatcher that calls existing per-test scripts,
         reusing all existing logic (resource tracing, exit handlers, MPI wrapping).
 
         Args:
             cache: Optional ExecutionCache to filter out cached tests
 
         Returns:
-            Path to the generated kickoff script
+            Path to the generated execution script
         """
         from iops.execution.matrix import build_execution_matrix
 
         self.logger.info("=" * 70)
-        self.logger.info("KICKOFF MODE: Preparing all tests upfront")
+        self.logger.info("SINGLE-ALLOCATION MODE: Preparing all tests upfront")
         self.logger.info("=" * 70)
 
         # Build execution matrix
@@ -480,7 +480,7 @@ class BasePlanner(ABC, HasLogger):
         self._kickoff_preparation = True  # Flag for writing PENDING status in repetition folders
 
         # Initialize interleaving state FIRST to use planner's selection logic
-        # This ensures kickoff script order matches what next_test() would produce
+        # This ensures execution script order matches what next_test() would produce
         self._init_interleaving_state()
 
         self.logger.info("Creating folders and scripts using planner selection order...")
@@ -488,7 +488,7 @@ class BasePlanner(ABC, HasLogger):
         # Determine execution order using planner's selection logic
         # This simulates what next_test() would do, ensuring order consistency
         self._kickoff_order = []  # List of (test_idx, repetition) tuples for next_test() replay
-        kickoff_tests = []  # For kickoff script generation
+        kickoff_tests = []  # For execution script generation
 
         total_preparations = total_tests * repetitions
 
@@ -513,10 +513,12 @@ class BasePlanner(ABC, HasLogger):
                     )
                     is_cached = cached_result is not None
 
+                # Always add to order tracking (for next_test() to replay)
+                # Runner will handle cached tests by reading from cache and writing to sink
+                self._kickoff_order.append((idx, rep))
+
                 if not is_cached:
-                    # Add to order tracking (for next_test() to replay)
-                    self._kickoff_order.append((idx, rep))
-                    # Add to kickoff script list
+                    # Add to execution script list (only non-cached tests run in bash)
                     kickoff_tests.append({
                         'execution_id': test.execution_id,
                         'repetition': rep,
@@ -525,7 +527,7 @@ class BasePlanner(ABC, HasLogger):
                     })
                 else:
                     self.logger.debug(
-                        f"  [Cache] Skipping exec_id={test.execution_id} rep={rep} (cached)"
+                        f"  [Cache] exec_id={test.execution_id} rep={rep} will use cached result"
                     )
 
                 # Update selection state (same as next_test would)
@@ -553,20 +555,20 @@ class BasePlanner(ABC, HasLogger):
             # Fall back to simple logging
             _prepare_in_selection_order()
 
-        # Write complete index with kickoff mode fields (folders_upfront, active_tests, etc.)
+        # Write complete index with single-allocation mode fields (folders_upfront, active_tests, etc.)
         # This is needed for watch mode to properly track execution progress.
         # Always call this, even with no skipped instances, to ensure index has all fields.
         self._initialize_all_folders(kept_instances, skipped_instances)
 
         cached_count = (total_tests * repetitions) - len(kickoff_tests)
         self.logger.info(f"  Tests prepared: {total_tests * repetitions}")
-        self.logger.info(f"  Cached (will skip): {cached_count}")
-        self.logger.info(f"  To execute in kickoff: {len(kickoff_tests)}")
+        self.logger.info(f"  Cached (from previous runs): {cached_count}")
+        self.logger.info(f"  To execute in single allocation: {len(kickoff_tests)}")
 
-        # Generate kickoff script (uses order from selection loop above)
+        # Generate execution script (uses order from selection loop above)
         kickoff_path = self._generate_kickoff_script(kickoff_tests)
 
-        self.logger.info(f"  Kickoff script: {kickoff_path}")
+        self.logger.info(f"  Execution script: {kickoff_path}")
         self.logger.info("=" * 70)
 
         # Reset index for next_test() to replay from stored order
@@ -578,9 +580,9 @@ class BasePlanner(ABC, HasLogger):
 
     def _generate_kickoff_script(self, tests: list) -> Path:
         """
-        Generate the kickoff script that runs all tests sequentially.
+        Generate the single-allocation execution script that runs all tests sequentially.
 
-        The kickoff script is a dispatcher that:
+        The execution script is a dispatcher that:
         1. Sets up SBATCH directives (from user's allocation_script)
         2. Defines a run_test() function with timeout and status reporting
         3. Calls existing per-test scripts sequentially
@@ -592,7 +594,7 @@ class BasePlanner(ABC, HasLogger):
             tests: List of test dicts with execution_id, repetition, execution_dir, script_file
 
         Returns:
-            Path to the generated kickoff script
+            Path to the generated execution script
         """
         from datetime import datetime
 
@@ -621,7 +623,7 @@ class BasePlanner(ABC, HasLogger):
             else:
                 setup_lines.append(line)
 
-        # Build the kickoff script
+        # Build the execution script
         lines = [
             "#!/bin/bash",
         ]
@@ -631,15 +633,15 @@ class BasePlanner(ABC, HasLogger):
 
         # 2. IOPS-managed SBATCH directives
         lines.extend([
-            "#SBATCH --job-name=iops_kickoff",
-            f"#SBATCH --output={logs_dir}/kickoff_%j.out",
-            f"#SBATCH --error={logs_dir}/kickoff_%j.err",
+            "#SBATCH --job-name=iops_single_alloc",
+            f"#SBATCH --output={logs_dir}/single_alloc_%j.out",
+            f"#SBATCH --error={logs_dir}/single_alloc_%j.err",
         ])
 
         # 3. Informational comments
         lines.extend([
             "",
-            "# IOPS Kickoff Script - Runs all tests sequentially within allocation",
+            "# IOPS Single-Allocation Script - Runs all tests sequentially within allocation",
             f"# Generated: {datetime.now().isoformat()}",
             f"# Total tests: {len(tests)}",
             f"# Timeout per test: {test_timeout}s",
@@ -655,7 +657,7 @@ class BasePlanner(ABC, HasLogger):
             lines.append("")
 
         lines.extend([
-            "# ===== KICKOFF DISPATCHER =====",
+            "# ===== SINGLE-ALLOCATION DISPATCHER =====",
             "",
             f"_IOPS_TEST_TIMEOUT={test_timeout}",
             "",
@@ -692,7 +694,7 @@ class BasePlanner(ABC, HasLogger):
             "    return 0  # Always continue to next test",
             "}",
             "",
-            f'echo "===== IOPS Kickoff Start: $(date -Iseconds) ====="',
+            f'echo "===== IOPS Single-Allocation Start: $(date -Iseconds) ====="',
             f'echo "Total tests: {len(tests)}"',
             'echo ""',
             "",
@@ -709,10 +711,10 @@ class BasePlanner(ABC, HasLogger):
 
         lines.extend([
             'echo ""',
-            f'echo "===== IOPS Kickoff Complete: $(date -Iseconds) ====="',
+            f'echo "===== IOPS Single-Allocation Complete: $(date -Iseconds) ====="',
         ])
 
-        # Write kickoff script
+        # Write execution script
         kickoff_path = workdir / "__iops_kickoff.sh"
         with open(kickoff_path, "w") as f:
             f.write("\n".join(lines))
@@ -771,7 +773,7 @@ class BasePlanner(ABC, HasLogger):
         # Always create repetition folder (not created upfront)
         exec_dir.mkdir(parents=True, exist_ok=True)
 
-        # In kickoff preparation mode, write PENDING status to repetition folder
+        # In single-allocation preparation mode, write PENDING status to repetition folder
         # This allows watch mode to properly count pending tests before execution starts
         if getattr(self, '_kickoff_preparation', False) and getattr(self.cfg.benchmark, 'track_executions', True):
             rep_status_file = exec_dir / STATUS_FILENAME
@@ -1291,12 +1293,12 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
     # ------------------------------------------------------------------ #
     def _next_test_kickoff(self) -> Optional[Any]:
         """
-        Return next test in pre-determined kickoff order.
+        Return next test in pre-determined single-allocation order.
 
-        In kickoff mode, prepare_kickoff_mode() already determined the execution
-        order and stored it in _kickoff_order. This method replays that order
-        to ensure the runner waits for tests in the same sequence the kickoff
-        script executes them.
+        In single-allocation mode, prepare_kickoff_mode() already determined the
+        execution order and stored it in _kickoff_order. This method replays that
+        order to ensure the runner waits for tests in the same sequence the
+        execution script runs them.
         """
         if self._kickoff_index >= len(self._kickoff_order):
             return None
@@ -1312,7 +1314,7 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
         self._prepare_execution_artifacts(test, rep)
 
         self.logger.debug(
-            f"  [Planner] Kickoff test {self._kickoff_index}/{len(self._kickoff_order)}: "
+            f"  [Planner] Single-allocation test {self._kickoff_index}/{len(self._kickoff_order)}: "
             f"exec_id={test.execution_id} rep={rep}"
         )
 
@@ -1323,10 +1325,10 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
         Returns the next test to run (including repetitions),
         or None when all tests are done.
 
-        In kickoff mode, returns tests in the pre-determined order from
+        In single-allocation mode, returns tests in the pre-determined order from
         prepare_kickoff_mode(). Otherwise, uses random interleaving.
         """
-        # Kickoff mode: replay from stored order
+        # Single-allocation mode: replay from stored order
         if getattr(self, '_kickoff_mode_active', False):
             return self._next_test_kickoff()
 

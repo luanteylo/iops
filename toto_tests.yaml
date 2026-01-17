@@ -42,7 +42,7 @@ benchmark:
   executor: "slurm"
   slurm_options:
    allocation:
-     mode: "kickoff"            # Pre-generate all tests, run sequentially
+     mode: "single"            # Pre-generate all tests, run sequentially
      test_timeout: 60          # 1 minute per test
      allocation_script: |
        #SBATCH --nodes=16
@@ -158,7 +158,7 @@ command:
 
 scripts:
   - name: "ior"
-    # In kickoff mode: script_template contains the full srun command
+    # In single-allocation mode: script_template contains the full srun command
     # No MPI wrapping - user controls srun directly with Jinja2 variables
     script_template: |
       #!/bin/bash

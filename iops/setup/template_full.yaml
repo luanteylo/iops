@@ -150,6 +150,10 @@ benchmark:
   #     # Allocation mode: "single" or "per-test" (default)
   #     mode: "single"
   #
+  #     # Per-test timeout in seconds (default: 3600)
+  #     # If a test exceeds this timeout, it is marked as failed
+  #     test_timeout: 300
+  #
   #     # SBATCH directives for the allocation (required when mode="single")
   #     # Include all resource requests: nodes, time, partition, account, etc.
   #     allocation_script: |

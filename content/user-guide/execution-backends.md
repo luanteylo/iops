@@ -177,6 +177,7 @@ benchmark:
   slurm_options:
     allocation:
       mode: "single"
+      test_timeout: 300  # Per-test timeout in seconds (default: 3600)
       allocation_script: |
         #SBATCH --nodes=8
         #SBATCH --time=02:00:00
@@ -185,32 +186,7 @@ benchmark:
         #SBATCH --exclusive
 ```
 
-#### When to Use
+**When to use:** HPC systems with job limits, long queue wait times, or many small tests.
 
-- **Job limits**: HPC systems that limit the number of jobs per user
-- **Queue wait times**: Avoid waiting in queue for each individual test
-- **Many small tests**: Running hundreds of short tests more efficiently
-- **Scheduler load**: Reduce load on the SLURM scheduler
-
-#### MPI Configuration
-
-For MPI programs in single-allocation mode, use the `mpi:` block to automatically handle nodelist construction, mpirun flags, and environment variable passing:
-
-```yaml
-scripts:
-  - name: "benchmark"
-    mpi:
-      nodes: "{{ nodes }}"
-      ppn: "{{ ppn }}"
-      pass_env:                     # Optional: defaults to [PATH, LD_LIBRARY_PATH]
-        - LD_PRELOAD                # Add custom vars your script exports
-        - MY_APP_CONFIG
-    script_template: |
-      #!/bin/bash
-      module load openmpi
-      export LD_PRELOAD=/path/to/lib.so
-      {{ command.template }}
-```
-
-For detailed configuration, MPI setup, troubleshooting, and complete examples, see the dedicated **[Single-Allocation Mode Guide]({{< relref "single-allocation-mode" >}})**.
+For detailed configuration, MPI setup, troubleshooting, and complete examples, see the **[Single-Allocation Mode](../single-allocation-mode)** guide.
 

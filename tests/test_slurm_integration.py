@@ -185,7 +185,7 @@ class TestIOPSConfigWithSlurm:
         """Test that KickoffSingleAllocationExecutor is correctly built from config."""
         config = {
             "benchmark": {
-                "name": "Kickoff Alloc Config Test",
+                "name": "Single Alloc Config Test",
                 "workdir": str(slurm_workdir),
                 "executor": "slurm",
                 "repetitions": 1,
@@ -193,7 +193,7 @@ class TestIOPSConfigWithSlurm:
                 "slurm_options": {
                     "poll_interval": 3,
                     "allocation": {
-                        "mode": "kickoff",
+                        "mode": "single",
                         "test_timeout": 300,
                         "allocation_script": """#SBATCH --nodes=2
 #SBATCH --time=01:00:00

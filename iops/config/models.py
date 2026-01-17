@@ -19,31 +19,31 @@ class ConfigValidationError(Exception):
 @dataclass
 class AllocationConfig:
     """
-    Configuration for SLURM kickoff mode.
+    Configuration for SLURM single-allocation mode.
 
-    In kickoff mode, all tests run within ONE SLURM allocation instead of submitting
-    individual jobs per test. This reduces job submission overhead and is useful for
-    HPC systems with job limits or queue wait times.
+    In single-allocation mode, all tests run within ONE SLURM allocation instead of
+    submitting individual jobs per test. This reduces job submission overhead and is
+    useful for HPC systems with job limits or queue wait times.
 
     The user provides SBATCH directives and setup code in `allocation_script`. IOPS will:
     - Add shebang if not provided
     - Add job-name, output, and error directives
-    - Generate a kickoff script that runs all tests sequentially
+    - Generate an execution script that runs all tests sequentially
 
     Allocation Modes:
         - "per-test" (default): Each test is submitted as a separate SLURM job
-        - "kickoff": Pre-generates a kickoff script that runs all tests sequentially
+        - "single": Pre-generates an execution script that runs all tests sequentially
           within a single allocation, reducing per-test overhead from ~5-30s to ~100ms
 
     Attributes:
-        mode: Allocation mode - "kickoff" or "per-test" (default)
-        allocation_script: SBATCH directives + setup code (required when mode="kickoff")
-        test_timeout: Per-test timeout in seconds for kickoff mode (default: 3600)
+        mode: Allocation mode - "single" or "per-test" (default)
+        allocation_script: SBATCH directives + setup code (required when mode="single")
+        test_timeout: Per-test timeout in seconds for single-allocation mode (default: 3600)
 
-    Example (kickoff mode):
+    Example (single-allocation mode):
         slurm_options:
           allocation:
-            mode: "kickoff"
+            mode: "single"
             test_timeout: 300  # 5 minutes per test
             allocation_script: |
               #SBATCH --nodes=8
@@ -56,14 +56,14 @@ class AllocationConfig:
 
               # Any setup that runs once before all tests
 
-    In kickoff mode:
+    In single-allocation mode:
     - allocation_script contains SBATCH directives AND setup (modules, env vars)
     - script_template contains the srun command with Jinja2 variables
     - User controls srun directly in script_template (no automatic MPI wrapping)
     """
-    mode: str = "per-test"  # "kickoff" or "per-test"
+    mode: str = "per-test"  # "single" or "per-test"
     allocation_script: Optional[str] = None
-    test_timeout: int = 3600  # Per-test timeout in seconds for kickoff mode
+    test_timeout: int = 3600  # Per-test timeout in seconds for single-allocation mode
 
 
 @dataclass
@@ -71,7 +71,7 @@ class SlurmOptionsConfig:
     """
     SLURM executor configuration options.
 
-    Override commands used for job management, configure polling, or enable kickoff mode.
+    Override commands used for job management, configure polling, or enable single-allocation mode.
     Commands are templates that support {job_id} placeholder for dynamic substitution.
     This is useful when running on systems with command wrappers or custom SLURM installations.
 
@@ -93,10 +93,10 @@ class SlurmOptionsConfig:
             cancel: "lrms-wrapper kill {job_id}"
           poll_interval: 10                                       # Check status every 10 seconds
 
-    Example with kickoff mode:
+    Example with single-allocation mode:
         slurm_options:
           allocation:
-            mode: "kickoff"
+            mode: "single"
             test_timeout: 300
             allocation_script: |
               #SBATCH --nodes=8
@@ -115,7 +115,7 @@ class SlurmOptionsConfig:
     """
     commands: Optional[Dict[str, str]] = None
     poll_interval: Optional[int] = None  # Polling interval in seconds for SLURM job status checks
-    allocation: Optional[AllocationConfig] = None  # Kickoff mode configuration
+    allocation: Optional[AllocationConfig] = None  # Single-allocation mode configuration
 
 
 @dataclass
@@ -262,9 +262,9 @@ class MPIConfig:
     """
     DEPRECATED: MPI configuration is no longer supported.
 
-    In kickoff mode, use srun directly in script_template with Jinja2 variables.
+    In single-allocation mode, use srun directly in script_template with Jinja2 variables.
 
-    Example (kickoff mode):
+    Example (single-allocation mode):
         scripts:
           - name: "benchmark"
             script_template: |

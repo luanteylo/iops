@@ -17,7 +17,7 @@ title: "IOPS YAML Format Reference"
 7. [`output`](#output)
 8. [`reporting` (optional)](#reporting-optional)
 
-See also: [Templating and Context Reference](templating-and-context.md) for Jinja2 syntax, dynamic values, conditionals, and context variables.
+See also: [Templating and Context Reference](../templating-and-context) for Jinja2 syntax, dynamic values, conditionals, and context variables.
 
 ---
 
@@ -74,6 +74,7 @@ benchmark:
     allocation:                     #   Single-allocation mode (SLURM only)
       mode: string                  #     "single" | "per-test" (default: "per-test")
       allocation_script: string     #     SBATCH directives for allocation (required if mode: "single")
+      test_timeout: integer         #     Per-test timeout in seconds (default: 3600)
 
   random_seed: integer              # Optional: seed for randomization (default: 42)
   cache_file: path                  # Optional: cache file location
@@ -189,6 +190,7 @@ benchmark:
   slurm_options:
     allocation:
       mode: "single"
+      test_timeout: 300  # 5 minutes per test (default: 3600)
       allocation_script: |
         #SBATCH --nodes=8
         #SBATCH --time=02:00:00
@@ -197,19 +199,9 @@ benchmark:
         #SBATCH --exclusive
 ```
 
-**When to use single-allocation mode:**
-- HPC systems with job limits or long queue wait times
-- Running many small tests efficiently
-- Reducing scheduler load
+**When to use:** HPC systems with job limits, long queue wait times, or many small tests.
 
-**How it works:**
-- IOPS submits ONE sbatch job using your `allocation_script` directives
-- IOPS injects: shebang (if missing), job-name, output/error paths, and a sleep command
-- Tests run via `srun --jobid=<id> --overlap bash script.sh`
-- Each test's stdout/stderr is captured separately in its execution_dir
-- Script `#SBATCH` directives are ignored (allocation controls resources)
-
-See [Execution Backends](execution-backends.md#single-allocation-mode) for script requirements.
+See [Single-Allocation Mode](../single-allocation-mode) for details.
 
 </details>
 
@@ -229,7 +221,7 @@ Collect hardware/environment info from compute nodes.
 Write metadata files for `iops find` command.
 
 #### `trace_resources` (optional, default: false)
-Enable CPU and memory tracing during execution. See [Resource Tracing](resource-tracing.md).
+Enable CPU and memory tracing during execution. See [Resource Tracing](../resource-tracing).
 
 #### `trace_interval` (optional, default: 1.0)
 Sampling interval in seconds for resource tracing. Only used when `trace_resources: true`.
@@ -715,7 +707,7 @@ When `mpi:` is configured, IOPS wraps your script with:
 3. mpirun/srun command with all necessary flags
 4. Environment variable passing
 
-See [Single-Allocation Mode](single-allocation-mode.md#automatic-mpi-configuration-recommended) for detailed examples.
+See [Single-Allocation Mode](../single-allocation-mode#automatic-mpi-configuration-recommended) for detailed examples.
 
 </details>
 

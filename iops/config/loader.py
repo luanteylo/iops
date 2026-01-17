@@ -1075,28 +1075,28 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             f"benchmark.executor must be one of: slurm, local (got '{cfg.benchmark.executor}')"
         )
 
-    # allocation config validation (SLURM kickoff mode)
+    # allocation config validation (SLURM single-allocation mode)
     eo = cfg.benchmark.slurm_options
     if eo and eo.allocation:
         alloc = eo.allocation
 
         # Validate mode
-        if alloc.mode not in ("kickoff", "per-test"):
+        if alloc.mode not in ("single", "per-test"):
             raise ConfigValidationError(
-                f"slurm_options.allocation.mode must be 'kickoff' or 'per-test' (got '{alloc.mode}')"
+                f"slurm_options.allocation.mode must be 'single' or 'per-test' (got '{alloc.mode}')"
             )
 
-        # Kickoff allocation mode requires slurm executor
-        if alloc.mode == "kickoff" and cfg.benchmark.executor != "slurm":
+        # Single-allocation mode requires slurm executor
+        if alloc.mode == "single" and cfg.benchmark.executor != "slurm":
             raise ConfigValidationError(
-                f"slurm_options.allocation.mode='kickoff' requires executor='slurm'"
+                f"slurm_options.allocation.mode='single' requires executor='slurm'"
             )
 
-        # When mode="kickoff", allocation_script is required
-        if alloc.mode == "kickoff":
+        # When mode="single", allocation_script is required
+        if alloc.mode == "single":
             if not alloc.allocation_script or not alloc.allocation_script.strip():
                 raise ConfigValidationError(
-                    "slurm_options.allocation.allocation_script is required when mode='kickoff'"
+                    "slurm_options.allocation.allocation_script is required when mode='single'"
                 )
 
             # Basic sanity check: allocation_script should contain SBATCH directives
@@ -1111,12 +1111,12 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"slurm_options.allocation.test_timeout must be a positive integer (got '{alloc.test_timeout}')"
                 )
 
-            # Kickoff mode is incompatible with Bayesian optimization
+            # Single-allocation mode is incompatible with Bayesian optimization
             # (test sequence is predetermined, no feedback loop)
             if cfg.benchmark.search_method == "bayesian":
                 raise ConfigValidationError(
-                    "allocation.mode='kickoff' is incompatible with search_method='bayesian'. "
-                    "Kickoff mode pre-generates all tests upfront, which prevents Bayesian optimization "
+                    "allocation.mode='single' is incompatible with search_method='bayesian'. "
+                    "Single-allocation mode pre-generates all tests upfront, which prevents Bayesian optimization "
                     "from adapting based on results. Use mode='per-test' for Bayesian optimization."
                 )
 
@@ -1341,7 +1341,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if s.mpi is not None:
             raise ConfigValidationError(
                 f"script '{s.name}' has 'mpi' config which is no longer supported. "
-                f"In kickoff mode, use srun directly in script_template with Jinja2 variables. "
+                f"In single-allocation mode, use srun directly in script_template with Jinja2 variables. "
                 f"Example: srun --nodes={{{{ nodes }}}} --ntasks-per-node={{{{ ppn }}}} {{{{ command.template }}}}"
             )
 

@@ -1,9 +1,9 @@
 """
-Tests for kickoff mode.
+Tests for single-allocation mode.
 
-Kickoff mode is a variant of single-allocation mode that pre-generates a kickoff
-script containing ALL tests. This eliminates per-test overhead (srun startup,
-SSH agent issues) by running tests sequentially within the allocation.
+Single-allocation mode pre-generates an execution script containing ALL tests.
+This eliminates per-test overhead (srun startup, SSH agent issues) by running
+tests sequentially within the allocation.
 """
 
 import json
@@ -46,17 +46,17 @@ def _get_logger():
 
 @pytest.fixture
 def sample_kickoff_config_dict():
-    """Return a minimal YAML config dict for kickoff mode testing."""
+    """Return a minimal YAML config dict for single-allocation mode testing."""
     return {
         "benchmark": {
-            "name": "kickoff_test",
+            "name": "single_alloc_test",
             "workdir": "./workdir",
             "executor": "slurm",
             "search_method": "exhaustive",
             "repetitions": 1,
             "slurm_options": {
                 "allocation": {
-                    "mode": "kickoff",
+                    "mode": "single",
                     "test_timeout": 300,
                     "allocation_script": """
 #SBATCH --nodes=4
@@ -96,7 +96,7 @@ def sample_kickoff_config_dict():
 
 @pytest.fixture
 def sample_kickoff_config(sample_kickoff_config_dict, tmp_path):
-    """Create a kickoff config from dict and temp directory."""
+    """Create a single-allocation config from dict and temp directory."""
     # Update workdir to temp path
     sample_kickoff_config_dict["benchmark"]["workdir"] = str(tmp_path / "workdir")
     return sample_kickoff_config_dict
@@ -107,25 +107,25 @@ def sample_kickoff_config(sample_kickoff_config_dict, tmp_path):
 # ============================================================================ #
 
 class TestAllocationConfigKickoff:
-    """Tests for kickoff mode in AllocationConfig."""
+    """Tests for single-allocation mode in AllocationConfig."""
 
     def test_allocation_config_kickoff_mode_default_timeout(self):
-        """Test that kickoff mode has default test_timeout of 3600."""
+        """Test that single-allocation mode has default test_timeout of 3600."""
         cfg = AllocationConfig(
-            mode="kickoff",
+            mode="single",
             allocation_script="#SBATCH --nodes=4"
         )
-        assert cfg.mode == "kickoff"
+        assert cfg.mode == "single"
         assert cfg.test_timeout == 3600
 
     def test_allocation_config_kickoff_mode_custom_timeout(self):
-        """Test that kickoff mode can set custom test_timeout."""
+        """Test that single-allocation mode can set custom test_timeout."""
         cfg = AllocationConfig(
-            mode="kickoff",
+            mode="single",
             allocation_script="#SBATCH --nodes=4",
             test_timeout=300
         )
-        assert cfg.mode == "kickoff"
+        assert cfg.mode == "single"
         assert cfg.test_timeout == 300
 
 
@@ -134,10 +134,10 @@ class TestAllocationConfigKickoff:
 # ============================================================================ #
 
 class TestKickoffModeValidation:
-    """Tests for kickoff mode validation in loader."""
+    """Tests for single-allocation mode validation in loader."""
 
     def test_kickoff_mode_is_valid(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff mode is accepted by the loader."""
+        """Test that single-allocation mode is accepted by the loader."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -148,10 +148,10 @@ class TestKickoffModeValidation:
         config_file.write_text(yaml.dump(sample_kickoff_config))
 
         cfg = load_generic_config(Path(config_file), _get_logger())
-        assert cfg.benchmark.slurm_options.allocation.mode == "kickoff"
+        assert cfg.benchmark.slurm_options.allocation.mode == "single"
 
     def test_kickoff_mode_requires_slurm_executor(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff mode requires executor='slurm'."""
+        """Test that single-allocation mode requires executor='slurm'."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -166,7 +166,7 @@ class TestKickoffModeValidation:
             load_generic_config(Path(config_file), _get_logger())
 
     def test_kickoff_mode_requires_allocation_script(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff mode requires allocation_script."""
+        """Test that single-allocation mode requires allocation_script."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -181,7 +181,7 @@ class TestKickoffModeValidation:
             load_generic_config(Path(config_file), _get_logger())
 
     def test_kickoff_mode_requires_sbatch_directive(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff mode allocation_script must have #SBATCH."""
+        """Test that single-allocation mode allocation_script must have #SBATCH."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -196,7 +196,7 @@ class TestKickoffModeValidation:
             load_generic_config(Path(config_file), _get_logger())
 
     def test_kickoff_mode_invalid_test_timeout(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff mode rejects non-positive test_timeout."""
+        """Test that single-allocation mode rejects non-positive test_timeout."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -211,7 +211,7 @@ class TestKickoffModeValidation:
             load_generic_config(Path(config_file), _get_logger())
 
     def test_kickoff_mode_incompatible_with_bayesian(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff mode is incompatible with Bayesian search."""
+        """Test that single-allocation mode is incompatible with Bayesian search."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -255,10 +255,10 @@ class TestKickoffModeValidation:
 # ============================================================================ #
 
 class TestKickoffExecutorBuild:
-    """Tests for executor build with kickoff mode."""
+    """Tests for executor build with single-allocation mode."""
 
     def test_executor_build_requires_kickoff_path_for_kickoff_mode(self, sample_kickoff_config, tmp_path):
-        """Test that building kickoff executor without path raises error."""
+        """Test that building single-allocation executor without path raises error."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -297,10 +297,10 @@ class TestKickoffExecutorBuild:
 # ============================================================================ #
 
 class TestKickoffScriptGeneration:
-    """Tests for kickoff script generation in planner."""
+    """Tests for single-allocation script generation in planner."""
 
     def test_prepare_kickoff_mode_generates_script(self, sample_kickoff_config, tmp_path):
-        """Test that prepare_kickoff_mode creates the kickoff script."""
+        """Test that prepare_kickoff_mode creates the execution script."""
         import yaml
 
         # Create workdir
@@ -320,7 +320,7 @@ class TestKickoffScriptGeneration:
         assert kickoff_path.name == "__iops_kickoff.sh"
 
     def test_kickoff_script_contains_sbatch_directives(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff script includes user's SBATCH directives."""
+        """Test that execution script includes user's SBATCH directives."""
         import yaml
 
         workdir = tmp_path / "workdir"
@@ -339,10 +339,10 @@ class TestKickoffScriptGeneration:
         assert "#SBATCH --nodes=4" in content
         assert "#SBATCH --time=01:00:00" in content
         assert "#SBATCH --partition=compute" in content
-        assert "#SBATCH --job-name=iops_kickoff" in content
+        assert "#SBATCH --job-name=iops_single_alloc" in content
 
     def test_kickoff_script_contains_run_test_function(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff script defines run_test function."""
+        """Test that execution script defines run_test function."""
         import yaml
 
         workdir = tmp_path / "workdir"
@@ -363,7 +363,7 @@ class TestKickoffScriptGeneration:
         assert "__iops_status.json" in content
 
     def test_kickoff_script_contains_test_calls(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff script includes calls for each test."""
+        """Test that execution script includes calls for each test."""
         import yaml
 
         workdir = tmp_path / "workdir"
@@ -385,7 +385,7 @@ class TestKickoffScriptGeneration:
         assert "run_test" in content
 
     def test_kickoff_script_with_timeout_setting(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff script uses configured test_timeout."""
+        """Test that execution script uses configured test_timeout."""
         import yaml
 
         workdir = tmp_path / "workdir"
