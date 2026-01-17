@@ -991,9 +991,26 @@ class SingleAllocationSlurmExecutor(SlurmExecutor):
         # Extract allocation config (already validated by loader)
         self.allocation = cfg.benchmark.slurm_options.allocation
 
+        # Parse node count from allocation_script (#SBATCH --nodes=N)
+        self.allocation_nodes = self._parse_allocation_nodes()
+
         # Allocation state tracking
         self.allocation_job_id: Optional[str] = None
         self.allocation_submitted: bool = False
+
+    def _parse_allocation_nodes(self) -> int:
+        """Extract --nodes value from allocation_script."""
+        import re
+        script = self.allocation.allocation_script
+        # Match #SBATCH --nodes=N or #SBATCH -N N
+        match = re.search(r'#SBATCH\s+(?:--nodes=|-N\s*)(\d+)', script)
+        if match:
+            return int(match.group(1))
+        # Default to 1 if not specified
+        self.logger.warning(
+            f"  [{self._LOG_PREFIX}] Could not parse --nodes from allocation_script, defaulting to 1"
+        )
+        return 1
 
     def submit(self, test: ExecutionInstance) -> None:
         """
@@ -1254,12 +1271,13 @@ class SingleAllocationSlurmExecutor(SlurmExecutor):
         test.metadata["__jobid"] = self.allocation_job_id
 
         # Build srun command (cmd_srun may include prefix like "docker exec slurmctld srun")
-        # --ntasks-per-node=1 runs script once per node in the allocation
+        # Run script once per node on ALL nodes in the allocation
         # The script uses SLURM_NODEID to run mpirun only on node 0
         srun_parts = shlex.split(self.cmd_srun)
         cmd = srun_parts + [
             f"--jobid={self.allocation_job_id}",
             "--overlap",
+            f"--nodes={self.allocation_nodes}",
             "--ntasks-per-node=1",
             "bash",
             str(script_path),
