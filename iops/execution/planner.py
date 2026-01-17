@@ -523,6 +523,11 @@ class BasePlanner(ABC, HasLogger):
         self.logger.info(f"  Kickoff script: {kickoff_path}")
         self.logger.info("=" * 70)
 
+        # Initialize interleaving state for next_test() to work correctly
+        # This is needed because next_test() uses _active_indices to track progress
+        # Note: kickoff mode is only valid for exhaustive/random planners (validated in loader)
+        self._init_interleaving_state()
+
         return kickoff_path
 
     def _generate_kickoff_script(self, tests: list) -> Path:
