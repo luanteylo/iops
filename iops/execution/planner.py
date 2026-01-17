@@ -477,6 +477,7 @@ class BasePlanner(ABC, HasLogger):
         runs_root = run_root / "runs"
         runs_root.mkdir(parents=True, exist_ok=True)
         self._folders_initialized = True  # Skip folder creation in _prepare_execution_artifacts
+        self._kickoff_preparation = True  # Flag for writing PENDING status in repetition folders
 
         # Initialize interleaving state FIRST to use planner's selection logic
         # This ensures kickoff script order matches what next_test() would produce
@@ -571,6 +572,7 @@ class BasePlanner(ABC, HasLogger):
         # Reset index for next_test() to replay from stored order
         self._kickoff_index = 0
         self._kickoff_mode_active = True
+        self._kickoff_preparation = False  # Done with initial preparation
 
         return kickoff_path
 
@@ -768,6 +770,13 @@ class BasePlanner(ABC, HasLogger):
 
         # Always create repetition folder (not created upfront)
         exec_dir.mkdir(parents=True, exist_ok=True)
+
+        # In kickoff preparation mode, write PENDING status to repetition folder
+        # This allows watch mode to properly count pending tests before execution starts
+        if getattr(self, '_kickoff_preparation', False) and getattr(self.cfg.benchmark, 'track_executions', True):
+            rep_status_file = exec_dir / STATUS_FILENAME
+            with open(rep_status_file, "w") as f:
+                json.dump({"status": "PENDING"}, f)
 
         # Point to repetition dir (useful for templates like {{ execution_dir }})
         # Must be set before _write_params_file so derived variables render correctly
