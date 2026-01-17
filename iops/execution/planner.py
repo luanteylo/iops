@@ -590,18 +590,13 @@ class BasePlanner(ABC, HasLogger):
         logs_dir = workdir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
+        # IMPORTANT: All #SBATCH directives must come first, before any regular comments.
+        # SLURM stops parsing #SBATCH when it encounters non-SBATCH lines.
         lines = [
             "#!/bin/bash",
-            "",
-            "# IOPS Kickoff Script - Runs all tests sequentially within allocation",
-            f"# Generated: {datetime.now().isoformat()}",
-            f"# Total tests: {len(tests)}",
-            f"# Timeout per test: {test_timeout}s",
-            "",
-            "# User allocation directives",
         ]
 
-        # Add user's SBATCH directives
+        # Add user's SBATCH directives first
         user_script = allocation.allocation_script.strip()
         if not user_script.startswith("#!"):
             lines.append(user_script)
@@ -610,13 +605,20 @@ class BasePlanner(ABC, HasLogger):
             for line in user_script.split('\n')[1:]:
                 lines.append(line)
 
-        # Add IOPS-managed directives
+        # Add IOPS-managed SBATCH directives (must be before any regular comments)
         lines.extend([
-            "",
-            "# IOPS-managed directives",
             "#SBATCH --job-name=iops_kickoff",
             f"#SBATCH --output={logs_dir}/kickoff_%j.out",
             f"#SBATCH --error={logs_dir}/kickoff_%j.err",
+        ])
+
+        # Now add informational comments (after all SBATCH directives)
+        lines.extend([
+            "",
+            "# IOPS Kickoff Script - Runs all tests sequentially within allocation",
+            f"# Generated: {datetime.now().isoformat()}",
+            f"# Total tests: {len(tests)}",
+            f"# Timeout per test: {test_timeout}s",
             "",
             "# ===== KICKOFF DISPATCHER =====",
             "",
