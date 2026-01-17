@@ -321,3 +321,195 @@ class TestConstraintViolation:
         assert violation.vars == {"x": 5}
         assert violation.violation_policy == "skip"
         assert violation.message == "Constraint violated"
+
+
+class TestExtractConstraintVariables:
+    """Test variable extraction from constraint rules."""
+
+    def test_simple_comparison(self):
+        """Test extracting variables from simple comparison."""
+        from iops.execution.constraints import extract_constraint_variables
+
+        result = extract_constraint_variables("x > 10")
+        assert result == {"x"}
+
+    def test_multiple_variables(self):
+        """Test extracting multiple variables."""
+        from iops.execution.constraints import extract_constraint_variables
+
+        result = extract_constraint_variables("total_procs >= nodes")
+        assert result == {"total_procs", "nodes"}
+
+    def test_with_operators(self):
+        """Test extracting variables with modulo and division."""
+        from iops.execution.constraints import extract_constraint_variables
+
+        result = extract_constraint_variables("block_size % transfer_size == 0")
+        assert result == {"block_size", "transfer_size"}
+
+    def test_with_functions(self):
+        """Test that functions are not included in extracted variables."""
+        from iops.execution.constraints import extract_constraint_variables
+
+        result = extract_constraint_variables("max(a, b) <= 100 and min(c, d) > 0")
+        assert result == {"a", "b", "c", "d"}
+
+    def test_complex_expression(self):
+        """Test extracting from complex boolean expression."""
+        from iops.execution.constraints import extract_constraint_variables
+
+        result = extract_constraint_variables("(nodes * ppn) >= total_procs and block_size > 0")
+        assert result == {"nodes", "ppn", "total_procs", "block_size"}
+
+
+class TestClassifyConstraints:
+    """Test constraint classification into early/late."""
+
+    def test_classify_swept_only_constraint(self):
+        """Test that constraint using only swept vars is classified as early."""
+        from iops.execution.constraints import classify_constraints
+
+        constraint = ConstraintConfig(
+            name="valid_procs",
+            rule="total_procs >= nodes",
+            violation_policy="skip"
+        )
+
+        swept_vars = {"nodes", "total_procs", "ppn"}
+        derived_vars = {"procs_per_node", "block_size"}
+
+        early, late = classify_constraints([constraint], swept_vars, derived_vars)
+
+        assert len(early) == 1
+        assert len(late) == 0
+        assert early[0].name == "valid_procs"
+
+    def test_classify_derived_constraint(self):
+        """Test that constraint using derived var is classified as late."""
+        from iops.execution.constraints import classify_constraints
+
+        constraint = ConstraintConfig(
+            name="block_alignment",
+            rule="block_size % transfer_size == 0",
+            violation_policy="skip"
+        )
+
+        swept_vars = {"nodes", "transfer_size"}
+        derived_vars = {"block_size"}
+
+        early, late = classify_constraints([constraint], swept_vars, derived_vars)
+
+        assert len(early) == 0
+        assert len(late) == 1
+        assert late[0].name == "block_alignment"
+
+    def test_classify_mixed_constraints(self):
+        """Test classifying a mix of early and late constraints."""
+        from iops.execution.constraints import classify_constraints
+
+        constraint_early = ConstraintConfig(
+            name="valid_procs",
+            rule="total_procs >= nodes",
+            violation_policy="skip"
+        )
+        constraint_late = ConstraintConfig(
+            name="block_alignment",
+            rule="block_size % transfer_size == 0",
+            violation_policy="skip"
+        )
+
+        swept_vars = {"nodes", "total_procs", "transfer_size"}
+        derived_vars = {"procs_per_node", "block_size"}
+
+        early, late = classify_constraints(
+            [constraint_early, constraint_late],
+            swept_vars,
+            derived_vars
+        )
+
+        assert len(early) == 1
+        assert len(late) == 1
+        assert early[0].name == "valid_procs"
+        assert late[0].name == "block_alignment"
+
+
+class TestEarlyConstraintFiltering:
+    """Test that early constraints prevent derived expression errors."""
+
+    def test_early_constraint_prevents_division_by_zero(self, tmp_path):
+        """Test that early constraint filters before derived expr evaluation."""
+        import logging
+        from iops.config.loader import load_generic_config
+        from iops.execution.matrix import build_execution_matrix
+
+        # Create config with derived var that would divide by zero
+        # when total_procs < nodes (procs_per_node = 0)
+        config_content = """
+benchmark:
+  name: test
+  workdir: {workdir}
+  executor: local
+
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 4, 8, 16]
+  total_procs:
+    type: int
+    sweep:
+      mode: list
+      values: [8, 16]
+  procs_per_node:
+    type: int
+    expr: "total_procs // nodes"
+  block_size:
+    type: int
+    expr: "(1024) // (nodes * procs_per_node)"
+
+constraints:
+  - name: "valid_procs_distribution"
+    rule: "total_procs >= nodes"
+    violation_policy: "skip"
+
+command:
+  template: "echo test"
+
+scripts:
+  - name: test
+    script_template: |
+      #!/bin/bash
+      echo test
+
+output:
+  sink:
+    type: csv
+    path: "{{{{ workdir }}}}/results.csv"
+""".format(workdir=tmp_path)
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(config_content)
+
+        logger = logging.getLogger("test")
+        cfg = load_generic_config(Path(config_file), logger)
+
+        # This should NOT raise a division by zero error
+        # because the early constraint filters out invalid combinations
+        # BEFORE derived expressions are evaluated
+        kept, skipped = build_execution_matrix(cfg)
+
+        # Verify we got valid combinations
+        # nodes=1 with total_procs=8,16 -> valid
+        # nodes=4 with total_procs=8,16 -> valid
+        # nodes=8 with total_procs=8,16 -> valid
+        # nodes=16 with total_procs=8,16 -> invalid (would be filtered)
+        assert len(kept) > 0
+
+        # Verify all kept instances have valid derived vars
+        for instance in kept:
+            vars_data = instance.vars
+            # procs_per_node should be >= 1
+            assert vars_data["procs_per_node"] >= 1
+            # block_size should be computable without error
+            assert "block_size" in vars_data

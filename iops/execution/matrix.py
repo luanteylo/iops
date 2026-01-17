@@ -19,7 +19,11 @@ from iops.config.models import (
     MPIConfig,
     ConfigValidationError,
 )
-from iops.execution.constraints import filter_execution_matrix
+from iops.execution.constraints import (
+    filter_execution_matrix,
+    classify_constraints,
+    check_constraints_for_vars,
+)
 
 
 # ----------------- Jinja helpers ----------------- #
@@ -1011,6 +1015,52 @@ def build_execution_matrix(
                 exhaustive_assignment = dict(zip(exhaustive_names, exhaustive_combo)) if exhaustive_names else {}
                 combinations.append({**search_assignment, **exhaustive_assignment})
 
+    # ----------------- classify constraints for early/late evaluation ----------------- #
+
+    # Get names of swept and derived variables
+    swept_var_names_set = {name for name, _ in swept_vars}
+    derived_var_names_set = {name for name, _ in derived_vars}
+
+    # Classify constraints:
+    # - early_constraints: only reference swept variables (can filter before derived eval)
+    # - late_constraints: reference derived variables (must filter after derived eval)
+    early_constraints: List = []
+    late_constraints: List = []
+
+    if cfg.constraints:
+        early_constraints, late_constraints = classify_constraints(
+            cfg.constraints,
+            swept_var_names_set,
+            derived_var_names_set,
+        )
+
+    # ----------------- apply early constraints to filter combinations ----------------- #
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    early_skipped_count = 0
+    if early_constraints:
+        valid_combinations = []
+        for combo in combinations:
+            is_valid, violations = check_constraints_for_vars(combo, early_constraints)
+            if is_valid:
+                valid_combinations.append(combo)
+            else:
+                early_skipped_count += 1
+                # Log at debug level (can be many)
+                logger.debug(
+                    f"Early constraint filter: skipping combination {combo}"
+                )
+
+        combinations = valid_combinations
+
+        if early_skipped_count > 0:
+            logger.info(
+                f"Early constraint filtering: {early_skipped_count} combinations skipped "
+                f"before evaluating derived expressions"
+            )
+
     # ----------------- build ExecutionInstance objects ----------------- #
 
     executions: List[ExecutionInstance] = []
@@ -1032,24 +1082,22 @@ def build_execution_matrix(
 
             executions.append(exec_instance)
 
-    # Apply constraints if defined
-    skipped_instances: List[ExecutionInstance] = []
-    if cfg.constraints:
-        import logging
-        logger = logging.getLogger(__name__)
+    # ----------------- apply late constraints (may use derived vars) ----------------- #
 
+    skipped_instances: List[ExecutionInstance] = []
+    if late_constraints:
         executions, skipped_instances, violations = filter_execution_matrix(
             executions,
-            cfg.constraints,
+            late_constraints,
             logger
         )
 
-        # Log summary of constraint filtering
+        # Log summary of late constraint filtering
         if violations:
             skipped_count = sum(1 for v in violations if v.violation_policy == "skip")
             warned_count = sum(1 for v in violations if v.violation_policy == "warn")
             logger.info(
-                f"Constraint filtering complete: {len(executions)} instances remaining after filtering. "
+                f"Late constraint filtering complete: {len(executions)} instances remaining. "
                 f"({skipped_count} skipped, {warned_count} warned)"
             )
 
