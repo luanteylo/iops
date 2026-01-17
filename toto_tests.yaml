@@ -170,9 +170,23 @@ scripts:
       echo "With TOTO:      {{ with_toto }}"
       echo ""
 
-      srun --nodes={{ nodes }} --ntasks-per-node={{ procs_per_node }} \
-        {% if with_toto %}--export=ALL,LD_PRELOAD=/home/lgouveia/toto/toto.so,TOTO_PFS_PATHS=/beegfs,TOTO_LOG_LEVEL=ERROR,TOTO_LOG_TO_STDOUT=0,TOTO_BEEGFS_STRIPING_PREFIX=/beegfs/lgouveia,TOTO_BEEGFS_STRIPING_SUFIX=ior,TOTO_LOGS_FOLDER={{ execution_dir }},TOTO_ANALYSIS_PERIOD={{ analysis_period }} \
-        {% endif %}{{ command.template }}
+      {% if with_toto %}
+      # add toto env vars for the test
+      export TOTO_PFS_PATHS=/beegfs
+      #export TOTO_ACCUMULATE_STATISTICS=1
+      export TOTO_LOG_LEVEL='ERROR'
+      #export TOTO_STRIPE_COUNT_TUNING=0
+      #export TOTO_MONITOR_OST_PERFORMANCE=0
+      export TOTO_LOG_TO_STDOUT=0
+      export TOTO_BEEGFS_STRIPING_PREFIX=/beegfs/lgouveia
+      export TOTO_BEEGFS_STRIPING_SUFIX=ior
+      export TOTO_LOGS_FOLDER={{ execution_dir }} 
+      export TOTO_ANALYSIS_PERIOD={{ analysis_period }}
+      {% endif %}
+
+      srun {% if with_toto %} --export=LD_PRELOAD=/home/lgouveia/toto/toto.so {% endif %} \
+        --nodes={{ nodes }} --ntasks-per-node={{ procs_per_node }} \
+        {{ command.template }}
     
     parser:
       # File to parse (typically a variable pointing to the output)
