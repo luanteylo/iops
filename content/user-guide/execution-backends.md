@@ -251,13 +251,37 @@ Scripts have access to all SLURM variables from the allocation:
 | Variable | Description |
 |----------|-------------|
 | `SLURM_JOB_ID` | Allocation job ID |
-| `SLURM_NODELIST` | List of allocated nodes |
-| `SLURM_JOB_NUM_NODES` | Number of nodes |
+| `SLURM_JOB_NODELIST` | **All nodes in the allocation** (use this for mpirun --host) |
+| `SLURM_NODELIST` | Nodes for current step (single node when script runs) |
+| `SLURM_JOB_NUM_NODES` | Number of nodes in allocation |
 | `SLURM_NTASKS` | Total tasks (if set in allocation) |
+
+**Important**: Use `SLURM_JOB_NODELIST` (not `SLURM_NODELIST`) to get the full list of nodes in the allocation. Since scripts run on a single node, `SLURM_NODELIST` only contains that one node.
 
 #### Per-Test Resource Control
 
-The `allocation_script` defines the **maximum** resources available. Each test can use a **subset** of those resources by calling `srun` with specific resource flags inside your script:
+The `allocation_script` defines the **maximum** resources available. Each test can use a **subset** of those resources.
+
+**Option 1: Using srun (requires OpenMPI with PMI support)**
+
+If your OpenMPI was built with SLURM PMI support, use `srun` directly:
+
+```yaml
+scripts:
+  - name: "benchmark"
+    script_template: |
+      #!/bin/bash
+      module load openmpi
+
+      srun --nodes={{ nodes }} \
+           --ntasks={{ nodes * ppn }} \
+           --ntasks-per-node={{ ppn }} \
+           {{ command.template }}
+```
+
+**Option 2: Using mpirun with --host (no PMI required)**
+
+If your OpenMPI doesn't have PMI support (common on many HPC systems), use `mpirun` with explicit host selection:
 
 ```yaml
 vars:
@@ -283,30 +307,23 @@ scripts:
       #!/bin/bash
       module load openmpi
 
-      # Request specific resources for THIS test
-      srun --nodes={{ nodes }} \
-           --ntasks={{ nodes * ppn }} \
-           --ntasks-per-node={{ ppn }} \
-           {{ command.template }}
+      # Build host list from allocation (not current step)
+      # Format: node1:slots,node2:slots,...
+      NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n {{ nodes }} | sed 's/$/:{{ ppn }}/' | tr '\n' ',')
+      NODELIST=${NODELIST%,}  # Remove trailing comma
+
+      mpirun --host $NODELIST \
+             -np {{ nodes * ppn }} \
+             --map-by ppr:{{ ppn }}:node \
+             --mca plm rsh \
+             {{ command.template }}
 ```
 
-In this example:
-- The allocation reserves 8 nodes total
-- Tests sweep through `nodes=[1, 2, 4, 8]`
-- Each test's `srun` requests only the nodes it needs
-- SLURM automatically selects available nodes from the allocation
-
-**Common srun flags for resource control:**
-
-| Flag | Description |
-|------|-------------|
-| `--nodes=N` | Number of nodes to use |
-| `--ntasks=N` | Total number of tasks |
-| `--ntasks-per-node=N` | Tasks per node |
-| `--cpus-per-task=N` | CPUs per task (for OpenMP) |
-| `--exclusive` | Exclusive access to nodes |
-
-**Note**: When using `srun` for resource control, `mpirun`/`mpiexec` can still be used inside the script. The `srun` allocates resources, and MPI launchers work within that allocation.
+Key points for the mpirun approach:
+- Use `SLURM_JOB_NODELIST` to get all allocation nodes
+- Add slot counts with `sed 's/$/:{{ ppn }}/'` (e.g., `node1:16,node2:16`)
+- Use `--mca plm rsh` to bypass SLURM's process launcher
+- Use `-x VAR=value` to pass environment variables (not `env VAR=value`)
 
 #### Configuration Reference
 
