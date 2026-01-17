@@ -202,10 +202,13 @@ scripts:
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ ppn }}"
-      pass_env: [LD_LIBRARY_PATH, PATH]
+      pass_env:                     # Optional: defaults to [PATH, LD_LIBRARY_PATH]
+        - LD_PRELOAD                # Add custom vars your script exports
+        - MY_APP_CONFIG
     script_template: |
       #!/bin/bash
       module load openmpi
+      export LD_PRELOAD=/path/to/lib.so
       {{ command.template }}
 ```
 

@@ -140,7 +140,6 @@ scripts:
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ ppn }}"
-      pass_env: [LD_LIBRARY_PATH, PATH]
     script_template: |
       #!/bin/bash
       module load openmpi
@@ -154,9 +153,10 @@ scripts:
 | `launcher` | string | `"mpirun"` | MPI launcher - `"mpirun"` or `"srun"` |
 | `nodes` | string/int | `"all"` | Number of nodes - `"{{ var }}"`, integer, or `"all"` |
 | `ppn` | string/int | (required) | Processes per node - `"{{ var }}"` or integer |
+| `pass_env` | list | `["PATH", "LD_LIBRARY_PATH"]` | Environment variables to pass to MPI processes |
 | `extra_options` | list | `[]` | Additional launcher flags |
 
-**Environment variable handling**: All environment variables from the script are **automatically** passed to MPI processes. Any variables you `export` in your script (including PATH, LD_LIBRARY_PATH, LD_PRELOAD, or custom variables like TOTO_*) are available on all remote nodes without needing to list them explicitly.
+**Environment variable handling**: By default, `PATH` and `LD_LIBRARY_PATH` are passed to MPI processes. If you need additional variables (e.g., `LD_PRELOAD`, custom app variables), add them to `pass_env`.
 
 #### Nodes Resolution
 
@@ -167,7 +167,7 @@ scripts:
 | `"all"` | Full allocation, no `head` |
 | *(omitted)* | Default to `"all"` |
 
-#### Example with Extra Options
+#### Example with Custom Environment Variables
 
 ```yaml
 scripts:
@@ -175,13 +175,18 @@ scripts:
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ ppn }}"
+      pass_env:
+        - LD_PRELOAD
+        - OMP_NUM_THREADS
+        - MY_APP_CONFIG
       extra_options:
         - "--mca btl tcp,self"
-        - "--mca mpi_show_mca_params all"
     script_template: |
       #!/bin/bash
       module load openmpi
-      export OMP_NUM_THREADS=4  # Automatically passed to all MPI processes
+      export LD_PRELOAD=/path/to/lib.so
+      export OMP_NUM_THREADS=4
+      export MY_APP_CONFIG=/etc/app.conf
       {{ command.template }}
 ```
 
@@ -450,7 +455,8 @@ scripts:
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ ppn }}"
-      pass_env: [LD_LIBRARY_PATH, PATH]
+      # pass_env defaults to [PATH, LD_LIBRARY_PATH]
+      # Add custom vars here if needed: pass_env: [LD_PRELOAD, MY_VAR]
     script_template: |
       #!/bin/bash
 

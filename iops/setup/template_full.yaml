@@ -446,7 +446,7 @@ scripts:
     #   - Adding SLURM_NODEID check (only node 0 runs mpirun)
     #   - Constructing NODELIST from SLURM_JOB_NODELIST
     #   - Adding mpirun flags (--oversubscribe, --mca plm rsh, etc.)
-    #   - Passing environment variables
+    #   - Passing environment variables specified in pass_env
     #
     # When 'mpi:' is configured, IOPS wraps your script with MPI launch logic.
     # Your script just needs {{ command.template }} - IOPS handles the rest.
@@ -455,10 +455,11 @@ scripts:
     #   launcher: "mpirun"           # "mpirun" (default) or "srun"
     #   nodes: "{{ nodes }}"         # Variable, number, or "all" (default)
     #   ppn: "{{ ppn }}"             # Processes per node (required)
+    #   pass_env:                    # Env vars to pass (default: PATH, LD_LIBRARY_PATH)
+    #     - LD_PRELOAD               # Add any custom vars your script exports
+    #     - MY_CUSTOM_VAR
     #   extra_options:               # Additional launcher flags
     #     - "--mca btl tcp,self"
-    # Note: All environment variables from your script are automatically passed
-    # to MPI processes (exports like LD_PRELOAD, OMP_NUM_THREADS, etc.)
 
     # ---------------------------------------------------------------------------
     # SCRIPT TEMPLATE
