@@ -22,7 +22,6 @@ from iops.config.models import (
     OutputSinkConfig,
     SlurmOptionsConfig,
     AllocationConfig,
-    MPIConfig,
 )
 from iops.config.loader import load_generic_config, ConfigValidationError
 from iops.execution.executors import (
@@ -231,8 +230,8 @@ class TestKickoffModeValidation:
         with pytest.raises(ConfigValidationError, match="incompatible with search_method='bayesian'"):
             load_generic_config(Path(config_file), _get_logger())
 
-    def test_kickoff_mode_allows_mpi_config(self, sample_kickoff_config, tmp_path):
-        """Test that kickoff mode allows MPI config (like single mode)."""
+    def test_kickoff_mode_rejects_mpi_config(self, sample_kickoff_config, tmp_path):
+        """Test that MPI config is no longer supported (raises error)."""
         import yaml
         # Create workdir
         workdir = tmp_path / "workdir"
@@ -247,9 +246,8 @@ class TestKickoffModeValidation:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(yaml.dump(sample_kickoff_config))
 
-        cfg = load_generic_config(Path(config_file), _get_logger())
-        assert cfg.scripts[0].mpi is not None
-        assert cfg.scripts[0].mpi.ppn == "8"
+        with pytest.raises(ConfigValidationError, match="'mpi' config which is no longer supported"):
+            load_generic_config(Path(config_file), _get_logger())
 
 
 # ============================================================================ #

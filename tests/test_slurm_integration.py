@@ -31,7 +31,7 @@ from iops.execution.runner import IOPSRunner
 from iops.execution.executors import (
     BaseExecutor,
     SlurmExecutor,
-    SingleAllocationSlurmExecutor,
+    KickoffSingleAllocationExecutor,
 )
 
 
@@ -181,11 +181,11 @@ class TestIOPSConfigWithSlurm:
         assert isinstance(executor, SlurmExecutor)
         assert executor.poll_interval == 5
 
-    def test_single_allocation_executor_building(self, slurm_workdir):
-        """Test that SingleAllocationSlurmExecutor is correctly built from config."""
+    def test_kickoff_allocation_executor_building(self, slurm_workdir):
+        """Test that KickoffSingleAllocationExecutor is correctly built from config."""
         config = {
             "benchmark": {
-                "name": "Single Alloc Config Test",
+                "name": "Kickoff Alloc Config Test",
                 "workdir": str(slurm_workdir),
                 "executor": "slurm",
                 "repetitions": 1,
@@ -193,10 +193,13 @@ class TestIOPSConfigWithSlurm:
                 "slurm_options": {
                     "poll_interval": 3,
                     "allocation": {
-                        "mode": "single",
+                        "mode": "kickoff",
+                        "test_timeout": 300,
                         "allocation_script": """#SBATCH --nodes=2
 #SBATCH --time=01:00:00
-#SBATCH --partition=normal""",
+#SBATCH --partition=normal
+
+module purge""",
                     }
                 }
             },
@@ -220,7 +223,7 @@ class TestIOPSConfigWithSlurm:
         cfg = load_generic_config(config_file, logging.getLogger("test"))
         executor = BaseExecutor.build(cfg)
 
-        assert isinstance(executor, SingleAllocationSlurmExecutor)
+        assert isinstance(executor, KickoffSingleAllocationExecutor)
         assert "#SBATCH --nodes=2" in executor.allocation.allocation_script
         assert executor.poll_interval == 3
 

@@ -1075,28 +1075,28 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             f"benchmark.executor must be one of: slurm, local (got '{cfg.benchmark.executor}')"
         )
 
-    # allocation config validation (SLURM single-allocation mode)
+    # allocation config validation (SLURM kickoff mode)
     eo = cfg.benchmark.slurm_options
     if eo and eo.allocation:
         alloc = eo.allocation
 
         # Validate mode
-        if alloc.mode not in ("single", "kickoff", "per-test"):
+        if alloc.mode not in ("kickoff", "per-test"):
             raise ConfigValidationError(
-                f"slurm_options.allocation.mode must be 'single', 'kickoff', or 'per-test' (got '{alloc.mode}')"
+                f"slurm_options.allocation.mode must be 'kickoff' or 'per-test' (got '{alloc.mode}')"
             )
 
-        # Single/kickoff allocation mode requires slurm executor
-        if alloc.mode in ("single", "kickoff") and cfg.benchmark.executor != "slurm":
+        # Kickoff allocation mode requires slurm executor
+        if alloc.mode == "kickoff" and cfg.benchmark.executor != "slurm":
             raise ConfigValidationError(
-                f"slurm_options.allocation.mode='{alloc.mode}' requires executor='slurm'"
+                f"slurm_options.allocation.mode='kickoff' requires executor='slurm'"
             )
 
-        # When mode="single" or "kickoff", allocation_script is required
-        if alloc.mode in ("single", "kickoff"):
+        # When mode="kickoff", allocation_script is required
+        if alloc.mode == "kickoff":
             if not alloc.allocation_script or not alloc.allocation_script.strip():
                 raise ConfigValidationError(
-                    f"slurm_options.allocation.allocation_script is required when mode='{alloc.mode}'"
+                    "slurm_options.allocation.allocation_script is required when mode='kickoff'"
                 )
 
             # Basic sanity check: allocation_script should contain SBATCH directives
@@ -1105,8 +1105,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     "slurm_options.allocation.allocation_script must contain at least one #SBATCH directive"
                 )
 
-        # Kickoff mode specific validation
-        if alloc.mode == "kickoff":
             # test_timeout must be positive
             if alloc.test_timeout is not None and alloc.test_timeout <= 0:
                 raise ConfigValidationError(
@@ -1119,7 +1117,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 raise ConfigValidationError(
                     "allocation.mode='kickoff' is incompatible with search_method='bayesian'. "
                     "Kickoff mode pre-generates all tests upfront, which prevents Bayesian optimization "
-                    "from adapting based on results. Use mode='single' for Bayesian optimization."
+                    "from adapting based on results. Use mode='per-test' for Bayesian optimization."
                 )
 
     # trace_interval validation
@@ -1339,82 +1337,13 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"(positional mapping requires metric names)"
                 )
 
-        # mpi config validation (optional)
+        # mpi config is deprecated - raise error if used
         if s.mpi is not None:
-            # MPI config requires single-allocation or kickoff mode
-            eo = cfg.benchmark.slurm_options
-            is_allocation_mode = (
-                eo is not None and
-                eo.allocation is not None and
-                eo.allocation.mode in ("single", "kickoff")
+            raise ConfigValidationError(
+                f"script '{s.name}' has 'mpi' config which is no longer supported. "
+                f"In kickoff mode, use srun directly in script_template with Jinja2 variables. "
+                f"Example: srun --nodes={{{{ nodes }}}} --ntasks-per-node={{{{ ppn }}}} {{{{ command.template }}}}"
             )
-            if not is_allocation_mode:
-                raise ConfigValidationError(
-                    f"script '{s.name}' has 'mpi' config but allocation.mode is not 'single' or 'kickoff'. "
-                    f"MPI configuration is only valid in single-allocation or kickoff mode. "
-                    f"Set slurm_options.allocation.mode: 'single' or 'kickoff' to use this feature."
-                )
-
-            # Validate launcher
-            if s.mpi.launcher not in ("mpirun", "srun"):
-                raise ConfigValidationError(
-                    f"script '{s.name}' mpi.launcher must be 'mpirun' or 'srun' "
-                    f"(got '{s.mpi.launcher}')"
-                )
-
-            # ppn is required
-            if s.mpi.ppn is None or s.mpi.ppn.strip() == "":
-                raise ConfigValidationError(
-                    f"script '{s.name}' mpi.ppn is required (processes per node)"
-                )
-
-            # Validate nodes value
-            nodes_val = s.mpi.nodes
-            if nodes_val is not None and nodes_val.strip() != "":
-                stripped_nodes = nodes_val.strip()
-                # Must be "all", a number, or a Jinja template
-                if stripped_nodes != "all" and "{{" not in stripped_nodes:
-                    # Should be a number
-                    try:
-                        int(stripped_nodes)
-                    except ValueError:
-                        raise ConfigValidationError(
-                            f"script '{s.name}' mpi.nodes must be 'all', a number, "
-                            f"or a Jinja template (got '{nodes_val}')"
-                        )
-
-            # Validate extra_options is a list of strings
-            if s.mpi.extra_options is not None:
-                if not isinstance(s.mpi.extra_options, list):
-                    raise ConfigValidationError(
-                        f"script '{s.name}' mpi.extra_options must be a list of strings"
-                    )
-                for opt in s.mpi.extra_options:
-                    if not isinstance(opt, str):
-                        raise ConfigValidationError(
-                            f"script '{s.name}' mpi.extra_options must contain only strings "
-                            f"(got '{type(opt).__name__}')"
-                        )
-
-            # Validate pass_env is a dict with valid env var names
-            if s.mpi.pass_env is not None:
-                if not isinstance(s.mpi.pass_env, dict):
-                    raise ConfigValidationError(
-                        f"script '{s.name}' mpi.pass_env must be a dict mapping var names to values"
-                    )
-                # Valid env var name: starts with letter or underscore, contains alphanumeric and underscore
-                env_var_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
-                for var_name, var_value in s.mpi.pass_env.items():
-                    if not isinstance(var_name, str) or not env_var_pattern.match(var_name):
-                        raise ConfigValidationError(
-                            f"script '{s.name}' mpi.pass_env has invalid env var name '{var_name}'. "
-                            f"Must start with letter/underscore and contain only alphanumeric/underscore."
-                        )
-                    if not isinstance(var_value, str):
-                        raise ConfigValidationError(
-                            f"script '{s.name}' mpi.pass_env['{var_name}'] must be a string "
-                            f"(got '{type(var_value).__name__}')"
-                        )
 
     # ---- output ----
     sink = cfg.output.sink

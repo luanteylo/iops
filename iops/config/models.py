@@ -19,43 +19,28 @@ class ConfigValidationError(Exception):
 @dataclass
 class AllocationConfig:
     """
-    Configuration for single-allocation SLURM mode.
+    Configuration for SLURM kickoff mode.
 
-    In single-allocation mode, all tests run within ONE SLURM allocation instead
-    of submitting individual jobs per test. This reduces job submission overhead
-    and is useful for HPC systems with job limits or queue wait times.
+    In kickoff mode, all tests run within ONE SLURM allocation instead of submitting
+    individual jobs per test. This reduces job submission overhead and is useful for
+    HPC systems with job limits or queue wait times.
 
-    The user provides SBATCH directives in `allocation_script`. IOPS will:
+    The user provides SBATCH directives and setup code in `allocation_script`. IOPS will:
     - Add shebang if not provided
     - Add job-name, output, and error directives
-    - Inject a sleep command to keep the allocation alive
+    - Generate a kickoff script that runs all tests sequentially
 
     Allocation Modes:
         - "per-test" (default): Each test is submitted as a separate SLURM job
-        - "single": Tests run via srun within a single allocation
         - "kickoff": Pre-generates a kickoff script that runs all tests sequentially
-          within the allocation, reducing per-test overhead from ~5-30s to ~100ms
-
-    Tests run within the allocation via: srun --jobid=<alloc_id> --overlap bash script.sh
+          within a single allocation, reducing per-test overhead from ~5-30s to ~100ms
 
     Attributes:
-        mode: Allocation mode - "single", "kickoff", or "per-test" (default)
-        allocation_script: SBATCH directives for the allocation (required when mode="single" or "kickoff")
+        mode: Allocation mode - "kickoff" or "per-test" (default)
+        allocation_script: SBATCH directives + setup code (required when mode="kickoff")
         test_timeout: Per-test timeout in seconds for kickoff mode (default: 3600)
 
-    Example (single mode - srun per test):
-        slurm_options:
-          allocation:
-            mode: "single"
-            allocation_script: |
-              #SBATCH --nodes=8
-              #SBATCH --time=02:00:00
-              #SBATCH --partition=compute
-              #SBATCH --account=myproject
-              #SBATCH --exclusive
-              #SBATCH --constraint=ib
-
-    Example (kickoff mode - pre-generated script for all tests):
+    Example (kickoff mode):
         slurm_options:
           allocation:
             mode: "kickoff"
@@ -74,9 +59,9 @@ class AllocationConfig:
     In kickoff mode:
     - allocation_script contains SBATCH directives AND setup (modules, env vars)
     - script_template contains the srun command with Jinja2 variables
-    - No MPI wrapping - user controls srun directly in script_template
+    - User controls srun directly in script_template (no automatic MPI wrapping)
     """
-    mode: str = "per-test"  # "single", "kickoff", or "per-test"
+    mode: str = "per-test"  # "kickoff" or "per-test"
     allocation_script: Optional[str] = None
     test_timeout: int = 3600  # Per-test timeout in seconds for kickoff mode
 
@@ -86,7 +71,7 @@ class SlurmOptionsConfig:
     """
     SLURM executor configuration options.
 
-    Override commands used for job management, configure polling, or enable single-allocation mode.
+    Override commands used for job management, configure polling, or enable kickoff mode.
     Commands are templates that support {job_id} placeholder for dynamic substitution.
     This is useful when running on systems with command wrappers or custom SLURM installations.
 
@@ -108,15 +93,19 @@ class SlurmOptionsConfig:
             cancel: "lrms-wrapper kill {job_id}"
           poll_interval: 10                                       # Check status every 10 seconds
 
-    Example with single-allocation mode:
+    Example with kickoff mode:
         slurm_options:
           allocation:
-            mode: "single"
+            mode: "kickoff"
+            test_timeout: 300
             allocation_script: |
               #SBATCH --nodes=8
               #SBATCH --time=02:00:00
               #SBATCH --partition=batch
               #SBATCH --account=myaccount
+
+              module purge
+              module load mpi/openmpi/4.0.1
 
     Placeholders:
         {job_id} - Replaced with the SLURM job ID at runtime
@@ -126,7 +115,7 @@ class SlurmOptionsConfig:
     """
     commands: Optional[Dict[str, str]] = None
     poll_interval: Optional[int] = None  # Polling interval in seconds for SLURM job status checks
-    allocation: Optional[AllocationConfig] = None  # Single-allocation mode configuration
+    allocation: Optional[AllocationConfig] = None  # Kickoff mode configuration
 
 
 @dataclass
@@ -271,44 +260,24 @@ class ParserConfig:
 @dataclass
 class MPIConfig:
     """
-    MPI configuration for single-allocation mode.
+    DEPRECATED: MPI configuration is no longer supported.
 
-    Simplifies MPI launching by automatically handling:
-    - SLURM_NODEID check (only node 0 runs mpirun)
-    - NODELIST construction from SLURM_JOB_NODELIST
-    - mpirun flags (--oversubscribe, --mca plm rsh, etc.)
-    - Environment variable passing
+    In kickoff mode, use srun directly in script_template with Jinja2 variables.
 
-    This configuration is only valid when allocation.mode="single".
-
-    Attributes:
-        launcher: MPI launcher command - "mpirun" (default) or "srun"
-        nodes: Number of nodes to use - "{{ var }}", integer, or "all" (default)
-        ppn: Processes per node - "{{ var }}" or integer (required)
-        pass_env: Environment variables to forward to MPI processes.
-            Dict mapping var names to values (supports Jinja2 templates).
-            Defaults to {PATH: "$PATH", LD_LIBRARY_PATH: "$LD_LIBRARY_PATH"}.
-            Use "$VAR" to pass current shell value, or literal/Jinja values.
-            Empty values after rendering are skipped (no -x flag generated).
-        extra_options: Additional launcher flags (e.g., "--mca btl tcp,self")
-
-    Example:
+    Example (kickoff mode):
         scripts:
           - name: "benchmark"
-            mpi:
-              nodes: "{{ nodes }}"
-              ppn: "{{ ppn }}"
-              pass_env:
-                LD_PRELOAD: "{{ '/path/to/lib.so' if with_toto else '' }}"
-                PATH: "$PATH"
             script_template: |
               #!/bin/bash
               module load openmpi
-              {{ command.template }}
+              srun --nodes={{ nodes }} --ntasks-per-node={{ ppn }} {{ command.template }}
+
+    This class is kept for backward compatibility with YAML parsing,
+    but using it will raise a ConfigValidationError.
     """
-    launcher: str = "mpirun"  # "mpirun" or "srun"
-    nodes: Optional[str] = "all"  # "{{ var }}", number, or "all"
-    ppn: Optional[str] = None  # "{{ var }}" or number (required)
+    launcher: str = "mpirun"
+    nodes: Optional[str] = "all"
+    ppn: Optional[str] = None
     pass_env: Dict[str, str] = field(default_factory=lambda: {
         "PATH": "$PATH",
         "LD_LIBRARY_PATH": "$LD_LIBRARY_PATH"
@@ -322,7 +291,7 @@ class ScriptConfig:
     script_template: str
     post: Optional[PostConfig] = None      # optional
     parser: Optional[ParserConfig] = None  # optional
-    mpi: Optional[MPIConfig] = None        # optional MPI configuration
+    mpi: Optional[MPIConfig] = None        # DEPRECATED: raises error if used
 
 
 @dataclass
