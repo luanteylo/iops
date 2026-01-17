@@ -1119,10 +1119,56 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
         )
 
         last_status = None
+        wait_start = None  # Only start timing once allocation is RUNNING
+        status_file_seen = False
+
         while True:
-            # Check if allocation is still running
+            # Check if allocation is still running (do this first to track state)
+            alloc_state = None
             if self.allocation_job_id:
                 alloc_state = self._squeue_state(self.allocation_job_id)
+
+            # Start staleness timer once allocation is running
+            # Don't count queue wait time (PENDING) against test_timeout
+            if wait_start is None and alloc_state == "RUNNING":
+                wait_start = time.time()
+                self.logger.debug(
+                    f"  [{self._LOG_PREFIX}] Allocation running, starting staleness timer"
+                )
+
+            # Staleness checks only apply once allocation is running
+            if wait_start is not None:
+                elapsed = time.time() - wait_start
+
+                # Staleness check: if status file never appears, fail after test_timeout
+                # This handles cases where the bash script stops before reaching this test
+                if not status_file_seen and elapsed > self.test_timeout:
+                    msg = (
+                        f"Status file not found after {self.test_timeout}s. "
+                        f"The execution script may have stopped before reaching this test. "
+                        f"Expected: {status_file}"
+                    )
+                    self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = msg
+                    break
+
+                # Staleness check: if status file shows RUNNING for too long, fail
+                # This handles cases where the bash script itself is hung
+                if status_file_seen and elapsed > self.test_timeout:
+                    current = test.metadata.get("__executor_status")
+                    if current == self.STATUS_RUNNING:
+                        msg = (
+                            f"Test stuck in RUNNING state for {self.test_timeout}s. "
+                            f"The execution script may be hung."
+                        )
+                        self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                        test.metadata["__executor_status"] = self.STATUS_FAILED
+                        test.metadata["__error"] = msg
+                        break
+
+            # Handle allocation state changes
+            if self.allocation_job_id:
                 if alloc_state is None:
                     # Allocation finished - check if test completed
                     if self._check_status_file(test, status_file, terminal_statuses, metrics):
@@ -1145,6 +1191,8 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
                     break
 
             # Check status file
+            if self._safe_is_file(status_file):
+                status_file_seen = True
             if self._check_status_file(test, status_file, terminal_statuses, metrics):
                 break
 
