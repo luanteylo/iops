@@ -14,6 +14,7 @@ IOPS supports two execution backends for running benchmarks: local execution and
    - [Job Monitoring](#job-monitoring)
    - [Custom SLURM Commands](#custom-slurm-commands)
    - [Single-Allocation Mode](#single-allocation-mode)
+     - [Per-Test Resource Control](#per-test-resource-control)
 
 ---
 
@@ -164,7 +165,6 @@ benchmark:
 This allows IOPS to work with various SLURM configurations and wrapper systems commonly found in HPC environments. The `{job_id}` placeholder is replaced with the actual job ID at runtime, giving you complete control over command structure and flags.
 
 **Notes**:
-- The `submit` command specified in `slurm_options` is a default. Individual scripts can override it via `scripts[].submit`.
 - The `{job_id}` placeholder is required for status, info, and cancel commands.
 - The `poll_interval` controls how often (in seconds) IOPS checks job status during execution. Default is 30 seconds.
 
@@ -254,6 +254,59 @@ Scripts have access to all SLURM variables from the allocation:
 | `SLURM_NODELIST` | List of allocated nodes |
 | `SLURM_JOB_NUM_NODES` | Number of nodes |
 | `SLURM_NTASKS` | Total tasks (if set in allocation) |
+
+#### Per-Test Resource Control
+
+The `allocation_script` defines the **maximum** resources available. Each test can use a **subset** of those resources by calling `srun` with specific resource flags inside your script:
+
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep: { mode: list, values: [1, 2, 4, 8] }
+  ppn:
+    type: int
+    expr: "16"
+
+benchmark:
+  slurm_options:
+    allocation:
+      mode: "single"
+      allocation_script: |
+        #SBATCH --nodes=8           # Maximum nodes available
+        #SBATCH --time=04:00:00
+        #SBATCH --exclusive
+
+scripts:
+  - name: "benchmark"
+    script_template: |
+      #!/bin/bash
+      module load openmpi
+
+      # Request specific resources for THIS test
+      srun --nodes={{ nodes }} \
+           --ntasks={{ nodes * ppn }} \
+           --ntasks-per-node={{ ppn }} \
+           {{ command.template }}
+```
+
+In this example:
+- The allocation reserves 8 nodes total
+- Tests sweep through `nodes=[1, 2, 4, 8]`
+- Each test's `srun` requests only the nodes it needs
+- SLURM automatically selects available nodes from the allocation
+
+**Common srun flags for resource control:**
+
+| Flag | Description |
+|------|-------------|
+| `--nodes=N` | Number of nodes to use |
+| `--ntasks=N` | Total number of tasks |
+| `--ntasks-per-node=N` | Tasks per node |
+| `--cpus-per-task=N` | CPUs per task (for OpenMP) |
+| `--exclusive` | Exclusive access to nodes |
+
+**Note**: When using `srun` for resource control, `mpirun`/`mpiexec` can still be used inside the script. The `srun` allocates resources, and MPI launchers work within that allocation.
 
 #### Configuration Reference
 
