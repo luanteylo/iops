@@ -771,8 +771,9 @@ def test_mpi_wrapper_passes_all_env_vars(mpi_planner):
 
     script_content = test.script_file.read_text()
 
-    # Should generate env flags dynamically using env command
-    assert "__IOPS_MPI_ENV_FLAGS=$(env | cut -d= -f1 |" in script_content
+    # Should generate env flags dynamically using env command with grep filter
+    # The grep filters out multi-line values and bash functions
+    assert "__IOPS_MPI_ENV_FLAGS=$(env | grep -oE" in script_content
     # Should use the env flags in mpirun command
     assert "$__IOPS_MPI_ENV_FLAGS" in script_content
 

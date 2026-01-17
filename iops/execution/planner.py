@@ -930,14 +930,21 @@ class BasePlanner(ABC, HasLogger):
         the -x flags for mpirun, ensuring all exported variables
         (modules, user settings, etc.) are passed to MPI processes.
 
+        Uses grep to filter only valid variable names, excluding:
+        - Multi-line variable values (like TERMCAP)
+        - Bash functions (like BASH_FUNC_module())
+        - Any malformed entries
+
         Returns:
             Bash command string to set __IOPS_MPI_ENV_FLAGS
         """
-        # Use env to get all variables, extract names, and build -x flags
-        # This ensures PATH, LD_LIBRARY_PATH, and any user-exported vars are passed
+        # Use env to get all variables, filter to valid names only
+        # The regex matches: start of line, valid var name (letter/underscore,
+        # then alphanumerics/underscores), followed by =
+        # grep -o extracts just the matching part, then we remove the trailing =
         return (
-            "__IOPS_MPI_ENV_FLAGS=$(env | cut -d= -f1 | "
-            "sed 's/^/-x /' | tr '\\n' ' ')"
+            "__IOPS_MPI_ENV_FLAGS=$(env | grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' | "
+            "sed 's/=$//' | sed 's/^/-x /' | tr '\\n' ' ')"
         )
 
     def _generate_mpi_command(
