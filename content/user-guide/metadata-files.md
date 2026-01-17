@@ -44,7 +44,7 @@ Located in `workdir/run_XXX/`:
 | `__iops_run_metadata.json` | Report generation (config, timing, variables) |
 | `__iops_index.json` | Fast execution lookup for `iops find` |
 | `__iops_resource_summary.csv` | Aggregated CPU/memory metrics |
-| `__iops_allocation.sh` | Single-allocation mode script (SLURM only) |
+| `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
 
 ### Execution Tracking Files
 
@@ -431,13 +431,13 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 
 ---
 
-### `__iops_allocation.sh`
+### `__iops_kickoff.sh`
 
-**Location:** `workdir/run_001/__iops_allocation.sh`
+**Location:** `workdir/run_001/__iops_kickoff.sh`
 
 **Written:** When using single-allocation mode, before submitting to SLURM
 
-**Purpose:** The allocation script submitted via `sbatch` to acquire resources. IOPS keeps this allocation alive while running tests via `srun`.
+**Purpose:** The execution script submitted via `sbatch` that runs all tests sequentially within a single SLURM allocation.
 
 **Structure:**
 ```bash
@@ -449,19 +449,33 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 #SBATCH --exclusive
 
 # IOPS-managed directives
-#SBATCH --job-name=iops_allocation
-#SBATCH --output=/path/to/workdir/logs/allocation_%j.out
-#SBATCH --error=/path/to/workdir/logs/allocation_%j.err
+#SBATCH --job-name=iops_single_alloc
+#SBATCH --output=/path/to/workdir/logs/single_alloc_%j.out
+#SBATCH --error=/path/to/workdir/logs/single_alloc_%j.err
 
-# IOPS-injected: keep allocation alive
-sleep 2147483647 || sleep 999999 || while true; do sleep 1000; done
+# User setup commands (modules, env vars from allocation_script)
+module purge
+module load mpi/openmpi/4.0.1
+
+# IOPS-generated test dispatcher
+run_test() {
+    # Runs each test with timeout, writes status to __iops_status.json
+    ...
+}
+
+# Sequential test execution
+run_test "/path/to/exec_0001/repetition_001" "run_script.sh" "exec_0001" "1"
+run_test "/path/to/exec_0001/repetition_002" "run_script.sh" "exec_0001" "2"
+...
 ```
 
 **Key features:**
 - Contains user-provided SBATCH directives from `allocation_script`
-- IOPS adds: shebang (if missing), job-name, output/error paths
-- Allocation stays alive via sleep while tests run
-- Tests execute via `srun --jobid=<id> --overlap bash script.sh`
+- IOPS adds: shebang, job-name (`iops_single_alloc`), output/error paths
+- User setup commands (module loads, exports) run once at the start
+- Tests run sequentially via the `run_test()` dispatcher function
+- Each test respects `test_timeout` (default: 3600s)
+- Status files (`__iops_status.json`) updated for each test (RUNNING → SUCCEEDED/FAILED/TIMEOUT)
 
 **Controlled by:** `slurm_options.allocation.mode: "single"`
 

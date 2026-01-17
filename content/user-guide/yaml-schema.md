@@ -587,12 +587,6 @@ scripts:
       ...
       {{ command.template }}
 
-    mpi:                            # Optional: MPI config (single-allocation only)
-      launcher: string              #   "mpirun" (default) or "srun"
-      nodes: string                 #   "{{ var }}", number, or "all" (default)
-      ppn: string                   #   Processes per node (required)
-      extra_options: list           #   Additional launcher flags (all env vars passed automatically)
-
     post:                           # Optional: post-processing
       script: |
         #!/bin/bash
@@ -647,67 +641,6 @@ scripts:
       module load mpi ior
       mpirun {{ command.template }}
 ```
-
-</details>
-
-<details>
-<summary><strong>mpi</strong> (optional, single-allocation mode only)</summary>
-
-Simplifies MPI launching in single-allocation mode by automatically handling nodelist construction, mpirun flags, and environment variable passing.
-
-**Requirements:**
-- Only valid when `slurm_options.allocation.mode: "single"`
-- `ppn` (processes per node) is required
-
-```yaml
-scripts:
-  - name: "benchmark"
-    mpi:
-      launcher: "mpirun"              # "mpirun" (default) or "srun"
-      nodes: "{{ nodes }}"            # Variable, number, or "all" (default)
-      ppn: "{{ ppn }}"                # Processes per node (required)
-      pass_env:                       # Env vars to pass to MPI processes
-        - LD_PRELOAD
-        - MY_CUSTOM_VAR
-      extra_options:                  # Additional launcher flags
-        - "--mca btl tcp,self"
-    script_template: |
-      #!/bin/bash
-      module load openmpi
-      export LD_PRELOAD=/path/to/lib.so
-      export MY_CUSTOM_VAR=value
-      {{ command.template }}
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `launcher` | string | `"mpirun"` | MPI launcher - `"mpirun"` or `"srun"` |
-| `nodes` | string/int | `"all"` | Number of nodes - `"{{ var }}"`, integer, or `"all"` |
-| `ppn` | string/int | (required) | Processes per node - `"{{ var }}"` or integer |
-| `pass_env` | list | `["PATH", "LD_LIBRARY_PATH"]` | Environment variables to pass to MPI processes |
-| `extra_options` | list | `[]` | Additional launcher flags |
-
-**Environment variable handling**: By default, `PATH` and `LD_LIBRARY_PATH` are passed to MPI processes. Add any other variables you need (e.g., `LD_PRELOAD`, custom app variables) to `pass_env`.
-
-**Nodes resolution:**
-
-| Value | Behavior |
-|-------|----------|
-| `"{{ var }}"` | Use variable value, select first N nodes |
-| `4` (number) | Fixed count, select first 4 nodes |
-| `"all"` | Use all nodes in allocation |
-
-**Generated script structure:**
-
-When `mpi:` is configured, IOPS wraps your script with:
-1. SLURM_NODEID check (only node 0 runs mpirun)
-2. NODELIST construction from SLURM_JOB_NODELIST
-3. mpirun/srun command with all necessary flags
-4. Environment variable passing
-
-See [Single-Allocation Mode](../single-allocation-mode#automatic-mpi-configuration-recommended) for detailed examples.
 
 </details>
 
