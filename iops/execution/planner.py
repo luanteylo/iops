@@ -472,57 +472,69 @@ class BasePlanner(ABC, HasLogger):
         self.logger.info(f"  Skipped by constraints: {total_skipped}")
         self.logger.info(f"  Repetitions per test: {repetitions}")
 
-        # Initialize state for progress tracking
-        self._attempt_total = total_tests * repetitions
-        self._attempt_count = 0
-
-        # Collect all test+repetition pairs to include in kickoff
-        kickoff_tests = []
-
-        # Create folders and scripts for ALL tests
+        # Create folders root
         run_root = Path(self.cfg.benchmark.workdir)
         runs_root = run_root / "runs"
         runs_root.mkdir(parents=True, exist_ok=True)
-
         self._folders_initialized = True  # Skip folder creation in _prepare_execution_artifacts
 
-        self.logger.info("Creating folders and scripts for all tests...")
+        # Initialize interleaving state FIRST to use planner's selection logic
+        # This ensures kickoff script order matches what next_test() would produce
+        self._init_interleaving_state()
 
-        # Prepare all tests with optional progress bar
+        self.logger.info("Creating folders and scripts using planner selection order...")
+
+        # Determine execution order using planner's selection logic
+        # This simulates what next_test() would do, ensuring order consistency
+        self._kickoff_order = []  # List of (test_idx, repetition) tuples for next_test() replay
+        kickoff_tests = []  # For kickoff script generation
+
         total_preparations = total_tests * repetitions
 
-        def _prepare_all_tests(progress=None, task=None):
-            """Inner function to prepare tests, optionally updating progress bar."""
-            for test in kept_instances:
-                for rep in range(1, repetitions + 1):
-                    # Prepare execution artifacts (creates folders, writes scripts)
-                    self._prepare_execution_artifacts(test, rep)
+        def _prepare_in_selection_order(progress=None, task=None):
+            """Prepare tests in planner's selection order (random interleaving)."""
+            while self._active_indices:
+                # Use same selection logic as next_test()
+                idx = self.random.choice(self._active_indices)
+                rep = self._next_rep_by_idx[idx] + 1  # 1-based
 
-                    # Check cache if available
-                    is_cached = False
-                    if cache is not None:
-                        cached_result = cache.get_cached_result(
-                            params=test.vars,
-                            repetition=rep,
-                        )
-                        is_cached = cached_result is not None
+                test = self.execution_matrix[idx]
 
-                    if not is_cached:
-                        # Add to kickoff list
-                        kickoff_tests.append({
-                            'execution_id': test.execution_id,
-                            'repetition': rep,
-                            'execution_dir': str(test.execution_dir),
-                            'script_file': str(test.script_file),
-                        })
-                    else:
-                        self.logger.debug(
-                            f"  [Cache] Skipping exec_id={test.execution_id} rep={rep} (cached)"
-                        )
+                # Prepare artifacts (creates folders, writes scripts)
+                self._prepare_execution_artifacts(test, rep)
 
-                    # Update progress bar if available
-                    if progress is not None and task is not None:
-                        progress.update(task, advance=1)
+                # Check cache if available
+                is_cached = False
+                if cache is not None:
+                    cached_result = cache.get_cached_result(
+                        params=test.vars,
+                        repetition=rep,
+                    )
+                    is_cached = cached_result is not None
+
+                if not is_cached:
+                    # Add to order tracking (for next_test() to replay)
+                    self._kickoff_order.append((idx, rep))
+                    # Add to kickoff script list
+                    kickoff_tests.append({
+                        'execution_id': test.execution_id,
+                        'repetition': rep,
+                        'execution_dir': str(test.execution_dir),
+                        'script_file': str(test.script_file),
+                    })
+                else:
+                    self.logger.debug(
+                        f"  [Cache] Skipping exec_id={test.execution_id} rep={rep} (cached)"
+                    )
+
+                # Update selection state (same as next_test would)
+                self._next_rep_by_idx[idx] += 1
+                if self._next_rep_by_idx[idx] >= self._total_reps_by_idx[idx]:
+                    self._active_indices.remove(idx)
+
+                # Update progress bar if available
+                if progress is not None and task is not None:
+                    progress.update(task, advance=1)
 
         if RICH_AVAILABLE and total_preparations > 0:
             # Use rich progress bar
@@ -535,10 +547,10 @@ class BasePlanner(ABC, HasLogger):
             )
             with progress:
                 task = progress.add_task("Preparing tests", total=total_preparations)
-                _prepare_all_tests(progress, task)
+                _prepare_in_selection_order(progress, task)
         else:
             # Fall back to simple logging
-            _prepare_all_tests()
+            _prepare_in_selection_order()
 
         # Initialize folders for skipped tests too (for visibility in iops find)
         if skipped_instances:
@@ -549,16 +561,15 @@ class BasePlanner(ABC, HasLogger):
         self.logger.info(f"  Cached (will skip): {cached_count}")
         self.logger.info(f"  To execute in kickoff: {len(kickoff_tests)}")
 
-        # Generate kickoff script
+        # Generate kickoff script (uses order from selection loop above)
         kickoff_path = self._generate_kickoff_script(kickoff_tests)
 
         self.logger.info(f"  Kickoff script: {kickoff_path}")
         self.logger.info("=" * 70)
 
-        # Initialize interleaving state for next_test() to work correctly
-        # This is needed because next_test() uses _active_indices to track progress
-        # Note: kickoff mode is only valid for exhaustive/random planners (validated in loader)
-        self._init_interleaving_state()
+        # Reset index for next_test() to replay from stored order
+        self._kickoff_index = 0
+        self._kickoff_mode_active = True
 
         return kickoff_path
 
@@ -1268,13 +1279,47 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
+    def _next_test_kickoff(self) -> Optional[Any]:
+        """
+        Return next test in pre-determined kickoff order.
+
+        In kickoff mode, prepare_kickoff_mode() already determined the execution
+        order and stored it in _kickoff_order. This method replays that order
+        to ensure the runner waits for tests in the same sequence the kickoff
+        script executes them.
+        """
+        if self._kickoff_index >= len(self._kickoff_order):
+            return None
+
+        test_idx, rep = self._kickoff_order[self._kickoff_index]
+        self._kickoff_index += 1
+        self._attempt_count += 1
+
+        test = self.execution_matrix[test_idx]
+
+        # Re-prepare artifacts to ensure test.execution_dir is set correctly
+        # (artifacts already exist from prepare_kickoff_mode, this just updates the object)
+        self._prepare_execution_artifacts(test, rep)
+
+        self.logger.debug(
+            f"  [Planner] Kickoff test {self._kickoff_index}/{len(self._kickoff_order)}: "
+            f"exec_id={test.execution_id} rep={rep}"
+        )
+
+        return test
+
     def next_test(self) -> Any:
         """
         Returns the next test to run (including repetitions),
         or None when all tests are done.
 
-        Uses random interleaving of repetitions.
+        In kickoff mode, returns tests in the pre-determined order from
+        prepare_kickoff_mode(). Otherwise, uses random interleaving.
         """
+        # Kickoff mode: replay from stored order
+        if getattr(self, '_kickoff_mode_active', False):
+            return self._next_test_kickoff()
+
         while True:
             matrix_finished = (
                 self.execution_matrix is not None
