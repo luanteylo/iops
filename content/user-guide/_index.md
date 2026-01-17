@@ -16,6 +16,7 @@ Comprehensive guide to using IOPS features and capabilities.
 
 - **[Search Methods](search-methods)** - Parameter space exploration: exhaustive, random sampling, and Bayesian optimization
 - **[Execution Backends](execution-backends)** - Run locally or on SLURM clusters
+- **[Single-Allocation Mode](single-allocation-mode)** - Run all tests in one SLURM allocation (MPI setup, troubleshooting)
 - **[Result Caching](caching)** - Skip redundant tests with smart caching
 - **[Resource Tracing](resource-tracing)** - Trace CPU and memory utilization during benchmark execution
 

@@ -1254,14 +1254,13 @@ class SingleAllocationSlurmExecutor(SlurmExecutor):
         test.metadata["__jobid"] = self.allocation_job_id
 
         # Build srun command (cmd_srun may include prefix like "docker exec slurmctld srun")
-        # --nodes=1 --ntasks=1 ensures script runs once on a single node
-        # The script itself handles MPI distribution via mpirun/srun with --host
+        # --ntasks-per-node=1 runs script once per node in the allocation
+        # The script uses SLURM_NODEID to run mpirun only on node 0
         srun_parts = shlex.split(self.cmd_srun)
         cmd = srun_parts + [
             f"--jobid={self.allocation_job_id}",
             "--overlap",
-            "--nodes=1",
-            "--ntasks=1",
+            "--ntasks-per-node=1",
             "bash",
             str(script_path),
         ]
