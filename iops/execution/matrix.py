@@ -649,20 +649,9 @@ class ExecutionInstance:
 
     def describe(self) -> str:
         """
-        Verbose, multi-section representation for DEBUG logs.
-        Everything rendered lazily with current state.
+        Concise representation for DEBUG logs.
+        Shows metadata only - no script/command content (check execution_dir for files).
         """
-        def truncate_text(text: str, max_lines: int = 5) -> str:
-            """Truncate text to max_lines, showing count of omitted lines."""
-            if not text:
-                return ""
-            text_lines = text.strip().split('\n')
-            if len(text_lines) <= max_lines:
-                return text
-            shown = '\n'.join(text_lines[:max_lines])
-            omitted = len(text_lines) - max_lines
-            return f"{shown}\n  ... ({omitted} more lines)"
-
         sep_start = sep_end = "#" * 80
         sep = "-" * 80
         lines: list[str] = [
@@ -681,15 +670,7 @@ class ExecutionInstance:
         for k in sorted(vars_map):
             lines.append(f"  {k} = {vars_map[k]!r}")
 
-        # Truncate command if very long
-        command_text = truncate_text(self.command, max_lines=3)
-        lines.extend([
-            sep,
-            "Command:",
-            command_text,
-        ])
-
-        # Show script summary instead of full content
+        # Show script summary only (check execution_dir for actual content)
         script_lines = self.script_text.strip().split('\n') if self.script_text else []
         lines.extend([
             sep,
@@ -698,24 +679,15 @@ class ExecutionInstance:
 
         if self.post_script:
             post_lines = self.post_script.strip().split('\n')
-            lines.extend([sep, f"Post-script: {len(post_lines)} lines"])
+            lines.append(f"Post-script: {len(post_lines)} lines")
 
         env_rendered = self.env
         if env_rendered:
-            lines.extend([sep, f"Environment: {len(env_rendered)} variables"])
-            # Show just the keys, not full values
-            for k in sorted(env_rendered.keys()):
-                lines.append(f"  {k}=...")
+            lines.append(f"Environment: {len(env_rendered)} variables")
 
         effective_labels = self.command_labels
         if effective_labels:
-            lines.extend([sep, "Labels:"])
-            for k, v in effective_labels.items():
-                # Truncate long label values
-                v_str = str(v)
-                if len(v_str) > 60:
-                    v_str = v_str[:57] + "..."
-                lines.append(f"  {k}: {v_str}")
+            lines.append(f"Labels: {len(effective_labels)} defined")
 
         if self.output_path:
             lines.extend([

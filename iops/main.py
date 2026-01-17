@@ -330,22 +330,18 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug("Variables (vars)")
     logger.debug(sub)
 
+    swept_vars = []
+    derived_vars = []
     for name, var in cfg.vars.items():
-        logger.debug(f"  - {name}")
-        logger.debug(f"      type : {var.type}")
-
         if var.sweep:
-            logger.debug("      sweep:")
-            logger.debug(f"        mode : {var.sweep.mode}")
-            if var.sweep.mode == "range":
-                logger.debug(f"        start: {var.sweep.start}")
-                logger.debug(f"        end  : {var.sweep.end}")
-                logger.debug(f"        step : {var.sweep.step}")
-            elif var.sweep.mode == "list":
-                logger.debug(f"        values: {var.sweep.values}")
+            swept_vars.append(name)
+        elif var.expr:
+            derived_vars.append(name)
 
-        if var.expr:
-            logger.debug(f"      expr : {var.expr}")
+    if swept_vars:
+        logger.debug(f"  Swept: {', '.join(swept_vars)}")
+    if derived_vars:
+        logger.debug(f"  Derived: {', '.join(derived_vars)}")
 
     # ------------------------------------------------------------------
     # Exhaustive vars (if specified)
@@ -361,18 +357,12 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(sub)
     logger.debug("Command")
     logger.debug(sub)
-    logger.debug("  Template:")
-    logger.debug("  " + cfg.command.template.replace("\n", "\n  "))
-
+    cmd_lines = cfg.command.template.strip().split('\n')
+    logger.debug(f"  Template: {len(cmd_lines)} lines")
     if cfg.command.env:
-        logger.debug("  Environment:")
-        for k, v in cfg.command.env.items():
-            logger.debug(f"    {k}={v}")
-
+        logger.debug(f"  Environment: {len(cfg.command.env)} variables")
     if cfg.command.labels:
-        logger.debug("  Labels:")
-        for k, v in cfg.command.labels.items():
-            logger.debug(f"    {k}: {v}")
+        logger.debug(f"  Labels: {len(cfg.command.labels)} defined")
 
     # ------------------------------------------------------------------
     logger.debug(sub)
