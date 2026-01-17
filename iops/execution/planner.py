@@ -552,9 +552,10 @@ class BasePlanner(ABC, HasLogger):
             # Fall back to simple logging
             _prepare_in_selection_order()
 
-        # Initialize folders for skipped tests too (for visibility in iops find)
-        if skipped_instances:
-            self._initialize_all_folders(kept_instances, skipped_instances)
+        # Write complete index with kickoff mode fields (folders_upfront, active_tests, etc.)
+        # This is needed for watch mode to properly track execution progress.
+        # Always call this, even with no skipped instances, to ensure index has all fields.
+        self._initialize_all_folders(kept_instances, skipped_instances)
 
         cached_count = (total_tests * repetitions) - len(kickoff_tests)
         self.logger.info(f"  Tests prepared: {total_tests * repetitions}")
