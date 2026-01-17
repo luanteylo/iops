@@ -36,6 +36,7 @@ from iops.config.models import (
     PostConfig,
     ParserConfig,
     MetricConfig,
+    MPIConfig,
     OutputConfig,
     OutputSinkConfig,
     ReportingConfig,
@@ -699,12 +700,26 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 parser_script=parser_script,
             )
 
+        # optional mpi config
+        mpi_block = s.get("mpi")
+        mpi_cfg = None
+        if mpi_block is not None:
+            # Parse mpi configuration
+            mpi_cfg = MPIConfig(
+                launcher=mpi_block.get("launcher", "mpirun"),
+                nodes=str(mpi_block.get("nodes", "all")),  # Always store as string
+                ppn=str(mpi_block.get("ppn")) if mpi_block.get("ppn") is not None else None,
+                pass_env=mpi_block.get("pass_env", ["LD_LIBRARY_PATH", "PATH"]),
+                extra_options=mpi_block.get("extra_options", []),
+            )
+
         scripts.append(
             ScriptConfig(
                 name=s["name"],
                 script_template=script_template,
                 post=post_cfg,
                 parser=parser_cfg,
+                mpi=mpi_cfg,
             )
         )
 
@@ -1298,6 +1313,76 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"script '{s.name}' parser.metrics must be non-empty "
                     f"(positional mapping requires metric names)"
                 )
+
+        # mpi config validation (optional)
+        if s.mpi is not None:
+            # MPI config requires single-allocation mode
+            eo = cfg.benchmark.slurm_options
+            is_single_allocation = (
+                eo is not None and
+                eo.allocation is not None and
+                eo.allocation.mode == "single"
+            )
+            if not is_single_allocation:
+                raise ConfigValidationError(
+                    f"script '{s.name}' has 'mpi' config but allocation.mode is not 'single'. "
+                    f"MPI configuration is only valid in single-allocation mode. "
+                    f"Set slurm_options.allocation.mode: 'single' to use this feature."
+                )
+
+            # Validate launcher
+            if s.mpi.launcher not in ("mpirun", "srun"):
+                raise ConfigValidationError(
+                    f"script '{s.name}' mpi.launcher must be 'mpirun' or 'srun' "
+                    f"(got '{s.mpi.launcher}')"
+                )
+
+            # ppn is required
+            if s.mpi.ppn is None or s.mpi.ppn.strip() == "":
+                raise ConfigValidationError(
+                    f"script '{s.name}' mpi.ppn is required (processes per node)"
+                )
+
+            # Validate nodes value
+            nodes_val = s.mpi.nodes
+            if nodes_val is not None and nodes_val.strip() != "":
+                stripped_nodes = nodes_val.strip()
+                # Must be "all", a number, or a Jinja template
+                if stripped_nodes != "all" and "{{" not in stripped_nodes:
+                    # Should be a number
+                    try:
+                        int(stripped_nodes)
+                    except ValueError:
+                        raise ConfigValidationError(
+                            f"script '{s.name}' mpi.nodes must be 'all', a number, "
+                            f"or a Jinja template (got '{nodes_val}')"
+                        )
+
+            # Validate pass_env is a list of strings
+            if s.mpi.pass_env is not None:
+                if not isinstance(s.mpi.pass_env, list):
+                    raise ConfigValidationError(
+                        f"script '{s.name}' mpi.pass_env must be a list of environment variable names"
+                    )
+                for env_var in s.mpi.pass_env:
+                    if not isinstance(env_var, str):
+                        raise ConfigValidationError(
+                            f"script '{s.name}' mpi.pass_env must contain only strings "
+                            f"(got '{type(env_var).__name__}')"
+                        )
+
+            # Validate extra_options is a list of strings
+            if s.mpi.extra_options is not None:
+                if not isinstance(s.mpi.extra_options, list):
+                    raise ConfigValidationError(
+                        f"script '{s.name}' mpi.extra_options must be a list of strings"
+                    )
+                for opt in s.mpi.extra_options:
+                    if not isinstance(opt, str):
+                        raise ConfigValidationError(
+                            f"script '{s.name}' mpi.extra_options must contain only strings "
+                            f"(got '{type(opt).__name__}')"
+                        )
 
     # ---- output ----
     sink = cfg.output.sink

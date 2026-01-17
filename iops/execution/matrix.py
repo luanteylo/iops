@@ -16,6 +16,7 @@ from iops.config.models import (
     VarConfig,
     ParserConfig,
     MetricConfig,
+    MPIConfig,
     ConfigValidationError,
 )
 from iops.execution.constraints import filter_execution_matrix
@@ -317,6 +318,9 @@ class ExecutionInstance:
 
     # Parser template (with possibly templated .file)
     parser_template: ParserConfig | None = None
+
+    # MPI configuration for single-allocation mode
+    mpi_config: Optional[MPIConfig] = None
 
     # Output configuration (template + selection)
     output_path_template: str | None = None
@@ -805,6 +809,9 @@ def create_execution_instance(
             parser_script=script_cfg.parser.parser_script,
         )
 
+    # MPI configuration (stored as-is from script config)
+    mpi_config: MPIConfig | None = script_cfg.mpi
+
     return ExecutionInstance(
         execution_id=execution_id,
         repetition=0,  # planner will set metadata["repetition"] per run
@@ -825,6 +832,7 @@ def create_execution_instance(
         script_template=script_template,
         post_script_template=post_script_template,
         parser_template=parser_template,
+        mpi_config=mpi_config,
         output_path_template=output_path_template,
         output_type=output_type,
         output_mode=output_mode,

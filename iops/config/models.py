@@ -240,11 +240,51 @@ class ParserConfig:
 
 
 @dataclass
+class MPIConfig:
+    """
+    MPI configuration for single-allocation mode.
+
+    Simplifies MPI launching by automatically handling:
+    - SLURM_NODEID check (only node 0 runs mpirun)
+    - NODELIST construction from SLURM_JOB_NODELIST
+    - mpirun flags (--oversubscribe, --mca plm rsh, etc.)
+    - Environment variable passing
+
+    This configuration is only valid when allocation.mode="single".
+
+    Attributes:
+        launcher: MPI launcher command - "mpirun" (default) or "srun"
+        nodes: Number of nodes to use - "{{ var }}", integer, or "all" (default)
+        ppn: Processes per node - "{{ var }}" or integer (required)
+        pass_env: Environment variables to forward to MPI processes
+        extra_options: Additional launcher flags (e.g., "--mca btl tcp,self")
+
+    Example:
+        scripts:
+          - name: "benchmark"
+            mpi:
+              nodes: "{{ nodes }}"
+              ppn: "{{ ppn }}"
+              pass_env: [LD_LIBRARY_PATH, PATH]
+            script_template: |
+              #!/bin/bash
+              module load openmpi
+              {{ command.template }}
+    """
+    launcher: str = "mpirun"  # "mpirun" or "srun"
+    nodes: Optional[str] = "all"  # "{{ var }}", number, or "all"
+    ppn: Optional[str] = None  # "{{ var }}" or number (required)
+    pass_env: List[str] = field(default_factory=list)  # Additional vars (LD_LIBRARY_PATH, PATH always passed)
+    extra_options: List[str] = field(default_factory=list)
+
+
+@dataclass
 class ScriptConfig:
     name: str
     script_template: str
     post: Optional[PostConfig] = None      # optional
     parser: Optional[ParserConfig] = None  # optional
+    mpi: Optional[MPIConfig] = None        # optional MPI configuration
 
 
 @dataclass

@@ -144,7 +144,7 @@ benchmark:
   #   # Script requirements:
   #   #   - No #SBATCH directives needed (allocation_script controls resources)
   #   #   - Load modules in the script (srun starts a fresh shell)
-  #   #   - MPI programs work automatically (SLURM env vars are inherited)
+  #   #   - For MPI programs, use the 'mpi:' block in scripts (see below)
   #   # -------------------------------------------------------------------------
   #   allocation:
   #     # Allocation mode: "single" or "per-test" (default)
@@ -438,6 +438,28 @@ command:
 scripts:
   # Script name (can define multiple scripts)
   - name: "ior"
+
+    # ---------------------------------------------------------------------------
+    # MPI CONFIGURATION (optional, single-allocation mode only)
+    # ---------------------------------------------------------------------------
+    # Simplifies MPI launching in single-allocation mode by automatically:
+    #   - Adding SLURM_NODEID check (only node 0 runs mpirun)
+    #   - Constructing NODELIST from SLURM_JOB_NODELIST
+    #   - Adding mpirun flags (--oversubscribe, --mca plm rsh, etc.)
+    #   - Passing environment variables
+    #
+    # When 'mpi:' is configured, IOPS wraps your script with MPI launch logic.
+    # Your script just needs {{ command.template }} - IOPS handles the rest.
+    # ---------------------------------------------------------------------------
+    # mpi:
+    #   launcher: "mpirun"           # "mpirun" (default) or "srun"
+    #   nodes: "{{ nodes }}"         # Variable, number, or "all" (default)
+    #   ppn: "{{ ppn }}"             # Processes per node (required)
+    #   pass_env:                    # Additional env vars (LD_LIBRARY_PATH, PATH always passed)
+    #     - LD_PRELOAD
+    #     - OMP_NUM_THREADS
+    #   extra_options:               # Additional launcher flags
+    #     - "--mca btl tcp,self"
 
     # ---------------------------------------------------------------------------
     # SCRIPT TEMPLATE

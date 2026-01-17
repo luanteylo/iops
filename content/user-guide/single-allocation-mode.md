@@ -105,7 +105,112 @@ The `sleep infinity` command prevents the allocation job from exiting immediatel
 
 ## Running MPI Programs
 
-### With PMI Support
+IOPS provides two approaches for running MPI programs in single-allocation mode:
+
+1. **Automatic MPI configuration** (Recommended): Use the `mpi:` block for simplified MPI launching
+2. **Manual MPI configuration**: Handle MPI launching yourself in the script template
+
+### Automatic MPI Configuration (Recommended)
+
+The `mpi:` configuration block automatically handles:
+- SLURM_NODEID check (only node 0 runs mpirun)
+- NODELIST construction from SLURM_JOB_NODELIST
+- mpirun flags (--oversubscribe, --mca plm rsh, etc.)
+- Environment variable passing
+
+**Before (manual, error-prone):**
+
+```yaml
+script_template: |
+  #!/bin/bash
+  module load openmpi
+  if [ "$SLURM_NODEID" = "0" ]; then
+    NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n {{ nodes }} | sed 's/$/:{{ ppn }}/' | tr '\n' ',' | sed 's/,$//')
+    mpirun --host $NODELIST -np {{ nodes * ppn }} --mca plm rsh --oversubscribe \
+      -x LD_LIBRARY_PATH="$LD_LIBRARY_PATH" -x PATH="$PATH" \
+      {{ command.template }}
+  fi
+```
+
+**After (clean, automatic):**
+
+```yaml
+scripts:
+  - name: "benchmark"
+    mpi:
+      nodes: "{{ nodes }}"
+      ppn: "{{ ppn }}"
+      pass_env: [LD_LIBRARY_PATH, PATH]
+    script_template: |
+      #!/bin/bash
+      module load openmpi
+      {{ command.template }}
+```
+
+#### MPI Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `launcher` | string | `"mpirun"` | MPI launcher - `"mpirun"` or `"srun"` |
+| `nodes` | string/int | `"all"` | Number of nodes - `"{{ var }}"`, integer, or `"all"` |
+| `ppn` | string/int | (required) | Processes per node - `"{{ var }}"` or integer |
+| `pass_env` | list | `[]` | Additional environment variables to forward (additive to LD_LIBRARY_PATH, PATH) |
+| `extra_options` | list | `[]` | Additional launcher flags |
+
+**Environment variable handling**: `LD_LIBRARY_PATH` and `PATH` are **always** passed to MPI processes (essential for module-loaded libraries and executables on remote nodes). The `pass_env` list is **additive** - any variables you specify are passed in addition to these base variables. For example, `pass_env: [LD_PRELOAD]` will pass LD_LIBRARY_PATH, PATH, and LD_PRELOAD.
+
+#### Nodes Resolution
+
+| Value | Behavior |
+|-------|----------|
+| `"{{ var }}"` | Use variable, `head -n $value` |
+| `4` (number) | Fixed, `head -n 4` |
+| `"all"` | Full allocation, no `head` |
+| *(omitted)* | Default to `"all"` |
+
+#### Example with Extra Options
+
+```yaml
+scripts:
+  - name: "benchmark"
+    mpi:
+      nodes: "{{ nodes }}"
+      ppn: "{{ ppn }}"
+      pass_env:
+        - LD_LIBRARY_PATH
+        - PATH
+        - OMP_NUM_THREADS
+      extra_options:
+        - "--mca btl tcp,self"
+        - "--mca mpi_show_mca_params all"
+    script_template: |
+      #!/bin/bash
+      module load openmpi
+      {{ command.template }}
+```
+
+#### Using srun Launcher
+
+For systems with PMI support, use the `srun` launcher:
+
+```yaml
+scripts:
+  - name: "benchmark"
+    mpi:
+      launcher: "srun"
+      nodes: "{{ nodes }}"
+      ppn: "{{ ppn }}"
+    script_template: |
+      #!/bin/bash
+      module load openmpi
+      {{ command.template }}
+```
+
+### Manual MPI Configuration
+
+If you need full control over MPI launching, you can write the launch logic yourself.
+
+#### With PMI Support
 
 If your MPI installation has SLURM PMI support, use `srun` directly in your script:
 
@@ -121,7 +226,7 @@ script_template: |
 
 **How to check for PMI support**: Run a simple MPI program with srun. If you see errors like "OPAL ERROR: Not initialized in file pmix" or "OMPI was not built with SLURM's PMI support", you don't have PMI support.
 
-### Without PMI Support
+#### Without PMI Support
 
 Most HPC systems have OpenMPI compiled **without** SLURM PMI support. In this case, use `mpirun` with explicit host selection:
 
@@ -308,7 +413,7 @@ Check that:
 
 ## Complete Example
 
-Here's a complete working configuration for an IOR benchmark with variable node counts:
+Here's a complete working configuration for an IOR benchmark with variable node counts using the automatic MPI configuration:
 
 ```yaml
 benchmark:
@@ -346,6 +451,10 @@ command:
 
 scripts:
   - name: "ior"
+    mpi:
+      nodes: "{{ nodes }}"
+      ppn: "{{ ppn }}"
+      pass_env: [LD_LIBRARY_PATH, PATH]
     script_template: |
       #!/bin/bash
 
@@ -353,22 +462,10 @@ scripts:
       module purge
       module load openmpi/4.1 ior/3.3
 
-      # Build host list from FULL allocation
-      NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST \
-                 | head -n {{ nodes }} \
-                 | sed 's/$/:{{ ppn }}/' \
-                 | tr '\n' ',')
-      NODELIST=${NODELIST%,}
-
-      echo "Running on nodes: $NODELIST"
+      echo "Running IOR benchmark"
       echo "Total processes: {{ nodes * ppn }}"
 
-      # Run MPI program
-      mpirun --host $NODELIST \
-             -np {{ nodes * ppn }} \
-             --map-by ppr:{{ ppn }}:node \
-             --mca plm rsh \
-             {{ command.template }}
+      {{ command.template }}
 
     parser:
       file: "{{ execution_dir }}/stdout"
@@ -391,4 +488,45 @@ output:
   sink:
     type: csv
     path: "{{ workdir }}/results.csv"
+```
+
+### Manual Alternative
+
+If you need more control, here's the same example with manual MPI configuration:
+
+```yaml
+scripts:
+  - name: "ior"
+    script_template: |
+      #!/bin/bash
+
+      # Load modules (required - doesn't inherit from allocation)
+      module purge
+      module load openmpi/4.1 ior/3.3
+
+      # Only run MPI from node 0
+      if [ "$SLURM_NODEID" = "0" ]; then
+        # Build host list from FULL allocation
+        NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST \
+                   | head -n {{ nodes }} \
+                   | sed 's/$/:{{ ppn }}/' \
+                   | tr '\n' ',')
+        NODELIST=${NODELIST%,}
+
+        echo "Running on nodes: $NODELIST"
+        echo "Total processes: {{ nodes * ppn }}"
+
+        # Run MPI program
+        mpirun --host $NODELIST \
+               -np {{ nodes * ppn }} \
+               --map-by ppr:{{ ppn }}:node \
+               --mca plm rsh \
+               --oversubscribe \
+               -x LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+               -x PATH="$PATH" \
+               {{ command.template }}
+      fi
+
+    parser:
+      # ... same as above
 ```

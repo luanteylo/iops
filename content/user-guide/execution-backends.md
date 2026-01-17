@@ -192,5 +192,22 @@ benchmark:
 - **Many small tests**: Running hundreds of short tests more efficiently
 - **Scheduler load**: Reduce load on the SLURM scheduler
 
+#### MPI Configuration
+
+For MPI programs in single-allocation mode, use the `mpi:` block to automatically handle nodelist construction, mpirun flags, and environment variable passing:
+
+```yaml
+scripts:
+  - name: "benchmark"
+    mpi:
+      nodes: "{{ nodes }}"
+      ppn: "{{ ppn }}"
+      pass_env: [LD_LIBRARY_PATH, PATH]
+    script_template: |
+      #!/bin/bash
+      module load openmpi
+      {{ command.template }}
+```
+
 For detailed configuration, MPI setup, troubleshooting, and complete examples, see the dedicated **[Single-Allocation Mode Guide]({{< relref "single-allocation-mode" >}})**.
 

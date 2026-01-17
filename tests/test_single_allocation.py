@@ -1,4 +1,4 @@
-"""Tests for single-allocation SLURM mode."""
+"""Tests for single-allocation SLURM mode and MPI configuration."""
 
 import pytest
 import yaml
@@ -9,6 +9,7 @@ from iops.config.models import (
     ConfigValidationError,
     AllocationConfig,
     SlurmOptionsConfig,
+    MPIConfig,
 )
 from iops.execution.executors import (
     BaseExecutor,
@@ -16,6 +17,7 @@ from iops.execution.executors import (
     SingleAllocationSlurmExecutor,
 )
 from iops.execution.matrix import ExecutionInstance
+from iops.execution.planner import BasePlanner, ExhaustivePlanner
 from conftest import load_config
 
 
@@ -502,3 +504,488 @@ def test_full_single_allocation_config(tmp_path, sample_config_dict):
     assert "#SBATCH --account=hpc_project" in alloc.allocation_script
     assert "--exclusive" in alloc.allocation_script
     assert "--constraint=ib" in alloc.allocation_script
+
+
+# ============================================================================ #
+# MPIConfig Tests
+# ============================================================================ #
+
+
+def test_mpi_config_defaults():
+    """Test MPIConfig default values."""
+    config = MPIConfig(ppn="8")
+
+    assert config.launcher == "mpirun"
+    assert config.nodes == "all"
+    assert config.ppn == "8"
+    # pass_env defaults to empty; LD_LIBRARY_PATH and PATH are always added by the wrapper
+    assert config.pass_env == []
+    assert config.extra_options == []
+
+
+def test_mpi_config_parsing(tmp_path, sample_config_dict):
+    """Test that MPI config is properly parsed from YAML."""
+    config_file = tmp_path / "mpi_config.yaml"
+
+    # Add single-allocation mode (required for mpi config)
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+
+    # Add mpi config to script
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "nodes": "{{ nodes }}",
+        "ppn": "{{ ppn }}",
+        "pass_env": ["LD_LIBRARY_PATH", "PATH", "OMP_NUM_THREADS"],
+        "extra_options": ["--mca btl tcp,self"],
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+
+    script = config.scripts[0]
+    assert script.mpi is not None
+    assert script.mpi.launcher == "mpirun"
+    assert script.mpi.nodes == "{{ nodes }}"
+    assert script.mpi.ppn == "{{ ppn }}"
+    assert "OMP_NUM_THREADS" in script.mpi.pass_env
+    assert "--mca btl tcp,self" in script.mpi.extra_options
+
+
+def test_mpi_config_with_srun_launcher(tmp_path, sample_config_dict):
+    """Test MPI config with srun launcher."""
+    config_file = tmp_path / "mpi_srun.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "launcher": "srun",
+        "nodes": "4",
+        "ppn": "8",
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+
+    script = config.scripts[0]
+    assert script.mpi.launcher == "srun"
+    assert script.mpi.nodes == "4"
+    assert script.mpi.ppn == "8"
+
+
+def test_mpi_config_requires_single_allocation(tmp_path, sample_config_dict):
+    """Test that MPI config requires single-allocation mode."""
+    config_file = tmp_path / "mpi_no_alloc.yaml"
+
+    # No allocation config
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "nodes": "{{ nodes }}",
+        "ppn": "8",
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_config(config_file)
+
+    assert "single" in str(exc_info.value).lower()
+    assert "mpi" in str(exc_info.value).lower()
+
+
+def test_mpi_config_requires_ppn(tmp_path, sample_config_dict):
+    """Test that MPI config requires ppn."""
+    config_file = tmp_path / "mpi_no_ppn.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+
+    # mpi config without ppn
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "nodes": "{{ nodes }}",
+        # ppn is missing
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_config(config_file)
+
+    assert "ppn" in str(exc_info.value)
+
+
+def test_mpi_config_invalid_launcher(tmp_path, sample_config_dict):
+    """Test that invalid launcher raises error."""
+    config_file = tmp_path / "mpi_bad_launcher.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "launcher": "invalid",
+        "ppn": "8",
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_config(config_file)
+
+    assert "launcher" in str(exc_info.value)
+    assert "mpirun" in str(exc_info.value) or "srun" in str(exc_info.value)
+
+
+def test_mpi_config_invalid_nodes(tmp_path, sample_config_dict):
+    """Test that invalid nodes value raises error."""
+    config_file = tmp_path / "mpi_bad_nodes.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "nodes": "invalid_string",  # Not a number, not "all", not a template
+        "ppn": "8",
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_config(config_file)
+
+    assert "nodes" in str(exc_info.value)
+
+
+# ============================================================================ #
+# MPI Script Wrapping Tests
+# ============================================================================ #
+
+
+@pytest.fixture
+def mpi_planner(tmp_path, sample_config_dict):
+    """Create a planner with MPI-enabled config for testing."""
+    config_file = tmp_path / "mpi_test.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+    sample_config_dict["benchmark"]["collect_system_info"] = False
+    sample_config_dict["benchmark"]["trace_resources"] = False
+
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "nodes": "{{ nodes }}",
+        "ppn": "{{ ppn }}",
+        "pass_env": ["LD_LIBRARY_PATH", "PATH"],
+    }
+
+    sample_config_dict["scripts"][0]["script_template"] = """#!/bin/bash
+module load openmpi
+{{ command.template }}
+"""
+
+    # Add ppn variable
+    sample_config_dict["vars"]["ppn"] = {
+        "type": "int",
+        "sweep": {"mode": "list", "values": [4, 8]},
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    return ExhaustivePlanner(config)
+
+
+def test_mpi_wrapper_generates_nodeid_check(mpi_planner):
+    """Test that MPI wrapper generates SLURM_NODEID check."""
+    test = mpi_planner.next_test()
+
+    # Read the generated script
+    script_content = test.script_file.read_text()
+
+    # Should have SLURM_NODEID check
+    assert 'if [ "$SLURM_NODEID" = "0" ]' in script_content
+    assert "fi" in script_content
+
+
+def test_mpi_wrapper_generates_nodelist(mpi_planner):
+    """Test that MPI wrapper generates nodelist construction."""
+    test = mpi_planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # Should have nodelist construction
+    assert "__IOPS_NODELIST" in script_content
+    assert "scontrol show hostnames" in script_content
+
+
+def test_mpi_wrapper_generates_mpirun_command(mpi_planner):
+    """Test that MPI wrapper generates mpirun command."""
+    test = mpi_planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # Should have mpirun with required flags
+    assert "mpirun" in script_content
+    assert "--host $__IOPS_NODELIST" in script_content
+    assert "-np" in script_content
+    assert "--mca plm rsh" in script_content
+    assert "--oversubscribe" in script_content
+
+
+def test_mpi_wrapper_passes_env_vars(mpi_planner):
+    """Test that MPI wrapper passes environment variables."""
+    test = mpi_planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # Should pass environment variables
+    assert '-x LD_LIBRARY_PATH="$LD_LIBRARY_PATH"' in script_content
+    assert '-x PATH="$PATH"' in script_content
+
+
+def test_mpi_wrapper_env_vars_additive(tmp_path, sample_config_dict):
+    """Test that base env vars (LD_LIBRARY_PATH, PATH) are always passed even when user specifies only other vars."""
+    config_file = tmp_path / "config.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+    sample_config_dict["benchmark"]["collect_system_info"] = False
+    sample_config_dict["benchmark"]["trace_resources"] = False
+
+    # User specifies ONLY LD_PRELOAD - base vars should still be passed
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "ppn": "4",
+        "pass_env": ["LD_PRELOAD"],
+    }
+
+    sample_config_dict["scripts"][0]["script_template"] = """#!/bin/bash
+{{ command.template }}
+"""
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    planner = ExhaustivePlanner(config)
+    test = planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # Base vars should ALWAYS be passed
+    assert '-x LD_LIBRARY_PATH="$LD_LIBRARY_PATH"' in script_content
+    assert '-x PATH="$PATH"' in script_content
+    # User-specified var should also be passed
+    assert '-x LD_PRELOAD="$LD_PRELOAD"' in script_content
+
+
+def test_mpi_wrapper_preserves_setup_commands(mpi_planner):
+    """Test that MPI wrapper preserves user setup commands."""
+    test = mpi_planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # Module load should be inside the if block
+    assert "module load openmpi" in script_content
+    # Should be within the if SLURM_NODEID block
+    # The module load should come before the mpirun
+
+
+def test_mpi_resolve_template_value():
+    """Test that template values are resolved correctly."""
+    planner = Mock(spec=BasePlanner)
+    planner.logger = Mock()
+
+    ctx = {"nodes": 4, "ppn": 8}
+
+    # Test template resolution
+    result = BasePlanner._resolve_mpi_value(planner, "{{ nodes }}", ctx)
+    assert result == 4
+
+    # Test literal number
+    result = BasePlanner._resolve_mpi_value(planner, "2", ctx)
+    assert result == 2
+
+    # Test "all"
+    result = BasePlanner._resolve_mpi_value(planner, "all", ctx)
+    assert result is None
+
+
+def test_mpi_generate_nodelist_command_with_nodes():
+    """Test nodelist command generation with specific node count."""
+    planner = Mock(spec=BasePlanner)
+
+    cmd = BasePlanner._generate_nodelist_command(planner, nodes_value=4, ppn_value=8)
+
+    assert "head -n 4" in cmd
+    assert ":8" in cmd
+    assert "scontrol show hostnames" in cmd
+
+
+def test_mpi_generate_nodelist_command_all_nodes():
+    """Test nodelist command generation for all nodes."""
+    planner = Mock(spec=BasePlanner)
+
+    cmd = BasePlanner._generate_nodelist_command(planner, nodes_value=None, ppn_value=8)
+
+    # Should NOT have head -n
+    assert "head -n" not in cmd
+    assert ":8" in cmd
+    assert "scontrol show hostnames" in cmd
+
+
+def test_mpi_wrapper_with_srun_launcher(tmp_path, sample_config_dict):
+    """Test MPI wrapper with srun launcher."""
+    config_file = tmp_path / "mpi_srun_test.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+    sample_config_dict["benchmark"]["collect_system_info"] = False
+    sample_config_dict["benchmark"]["trace_resources"] = False
+
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "launcher": "srun",
+        "nodes": "{{ nodes }}",
+        "ppn": "{{ ppn }}",
+    }
+
+    sample_config_dict["scripts"][0]["script_template"] = """#!/bin/bash
+module load openmpi
+{{ command.template }}
+"""
+
+    sample_config_dict["vars"]["ppn"] = {
+        "type": "int",
+        "sweep": {"mode": "list", "values": [4, 8]},
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    planner = ExhaustivePlanner(config)
+    test = planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # Should have srun instead of mpirun
+    assert "srun" in script_content
+    assert "--ntasks-per-node=" in script_content
+    assert "--overlap" in script_content
+    # Should NOT have mpirun-specific flags
+    assert "--mca plm rsh" not in script_content
+
+
+def test_mpi_wrapper_with_extra_options(tmp_path, sample_config_dict):
+    """Test MPI wrapper with extra options."""
+    config_file = tmp_path / "mpi_extra_opts.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+    sample_config_dict["benchmark"]["collect_system_info"] = False
+    sample_config_dict["benchmark"]["trace_resources"] = False
+
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "nodes": "2",
+        "ppn": "4",
+        "extra_options": ["--mca btl tcp,self", "--mca mpi_show_mca_params all"],
+    }
+
+    sample_config_dict["scripts"][0]["script_template"] = """#!/bin/bash
+{{ command.template }}
+"""
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    planner = ExhaustivePlanner(config)
+    test = planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    assert "--mca btl tcp,self" in script_content
+    assert "--mca mpi_show_mca_params all" in script_content
+
+
+def test_mpi_config_stored_in_execution_instance(tmp_path, sample_config_dict):
+    """Test that MPI config is stored in ExecutionInstance."""
+    config_file = tmp_path / "mpi_instance.yaml"
+
+    sample_config_dict["benchmark"]["executor"] = "slurm"
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "allocation": {
+            "mode": "single",
+            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
+        }
+    }
+
+    sample_config_dict["scripts"][0]["mpi"] = {
+        "nodes": "{{ nodes }}",
+        "ppn": "8",
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+
+    from iops.execution.matrix import build_execution_matrix
+    instances, _ = build_execution_matrix(config)
+
+    assert len(instances) > 0
+    instance = instances[0]
+    assert instance.mpi_config is not None
+    assert instance.mpi_config.ppn == "8"
+    assert instance.mpi_config.nodes == "{{ nodes }}"

@@ -17,7 +17,7 @@ title: "IOPS YAML Format Reference"
 7. [`output`](#output)
 8. [`reporting` (optional)](#reporting-optional)
 
-See also: [Jinja2 Templating](jinja2-templating.md) for dynamic values, conditionals, and expressions.
+See also: [Templating and Context Reference](templating-and-context.md) for Jinja2 syntax, dynamic values, conditionals, and context variables.
 
 ---
 
@@ -595,6 +595,13 @@ scripts:
       ...
       {{ command.template }}
 
+    mpi:                            # Optional: MPI config (single-allocation only)
+      launcher: string              #   "mpirun" (default) or "srun"
+      nodes: string                 #   "{{ var }}", number, or "all" (default)
+      ppn: string                   #   Processes per node (required)
+      pass_env: list                #   Additional env vars (LD_LIBRARY_PATH, PATH always passed)
+      extra_options: list           #   Additional launcher flags
+
     post:                           # Optional: post-processing
       script: |
         #!/bin/bash
@@ -649,6 +656,66 @@ scripts:
       module load mpi ior
       mpirun {{ command.template }}
 ```
+
+</details>
+
+<details>
+<summary><strong>mpi</strong> (optional, single-allocation mode only)</summary>
+
+Simplifies MPI launching in single-allocation mode by automatically handling nodelist construction, mpirun flags, and environment variable passing.
+
+**Requirements:**
+- Only valid when `slurm_options.allocation.mode: "single"`
+- `ppn` (processes per node) is required
+
+```yaml
+scripts:
+  - name: "benchmark"
+    mpi:
+      launcher: "mpirun"              # "mpirun" (default) or "srun"
+      nodes: "{{ nodes }}"            # Variable, number, or "all" (default)
+      ppn: "{{ ppn }}"                # Processes per node (required)
+      pass_env:                       # Env vars to forward
+        - LD_LIBRARY_PATH
+        - PATH
+        - OMP_NUM_THREADS
+      extra_options:                  # Additional launcher flags
+        - "--mca btl tcp,self"
+    script_template: |
+      #!/bin/bash
+      module load openmpi
+      {{ command.template }}
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `launcher` | string | `"mpirun"` | MPI launcher - `"mpirun"` or `"srun"` |
+| `nodes` | string/int | `"all"` | Number of nodes - `"{{ var }}"`, integer, or `"all"` |
+| `ppn` | string/int | (required) | Processes per node - `"{{ var }}"` or integer |
+| `pass_env` | list | `[]` | Additional environment variables to forward (additive to LD_LIBRARY_PATH, PATH) |
+| `extra_options` | list | `[]` | Additional launcher flags |
+
+**Environment variable handling**: `LD_LIBRARY_PATH` and `PATH` are **always** passed (essential for module-loaded libraries and executables). The `pass_env` list is **additive** - variables you specify are passed in addition to these base variables.
+
+**Nodes resolution:**
+
+| Value | Behavior |
+|-------|----------|
+| `"{{ var }}"` | Use variable value, select first N nodes |
+| `4` (number) | Fixed count, select first 4 nodes |
+| `"all"` | Use all nodes in allocation |
+
+**Generated script structure:**
+
+When `mpi:` is configured, IOPS wraps your script with:
+1. SLURM_NODEID check (only node 0 runs mpirun)
+2. NODELIST construction from SLURM_JOB_NODELIST
+3. mpirun/srun command with all necessary flags
+4. Environment variable passing
+
+See [Single-Allocation Mode](single-allocation-mode.md#automatic-mpi-configuration-recommended) for detailed examples.
 
 </details>
 

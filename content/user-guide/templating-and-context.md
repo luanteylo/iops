@@ -1,27 +1,36 @@
 ---
-title: "Scripts and Context Variables"
+title: "Templating and Context Reference"
 ---
 
-IOPS uses several types of scripts and templates throughout the configuration. Each has access to different context variables and supports different input methods (inline content or external files).
+IOPS uses Jinja2 templating throughout the configuration to enable dynamic values, conditional logic, and computed expressions. This guide covers both the Jinja2 syntax and the context variables available in each configuration section.
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Context Variables Reference](#context-variables-reference)
-3. [command.template](#commandtemplate)
-4. [command.env](#commandenv)
-5. [scripts[].script_template](#scriptsscript_template)
-6. [scripts[].post.script](#scriptspostscript)
-7. [scripts[].parser.file](#scriptsparserfile)
-8. [scripts[].parser.parser_script](#scriptsparserparsers_cript)
-9. [vars[].expr](#varsexpr)
-10. [output.sink.path](#outputsinkpath)
+2. [Jinja2 Syntax Reference](#jinja2-syntax-reference)
+   - [Variable Substitution](#variable-substitution)
+   - [Conditionals](#conditionals)
+   - [Loops](#loops)
+   - [Filters](#filters)
+   - [Expressions](#expressions)
+3. [Context by Configuration Section](#context-by-configuration-section)
+   - [command.template](#commandtemplate)
+   - [command.env](#commandenv)
+   - [scripts[].script_template](#scriptsscript_template)
+   - [scripts[].post.script](#scriptspostscript)
+   - [scripts[].parser.file](#scriptsparserfile)
+   - [scripts[].parser.parser_script](#scriptsparserparsers_cript)
+   - [vars[].expr](#varsexpr)
+   - [output.sink.path](#outputsinkpath)
+4. [Complete Example](#complete-example)
 
 ---
 
 ## Overview
+
+### Template Support by Field
 
 | Field | Jinja2 Support | File Path Support | Inline Support |
 |-------|----------------|-------------------|----------------|
@@ -30,19 +39,13 @@ IOPS uses several types of scripts and templates throughout the configuration. E
 | `scripts[].script_template` | Yes | Yes | Yes |
 | `scripts[].post.script` | Yes | Yes | Yes |
 | `scripts[].parser.file` | Yes | No | Yes |
-| `scripts[].parser.parser_script` | No | Yes | Yes |
+| `scripts[].parser.parser_script` | **No** | Yes | Yes |
 | `vars[].expr` | Yes | No | Yes |
 | `output.sink.path` | Yes | No | Yes |
 
----
+### Standard Context Variables
 
-## Context Variables Reference
-
-Different templates have access to different context variables. Here's a comprehensive reference:
-
-### Standard Jinja2 Context
-
-Available in `command.template`, `script_template`, `post.script`, `vars[].expr`, and `output.sink.path`:
+These variables are available in all Jinja2 templates:
 
 | Variable | Type | Description |
 |----------|------|-------------|
@@ -53,42 +56,206 @@ Available in `command.template`, `script_template`, `post.script`, `vars[].expr`
 | `execution_dir` | str | Per-execution directory path |
 | All user `vars` | varies | All swept and derived variables by name |
 
-### Script Template Additional Context
+---
 
-Available in `scripts[].script_template` and `scripts[].post.script`:
+## Jinja2 Syntax Reference
 
-| Variable | Type | Description |
-|----------|------|-------------|
-| `command.template` | str | The rendered command string |
-| `command_env` | dict | Rendered environment variables from `command.env` |
-| `command_labels` | dict | Labels from `command.labels` |
-| `vars` | dict | All variables as a dictionary |
+### Variable Substitution
 
-### Parser Script Context
+The most common use case is variable interpolation using `{{ variable_name }}`:
 
-Available as **global variables** in `parser_script` (not Jinja2, but Python globals):
+```yaml
+command:
+  template: "ior -w -b {{ block_size }}mb -t {{ transfer_size }}mb -o {{ output_file }}"
 
-| Variable | Type | Description |
-|----------|------|-------------|
-| `vars` | dict | All execution variables (e.g., `vars["nodes"]`) |
-| `env` | dict | Rendered `command.env` variables |
-| `execution_id` | str | The execution ID |
-| `repetition` | int | Current repetition number |
+vars:
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_r{{ repetition }}.json"
+```
+
+### Conditionals
+
+Use `{% if condition %}` for conditional logic:
+
+```yaml
+# Basic conditional
+command:
+  template: >
+    my_benchmark --input data.bin
+    {% if use_compression %} --compress {% endif %}
+    --output {{ output_file }}
+
+# With else clause
+command:
+  template: >
+    ior {% if operation == "write" %} -w {% else %} -r {% endif %}
+    -b {{ block_size }}mb
+    -o {{ output_path }}
+
+# Numeric comparison
+command:
+  template: >
+    mpirun -np {{ ntasks }}
+    ./benchmark {% if nodes > 8 %} --large-scale {% endif %}
+
+# Complex conditions
+command:
+  template: >
+    benchmark
+    {% if nodes > 1 and processes_per_node >= 4 %} --parallel-mode {% endif %}
+    --config {{ config_file }}
+
+# Membership test
+command:
+  template: >
+    benchmark
+    {% if filesystem in ["lustre", "gpfs"] %} --parallel-fs {% endif %}
+    {% if access_pattern not in ["sequential"] %} --random-io {% endif %}
+    --output {{ output_file }}
+```
+
+**Available operators:**
+- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- Logical: `and`, `or`, `not`
+- Membership: `in`, `not in`
+
+**Critical syntax requirement:** Spaces are REQUIRED inside `{% %}` tags:
+- Correct: `{% if condition %}`
+- Wrong: `{%if condition%}` (causes TemplateSyntaxError)
+
+### Loops
+
+Use `{% for %}` to iterate over sequences:
+
+```yaml
+# Iterate over a list
+vars:
+  module_list:
+    type: str
+    expr: "{% for mod in ['mpi', 'ior', 'hdf5'] %}module load {{ mod }}; {% endfor %}"
+
+# Iterate over a range
+command:
+  template: >
+    benchmark
+    {% for i in range(3) %} --file{{ i }} input{{ i }}.dat {% endfor %}
+
+# Iterate with index
+script_template: |
+  #!/bin/bash
+  {% for i in range(nodes) %}
+  echo "Processing node {{ i }}"
+  {% endfor %}
+```
+
+**Loop variables:**
+- `loop.index`: Current iteration (1-indexed)
+- `loop.index0`: Current iteration (0-indexed)
+- `loop.first`: True on first iteration
+- `loop.last`: True on last iteration
+
+### Filters
+
+Filters transform values using the `|` operator:
+
+```yaml
+# Default value for optional variables
+command:
+  template: "benchmark --config {{ config_path | default('./default.conf') }}"
+
+# String manipulation
+vars:
+  uppercase_name:
+    type: str
+    expr: "{{ benchmark.name | upper }}"
+
+  lowercase_name:
+    type: str
+    expr: "{{ benchmark.name | lower }}"
+
+  filename:
+    type: str
+    expr: "{{ output_path | basename }}"
+
+# Numeric filters
+vars:
+  rounded_value:
+    type: float
+    expr: "{{ block_size_mb | round(2) }}"
+
+  absolute_value:
+    type: int
+    expr: "{{ difference | abs }}"
+```
+
+**Common filters:**
+
+| Filter | Description |
+|--------|-------------|
+| `default(value)` | Provide fallback for empty/falsy values |
+| `upper` | Convert to uppercase |
+| `lower` | Convert to lowercase |
+| `basename` | Extract filename from path |
+| `dirname` | Extract directory from path |
+| `round(precision)` | Round to N decimal places |
+| `abs` | Absolute value |
+| `int` | Convert to integer |
+| `float` | Convert to float |
+| `string` | Convert to string |
+| `length` | Get length of sequence |
+
+### Expressions
+
+Combine variables with arithmetic and function calls:
+
+```yaml
+# Arithmetic in derived variables
+vars:
+  total_processes:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+  block_size_mb:
+    type: int
+    expr: "{{ (volume_size_gb * 1024) // (nodes * ppn) }}"
+
+  percentage:
+    type: float
+    expr: "{{ (current_value / max_value) * 100.0 }}"
+
+# Using functions
+vars:
+  max_cores:
+    type: int
+    expr: "{{ max(nodes * ppn, 16) }}"
+
+  min_block_size:
+    type: int
+    expr: "{{ min(block_size_mb, 1024) }}"
+```
+
+**Available functions:**
+- `min()`, `max()`: Minimum/maximum values
+- `abs()`: Absolute value
+- `round()`: Round to nearest integer
+- `floor()`, `ceil()`: Floor/ceiling
+- `int()`, `float()`: Type conversion
 
 ---
 
-## `command.template`
+## Context by Configuration Section
+
+### `command.template`
 
 The main benchmark command template.
 
 **Jinja2 Support:** Yes
 **File Path Support:** No (inline only)
 
-### Available Context
-
-All standard Jinja2 context variables plus `command.labels` keys.
-
-### Example
+**Available Context:**
+- All standard Jinja2 context variables
+- All `command.labels` keys
 
 ```yaml
 command:
@@ -103,18 +270,15 @@ command:
 
 ---
 
-## `command.env`
+### `command.env`
 
 Environment variables passed to the execution. Values support Jinja2 templating.
 
 **Jinja2 Support:** Yes (for values)
 **File Path Support:** No
 
-### Available Context
-
-All standard Jinja2 context variables.
-
-### Example
+**Available Context:**
+- All standard Jinja2 context variables
 
 ```yaml
 command:
@@ -127,7 +291,7 @@ command:
     MY_STATIC_VAR: "some_value"
 ```
 
-### Using in script_template
+**Using in script_template:**
 
 Environment variables are available via `command_env` in your script template:
 
@@ -162,22 +326,21 @@ export MY_STATIC_VAR="some_value"
 
 ---
 
-## `scripts[].script_template`
+### `scripts[].script_template`
 
 The main execution script content.
 
 **Jinja2 Support:** Yes
 **File Path Support:** Yes
 
-### Available Context
-
+**Available Context:**
 - All standard Jinja2 context variables
 - `command.template` - The rendered command
 - `command_env` - Environment variables dictionary
 - `command_labels` - Labels dictionary
 - `vars` - All variables as a dictionary
 
-### Inline Content
+#### Inline Content
 
 ```yaml
 scripts:
@@ -192,7 +355,7 @@ scripts:
       srun {{ command.template }}
 ```
 
-### External File
+#### External File
 
 You can reference an external file instead of inline content:
 
@@ -232,7 +395,7 @@ export {{ key }}="{{ value }}"
 srun {{ command.template }}
 ```
 
-### File Detection Logic
+#### File Detection Logic
 
 IOPS determines if the value is a file path using these rules:
 1. Single line (no newlines)
@@ -243,20 +406,17 @@ If the file doesn't exist, the value is treated as inline content.
 
 ---
 
-## `scripts[].post.script`
+### `scripts[].post.script`
 
 Optional post-processing script executed after the main script completes.
 
 **Jinja2 Support:** Yes
 **File Path Support:** Yes
 
-### Available Context
-
+**Available Context:**
 Same as `script_template`:
 - All standard Jinja2 context variables
 - `command.template`, `command_env`, `command_labels`, `vars`
-
-### Example
 
 ```yaml
 scripts:
@@ -273,7 +433,7 @@ scripts:
         ls -lh {{ execution_dir }}
 ```
 
-### External File
+#### External File
 
 ```yaml
 scripts:
@@ -286,18 +446,15 @@ scripts:
 
 ---
 
-## `scripts[].parser.file`
+### `scripts[].parser.file`
 
 Path to the output file that the parser should read.
 
 **Jinja2 Support:** Yes
 **File Path Support:** N/A (this IS a file path)
 
-### Available Context
-
-All standard Jinja2 context variables.
-
-### Example
+**Available Context:**
+- All standard Jinja2 context variables
 
 ```yaml
 parser:
@@ -308,25 +465,23 @@ parser:
 
 ---
 
-## `scripts[].parser.parser_script`
+### `scripts[].parser.parser_script`
 
 Python script that extracts metrics from the output file.
 
 **Jinja2 Support:** No
 **File Path Support:** Yes
 
-### Available Context (Python Globals)
-
-The parser script has access to these **global variables** (not Jinja2, but Python globals injected at runtime):
+The parser script does NOT support Jinja2 templating, but has access to execution context via **Python global variables**:
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `vars` | dict | All execution variables |
+| `vars` | dict | All execution variables (e.g., `vars["nodes"]`) |
 | `env` | dict | Rendered `command.env` variables |
 | `execution_id` | str | The execution ID |
 | `repetition` | int | Current repetition number |
 
-### Inline Content
+#### Inline Content
 
 ```yaml
 parser:
@@ -347,9 +502,9 @@ parser:
         }
 ```
 
-### Using Context Variables
+#### Using Context Variables
 
-Access execution context via global variables. Here are simple, practical examples:
+Access execution context via global variables:
 
 **Example 1: Per-node throughput**
 ```yaml
@@ -405,7 +560,7 @@ parser:
             return {"performance": data["read_bw"]}
 ```
 
-### External File
+#### External File
 
 ```yaml
 parser:
@@ -427,7 +582,7 @@ def parse(file_path):
     return {"throughput": data["bandwidth"] / vars["nodes"]}
 ```
 
-### Requirements
+#### Requirements
 
 - Must define a function named `parse`
 - Function takes one argument: `file_path` (str)
@@ -435,22 +590,20 @@ def parse(file_path):
 
 ---
 
-## `vars[].expr`
+### `vars[].expr`
 
 Expression for derived (computed) variables.
 
 **Jinja2 Support:** Yes
 **File Path Support:** No
 
-### Available Context
-
+**Available Context:**
 - All standard Jinja2 context variables
 - All previously defined variables (order matters!)
 - Built-in functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`
 
-### Examples
+#### Arithmetic expressions
 
-**Arithmetic expressions:**
 ```yaml
 vars:
   nodes:
@@ -474,7 +627,8 @@ vars:
     expr: "{{ (total_volume_gb * 1024) // total_processes }}"
 ```
 
-**String templates:**
+#### String templates
+
 ```yaml
 vars:
   output_file:
@@ -486,7 +640,8 @@ vars:
     expr: "benchmark_n{{ nodes }}_p{{ ppn }}"
 ```
 
-**Conditional expressions:**
+#### Conditional expressions
+
 ```yaml
 vars:
   partition:
@@ -496,19 +651,16 @@ vars:
 
 ---
 
-## `output.sink.path`
+### `output.sink.path`
 
 Path to the output results file.
 
 **Jinja2 Support:** Yes
 **File Path Support:** N/A (this IS a file path)
 
-### Available Context
-
+**Available Context:**
 - `workdir` - Base working directory
 - Other standard context variables
-
-### Examples
 
 ```yaml
 output:
@@ -523,7 +675,7 @@ output:
     path: "{{ workdir }}/results/{{ benchmark.name }}_results.parquet"
 ```
 
-### Default Paths
+#### Default Paths
 
 If `path` is not specified, IOPS uses sensible defaults:
 
