@@ -652,6 +652,17 @@ class ExecutionInstance:
         Verbose, multi-section representation for DEBUG logs.
         Everything rendered lazily with current state.
         """
+        def truncate_text(text: str, max_lines: int = 5) -> str:
+            """Truncate text to max_lines, showing count of omitted lines."""
+            if not text:
+                return ""
+            text_lines = text.strip().split('\n')
+            if len(text_lines) <= max_lines:
+                return text
+            shown = '\n'.join(text_lines[:max_lines])
+            omitted = len(text_lines) - max_lines
+            return f"{shown}\n  ... ({omitted} more lines)"
+
         sep_start = sep_end = "#" * 80
         sep = "-" * 80
         lines: list[str] = [
@@ -659,8 +670,8 @@ class ExecutionInstance:
             f"Execution #{self.execution_id}",
             f"Benchmark : {self.benchmark_name}",
             f"Workdir   : {self.workdir}",
-            f"Exeucution Dir: {self.execution_dir}",
-            f"Repetitions: {self.repetition}/{self.repetitions}",            
+            f"Execution Dir: {self.execution_dir}",
+            f"Repetitions: {self.repetition}/{self.repetitions}",
             f"Cache File: {self.cache_file}",
             sep,
             "Variables:",
@@ -670,29 +681,41 @@ class ExecutionInstance:
         for k in sorted(vars_map):
             lines.append(f"  {k} = {vars_map[k]!r}")
 
+        # Truncate command if very long
+        command_text = truncate_text(self.command, max_lines=3)
         lines.extend([
             sep,
             "Command:",
-            self.command,
+            command_text,
+        ])
+
+        # Show script summary instead of full content
+        script_lines = self.script_text.strip().split('\n') if self.script_text else []
+        lines.extend([
             sep,
-            f"Script ({self.script_name}):",
-            self.script_text,
+            f"Script ({self.script_name}): {len(script_lines)} lines",
         ])
 
         if self.post_script:
-            lines.extend([sep, "Post-script:", self.post_script])
+            post_lines = self.post_script.strip().split('\n')
+            lines.extend([sep, f"Post-script: {len(post_lines)} lines"])
 
         env_rendered = self.env
         if env_rendered:
-            lines.extend([sep, "Environment:"])
-            for k, v in env_rendered.items():
-                lines.append(f"  {k}={v}")
+            lines.extend([sep, f"Environment: {len(env_rendered)} variables"])
+            # Show just the keys, not full values
+            for k in sorted(env_rendered.keys()):
+                lines.append(f"  {k}=...")
 
         effective_labels = self.command_labels
         if effective_labels:
             lines.extend([sep, "Labels:"])
             for k, v in effective_labels.items():
-                lines.append(f"  {k}: {v}")
+                # Truncate long label values
+                v_str = str(v)
+                if len(v_str) > 60:
+                    v_str = v_str[:57] + "..."
+                lines.append(f"  {k}: {v_str}")
 
         if self.output_path:
             lines.extend([
@@ -721,7 +744,8 @@ class ExecutionInstance:
             for m in parser_obj.metrics:
                 lines.append(f"    - {m.name} @ {m.path}")
             if parser_obj.parser_script:
-                lines.append(f"  parser_script: {parser_obj.parser_script}")
+                parser_lines = parser_obj.parser_script.strip().split('\n')
+                lines.append(f"  parser_script: {len(parser_lines)} lines")
 
         lines.append(sep_end)
 
