@@ -599,8 +599,7 @@ scripts:
       launcher: string              #   "mpirun" (default) or "srun"
       nodes: string                 #   "{{ var }}", number, or "all" (default)
       ppn: string                   #   Processes per node (required)
-      pass_env: list                #   Additional env vars (LD_LIBRARY_PATH, PATH always passed)
-      extra_options: list           #   Additional launcher flags
+      extra_options: list           #   Additional launcher flags (all env vars passed automatically)
 
     post:                           # Optional: post-processing
       script: |
@@ -675,15 +674,12 @@ scripts:
       launcher: "mpirun"              # "mpirun" (default) or "srun"
       nodes: "{{ nodes }}"            # Variable, number, or "all" (default)
       ppn: "{{ ppn }}"                # Processes per node (required)
-      pass_env:                       # Env vars to forward
-        - LD_LIBRARY_PATH
-        - PATH
-        - OMP_NUM_THREADS
       extra_options:                  # Additional launcher flags
         - "--mca btl tcp,self"
     script_template: |
       #!/bin/bash
       module load openmpi
+      export OMP_NUM_THREADS=4        # All exports are passed to MPI processes
       {{ command.template }}
 ```
 
@@ -694,10 +690,9 @@ scripts:
 | `launcher` | string | `"mpirun"` | MPI launcher - `"mpirun"` or `"srun"` |
 | `nodes` | string/int | `"all"` | Number of nodes - `"{{ var }}"`, integer, or `"all"` |
 | `ppn` | string/int | (required) | Processes per node - `"{{ var }}"` or integer |
-| `pass_env` | list | `[]` | Additional environment variables to forward (additive to LD_LIBRARY_PATH, PATH) |
 | `extra_options` | list | `[]` | Additional launcher flags |
 
-**Environment variable handling**: `LD_LIBRARY_PATH` and `PATH` are **always** passed (essential for module-loaded libraries and executables). The `pass_env` list is **additive** - variables you specify are passed in addition to these base variables.
+**Environment variable handling**: All environment variables are **automatically** passed to MPI processes. Any variable you `export` in your script is available on all remote nodes.
 
 **Nodes resolution:**
 

@@ -709,7 +709,6 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 launcher=mpi_block.get("launcher", "mpirun"),
                 nodes=str(mpi_block.get("nodes", "all")),  # Always store as string
                 ppn=str(mpi_block.get("ppn")) if mpi_block.get("ppn") is not None else None,
-                pass_env=mpi_block.get("pass_env", ["LD_LIBRARY_PATH", "PATH"]),
                 extra_options=mpi_block.get("extra_options", []),
             )
 
@@ -1356,19 +1355,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                         raise ConfigValidationError(
                             f"script '{s.name}' mpi.nodes must be 'all', a number, "
                             f"or a Jinja template (got '{nodes_val}')"
-                        )
-
-            # Validate pass_env is a list of strings
-            if s.mpi.pass_env is not None:
-                if not isinstance(s.mpi.pass_env, list):
-                    raise ConfigValidationError(
-                        f"script '{s.name}' mpi.pass_env must be a list of environment variable names"
-                    )
-                for env_var in s.mpi.pass_env:
-                    if not isinstance(env_var, str):
-                        raise ConfigValidationError(
-                            f"script '{s.name}' mpi.pass_env must contain only strings "
-                            f"(got '{type(env_var).__name__}')"
                         )
 
             # Validate extra_options is a list of strings

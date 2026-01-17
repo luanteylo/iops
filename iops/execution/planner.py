@@ -785,6 +785,10 @@ class BasePlanner(ABC, HasLogger):
                 # Generate nodelist construction
                 nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
                 wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
+
+                # Generate env flags (pass all current environment variables)
+                env_flags_cmd = self._generate_env_flags_command()
+                wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
                 wrapper_lines.append('')
 
                 # Generate MPI launch command
@@ -802,6 +806,10 @@ class BasePlanner(ABC, HasLogger):
                 # Generate nodelist construction
                 nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
                 wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
+
+                # Generate env flags (pass all current environment variables)
+                env_flags_cmd = self._generate_env_flags_command()
+                wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
                 wrapper_lines.append('')
 
                 # Generate MPI launch command (preserve surrounding text)
@@ -825,6 +833,8 @@ class BasePlanner(ABC, HasLogger):
             wrapper_lines.append('  # MPI launch (command not found in script, appending)')
             nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
             wrapper_lines.append(f'  {nodelist_cmd}')
+            env_flags_cmd = self._generate_env_flags_command()
+            wrapper_lines.append(f'  {env_flags_cmd}')
             wrapper_lines.append('')
             mpi_cmd = self._generate_mpi_command(
                 nodes_value, ppn_value, np_value, mpi, rendered_command
@@ -864,6 +874,24 @@ class BasePlanner(ABC, HasLogger):
                 f"__IOPS_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | "
                 f"head -n {nodes_value} | sed 's/$/:{ppn_value}/' | tr '\\n' ',' | sed 's/,$//')"
             )
+
+    def _generate_env_flags_command(self) -> str:
+        """
+        Generate bash command to build MPI environment variable flags.
+
+        This captures all current environment variables and constructs
+        the -x flags for mpirun, ensuring all exported variables
+        (modules, user settings, etc.) are passed to MPI processes.
+
+        Returns:
+            Bash command string to set __IOPS_MPI_ENV_FLAGS
+        """
+        # Use env to get all variables, extract names, and build -x flags
+        # This ensures PATH, LD_LIBRARY_PATH, and any user-exported vars are passed
+        return (
+            "__IOPS_MPI_ENV_FLAGS=$(env | cut -d= -f1 | "
+            "sed 's/^/-x /' | tr '\\n' ' ')"
+        )
 
     def _generate_mpi_command(
         self,
@@ -943,13 +971,9 @@ class BasePlanner(ABC, HasLogger):
         parts.append("--mca plm rsh")
         parts.append("--oversubscribe")
 
-        # Environment variable passing
-        # Always pass PATH and LD_LIBRARY_PATH (essential for module-loaded libs/executables)
-        # User-specified vars are additive
-        base_env_vars = ["LD_LIBRARY_PATH", "PATH"]
-        all_env_vars = list(dict.fromkeys(base_env_vars + mpi.pass_env))  # Preserve order, remove duplicates
-        for env_var in all_env_vars:
-            parts.append(f'-x {env_var}="${env_var}"')
+        # Pass all environment variables dynamically
+        # This ensures all exported vars (modules, user settings) are available on remote nodes
+        parts.append("$__IOPS_MPI_ENV_FLAGS")
 
         # Extra user-specified options
         for opt in mpi.extra_options:

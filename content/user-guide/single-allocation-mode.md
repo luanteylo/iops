@@ -154,10 +154,9 @@ scripts:
 | `launcher` | string | `"mpirun"` | MPI launcher - `"mpirun"` or `"srun"` |
 | `nodes` | string/int | `"all"` | Number of nodes - `"{{ var }}"`, integer, or `"all"` |
 | `ppn` | string/int | (required) | Processes per node - `"{{ var }}"` or integer |
-| `pass_env` | list | `[]` | Additional environment variables to forward (additive to LD_LIBRARY_PATH, PATH) |
 | `extra_options` | list | `[]` | Additional launcher flags |
 
-**Environment variable handling**: `LD_LIBRARY_PATH` and `PATH` are **always** passed to MPI processes (essential for module-loaded libraries and executables on remote nodes). The `pass_env` list is **additive** - any variables you specify are passed in addition to these base variables. For example, `pass_env: [LD_PRELOAD]` will pass LD_LIBRARY_PATH, PATH, and LD_PRELOAD.
+**Environment variable handling**: All environment variables from the script are **automatically** passed to MPI processes. Any variables you `export` in your script (including PATH, LD_LIBRARY_PATH, LD_PRELOAD, or custom variables like TOTO_*) are available on all remote nodes without needing to list them explicitly.
 
 #### Nodes Resolution
 
@@ -176,16 +175,13 @@ scripts:
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ ppn }}"
-      pass_env:
-        - LD_LIBRARY_PATH
-        - PATH
-        - OMP_NUM_THREADS
       extra_options:
         - "--mca btl tcp,self"
         - "--mca mpi_show_mca_params all"
     script_template: |
       #!/bin/bash
       module load openmpi
+      export OMP_NUM_THREADS=4  # Automatically passed to all MPI processes
       {{ command.template }}
 ```
 

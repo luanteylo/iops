@@ -455,11 +455,10 @@ scripts:
     #   launcher: "mpirun"           # "mpirun" (default) or "srun"
     #   nodes: "{{ nodes }}"         # Variable, number, or "all" (default)
     #   ppn: "{{ ppn }}"             # Processes per node (required)
-    #   pass_env:                    # Additional env vars (LD_LIBRARY_PATH, PATH always passed)
-    #     - LD_PRELOAD
-    #     - OMP_NUM_THREADS
     #   extra_options:               # Additional launcher flags
     #     - "--mca btl tcp,self"
+    # Note: All environment variables from your script are automatically passed
+    # to MPI processes (exports like LD_PRELOAD, OMP_NUM_THREADS, etc.)
 
     # ---------------------------------------------------------------------------
     # SCRIPT TEMPLATE

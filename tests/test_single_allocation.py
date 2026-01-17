@@ -518,8 +518,7 @@ def test_mpi_config_defaults():
     assert config.launcher == "mpirun"
     assert config.nodes == "all"
     assert config.ppn == "8"
-    # pass_env defaults to empty; LD_LIBRARY_PATH and PATH are always added by the wrapper
-    assert config.pass_env == []
+    # All env vars are passed automatically via $__IOPS_MPI_ENV_FLAGS
     assert config.extra_options == []
 
 
@@ -540,7 +539,6 @@ def test_mpi_config_parsing(tmp_path, sample_config_dict):
     sample_config_dict["scripts"][0]["mpi"] = {
         "nodes": "{{ nodes }}",
         "ppn": "{{ ppn }}",
-        "pass_env": ["LD_LIBRARY_PATH", "PATH", "OMP_NUM_THREADS"],
         "extra_options": ["--mca btl tcp,self"],
     }
 
@@ -554,7 +552,6 @@ def test_mpi_config_parsing(tmp_path, sample_config_dict):
     assert script.mpi.launcher == "mpirun"
     assert script.mpi.nodes == "{{ nodes }}"
     assert script.mpi.ppn == "{{ ppn }}"
-    assert "OMP_NUM_THREADS" in script.mpi.pass_env
     assert "--mca btl tcp,self" in script.mpi.extra_options
 
 
@@ -711,7 +708,6 @@ def mpi_planner(tmp_path, sample_config_dict):
     sample_config_dict["scripts"][0]["mpi"] = {
         "nodes": "{{ nodes }}",
         "ppn": "{{ ppn }}",
-        "pass_env": ["LD_LIBRARY_PATH", "PATH"],
     }
 
     sample_config_dict["scripts"][0]["script_template"] = """#!/bin/bash
@@ -769,55 +765,16 @@ def test_mpi_wrapper_generates_mpirun_command(mpi_planner):
     assert "--oversubscribe" in script_content
 
 
-def test_mpi_wrapper_passes_env_vars(mpi_planner):
-    """Test that MPI wrapper passes environment variables."""
+def test_mpi_wrapper_passes_all_env_vars(mpi_planner):
+    """Test that MPI wrapper passes all environment variables dynamically."""
     test = mpi_planner.next_test()
 
     script_content = test.script_file.read_text()
 
-    # Should pass environment variables
-    assert '-x LD_LIBRARY_PATH="$LD_LIBRARY_PATH"' in script_content
-    assert '-x PATH="$PATH"' in script_content
-
-
-def test_mpi_wrapper_env_vars_additive(tmp_path, sample_config_dict):
-    """Test that base env vars (LD_LIBRARY_PATH, PATH) are always passed even when user specifies only other vars."""
-    config_file = tmp_path / "config.yaml"
-
-    sample_config_dict["benchmark"]["executor"] = "slurm"
-    sample_config_dict["benchmark"]["slurm_options"] = {
-        "allocation": {
-            "mode": "single",
-            "allocation_script": "#SBATCH --nodes=8\n#SBATCH --time=02:00:00",
-        }
-    }
-    sample_config_dict["benchmark"]["collect_system_info"] = False
-    sample_config_dict["benchmark"]["trace_resources"] = False
-
-    # User specifies ONLY LD_PRELOAD - base vars should still be passed
-    sample_config_dict["scripts"][0]["mpi"] = {
-        "ppn": "4",
-        "pass_env": ["LD_PRELOAD"],
-    }
-
-    sample_config_dict["scripts"][0]["script_template"] = """#!/bin/bash
-{{ command.template }}
-"""
-
-    with open(config_file, "w") as f:
-        yaml.dump(sample_config_dict, f)
-
-    config = load_config(config_file)
-    planner = ExhaustivePlanner(config)
-    test = planner.next_test()
-
-    script_content = test.script_file.read_text()
-
-    # Base vars should ALWAYS be passed
-    assert '-x LD_LIBRARY_PATH="$LD_LIBRARY_PATH"' in script_content
-    assert '-x PATH="$PATH"' in script_content
-    # User-specified var should also be passed
-    assert '-x LD_PRELOAD="$LD_PRELOAD"' in script_content
+    # Should generate env flags dynamically using env command
+    assert "__IOPS_MPI_ENV_FLAGS=$(env | cut -d= -f1 |" in script_content
+    # Should use the env flags in mpirun command
+    assert "$__IOPS_MPI_ENV_FLAGS" in script_content
 
 
 def test_mpi_wrapper_preserves_setup_commands(mpi_planner):

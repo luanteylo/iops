@@ -274,7 +274,6 @@ class MPIConfig:
     launcher: str = "mpirun"  # "mpirun" or "srun"
     nodes: Optional[str] = "all"  # "{{ var }}", number, or "all"
     ppn: Optional[str] = None  # "{{ var }}" or number (required)
-    pass_env: List[str] = field(default_factory=list)  # Additional vars (LD_LIBRARY_PATH, PATH always passed)
     extra_options: List[str] = field(default_factory=list)
 
 
