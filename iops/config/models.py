@@ -64,8 +64,17 @@ class AllocationConfig:
               #SBATCH --nodes=8
               #SBATCH --time=02:00:00
               #SBATCH --partition=compute
-              #SBATCH --account=myproject
               #SBATCH --exclusive
+
+              module purge
+              module load mpi/openmpi/4.0.1
+
+              # Any setup that runs once before all tests
+
+    In kickoff mode:
+    - allocation_script contains SBATCH directives AND setup (modules, env vars)
+    - script_template contains the srun command with Jinja2 variables
+    - No MPI wrapping - user controls srun directly in script_template
     """
     mode: str = "per-test"  # "single", "kickoff", or "per-test"
     allocation_script: Optional[str] = None

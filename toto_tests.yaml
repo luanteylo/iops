@@ -42,13 +42,18 @@ benchmark:
   executor: "slurm"
   slurm_options:
    allocation:
-     mode: "kickoff"            # Pre-generate all tests, run sequentially (faster than "single")
-     test_timeout: 60          # 5 minutes per test (IOR runs quickly)
+     mode: "kickoff"            # Pre-generate all tests, run sequentially
+     test_timeout: 60          # 1 minute per test
      allocation_script: |
        #SBATCH --nodes=16
        #SBATCH --time=04:00:00
        #SBATCH --exclusive
        #SBATCH --constraint bora
+
+       # Setup runs once before all tests
+       module purge
+       module load mpi/openmpi/4.0.1
+       module load compiler/gcc/12.2.0
   
   random_seed: 42
 
@@ -152,48 +157,22 @@ command:
 
 
 scripts:
-  # Script name (can define multiple scripts)
   - name: "ior"
-
-    # MPI configuration - IOPS handles SLURM_NODEID check, nodelist, and mpirun flags
-    # pass_env: dict mapping env var names to values (supports Jinja2 for conditional vars)
-    # Empty values are skipped (no -x flag generated)
-    mpi:
-      nodes: "{{ nodes }}"
-      ppn: "{{ procs_per_node }}"
-      pass_env:
-        LD_PRELOAD: "{{ '/home/lgouveia/toto/toto.so' if with_toto else '' }}"
-        TOTO_PFS_PATHS: "{{ '/beegfs' if with_toto else '' }}"
-        TOTO_LOG_LEVEL: "{{ 'ERROR' if with_toto else '' }}"
-        TOTO_LOG_TO_STDOUT: "{{ '0' if with_toto else '' }}"
-        TOTO_BEEGFS_STRIPING_PREFIX: "{{ '/beegfs/lgouveia' if with_toto else '' }}"
-        TOTO_BEEGFS_STRIPING_SUFIX: "{{ 'ior' if with_toto else '' }}"
-        TOTO_LOGS_FOLDER: "{{ execution_dir if with_toto else '' }}"
-        TOTO_ANALYSIS_PERIOD: "{{ analysis_period if with_toto else '' }}"
-
-    # Script is now clean - no exports needed! Environment variables are passed
-    # directly to mpirun via -x flags. This avoids LD_PRELOAD breaking scontrol/modules.
+    # In kickoff mode: script_template contains the full srun command
+    # No MPI wrapping - user controls srun directly with Jinja2 variables
     script_template: |
       #!/bin/bash
 
-      module purge
-      module load mpi/openmpi/4.0.1
-      module load compiler/gcc/12.2.0
-
-      echo "=== SLURM Allocation Details ==="
-      echo "SLURM_JOB_ID:        $SLURM_JOB_ID"
-      echo "SLURM_JOB_NODELIST:  $SLURM_JOB_NODELIST"
-      echo "SLURM_JOB_NUM_NODES: $SLURM_JOB_NUM_NODES"
-      echo "Hostname:            $(hostname)"
-      echo ""
       echo "=== Test Parameters ==="
-      echo "Requested nodes:     {{ nodes }}"
-      echo "Procs per node:      {{ procs_per_node }}"
-      echo "Total procs:         {{ nodes * procs_per_node }}"
+      echo "Nodes:          {{ nodes }}"
+      echo "Procs per node: {{ procs_per_node }}"
+      echo "Total procs:    {{ nodes * procs_per_node }}"
+      echo "With TOTO:      {{ with_toto }}"
       echo ""
 
-      # IOPS generates the mpirun command automatically
-      {{ command.template }}
+      srun --nodes={{ nodes }} --ntasks-per-node={{ procs_per_node }} \
+        {% if with_toto %}--export=ALL,LD_PRELOAD=/home/lgouveia/toto/toto.so,TOTO_PFS_PATHS=/beegfs,TOTO_LOG_LEVEL=ERROR,TOTO_LOG_TO_STDOUT=0,TOTO_BEEGFS_STRIPING_PREFIX=/beegfs/lgouveia,TOTO_BEEGFS_STRIPING_SUFIX=ior,TOTO_LOGS_FOLDER={{ execution_dir }},TOTO_ANALYSIS_PERIOD={{ analysis_period }} \
+        {% endif %}{{ command.template }}
     
     parser:
       # File to parse (typically a variable pointing to the output)

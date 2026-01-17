@@ -590,29 +590,39 @@ class BasePlanner(ABC, HasLogger):
         logs_dir = workdir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        # IMPORTANT: All #SBATCH directives must come first, before any regular comments.
-        # SLURM stops parsing #SBATCH when it encounters non-SBATCH lines.
+        # Parse allocation_script: separate SBATCH directives from setup commands
+        # SLURM stops parsing #SBATCH when it encounters non-SBATCH lines,
+        # so we must put ALL #SBATCH directives at the top.
+        user_script = allocation.allocation_script.strip()
+        if user_script.startswith("#!"):
+            # Skip user's shebang
+            user_script = "\n".join(user_script.split('\n')[1:])
+
+        sbatch_lines = []
+        setup_lines = []
+        for line in user_script.split('\n'):
+            stripped = line.strip()
+            if stripped.startswith("#SBATCH"):
+                sbatch_lines.append(line)
+            else:
+                setup_lines.append(line)
+
+        # Build the kickoff script
         lines = [
             "#!/bin/bash",
         ]
 
-        # Add user's SBATCH directives first
-        user_script = allocation.allocation_script.strip()
-        if not user_script.startswith("#!"):
-            lines.append(user_script)
-        else:
-            # Skip user's shebang, add the rest
-            for line in user_script.split('\n')[1:]:
-                lines.append(line)
+        # 1. User's SBATCH directives
+        lines.extend(sbatch_lines)
 
-        # Add IOPS-managed SBATCH directives (must be before any regular comments)
+        # 2. IOPS-managed SBATCH directives
         lines.extend([
             "#SBATCH --job-name=iops_kickoff",
             f"#SBATCH --output={logs_dir}/kickoff_%j.out",
             f"#SBATCH --error={logs_dir}/kickoff_%j.err",
         ])
 
-        # Now add informational comments (after all SBATCH directives)
+        # 3. Informational comments
         lines.extend([
             "",
             "# IOPS Kickoff Script - Runs all tests sequentially within allocation",
@@ -620,6 +630,17 @@ class BasePlanner(ABC, HasLogger):
             f"# Total tests: {len(tests)}",
             f"# Timeout per test: {test_timeout}s",
             "",
+        ])
+
+        # 4. User's setup commands (modules, env vars, etc.)
+        # Strip leading empty lines but preserve the rest
+        while setup_lines and not setup_lines[0].strip():
+            setup_lines.pop(0)
+        if setup_lines:
+            lines.extend(setup_lines)
+            lines.append("")
+
+        lines.extend([
             "# ===== KICKOFF DISPATCHER =====",
             "",
             f"_IOPS_TEST_TIMEOUT={test_timeout}",
@@ -750,9 +771,15 @@ class BasePlanner(ABC, HasLogger):
         # Get the rendered script text
         script_text = test.script_text
 
-        # Apply MPI wrapping if configured (for single-allocation mode)
-        # This must happen before IOPS injection so the wrapper structure is correct
-        if test.mpi_config:
+        # Apply MPI wrapping if configured (for single-allocation mode only)
+        # In kickoff mode, user controls srun directly in script_template - no wrapping needed
+        is_kickoff = (
+            hasattr(self.cfg.benchmark, 'slurm_options') and
+            self.cfg.benchmark.slurm_options and
+            self.cfg.benchmark.slurm_options.allocation and
+            self.cfg.benchmark.slurm_options.allocation.mode == "kickoff"
+        )
+        if test.mpi_config and not is_kickoff:
             script_text = self._wrap_script_with_mpi(script_text, test)
 
         # Inject IOPS helper scripts (exit handler, runtime monitors, atexit scripts)
