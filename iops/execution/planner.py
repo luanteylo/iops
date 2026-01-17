@@ -17,6 +17,7 @@ from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
 from collections import defaultdict
+import logging
 import random
 import json
 import warnings
@@ -791,6 +792,13 @@ class BasePlanner(ABC, HasLogger):
                 wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
                 wrapper_lines.append('')
 
+                # Debug: print generated MPI variables (only when log level is DEBUG)
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    wrapper_lines.append(f'{indent_str}echo "=== IOPS MPI Debug ==="')
+                    wrapper_lines.append(f'{indent_str}echo "NODELIST: $__IOPS_NODELIST"')
+                    wrapper_lines.append(f'{indent_str}echo "ENV_FLAGS: $__IOPS_MPI_ENV_FLAGS"')
+                    wrapper_lines.append(f'{indent_str}echo ""')
+
                 # Generate MPI launch command
                 mpi_cmd = self._generate_mpi_command(
                     nodes_value, ppn_value, np_value, mpi, rendered_command
@@ -811,6 +819,13 @@ class BasePlanner(ABC, HasLogger):
                 env_flags_cmd = self._generate_env_flags_command()
                 wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
                 wrapper_lines.append('')
+
+                # Debug: print generated MPI variables (only when log level is DEBUG)
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    wrapper_lines.append(f'{indent_str}echo "=== IOPS MPI Debug ==="')
+                    wrapper_lines.append(f'{indent_str}echo "NODELIST: $__IOPS_NODELIST"')
+                    wrapper_lines.append(f'{indent_str}echo "ENV_FLAGS: $__IOPS_MPI_ENV_FLAGS"')
+                    wrapper_lines.append(f'{indent_str}echo ""')
 
                 # Generate MPI launch command (preserve surrounding text)
                 mpi_cmd = self._generate_mpi_command(
@@ -836,6 +851,12 @@ class BasePlanner(ABC, HasLogger):
             env_flags_cmd = self._generate_env_flags_command()
             wrapper_lines.append(f'  {env_flags_cmd}')
             wrapper_lines.append('')
+            # Debug: print generated MPI variables (only when log level is DEBUG)
+            if self.logger.isEnabledFor(logging.DEBUG):
+                wrapper_lines.append('  echo "=== IOPS MPI Debug ==="')
+                wrapper_lines.append('  echo "NODELIST: $__IOPS_NODELIST"')
+                wrapper_lines.append('  echo "ENV_FLAGS: $__IOPS_MPI_ENV_FLAGS"')
+                wrapper_lines.append('  echo ""')
             mpi_cmd = self._generate_mpi_command(
                 nodes_value, ppn_value, np_value, mpi, rendered_command
             )
