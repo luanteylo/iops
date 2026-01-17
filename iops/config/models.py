@@ -257,8 +257,10 @@ class MPIConfig:
         nodes: Number of nodes to use - "{{ var }}", integer, or "all" (default)
         ppn: Processes per node - "{{ var }}" or integer (required)
         pass_env: Environment variables to forward to MPI processes.
-            Defaults to ["PATH", "LD_LIBRARY_PATH"]. Add any vars exported
-            in your script that MPI processes need (e.g., LD_PRELOAD).
+            Dict mapping var names to values (supports Jinja2 templates).
+            Defaults to {PATH: "$PATH", LD_LIBRARY_PATH: "$LD_LIBRARY_PATH"}.
+            Use "$VAR" to pass current shell value, or literal/Jinja values.
+            Empty values after rendering are skipped (no -x flag generated).
         extra_options: Additional launcher flags (e.g., "--mca btl tcp,self")
 
     Example:
@@ -267,17 +269,21 @@ class MPIConfig:
             mpi:
               nodes: "{{ nodes }}"
               ppn: "{{ ppn }}"
-              pass_env: [LD_PRELOAD, TOTO_PFS_PATHS]
+              pass_env:
+                LD_PRELOAD: "{{ '/path/to/lib.so' if with_toto else '' }}"
+                PATH: "$PATH"
             script_template: |
               #!/bin/bash
-              export LD_PRELOAD=/path/to/lib.so
               module load openmpi
               {{ command.template }}
     """
     launcher: str = "mpirun"  # "mpirun" or "srun"
     nodes: Optional[str] = "all"  # "{{ var }}", number, or "all"
     ppn: Optional[str] = None  # "{{ var }}" or number (required)
-    pass_env: List[str] = field(default_factory=lambda: ["PATH", "LD_LIBRARY_PATH"])
+    pass_env: Dict[str, str] = field(default_factory=lambda: {
+        "PATH": "$PATH",
+        "LD_LIBRARY_PATH": "$LD_LIBRARY_PATH"
+    })
     extra_options: List[str] = field(default_factory=list)
 
 

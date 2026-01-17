@@ -705,10 +705,13 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         mpi_cfg = None
         if mpi_block is not None:
             # Parse mpi configuration
-            # pass_env defaults to ["PATH", "LD_LIBRARY_PATH"] if not specified
+            # pass_env defaults to {PATH: "$PATH", LD_LIBRARY_PATH: "$LD_LIBRARY_PATH"}
             pass_env = mpi_block.get("pass_env")
             if pass_env is None:
-                pass_env = ["PATH", "LD_LIBRARY_PATH"]
+                pass_env = {"PATH": "$PATH", "LD_LIBRARY_PATH": "$LD_LIBRARY_PATH"}
+            elif isinstance(pass_env, list):
+                # Backwards compatibility: convert list to dict with shell expansion
+                pass_env = {var: f"${var}" for var in pass_env}
             mpi_cfg = MPIConfig(
                 launcher=mpi_block.get("launcher", "mpirun"),
                 nodes=str(mpi_block.get("nodes", "all")),  # Always store as string
@@ -1373,6 +1376,26 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                         raise ConfigValidationError(
                             f"script '{s.name}' mpi.extra_options must contain only strings "
                             f"(got '{type(opt).__name__}')"
+                        )
+
+            # Validate pass_env is a dict with valid env var names
+            if s.mpi.pass_env is not None:
+                if not isinstance(s.mpi.pass_env, dict):
+                    raise ConfigValidationError(
+                        f"script '{s.name}' mpi.pass_env must be a dict mapping var names to values"
+                    )
+                # Valid env var name: starts with letter or underscore, contains alphanumeric and underscore
+                env_var_pattern = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+                for var_name, var_value in s.mpi.pass_env.items():
+                    if not isinstance(var_name, str) or not env_var_pattern.match(var_name):
+                        raise ConfigValidationError(
+                            f"script '{s.name}' mpi.pass_env has invalid env var name '{var_name}'. "
+                            f"Must start with letter/underscore and contain only alphanumeric/underscore."
+                        )
+                    if not isinstance(var_value, str):
+                        raise ConfigValidationError(
+                            f"script '{s.name}' mpi.pass_env['{var_name}'] must be a string "
+                            f"(got '{type(var_value).__name__}')"
                         )
 
     # ---- output ----

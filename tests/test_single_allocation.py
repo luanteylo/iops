@@ -518,7 +518,8 @@ def test_mpi_config_defaults():
     assert config.launcher == "mpirun"
     assert config.nodes == "all"
     assert config.ppn == "8"
-    # All env vars are passed automatically via $__IOPS_MPI_ENV_FLAGS
+    # Default pass_env is a dict with PATH and LD_LIBRARY_PATH
+    assert config.pass_env == {"PATH": "$PATH", "LD_LIBRARY_PATH": "$LD_LIBRARY_PATH"}
     assert config.extra_options == []
 
 
@@ -783,7 +784,7 @@ def test_mpi_wrapper_custom_pass_env(tmp_path):
     from iops.execution.planner import BasePlanner
     from pathlib import Path
 
-    # Create config with custom pass_env
+    # Create config with custom pass_env (dict format)
     config_content = """
 benchmark:
   name: test
@@ -814,9 +815,9 @@ scripts:
       nodes: "{{{{ nodes }}}}"
       ppn: "{{{{ ppn }}}}"
       pass_env:
-        - LD_PRELOAD
-        - TOTO_LOG_LEVEL
-        - MY_CUSTOM_VAR
+        LD_PRELOAD: "/path/to/lib.so"
+        TOTO_LOG_LEVEL: "ERROR"
+        MY_CUSTOM_VAR: "$MY_CUSTOM_VAR"
     script_template: |
       #!/bin/bash
       echo test
@@ -837,12 +838,85 @@ output:
 
     script_content = test.script_file.read_text()
 
-    # Should pass custom env vars
-    assert '-x LD_PRELOAD="$LD_PRELOAD"' in script_content
-    assert '-x TOTO_LOG_LEVEL="$TOTO_LOG_LEVEL"' in script_content
+    # Should pass custom env vars with their values
+    assert '-x LD_PRELOAD="/path/to/lib.so"' in script_content
+    assert '-x TOTO_LOG_LEVEL="ERROR"' in script_content
     assert '-x MY_CUSTOM_VAR="$MY_CUSTOM_VAR"' in script_content
     # Should NOT have default vars since user overrode them
     assert '-x PATH="$PATH"' not in script_content
+
+
+def test_mpi_wrapper_conditional_pass_env(tmp_path):
+    """Test that empty pass_env values are skipped (conditional env vars)."""
+    import logging
+    from iops.config.loader import load_generic_config
+    from iops.execution.planner import BasePlanner
+    from pathlib import Path
+
+    # Create config with conditional pass_env using Jinja templates
+    config_content = """
+benchmark:
+  name: test
+  workdir: {workdir}
+  executor: slurm
+  slurm_options:
+    allocation:
+      mode: single
+      allocation_script: |
+        #SBATCH --nodes=2
+
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [2]
+  ppn:
+    type: int
+    expr: "8"
+  with_toto:
+    type: bool
+    sweep:
+      mode: list
+      values: [false]
+
+command:
+  template: "echo test"
+
+scripts:
+  - name: test
+    mpi:
+      nodes: "{{{{ nodes }}}}"
+      ppn: "{{{{ ppn }}}}"
+      pass_env:
+        LD_PRELOAD: "{{{{ '/path/to/lib.so' if with_toto else '' }}}}"
+        TOTO_LOG_LEVEL: "{{{{ 'ERROR' if with_toto else '' }}}}"
+        PATH: "$PATH"
+    script_template: |
+      #!/bin/bash
+      echo test
+
+output:
+  sink:
+    type: csv
+    path: "{{{{ workdir }}}}/results.csv"
+""".format(workdir=tmp_path)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(config_content)
+
+    logger = logging.getLogger("test")
+    cfg = load_generic_config(Path(config_file), logger)
+    planner = BasePlanner.build(cfg)
+    test = planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # with_toto=false, so LD_PRELOAD and TOTO_LOG_LEVEL should be skipped (empty values)
+    assert '-x LD_PRELOAD=' not in script_content
+    assert '-x TOTO_LOG_LEVEL=' not in script_content
+    # PATH should still be present (non-empty value)
+    assert '-x PATH="$PATH"' in script_content
 
 
 def test_mpi_wrapper_preserves_setup_commands(mpi_planner):

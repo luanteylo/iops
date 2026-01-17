@@ -151,37 +151,25 @@ scripts:
   - name: "ior"
 
     # MPI configuration - IOPS handles SLURM_NODEID check, nodelist, and mpirun flags
-    # pass_env: list of env vars to pass to MPI processes (default: PATH, LD_LIBRARY_PATH)
+    # pass_env: dict mapping env var names to values (supports Jinja2 for conditional vars)
+    # Empty values are skipped (no -x flag generated)
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ procs_per_node }}"
       pass_env:
-        - LD_PRELOAD
-        - TOTO_PFS_PATHS
-        - TOTO_LOG_LEVEL
-        - TOTO_LOG_TO_STDOUT
-        - TOTO_BEEGFS_STRIPING_PREFIX
-        - TOTO_BEEGFS_STRIPING_SUFIX
-        - TOTO_LOGS_FOLDER
-        - TOTO_ANALYSIS_PERIOD
+        LD_PRELOAD: "{{ '/home/lgouveia/toto/toto.so' if with_toto else '' }}"
+        TOTO_PFS_PATHS: "{{ '/beegfs' if with_toto else '' }}"
+        TOTO_LOG_LEVEL: "{{ 'ERROR' if with_toto else '' }}"
+        TOTO_LOG_TO_STDOUT: "{{ '0' if with_toto else '' }}"
+        TOTO_BEEGFS_STRIPING_PREFIX: "{{ '/beegfs/lgouveia' if with_toto else '' }}"
+        TOTO_BEEGFS_STRIPING_SUFIX: "{{ 'ior' if with_toto else '' }}"
+        TOTO_LOGS_FOLDER: "{{ execution_dir if with_toto else '' }}"
+        TOTO_ANALYSIS_PERIOD: "{{ analysis_period if with_toto else '' }}"
 
+    # Script is now clean - no exports needed! Environment variables are passed
+    # directly to mpirun via -x flags. This avoids LD_PRELOAD breaking scontrol/modules.
     script_template: |
       #!/bin/bash
-
-      {% if with_toto %}
-      # add toto env vars for the test
-      export TOTO_PFS_PATHS=/beegfs
-      #export TOTO_ACCUMULATE_STATISTICS=1
-      export TOTO_LOG_LEVEL='ERROR'
-      #export TOTO_STRIPE_COUNT_TUNING=0
-      #export TOTO_MONITOR_OST_PERFORMANCE=0
-      export TOTO_LOG_TO_STDOUT=0
-      export TOTO_BEEGFS_STRIPING_PREFIX=/beegfs/lgouveia
-      export TOTO_BEEGFS_STRIPING_SUFIX=ior
-      export TOTO_LOGS_FOLDER={{ execution_dir }}
-      export TOTO_ANALYSIS_PERIOD={{ analysis_period }}
-      export LD_PRELOAD=/home/lgouveia/toto/toto.so
-      {% endif %}
 
       module purge
       module load mpi/openmpi/4.0.1

@@ -768,6 +768,14 @@ class BasePlanner(ABC, HasLogger):
         wrapper_lines.append('if [ "$SLURM_NODEID" = "0" ]; then')
         wrapper_lines.append('')
 
+        # Generate nodelist FIRST - before any user code runs
+        # This ensures scontrol runs without interference from user-set vars like LD_PRELOAD
+        # With pass_env key-value format, env vars are passed directly to mpirun via -x flags,
+        # so users don't need exports in their scripts anymore
+        nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
+        wrapper_lines.append(f'  {nodelist_cmd}')
+        wrapper_lines.append('')
+
         # Track whether we found and replaced the command
         command_replaced = False
 
@@ -779,41 +787,21 @@ class BasePlanner(ABC, HasLogger):
             # Check if this line contains the rendered command
             # We look for the command itself or significant parts of it
             if rendered_command and stripped == rendered_command:
-                # This line IS the command - replace it with MPI launch block
+                # This line IS the command - replace it with MPI launch
                 indent = len(body_line) - len(body_line.lstrip())
                 indent_str = body_line[:indent] if indent > 0 else '  '
 
-                # Generate nodelist (save/unset LD_PRELOAD to avoid breaking scontrol)
-                wrapper_lines.append(f'{indent_str}__IOPS_SAVED_LD_PRELOAD="${{LD_PRELOAD:-}}"')
-                wrapper_lines.append(f'{indent_str}unset LD_PRELOAD')
-                nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
-                wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
-                wrapper_lines.append(f'{indent_str}export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
-                wrapper_lines.append('')
-
                 # Generate MPI launch command
                 mpi_cmd = self._generate_mpi_command(
-                    nodes_value, ppn_value, np_value, mpi, rendered_command
+                    nodes_value, ppn_value, np_value, mpi, rendered_command, test
                 )
                 wrapper_lines.append(f'{indent_str}{mpi_cmd}')
                 command_replaced = True
             elif rendered_command and rendered_command in stripped:
                 # The command is part of a larger line (e.g., with redirections)
                 # Replace just the command portion
-                indent = len(body_line) - len(body_line.lstrip())
-                indent_str = body_line[:indent] if indent > 0 else '  '
-
-                # Generate nodelist (save/unset LD_PRELOAD to avoid breaking scontrol)
-                wrapper_lines.append(f'{indent_str}__IOPS_SAVED_LD_PRELOAD="${{LD_PRELOAD:-}}"')
-                wrapper_lines.append(f'{indent_str}unset LD_PRELOAD')
-                nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
-                wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
-                wrapper_lines.append(f'{indent_str}export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
-                wrapper_lines.append('')
-
-                # Generate MPI launch command (preserve surrounding text)
                 mpi_cmd = self._generate_mpi_command(
-                    nodes_value, ppn_value, np_value, mpi, rendered_command
+                    nodes_value, ppn_value, np_value, mpi, rendered_command, test
                 )
                 # Replace the command in the line
                 new_line = body_line.replace(rendered_command, mpi_cmd)
@@ -830,17 +818,8 @@ class BasePlanner(ABC, HasLogger):
         if not command_replaced and rendered_command:
             wrapper_lines.append('')
             wrapper_lines.append('  # MPI launch (command not found in script, appending)')
-
-            # Generate nodelist (save/unset LD_PRELOAD to avoid breaking scontrol)
-            wrapper_lines.append('  __IOPS_SAVED_LD_PRELOAD="${LD_PRELOAD:-}"')
-            wrapper_lines.append('  unset LD_PRELOAD')
-            nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
-            wrapper_lines.append(f'  {nodelist_cmd}')
-            wrapper_lines.append('  export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
-            wrapper_lines.append('')
-
             mpi_cmd = self._generate_mpi_command(
-                nodes_value, ppn_value, np_value, mpi, rendered_command
+                nodes_value, ppn_value, np_value, mpi, rendered_command, test
             )
             wrapper_lines.append(f'  {mpi_cmd}')
 
@@ -885,6 +864,7 @@ class BasePlanner(ABC, HasLogger):
         np_value: Optional[int],
         mpi: MPIConfig,
         command: str,
+        test: ExecutionInstance,
     ) -> str:
         """
         Generate the MPI launch command.
@@ -895,13 +875,14 @@ class BasePlanner(ABC, HasLogger):
             np_value: Total processes (None = compute at runtime)
             mpi: MPI configuration
             command: Rendered command to execute
+            test: ExecutionInstance for rendering pass_env values
 
         Returns:
             MPI launch command string
         """
         if mpi.launcher == "mpirun":
             return self._generate_mpirun_command(
-                nodes_value, ppn_value, np_value, mpi, command
+                nodes_value, ppn_value, np_value, mpi, command, test
             )
         else:  # srun
             return self._generate_srun_command(
@@ -915,6 +896,7 @@ class BasePlanner(ABC, HasLogger):
         np_value: Optional[int],
         mpi: MPIConfig,
         command: str,
+        test: ExecutionInstance,
     ) -> str:
         """
         Generate mpirun command with all necessary flags.
@@ -925,7 +907,7 @@ class BasePlanner(ABC, HasLogger):
         - --map-by ppr:ppn:node: Processes per node mapping
         - --mca plm rsh: Use rsh/ssh for process launch (needed within allocation)
         - --oversubscribe: Allow more processes than cores (for flexibility)
-        - -x VAR="$VAR": Pass specified environment variables
+        - -x VAR="value": Pass specified environment variables
 
         Args:
             nodes_value: Number of nodes (None = all)
@@ -933,6 +915,7 @@ class BasePlanner(ABC, HasLogger):
             np_value: Total processes (None = compute at runtime)
             mpi: MPI configuration
             command: Rendered command to execute
+            test: ExecutionInstance for rendering pass_env values
 
         Returns:
             mpirun command string
@@ -957,9 +940,37 @@ class BasePlanner(ABC, HasLogger):
         parts.append("--oversubscribe")
 
         # Pass environment variables explicitly
-        # Default: PATH, LD_LIBRARY_PATH. User can add more via pass_env.
-        for var in mpi.pass_env:
-            parts.append(f'-x {var}="${var}"')
+        # pass_env is a dict: {VAR_NAME: "value_or_jinja_template"}
+        # Values can be:
+        # - "$VAR" for shell expansion (uses current env value)
+        # - Jinja template like "{{ '/path' if condition else '' }}"
+        # - Literal values
+        # Empty values after rendering are SKIPPED (no -x flag)
+        ctx = test._render_context()
+        for var_name, var_value in mpi.pass_env.items():
+            # Render value if it contains Jinja template
+            if "{{" in var_value:
+                try:
+                    rendered_value = _render_template(var_value, ctx)
+                except Exception as e:
+                    self.logger.warning(f"Could not render pass_env['{var_name}']: {e}")
+                    rendered_value = ""
+            else:
+                rendered_value = var_value
+
+            # Skip empty values (allows conditional env vars)
+            if not rendered_value or rendered_value.strip() == "":
+                continue
+
+            # Check if it's a shell variable reference ($VAR)
+            if rendered_value.startswith("$"):
+                # Shell expansion: -x VAR="$VAR"
+                parts.append(f'-x {var_name}="{rendered_value}"')
+            else:
+                # Literal value: -x VAR="value"
+                # Escape double quotes in the value
+                escaped_value = rendered_value.replace('"', '\\"')
+                parts.append(f'-x {var_name}="{escaped_value}"')
 
         # Extra user-specified options
         for opt in mpi.extra_options:
