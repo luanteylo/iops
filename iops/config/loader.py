@@ -563,6 +563,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             allocation_config = AllocationConfig(
                 mode=alloc.get("mode", "per-test"),
                 allocation_script=alloc.get("allocation_script"),
+                test_timeout=alloc.get("test_timeout", 3600),
             )
 
         slurm_options = SlurmOptionsConfig(
@@ -1080,28 +1081,45 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         alloc = eo.allocation
 
         # Validate mode
-        if alloc.mode not in ("single", "per-test"):
+        if alloc.mode not in ("single", "kickoff", "per-test"):
             raise ConfigValidationError(
-                f"slurm_options.allocation.mode must be 'single' or 'per-test' (got '{alloc.mode}')"
+                f"slurm_options.allocation.mode must be 'single', 'kickoff', or 'per-test' (got '{alloc.mode}')"
             )
 
-        # Single allocation mode requires slurm executor
-        if alloc.mode == "single" and cfg.benchmark.executor != "slurm":
+        # Single/kickoff allocation mode requires slurm executor
+        if alloc.mode in ("single", "kickoff") and cfg.benchmark.executor != "slurm":
             raise ConfigValidationError(
-                "slurm_options.allocation.mode='single' requires executor='slurm'"
+                f"slurm_options.allocation.mode='{alloc.mode}' requires executor='slurm'"
             )
 
-        # When mode="single", allocation_script is required
-        if alloc.mode == "single":
+        # When mode="single" or "kickoff", allocation_script is required
+        if alloc.mode in ("single", "kickoff"):
             if not alloc.allocation_script or not alloc.allocation_script.strip():
                 raise ConfigValidationError(
-                    "slurm_options.allocation.allocation_script is required when mode='single'"
+                    f"slurm_options.allocation.allocation_script is required when mode='{alloc.mode}'"
                 )
 
             # Basic sanity check: allocation_script should contain SBATCH directives
             if "#SBATCH" not in alloc.allocation_script:
                 raise ConfigValidationError(
                     "slurm_options.allocation.allocation_script must contain at least one #SBATCH directive"
+                )
+
+        # Kickoff mode specific validation
+        if alloc.mode == "kickoff":
+            # test_timeout must be positive
+            if alloc.test_timeout is not None and alloc.test_timeout <= 0:
+                raise ConfigValidationError(
+                    f"slurm_options.allocation.test_timeout must be a positive integer (got '{alloc.test_timeout}')"
+                )
+
+            # Kickoff mode is incompatible with Bayesian optimization
+            # (test sequence is predetermined, no feedback loop)
+            if cfg.benchmark.search_method == "bayesian":
+                raise ConfigValidationError(
+                    "allocation.mode='kickoff' is incompatible with search_method='bayesian'. "
+                    "Kickoff mode pre-generates all tests upfront, which prevents Bayesian optimization "
+                    "from adapting based on results. Use mode='single' for Bayesian optimization."
                 )
 
     # trace_interval validation
@@ -1323,18 +1341,18 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
 
         # mpi config validation (optional)
         if s.mpi is not None:
-            # MPI config requires single-allocation mode
+            # MPI config requires single-allocation or kickoff mode
             eo = cfg.benchmark.slurm_options
-            is_single_allocation = (
+            is_allocation_mode = (
                 eo is not None and
                 eo.allocation is not None and
-                eo.allocation.mode == "single"
+                eo.allocation.mode in ("single", "kickoff")
             )
-            if not is_single_allocation:
+            if not is_allocation_mode:
                 raise ConfigValidationError(
-                    f"script '{s.name}' has 'mpi' config but allocation.mode is not 'single'. "
-                    f"MPI configuration is only valid in single-allocation mode. "
-                    f"Set slurm_options.allocation.mode: 'single' to use this feature."
+                    f"script '{s.name}' has 'mpi' config but allocation.mode is not 'single' or 'kickoff'. "
+                    f"MPI configuration is only valid in single-allocation or kickoff mode. "
+                    f"Set slurm_options.allocation.mode: 'single' or 'kickoff' to use this feature."
                 )
 
             # Validate launcher

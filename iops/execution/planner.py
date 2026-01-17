@@ -421,6 +421,231 @@ class BasePlanner(ABC, HasLogger):
             'remaining': attempt_total - attempt_count
         }
 
+    # ------------------------------------------------------------------ #
+    # Kickoff Mode Support
+    # ------------------------------------------------------------------ #
+
+    def prepare_kickoff_mode(self, cache=None) -> Path:
+        """
+        Prepare all test folders and generate the kickoff script.
+
+        This method is called by the runner when allocation.mode='kickoff'.
+        It generates ALL test folders and scripts upfront, then creates
+        a kickoff script that runs uncached tests sequentially.
+
+        The kickoff script is a dispatcher that calls existing per-test scripts,
+        reusing all existing logic (resource tracing, exit handlers, MPI wrapping).
+
+        Args:
+            cache: Optional ExecutionCache to filter out cached tests
+
+        Returns:
+            Path to the generated kickoff script
+        """
+        from iops.execution.matrix import build_execution_matrix
+
+        self.logger.info("=" * 70)
+        self.logger.info("KICKOFF MODE: Preparing all tests upfront")
+        self.logger.info("=" * 70)
+
+        # Build execution matrix
+        self.logger.info("Building execution matrix...")
+        kept_instances, skipped_instances = build_execution_matrix(self.cfg)
+
+        # Store for tracking
+        self.execution_matrix = kept_instances
+        self.skipped_matrix = skipped_instances
+        self._matrix_built = True
+
+        total_tests = len(kept_instances)
+        total_skipped = len(skipped_instances)
+        repetitions = max(1, int(getattr(self.cfg.benchmark, "repetitions", 1) or 1))
+
+        self.logger.info(f"  Total unique parameter combinations: {total_tests}")
+        self.logger.info(f"  Skipped by constraints: {total_skipped}")
+        self.logger.info(f"  Repetitions per test: {repetitions}")
+
+        # Initialize state for progress tracking
+        self._attempt_total = total_tests * repetitions
+        self._attempt_count = 0
+
+        # Collect all test+repetition pairs to include in kickoff
+        kickoff_tests = []
+
+        # Create folders and scripts for ALL tests
+        run_root = Path(self.cfg.benchmark.workdir)
+        runs_root = run_root / "runs"
+        runs_root.mkdir(parents=True, exist_ok=True)
+
+        self._folders_initialized = True  # Skip folder creation in _prepare_execution_artifacts
+
+        self.logger.info("Creating folders and scripts for all tests...")
+
+        for test in kept_instances:
+            for rep in range(1, repetitions + 1):
+                # Prepare execution artifacts (creates folders, writes scripts)
+                self._prepare_execution_artifacts(test, rep)
+
+                # Check cache if available
+                is_cached = False
+                if cache is not None:
+                    cached_result = cache.get_cached_result(
+                        params=test.vars,
+                        repetition=rep,
+                    )
+                    is_cached = cached_result is not None
+
+                if not is_cached:
+                    # Add to kickoff list
+                    kickoff_tests.append({
+                        'execution_id': test.execution_id,
+                        'repetition': rep,
+                        'execution_dir': str(test.execution_dir),
+                        'script_file': str(test.script_file),
+                    })
+                else:
+                    self.logger.debug(
+                        f"  [Cache] Skipping exec_id={test.execution_id} rep={rep} (cached)"
+                    )
+
+        # Initialize folders for skipped tests too (for visibility in iops find)
+        if skipped_instances:
+            self._initialize_all_folders(kept_instances, skipped_instances)
+
+        cached_count = (total_tests * repetitions) - len(kickoff_tests)
+        self.logger.info(f"  Tests prepared: {total_tests * repetitions}")
+        self.logger.info(f"  Cached (will skip): {cached_count}")
+        self.logger.info(f"  To execute in kickoff: {len(kickoff_tests)}")
+
+        # Generate kickoff script
+        kickoff_path = self._generate_kickoff_script(kickoff_tests)
+
+        self.logger.info(f"  Kickoff script: {kickoff_path}")
+        self.logger.info("=" * 70)
+
+        return kickoff_path
+
+    def _generate_kickoff_script(self, tests: list) -> Path:
+        """
+        Generate the kickoff script that runs all tests sequentially.
+
+        The kickoff script is a dispatcher that:
+        1. Sets up SBATCH directives (from user's allocation_script)
+        2. Defines a run_test() function with timeout and status reporting
+        3. Calls existing per-test scripts sequentially
+
+        This reuses all existing per-test logic (MPI wrapping, resource tracing,
+        exit handlers) by calling the generated scripts.
+
+        Args:
+            tests: List of test dicts with execution_id, repetition, execution_dir, script_file
+
+        Returns:
+            Path to the generated kickoff script
+        """
+        from datetime import datetime
+
+        allocation = self.cfg.benchmark.slurm_options.allocation
+        test_timeout = allocation.test_timeout
+        workdir = Path(self.cfg.benchmark.workdir)
+
+        # Create logs directory
+        logs_dir = workdir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        lines = [
+            "#!/bin/bash",
+            "",
+            "# IOPS Kickoff Script - Runs all tests sequentially within allocation",
+            f"# Generated: {datetime.now().isoformat()}",
+            f"# Total tests: {len(tests)}",
+            f"# Timeout per test: {test_timeout}s",
+            "",
+            "# User allocation directives",
+        ]
+
+        # Add user's SBATCH directives
+        user_script = allocation.allocation_script.strip()
+        if not user_script.startswith("#!"):
+            lines.append(user_script)
+        else:
+            # Skip user's shebang, add the rest
+            for line in user_script.split('\n')[1:]:
+                lines.append(line)
+
+        # Add IOPS-managed directives
+        lines.extend([
+            "",
+            "# IOPS-managed directives",
+            "#SBATCH --job-name=iops_kickoff",
+            f"#SBATCH --output={logs_dir}/kickoff_%j.out",
+            f"#SBATCH --error={logs_dir}/kickoff_%j.err",
+            "",
+            "# ===== KICKOFF DISPATCHER =====",
+            "",
+            f"_IOPS_TEST_TIMEOUT={test_timeout}",
+            "",
+            "run_test() {",
+            '    local test_dir="$1"',
+            '    local script_path="$2"',
+            '    local exec_id="$3"',
+            '    local rep="$4"',
+            '    local status_file="$test_dir/__iops_status.json"',
+            "",
+            '    cd "$test_dir" || {',
+            '        echo "{\\"status\\":\\"ERROR\\",\\"error\\":\\"Failed to cd to $test_dir\\"}" > "$status_file"',
+            "        return 0",
+            "    }",
+            "",
+            '    echo "{\\"status\\":\\"RUNNING\\",\\"start_time\\":\\"$(date -Iseconds)\\"}" > "$status_file"',
+            '    echo "[$(date +%H:%M:%S)] Starting $exec_id rep $rep"',
+            "",
+            "    # Run with timeout, capture exit code",
+            '    timeout "$_IOPS_TEST_TIMEOUT" bash "$script_path"',
+            "    local rc=$?",
+            "",
+            "    if [ $rc -eq 0 ]; then",
+            '        echo "{\\"status\\":\\"SUCCEEDED\\",\\"end_time\\":\\"$(date -Iseconds)\\"}" > "$status_file"',
+            '        echo "[$(date +%H:%M:%S)] $exec_id rep $rep: SUCCEEDED"',
+            "    elif [ $rc -eq 124 ]; then",
+            f'        echo "{{\\"status\\":\\"TIMEOUT\\",\\"end_time\\":\\"$(date -Iseconds)\\",\\"error\\":\\"Test timed out after {test_timeout}s\\"}}" > "$status_file"',
+            '        echo "[$(date +%H:%M:%S)] $exec_id rep $rep: TIMEOUT"',
+            "    else",
+            '        echo "{\\"status\\":\\"FAILED\\",\\"exit_code\\":$rc,\\"end_time\\":\\"$(date -Iseconds)\\"}" > "$status_file"',
+            '        echo "[$(date +%H:%M:%S)] $exec_id rep $rep: FAILED (rc=$rc)"',
+            "    fi",
+            "",
+            "    return 0  # Always continue to next test",
+            "}",
+            "",
+            f'echo "===== IOPS Kickoff Start: $(date -Iseconds) ====="',
+            f'echo "Total tests: {len(tests)}"',
+            'echo ""',
+            "",
+        ])
+
+        # Add test calls
+        for i, test in enumerate(tests, 1):
+            exec_id = f"exec_{test['execution_id']:04d}"
+            lines.extend([
+                f"# === Test {i}/{len(tests)}: {exec_id} rep {test['repetition']} ===",
+                f'run_test "{test["execution_dir"]}" "{test["script_file"]}" "{exec_id}" "{test["repetition"]}"',
+                "",
+            ])
+
+        lines.extend([
+            'echo ""',
+            f'echo "===== IOPS Kickoff Complete: $(date -Iseconds) ====="',
+        ])
+
+        # Write kickoff script
+        kickoff_path = workdir / "__iops_kickoff.sh"
+        with open(kickoff_path, "w") as f:
+            f.write("\n".join(lines))
+        kickoff_path.chmod(0o755)
+
+        return kickoff_path
+
     def _prepare_execution_artifacts(self, test: Any, repetition: int) -> None:
         """
         Create folders + scripts for one test execution and one repetition.

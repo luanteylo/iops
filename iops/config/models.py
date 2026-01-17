@@ -30,13 +30,20 @@ class AllocationConfig:
     - Add job-name, output, and error directives
     - Inject a sleep command to keep the allocation alive
 
+    Allocation Modes:
+        - "per-test" (default): Each test is submitted as a separate SLURM job
+        - "single": Tests run via srun within a single allocation
+        - "kickoff": Pre-generates a kickoff script that runs all tests sequentially
+          within the allocation, reducing per-test overhead from ~5-30s to ~100ms
+
     Tests run within the allocation via: srun --jobid=<alloc_id> --overlap bash script.sh
 
     Attributes:
-        mode: Allocation mode - "single" or "per-test" (default)
-        allocation_script: SBATCH directives for the allocation (required when mode="single")
+        mode: Allocation mode - "single", "kickoff", or "per-test" (default)
+        allocation_script: SBATCH directives for the allocation (required when mode="single" or "kickoff")
+        test_timeout: Per-test timeout in seconds for kickoff mode (default: 3600)
 
-    Example:
+    Example (single mode - srun per test):
         slurm_options:
           allocation:
             mode: "single"
@@ -47,9 +54,22 @@ class AllocationConfig:
               #SBATCH --account=myproject
               #SBATCH --exclusive
               #SBATCH --constraint=ib
+
+    Example (kickoff mode - pre-generated script for all tests):
+        slurm_options:
+          allocation:
+            mode: "kickoff"
+            test_timeout: 300  # 5 minutes per test
+            allocation_script: |
+              #SBATCH --nodes=8
+              #SBATCH --time=02:00:00
+              #SBATCH --partition=compute
+              #SBATCH --account=myproject
+              #SBATCH --exclusive
     """
-    mode: str = "per-test"  # "single" or "per-test"
+    mode: str = "per-test"  # "single", "kickoff", or "per-test"
     allocation_script: Optional[str] = None
+    test_timeout: int = 3600  # Per-test timeout in seconds for kickoff mode
 
 
 @dataclass

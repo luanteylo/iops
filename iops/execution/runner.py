@@ -41,10 +41,6 @@ class IOPSRunner(HasLogger):
         self.cfg = cfg
         self.args = args
         self.planner = BasePlanner.build(cfg=self.cfg)
-        self.executor = BaseExecutor.build(cfg=self.cfg)
-
-        # Pass runner reference to executor for job tracking (used by SLURM)
-        self.executor.set_runner(self)
 
         # Initialize cache if cache_file is configured (always populate, use only with --use_cache)
         self.cache: Optional[ExecutionCache] = None
@@ -70,6 +66,22 @@ class IOPSRunner(HasLogger):
                 "Cache requested (--use_cache) but benchmark.cache_file not configured. "
                 "Cache disabled."
             )
+
+        # Check for kickoff mode (must be done after cache initialization, before executor)
+        self.kickoff_mode = self._is_kickoff_mode()
+        kickoff_path = None
+
+        if self.kickoff_mode:
+            # Kickoff mode: prepare all tests upfront and generate kickoff script
+            # Pass cache for filtering out cached tests (if --use-cache is enabled)
+            cache_for_kickoff = self.cache if self.use_cache_reads else None
+            kickoff_path = self.planner.prepare_kickoff_mode(cache=cache_for_kickoff)
+
+        # Create executor (kickoff mode requires kickoff_path)
+        self.executor = BaseExecutor.build(cfg=self.cfg, kickoff_path=kickoff_path)
+
+        # Pass runner reference to executor for job tracking (used by SLURM)
+        self.executor.set_runner(self)
 
         # Statistics
         self.cache_hits = 0
@@ -131,6 +143,30 @@ class IOPSRunner(HasLogger):
         # Register signal handler for Ctrl+C (SIGINT) if using SLURM executor
         if cfg.benchmark.executor == "slurm":
             signal.signal(signal.SIGINT, self._signal_handler)
+
+    def _is_kickoff_mode(self) -> bool:
+        """
+        Check if the runner is configured for kickoff mode.
+
+        Kickoff mode is enabled when:
+        - executor is "slurm"
+        - slurm_options.allocation.mode is "kickoff"
+
+        Returns:
+            True if kickoff mode is enabled, False otherwise
+        """
+        if self.cfg.benchmark.executor != "slurm":
+            return False
+
+        slurm_opts = self.cfg.benchmark.slurm_options
+        if slurm_opts is None:
+            return False
+
+        allocation = slurm_opts.allocation
+        if allocation is None:
+            return False
+
+        return allocation.mode == "kickoff"
 
     def _get_expected_metrics(self) -> set:
         """Get set of expected metric names from configuration."""

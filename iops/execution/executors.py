@@ -64,15 +64,23 @@ class BaseExecutor(ABC, HasLogger):
         return decorator
 
     @classmethod
-    def build(cls, cfg: GenericBenchmarkConfig) -> "BaseExecutor":
+    def build(cls, cfg: GenericBenchmarkConfig, kickoff_path: Path = None) -> "BaseExecutor":
         executor_name = cfg.benchmark.executor.lower()
 
-        # Check for single-allocation mode (SLURM only)
+        # Check for single-allocation or kickoff mode (SLURM only)
         if executor_name == "slurm":
             eo = cfg.benchmark.slurm_options
-            if eo and eo.allocation and eo.allocation.mode == "single":
-                # Import here to avoid circular import
-                return SingleAllocationSlurmExecutor(cfg)
+            if eo and eo.allocation:
+                if eo.allocation.mode == "kickoff":
+                    # Kickoff mode requires pre-generated kickoff path
+                    if kickoff_path is None:
+                        raise ValueError(
+                            "KickoffSingleAllocationExecutor requires kickoff_path. "
+                            "Use runner's kickoff mode initialization."
+                        )
+                    return KickoffSingleAllocationExecutor(cfg, kickoff_path)
+                elif eo.allocation.mode == "single":
+                    return SingleAllocationSlurmExecutor(cfg)
 
         # Default registry lookup
         executor_cls = cls._registry.get(executor_name)
@@ -1346,12 +1354,349 @@ class SingleAllocationSlurmExecutor(SlurmExecutor):
             test.metadata["__error"] = msg
 
 
+# ============================================================================ #
+# Kickoff Single-Allocation SLURM Executor
+# ============================================================================ #
+
+# Filename for the kickoff script (written to run root)
+KICKOFF_SCRIPT_FILENAME = "__iops_kickoff.sh"
+
+# Kickoff status filename pattern (written by kickoff script to each test dir)
+KICKOFF_STATUS_FILENAME = "__iops_status.json"
+
+
+class KickoffSingleAllocationExecutor(SlurmExecutor):
+    """
+    SLURM executor for kickoff mode.
+
+    In kickoff mode, a pre-generated script runs ALL tests sequentially within
+    a single SLURM allocation. This eliminates per-test overhead (srun startup,
+    SSH agent issues, NFS stale handles) that accumulates in single-allocation mode.
+
+    Key differences from SingleAllocationSlurmExecutor:
+    - Tests are prepared upfront (folders, scripts, params) before allocation starts
+    - A kickoff script is generated that sequences all tests
+    - The kickoff script is submitted via sbatch (not srun per test)
+    - Runner polls status files to track progress (no srun per test)
+
+    Execution flow:
+    1. First submit(): Submit kickoff script via sbatch
+    2. Subsequent submit(): Just register test, kickoff already running
+    3. wait_and_collect(): Poll status file until test completes
+
+    The kickoff script writes status files as it progresses:
+    - RUNNING when starting each test
+    - SUCCEEDED/FAILED/TIMEOUT when test completes
+
+    Inherits from SlurmExecutor:
+    - SLURM_ACTIVE_STATES, SLURM_FAIL_STATES
+    - _parse_jobid(), _squeue_state(), _scontrol_info()
+    - Command setup (cmd_submit, cmd_status, cmd_cancel, poll_interval)
+    """
+
+    _LOG_PREFIX = "KickoffExec"
+
+    def __init__(self, cfg: GenericBenchmarkConfig, kickoff_path: Path):
+        """
+        Initialize kickoff executor.
+
+        Args:
+            cfg: Benchmark configuration
+            kickoff_path: Path to the pre-generated kickoff script
+        """
+        # Initialize parent (sets up commands, poll_interval, etc.)
+        super().__init__(cfg)
+
+        # Extract allocation config
+        self.allocation = cfg.benchmark.slurm_options.allocation
+        self.kickoff_path = kickoff_path
+        self.test_timeout = self.allocation.test_timeout
+
+        # State tracking
+        self.allocation_job_id: Optional[str] = None
+        self.kickoff_submitted: bool = False
+        self.kickoff_failed: bool = False
+        self.kickoff_failure_reason: Optional[str] = None
+
+        # Poll interval for status file checks (faster than SLURM polling)
+        # Tests run sequentially, so we can poll quickly
+        self.status_poll_interval = 0.5  # seconds
+
+    def submit(self, test: ExecutionInstance) -> None:
+        """
+        Submit a test for execution within the kickoff allocation.
+
+        On first call, submits the kickoff script via sbatch.
+        The kickoff script runs all tests sequentially; this method just
+        records that we're waiting for this test.
+
+        Args:
+            test: ExecutionInstance to execute
+        """
+        self._init_execution_metadata(test)
+
+        # Validate script_file
+        if test.script_file is None or not isinstance(test.script_file, Path) or not self._safe_is_file(test.script_file):
+            msg = "test.script_file is not set or invalid."
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_ERROR
+            test.metadata["__error"] = msg
+            return
+
+        # Validate execution_dir
+        if test.execution_dir is None or not isinstance(test.execution_dir, Path):
+            msg = "test.execution_dir is not set or invalid."
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_ERROR
+            test.metadata["__error"] = msg
+            return
+
+        # Check if kickoff already failed
+        if self.kickoff_failed:
+            msg = f"Kickoff allocation failed: {self.kickoff_failure_reason}"
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_FAILED
+            test.metadata["__error"] = msg
+            return
+
+        # Submit kickoff on first test
+        if not self.kickoff_submitted:
+            try:
+                self._submit_kickoff()
+                self.kickoff_submitted = True
+            except Exception as e:
+                msg = f"Failed to submit kickoff: {e}"
+                self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                self.kickoff_failed = True
+                self.kickoff_failure_reason = str(e)
+                test.metadata["__executor_status"] = self.STATUS_ERROR
+                test.metadata["__error"] = msg
+                return
+
+        # Record that we're waiting for this test
+        test.metadata["__jobid"] = self.allocation_job_id
+        test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        test.metadata["__executor_status"] = self.STATUS_PENDING
+
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Registered test exec_id={test.execution_id} "
+            f"rep={test.repetition} for kickoff execution"
+        )
+
+    def wait_and_collect(self, test: ExecutionInstance) -> None:
+        """
+        Wait for test completion by polling its status file.
+
+        The kickoff script writes status files as it progresses through tests.
+        We poll until we see a terminal status (SUCCEEDED, FAILED, TIMEOUT, ERROR).
+
+        Args:
+            test: ExecutionInstance to collect results from
+        """
+        # Always create metrics dict early (handle parser=None safely)
+        parser = test.parser
+        metric_names = [m.name for m in (parser.metrics if parser else [])]
+        metrics = {name: None for name in metric_names}
+        test.metadata["metrics"] = metrics
+
+        # If kickoff failed before this test, bail out
+        if self.kickoff_failed:
+            test.metadata["__executor_status"] = self.STATUS_FAILED
+            test.metadata["__error"] = f"Kickoff failed: {self.kickoff_failure_reason}"
+            return
+
+        # If test already marked as error (from submit), skip waiting
+        if test.metadata.get("__executor_status") == self.STATUS_ERROR:
+            return
+
+        # Poll status file until completion
+        status_file = test.execution_dir / KICKOFF_STATUS_FILENAME
+        terminal_statuses = {"SUCCEEDED", "FAILED", "TIMEOUT", "ERROR"}
+
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Waiting for test exec_id={test.execution_id} "
+            f"(polling {status_file})"
+        )
+
+        last_status = None
+        while True:
+            # Check if allocation is still running
+            if self.allocation_job_id:
+                alloc_state = self._squeue_state(self.allocation_job_id)
+                if alloc_state is None:
+                    # Allocation finished - check if test completed
+                    if self._check_status_file(test, status_file, terminal_statuses, metrics):
+                        break
+                    # Allocation ended without completing this test
+                    msg = f"Allocation {self.allocation_job_id} ended before test completed"
+                    self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = msg
+                    self.kickoff_failed = True
+                    self.kickoff_failure_reason = msg
+                    break
+                elif alloc_state in self.SLURM_FAIL_STATES:
+                    msg = f"Allocation {self.allocation_job_id} failed with state: {alloc_state}"
+                    self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = msg
+                    self.kickoff_failed = True
+                    self.kickoff_failure_reason = msg
+                    break
+
+            # Check status file
+            if self._check_status_file(test, status_file, terminal_statuses, metrics):
+                break
+
+            # Log status changes
+            current_status = test.metadata.get("__executor_status")
+            if current_status != last_status:
+                self.logger.debug(
+                    f"  [{self._LOG_PREFIX}] Test exec_id={test.execution_id} "
+                    f"status: {current_status}"
+                )
+                last_status = current_status
+
+            time.sleep(self.status_poll_interval)
+
+        # Record end time
+        test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+        # Parse metrics if test succeeded
+        if test.metadata.get("__executor_status") == self.STATUS_SUCCEEDED:
+            if parser is not None:
+                self.logger.debug(f"  [{self._LOG_PREFIX}] Parsing metrics from output files")
+                self._try_parse_metrics(test, metrics)
+
+        metric_count = len([v for v in metrics.values() if v is not None])
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Collected {metric_count}/{len(metrics)} metrics: "
+            f"{list(metrics.keys())[:3]}{'...' if len(metrics) > 3 else ''}"
+        )
+
+        # Collect system info from compute node (if probe was enabled)
+        self._store_system_info(test)
+
+    def _check_status_file(
+        self,
+        test: ExecutionInstance,
+        status_file: Path,
+        terminal_statuses: set,
+        metrics: dict,
+    ) -> bool:
+        """
+        Check the status file and update test metadata.
+
+        Returns True if test reached a terminal status.
+        """
+        if not self._safe_is_file(status_file):
+            return False
+
+        try:
+            with open(status_file, "r") as f:
+                status_data = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            self.logger.debug(
+                f"  [{self._LOG_PREFIX}] Failed to read status file: {e}"
+            )
+            return False
+
+        status = status_data.get("status", "UNKNOWN")
+        test.metadata["__kickoff_status"] = status_data
+
+        if status == "RUNNING":
+            test.metadata["__executor_status"] = self.STATUS_RUNNING
+            return False
+
+        if status in terminal_statuses:
+            # Map kickoff status to executor status
+            if status == "SUCCEEDED":
+                test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
+            elif status in ("FAILED", "TIMEOUT", "ERROR"):
+                test.metadata["__executor_status"] = self.STATUS_FAILED
+                test.metadata["__error"] = status_data.get(
+                    "error", f"Test {status.lower()}"
+                )
+                if status == "TIMEOUT":
+                    test.metadata["__error"] = (
+                        f"Test timed out after {self.test_timeout}s"
+                    )
+
+            # Extract metrics from status file if present
+            if "metrics" in status_data and status_data["metrics"]:
+                for name, value in status_data["metrics"].items():
+                    if name in metrics:
+                        metrics[name] = value
+
+            return True
+
+        return False
+
+    def _submit_kickoff(self) -> None:
+        """
+        Submit the kickoff script via sbatch.
+
+        Sets self.allocation_job_id on success.
+
+        Raises:
+            RuntimeError: If submission fails
+        """
+        workdir = self.cfg.benchmark.workdir
+
+        # Use the pre-generated kickoff script
+        if not self._safe_is_file(self.kickoff_path):
+            raise RuntimeError(f"Kickoff script not found: {self.kickoff_path}")
+
+        self.logger.info(
+            f"  [{self._LOG_PREFIX}] Submitting kickoff script: {self.kickoff_path}"
+        )
+
+        # Submit via sbatch
+        cmd = shlex.split(self.cmd_submit)
+        cmd.append(str(self.kickoff_path))
+
+        self.logger.debug(f"  [{self._LOG_PREFIX}] Submit command: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+        )
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"SLURM kickoff submission failed (rc={result.returncode}): "
+                f"stderr='{stderr}' stdout='{stdout}'"
+            )
+
+        job_id = self._parse_jobid(stdout)
+        if not job_id:
+            raise RuntimeError(
+                f"Could not parse SLURM jobid from submission output: "
+                f"stdout='{stdout}' stderr='{stderr}'"
+            )
+
+        self.allocation_job_id = job_id
+        self.logger.info(f"  [{self._LOG_PREFIX}] Kickoff submitted: job_id={job_id}")
+
+        # Register job with runner for cleanup on interrupt (Ctrl+C)
+        if self.runner and hasattr(self.runner, "register_slurm_job"):
+            self.runner.register_slurm_job(job_id)
+
+
 # Module exports
 __all__ = [
     "BaseExecutor",
     "LocalExecutor",
     "SlurmExecutor",
     "SingleAllocationSlurmExecutor",
+    "KickoffSingleAllocationExecutor",
     "SYSINFO_FILENAME",
     "ALLOCATION_SCRIPT_FILENAME",
+    "KICKOFF_SCRIPT_FILENAME",
+    "KICKOFF_STATUS_FILENAME",
 ]
