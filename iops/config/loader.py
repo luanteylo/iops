@@ -705,10 +705,15 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         mpi_cfg = None
         if mpi_block is not None:
             # Parse mpi configuration
+            # pass_env defaults to ["PATH", "LD_LIBRARY_PATH"] if not specified
+            pass_env = mpi_block.get("pass_env")
+            if pass_env is None:
+                pass_env = ["PATH", "LD_LIBRARY_PATH"]
             mpi_cfg = MPIConfig(
                 launcher=mpi_block.get("launcher", "mpirun"),
                 nodes=str(mpi_block.get("nodes", "all")),  # Always store as string
                 ppn=str(mpi_block.get("ppn")) if mpi_block.get("ppn") is not None else None,
+                pass_env=pass_env,
                 extra_options=mpi_block.get("extra_options", []),
             )
 

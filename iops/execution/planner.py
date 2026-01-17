@@ -783,29 +783,13 @@ class BasePlanner(ABC, HasLogger):
                 indent = len(body_line) - len(body_line.lstrip())
                 indent_str = body_line[:indent] if indent > 0 else '  '
 
-                # Save and unset LD_PRELOAD to avoid breaking scontrol/env commands
-                # (LD_PRELOAD may contain libraries with unmet dependencies on compute nodes)
+                # Generate nodelist (save/unset LD_PRELOAD to avoid breaking scontrol)
                 wrapper_lines.append(f'{indent_str}__IOPS_SAVED_LD_PRELOAD="${{LD_PRELOAD:-}}"')
                 wrapper_lines.append(f'{indent_str}unset LD_PRELOAD')
-
-                # Generate nodelist construction
                 nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
                 wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
-
-                # Generate env flags (pass all current environment variables)
-                env_flags_cmd = self._generate_env_flags_command()
-                wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
-
-                # Restore LD_PRELOAD
                 wrapper_lines.append(f'{indent_str}export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
                 wrapper_lines.append('')
-
-                # Debug: print generated MPI variables (only when log level is DEBUG)
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    wrapper_lines.append(f'{indent_str}echo "=== IOPS MPI Debug ==="')
-                    wrapper_lines.append(f'{indent_str}echo "NODELIST: $__IOPS_NODELIST"')
-                    wrapper_lines.append(f'{indent_str}echo "ENV_FLAGS: $__IOPS_MPI_ENV_FLAGS"')
-                    wrapper_lines.append(f'{indent_str}echo ""')
 
                 # Generate MPI launch command
                 mpi_cmd = self._generate_mpi_command(
@@ -819,29 +803,13 @@ class BasePlanner(ABC, HasLogger):
                 indent = len(body_line) - len(body_line.lstrip())
                 indent_str = body_line[:indent] if indent > 0 else '  '
 
-                # Save and unset LD_PRELOAD to avoid breaking scontrol/env commands
-                # (LD_PRELOAD may contain libraries with unmet dependencies on compute nodes)
+                # Generate nodelist (save/unset LD_PRELOAD to avoid breaking scontrol)
                 wrapper_lines.append(f'{indent_str}__IOPS_SAVED_LD_PRELOAD="${{LD_PRELOAD:-}}"')
                 wrapper_lines.append(f'{indent_str}unset LD_PRELOAD')
-
-                # Generate nodelist construction
                 nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
                 wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
-
-                # Generate env flags (pass all current environment variables)
-                env_flags_cmd = self._generate_env_flags_command()
-                wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
-
-                # Restore LD_PRELOAD
                 wrapper_lines.append(f'{indent_str}export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
                 wrapper_lines.append('')
-
-                # Debug: print generated MPI variables (only when log level is DEBUG)
-                if self.logger.isEnabledFor(logging.DEBUG):
-                    wrapper_lines.append(f'{indent_str}echo "=== IOPS MPI Debug ==="')
-                    wrapper_lines.append(f'{indent_str}echo "NODELIST: $__IOPS_NODELIST"')
-                    wrapper_lines.append(f'{indent_str}echo "ENV_FLAGS: $__IOPS_MPI_ENV_FLAGS"')
-                    wrapper_lines.append(f'{indent_str}echo ""')
 
                 # Generate MPI launch command (preserve surrounding text)
                 mpi_cmd = self._generate_mpi_command(
@@ -863,26 +831,14 @@ class BasePlanner(ABC, HasLogger):
             wrapper_lines.append('')
             wrapper_lines.append('  # MPI launch (command not found in script, appending)')
 
-            # Save and unset LD_PRELOAD to avoid breaking scontrol/env commands
-            # (LD_PRELOAD may contain libraries with unmet dependencies on compute nodes)
+            # Generate nodelist (save/unset LD_PRELOAD to avoid breaking scontrol)
             wrapper_lines.append('  __IOPS_SAVED_LD_PRELOAD="${LD_PRELOAD:-}"')
             wrapper_lines.append('  unset LD_PRELOAD')
-
             nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
             wrapper_lines.append(f'  {nodelist_cmd}')
-            env_flags_cmd = self._generate_env_flags_command()
-            wrapper_lines.append(f'  {env_flags_cmd}')
-
-            # Restore LD_PRELOAD
             wrapper_lines.append('  export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
             wrapper_lines.append('')
 
-            # Debug: print generated MPI variables (only when log level is DEBUG)
-            if self.logger.isEnabledFor(logging.DEBUG):
-                wrapper_lines.append('  echo "=== IOPS MPI Debug ==="')
-                wrapper_lines.append('  echo "NODELIST: $__IOPS_NODELIST"')
-                wrapper_lines.append('  echo "ENV_FLAGS: $__IOPS_MPI_ENV_FLAGS"')
-                wrapper_lines.append('  echo ""')
             mpi_cmd = self._generate_mpi_command(
                 nodes_value, ppn_value, np_value, mpi, rendered_command
             )
@@ -921,31 +877,6 @@ class BasePlanner(ABC, HasLogger):
                 f"__IOPS_NODELIST=$(scontrol show hostnames $SLURM_JOB_NODELIST | "
                 f"head -n {nodes_value} | sed 's/$/:{ppn_value}/' | tr '\\n' ',' | sed 's/,$//')"
             )
-
-    def _generate_env_flags_command(self) -> str:
-        """
-        Generate bash command to build MPI environment variable flags.
-
-        This captures all current environment variables and constructs
-        the -x flags for mpirun, ensuring all exported variables
-        (modules, user settings, etc.) are passed to MPI processes.
-
-        Uses grep to filter only valid variable names, excluding:
-        - Multi-line variable values (like TERMCAP)
-        - Bash functions (like BASH_FUNC_module())
-        - Any malformed entries
-
-        Returns:
-            Bash command string to set __IOPS_MPI_ENV_FLAGS
-        """
-        # Use env to get all variables, filter to valid names only
-        # The regex matches: start of line, valid var name (letter/underscore,
-        # then alphanumerics/underscores), followed by =
-        # grep -o extracts just the matching part, then we remove the trailing =
-        return (
-            "__IOPS_MPI_ENV_FLAGS=$(env | grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' | "
-            "sed 's/=$//' | sed 's/^/-x /' | tr '\\n' ' ')"
-        )
 
     def _generate_mpi_command(
         self,
@@ -994,7 +925,7 @@ class BasePlanner(ABC, HasLogger):
         - --map-by ppr:ppn:node: Processes per node mapping
         - --mca plm rsh: Use rsh/ssh for process launch (needed within allocation)
         - --oversubscribe: Allow more processes than cores (for flexibility)
-        - -x VAR: Pass environment variables
+        - -x VAR="$VAR": Pass specified environment variables
 
         Args:
             nodes_value: Number of nodes (None = all)
@@ -1025,9 +956,10 @@ class BasePlanner(ABC, HasLogger):
         parts.append("--mca plm rsh")
         parts.append("--oversubscribe")
 
-        # Pass all environment variables dynamically
-        # This ensures all exported vars (modules, user settings) are available on remote nodes
-        parts.append("$__IOPS_MPI_ENV_FLAGS")
+        # Pass environment variables explicitly
+        # Default: PATH, LD_LIBRARY_PATH. User can add more via pass_env.
+        for var in mpi.pass_env:
+            parts.append(f'-x {var}="${var}"')
 
         # Extra user-specified options
         for opt in mpi.extra_options:

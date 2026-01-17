@@ -256,7 +256,9 @@ class MPIConfig:
         launcher: MPI launcher command - "mpirun" (default) or "srun"
         nodes: Number of nodes to use - "{{ var }}", integer, or "all" (default)
         ppn: Processes per node - "{{ var }}" or integer (required)
-        pass_env: Environment variables to forward to MPI processes
+        pass_env: Environment variables to forward to MPI processes.
+            Defaults to ["PATH", "LD_LIBRARY_PATH"]. Add any vars exported
+            in your script that MPI processes need (e.g., LD_PRELOAD).
         extra_options: Additional launcher flags (e.g., "--mca btl tcp,self")
 
     Example:
@@ -265,15 +267,17 @@ class MPIConfig:
             mpi:
               nodes: "{{ nodes }}"
               ppn: "{{ ppn }}"
-              pass_env: [LD_LIBRARY_PATH, PATH]
+              pass_env: [LD_PRELOAD, TOTO_PFS_PATHS]
             script_template: |
               #!/bin/bash
+              export LD_PRELOAD=/path/to/lib.so
               module load openmpi
               {{ command.template }}
     """
     launcher: str = "mpirun"  # "mpirun" or "srun"
     nodes: Optional[str] = "all"  # "{{ var }}", number, or "all"
     ppn: Optional[str] = None  # "{{ var }}" or number (required)
+    pass_env: List[str] = field(default_factory=lambda: ["PATH", "LD_LIBRARY_PATH"])
     extra_options: List[str] = field(default_factory=list)
 
 

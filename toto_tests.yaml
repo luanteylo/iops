@@ -151,10 +151,19 @@ scripts:
   - name: "ior"
 
     # MPI configuration - IOPS handles SLURM_NODEID check, nodelist, and mpirun flags
-    # All exported env vars (TOTO_*, LD_PRELOAD, etc.) are automatically passed to MPI processes
+    # pass_env: list of env vars to pass to MPI processes (default: PATH, LD_LIBRARY_PATH)
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ procs_per_node }}"
+      pass_env:
+        - LD_PRELOAD
+        - TOTO_PFS_PATHS
+        - TOTO_LOG_LEVEL
+        - TOTO_LOG_TO_STDOUT
+        - TOTO_BEEGFS_STRIPING_PREFIX
+        - TOTO_BEEGFS_STRIPING_SUFIX
+        - TOTO_LOGS_FOLDER
+        - TOTO_ANALYSIS_PERIOD
 
     script_template: |
       #!/bin/bash

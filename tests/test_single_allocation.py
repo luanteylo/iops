@@ -765,17 +765,84 @@ def test_mpi_wrapper_generates_mpirun_command(mpi_planner):
     assert "--oversubscribe" in script_content
 
 
-def test_mpi_wrapper_passes_all_env_vars(mpi_planner):
-    """Test that MPI wrapper passes all environment variables dynamically."""
+def test_mpi_wrapper_passes_env_vars(mpi_planner):
+    """Test that MPI wrapper passes environment variables explicitly."""
     test = mpi_planner.next_test()
 
     script_content = test.script_file.read_text()
 
-    # Should generate env flags dynamically using env command with grep filter
-    # The grep filters out multi-line values and bash functions
-    assert "__IOPS_MPI_ENV_FLAGS=$(env | grep -oE" in script_content
-    # Should use the env flags in mpirun command
-    assert "$__IOPS_MPI_ENV_FLAGS" in script_content
+    # Should pass default env vars: PATH and LD_LIBRARY_PATH
+    assert '-x PATH="$PATH"' in script_content
+    assert '-x LD_LIBRARY_PATH="$LD_LIBRARY_PATH"' in script_content
+
+
+def test_mpi_wrapper_custom_pass_env(tmp_path):
+    """Test that custom pass_env variables are passed to mpirun."""
+    import logging
+    from iops.config.loader import load_generic_config
+    from iops.execution.planner import BasePlanner
+    from pathlib import Path
+
+    # Create config with custom pass_env
+    config_content = """
+benchmark:
+  name: test
+  workdir: {workdir}
+  executor: slurm
+  slurm_options:
+    allocation:
+      mode: single
+      allocation_script: |
+        #SBATCH --nodes=2
+
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [2]
+  ppn:
+    type: int
+    expr: "8"
+
+command:
+  template: "echo test"
+
+scripts:
+  - name: test
+    mpi:
+      nodes: "{{{{ nodes }}}}"
+      ppn: "{{{{ ppn }}}}"
+      pass_env:
+        - LD_PRELOAD
+        - TOTO_LOG_LEVEL
+        - MY_CUSTOM_VAR
+    script_template: |
+      #!/bin/bash
+      echo test
+
+output:
+  sink:
+    type: csv
+    path: "{{{{ workdir }}}}/results.csv"
+""".format(workdir=tmp_path)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(config_content)
+
+    logger = logging.getLogger("test")
+    cfg = load_generic_config(Path(config_file), logger)
+    planner = BasePlanner.build(cfg)
+    test = planner.next_test()
+
+    script_content = test.script_file.read_text()
+
+    # Should pass custom env vars
+    assert '-x LD_PRELOAD="$LD_PRELOAD"' in script_content
+    assert '-x TOTO_LOG_LEVEL="$TOTO_LOG_LEVEL"' in script_content
+    assert '-x MY_CUSTOM_VAR="$MY_CUSTOM_VAR"' in script_content
+    # Should NOT have default vars since user overrode them
+    assert '-x PATH="$PATH"' not in script_content
 
 
 def test_mpi_wrapper_preserves_setup_commands(mpi_planner):
