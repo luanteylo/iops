@@ -783,6 +783,11 @@ class BasePlanner(ABC, HasLogger):
                 indent = len(body_line) - len(body_line.lstrip())
                 indent_str = body_line[:indent] if indent > 0 else '  '
 
+                # Save and unset LD_PRELOAD to avoid breaking scontrol/env commands
+                # (LD_PRELOAD may contain libraries with unmet dependencies on compute nodes)
+                wrapper_lines.append(f'{indent_str}__IOPS_SAVED_LD_PRELOAD="${{LD_PRELOAD:-}}"')
+                wrapper_lines.append(f'{indent_str}unset LD_PRELOAD')
+
                 # Generate nodelist construction
                 nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
                 wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
@@ -790,6 +795,9 @@ class BasePlanner(ABC, HasLogger):
                 # Generate env flags (pass all current environment variables)
                 env_flags_cmd = self._generate_env_flags_command()
                 wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
+
+                # Restore LD_PRELOAD
+                wrapper_lines.append(f'{indent_str}export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
                 wrapper_lines.append('')
 
                 # Debug: print generated MPI variables (only when log level is DEBUG)
@@ -811,6 +819,11 @@ class BasePlanner(ABC, HasLogger):
                 indent = len(body_line) - len(body_line.lstrip())
                 indent_str = body_line[:indent] if indent > 0 else '  '
 
+                # Save and unset LD_PRELOAD to avoid breaking scontrol/env commands
+                # (LD_PRELOAD may contain libraries with unmet dependencies on compute nodes)
+                wrapper_lines.append(f'{indent_str}__IOPS_SAVED_LD_PRELOAD="${{LD_PRELOAD:-}}"')
+                wrapper_lines.append(f'{indent_str}unset LD_PRELOAD')
+
                 # Generate nodelist construction
                 nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
                 wrapper_lines.append(f'{indent_str}{nodelist_cmd}')
@@ -818,6 +831,9 @@ class BasePlanner(ABC, HasLogger):
                 # Generate env flags (pass all current environment variables)
                 env_flags_cmd = self._generate_env_flags_command()
                 wrapper_lines.append(f'{indent_str}{env_flags_cmd}')
+
+                # Restore LD_PRELOAD
+                wrapper_lines.append(f'{indent_str}export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
                 wrapper_lines.append('')
 
                 # Debug: print generated MPI variables (only when log level is DEBUG)
@@ -846,11 +862,21 @@ class BasePlanner(ABC, HasLogger):
         if not command_replaced and rendered_command:
             wrapper_lines.append('')
             wrapper_lines.append('  # MPI launch (command not found in script, appending)')
+
+            # Save and unset LD_PRELOAD to avoid breaking scontrol/env commands
+            # (LD_PRELOAD may contain libraries with unmet dependencies on compute nodes)
+            wrapper_lines.append('  __IOPS_SAVED_LD_PRELOAD="${LD_PRELOAD:-}"')
+            wrapper_lines.append('  unset LD_PRELOAD')
+
             nodelist_cmd = self._generate_nodelist_command(nodes_value, ppn_value)
             wrapper_lines.append(f'  {nodelist_cmd}')
             env_flags_cmd = self._generate_env_flags_command()
             wrapper_lines.append(f'  {env_flags_cmd}')
+
+            # Restore LD_PRELOAD
+            wrapper_lines.append('  export LD_PRELOAD="$__IOPS_SAVED_LD_PRELOAD"')
             wrapper_lines.append('')
+
             # Debug: print generated MPI variables (only when log level is DEBUG)
             if self.logger.isEnabledFor(logging.DEBUG):
                 wrapper_lines.append('  echo "=== IOPS MPI Debug ==="')

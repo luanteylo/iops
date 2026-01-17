@@ -380,34 +380,19 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(sub)
 
     for i, script in enumerate(cfg.scripts, start=1):
-        logger.debug(f"  Script #{i}: {script.name}")
+        script_lines = script.script_template.strip().split('\n')
+        logger.debug(f"  Script #{i}: {script.name} ({len(script_lines)} lines)")
 
-        logger.debug("    Script template:")
-        logger.debug("    " + script.script_template.replace("\n", "\n    "))
+        if script.mpi:
+            logger.debug(f"    MPI: nodes={script.mpi.nodes}, ppn={script.mpi.ppn}, launcher={script.mpi.launcher}")
 
         if script.post:
-            logger.debug("    Post-processing script:")
-            logger.debug("    " + script.post.script.replace("\n", "\n    "))
+            post_lines = script.post.script.strip().split('\n')
+            logger.debug(f"    Post-script: {len(post_lines)} lines")
 
         if script.parser:
-            logger.debug("    Parser:")
-            logger.debug(f"      File : {script.parser.file}")
-            logger.debug(f"      metrics: {[m.name for m in script.parser.metrics]}")
-            logger.debug(f"      script: {script.parser.parser_script}")
-
-            if script.parser.metrics:
-                logger.debug("      Metrics:")
-                for m in script.parser.metrics:
-                    logger.debug(f"        - {m.name}")
-                    if m.path:
-                        logger.debug(f"            path: {m.path}")
-
-            if script.parser.parser_script:
-                logger.debug("      Custom parser script:")
-                logger.debug(
-                    "      "
-                    + script.parser.parser_script.replace("\n", "\n      ")
-                )
+            logger.debug(f"    Parser: file={script.parser.file}")
+            logger.debug(f"    Metrics: {[m.name for m in script.parser.metrics]}")
 
     # ------------------------------------------------------------------    
     logger.debug(sub)
