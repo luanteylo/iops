@@ -1266,7 +1266,7 @@ class SingleAllocationSlurmExecutor(SlurmExecutor):
             str(script_path),
         ]
 
-        self.logger.debug(
+        self.logger.info(
             f"  [{self._LOG_PREFIX}] Running test exec_id={test.execution_id} "
             f"rep={test.repetition}: {' '.join(cmd)}"
         )
