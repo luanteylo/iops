@@ -11,8 +11,9 @@ IOPS can track core-hours consumption and automatically stop execution when a bu
 1. [Configuration](#configuration)
 2. [How Core-Hours Are Calculated](#how-core-hours-are-calculated)
 3. [Duration Source and Accuracy](#duration-source-and-accuracy)
-4. [Dry-Run Estimation](#dry-run-estimation)
-5. [Cache Interaction](#cache-interaction)
+4. [Budget Enforcement Behavior](#budget-enforcement-behavior)
+5. [Dry-Run Estimation](#dry-run-estimation)
+6. [Cache Interaction](#cache-interaction)
 
 ---
 
@@ -107,6 +108,34 @@ The fallback prioritizes `__job_start` over `__submission_time` to exclude queue
 For SLURM jobs, the queue wait time (`__job_start - __submission_time`) is excluded from core-hours calculations when using timestamp fallback. However, the system probe is still preferred as it captures the exact script execution time.
 
 **Recommendation:** Keep `collect_system_info: true` (default) for accurate budget tracking with SLURM.
+
+---
+
+## Budget Enforcement Behavior
+
+IOPS checks the budget **before submitting** each test, not during execution. This means:
+
+1. **A test may exceed the budget**: If a test is submitted when budget remains, it will run to completion even if its actual duration causes the total to exceed `max_core_hours`.
+
+2. **No mid-execution cancellation**: Once a job is submitted to SLURM or starts locally, IOPS won't kill it based on budget—only prevent new submissions.
+
+**Example scenario:**
+
+```
+Core-hours: 1178.74/1200.00 (98.2% used, 21.26 remaining)
+SLURM job submitted: 3363545
+SLURM job 3363545 state: RUNNING
+```
+
+Here, 21.26 core-hours remain. If the next test requires 30 core-hours, it will still be submitted because some budget remains. The test runs to completion, and the final total may exceed 1200 core-hours.
+
+**Why this design?**
+
+- Killing running HPC jobs wastes already-consumed resources
+- Partial results from interrupted jobs are often unusable
+- The budget serves as a guideline, not a hard cutoff
+
+**Recommendation:** Set `max_core_hours` slightly below your actual allocation to account for this behavior, especially if individual tests consume significant core-hours.
 
 ---
 

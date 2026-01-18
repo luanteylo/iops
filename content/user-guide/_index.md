@@ -17,6 +17,7 @@ Comprehensive guide to using IOPS features and capabilities.
 - **[Execution Backends](execution-backends)** - Run locally or on SLURM clusters
 - **[Single-Allocation Mode](single-allocation-mode)** - Run all tests in one SLURM allocation (MPI setup, troubleshooting)
 - **[Result Caching](caching)** - Skip redundant tests with smart caching
+- **[Budget Control](budget-control)** - Limit core-hours consumption with `max_core_hours` and `cores_expr`
 - **[Resource Tracing](resource-tracing)** - Trace CPU and memory utilization during benchmark execution
 
 ## Results & Analysis
