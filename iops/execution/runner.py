@@ -93,6 +93,7 @@ class IOPSRunner(HasLogger):
         # Budget tracking
         self.max_core_hours: Optional[float] = None
         self.accumulated_core_hours: float = 0.0
+        self.saved_core_hours: float = 0.0  # Core-hours saved by cache hits
         self.budget_exceeded: bool = False
 
         # Determine effective budget (CLI overrides config)
@@ -1472,9 +1473,12 @@ class IOPSRunner(HasLogger):
             self.completed_tests.append(test)
 
             # Track core-hours budget if enabled
-            if self.max_core_hours is not None and not used_cache:
+            if self.max_core_hours is not None:
                 core_hours_used = self._compute_core_hours(test)
-                self.accumulated_core_hours += core_hours_used
+                if used_cache:
+                    self.saved_core_hours += core_hours_used
+                else:
+                    self.accumulated_core_hours += core_hours_used
 
             # Display progress and budget information periodically
             progress = self.planner.get_progress()
@@ -1494,7 +1498,8 @@ class IOPSRunner(HasLogger):
                 if self.max_core_hours is not None:
                     used_pct = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
                     remaining_budget = self.max_core_hours - self.accumulated_core_hours
-                    self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} ({used_pct:.1f}% used, {remaining_budget:.2f} remaining)")
+                    saved_str = f", {self.saved_core_hours:.2f} saved by cache" if self.saved_core_hours > 0 else ""
+                    self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} ({used_pct:.1f}% used, {remaining_budget:.2f} remaining{saved_str})")
 
                 self.logger.info("-" * 70)
 
@@ -1514,6 +1519,8 @@ class IOPSRunner(HasLogger):
                 f"Budget: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours "
                 f"({utilization:.1f}% utilized) [{status_msg}]"
             )
+            if self.saved_core_hours > 0:
+                self.logger.info(f"Cache savings: {self.saved_core_hours:.2f} core-hours saved by cache hits")
 
         if self.cache and self.use_cache_reads:
             hit_rate = (self.cache_hits / test_count * 100) if test_count > 0 else 0
