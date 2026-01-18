@@ -1180,11 +1180,11 @@ class IOPSRunner(HasLogger):
                 self.logger.info(f"  Total core-hours: {total_core_hours:.2f}")
                 exec_total_core_hours = total_core_hours
                 exec_count = total_executions
-            elif cached_results and not exec_core_hours_list:
+            elif len(cached_results) == total_executions:
                 # All executions are cached
                 exec_total_core_hours = 0
                 exec_count = 0
-                self.logger.info(f"\nAll {len(cached_results)} executions are cached - nothing to run")
+                self.logger.info(f"\nAll {total_executions} executions are cached - nothing to run")
             else:
                 exec_total_core_hours = sum(exec_core_hours_list) if exec_core_hours_list else 0
                 exec_count = len(exec_core_hours_list) if exec_core_hours_list else 0
