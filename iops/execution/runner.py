@@ -1225,37 +1225,6 @@ class IOPSRunner(HasLogger):
             self.logger.info(f"  ℹ️  No time estimate provided. Use --time-estimate <seconds> or set")
             self.logger.info(f"     benchmark.estimated_time_seconds in config for core-hours estimation.")
 
-        # Show sample executions
-        self.logger.info(f"\n" + "=" * 70)
-        self.logger.info("SAMPLE EXECUTIONS (first 10)")
-        self.logger.info("=" * 70)
-
-        for i, detail in enumerate(execution_details[:10]):
-            vars_str = ", ".join([f"{k}={v}" for k, v in list(detail['vars'].items())[:5]])
-            if len(detail['vars']) > 5:
-                vars_str += f", ... ({len(detail['vars'])} total)"
-
-            core_hours_str = ""
-            if self.estimated_time_seconds:
-                ch = detail['cores'] * (self.estimated_time_seconds / 3600.0)
-                core_hours_str = f" | {ch:.4f} core-hrs"
-
-            cache_marker = " [CACHED]" if detail.get('cached') else ""
-
-            self.logger.info(
-                f"  [{i+1:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} "
-                f"| {detail['cores']} cores{core_hours_str}{cache_marker}"
-            )
-            self.logger.info(f"        {vars_str}")
-
-        if total_executions > 10:
-            remaining = total_executions - 10
-            if cached_results:
-                remaining_cached = sum(1 for d in execution_details[10:] if d.get('cached'))
-                self.logger.info(f"  ... ({remaining} more executions, {remaining_cached} of which are cached)")
-            else:
-                self.logger.info(f"  ... ({remaining} more executions)")
-
         # Multiple scenario analysis
         if len(self.estimated_time_scenarios) > 1:
             self.logger.info(f"\n" + "=" * 70)
@@ -1329,6 +1298,15 @@ class IOPSRunner(HasLogger):
             f.write(f"Avg cores per execution: {avg_cores:.1f}\n")
             f.write("\n")
 
+            # Cache Savings (if cache is enabled and has actual durations)
+            if cached_results and cached_core_hours_list:
+                f.write("CACHE SAVINGS\n")
+                f.write("-" * 70 + "\n")
+                cached_total_core_hours = sum(cached_core_hours_list)
+                f.write(f"Cached executions: {len(cached_results)}\n")
+                f.write(f"Core-hours saved: {cached_total_core_hours:.2f} (using actual recorded durations)\n")
+                f.write("\n")
+
             # Scenario Analysis (uses cache-aware values if --use-cache is enabled)
             if self.estimated_time_scenarios:
                 f.write("SCENARIO ANALYSIS")
@@ -1363,19 +1341,6 @@ class IOPSRunner(HasLogger):
                             remaining = self.max_core_hours - total_ch
                             f.write(f"  ✓ Within budget (remaining: {remaining:.2f} core-hours)\n")
                 f.write("\n")
-
-            # Execution Details
-            f.write("EXECUTION DETAILS (all executions)\n")
-            f.write("-" * 70 + "\n")
-            for i, detail in enumerate(execution_details, 1):
-                vars_str = ", ".join([f"{k}={v}" for k, v in list(detail['vars'].items())[:5]])
-                if len(detail['vars']) > 5:
-                    vars_str += f", ... ({len(detail['vars'])} vars)"
-
-                cache_marker = " [CACHED]" if detail.get('cached') else ""
-                f.write(f"\n[{i:3d}] exec_id={detail['execution_id']} rep={detail['repetition']} ")
-                f.write(f"cores={detail['cores']}{cache_marker}\n")
-                f.write(f"      {vars_str}\n")
 
         self.logger.info(f"✓ Report saved to: {report_path}")
 
