@@ -1351,8 +1351,12 @@ class IOPSRunner(HasLogger):
         self.logger.info("DRY-RUN COMPLETE - Nothing was executed")
         self.logger.info(f"  • {num_unique_tests} unique tests × {repetitions} repetitions = {total_executions} executions")
         if cached_results:
+            executions_to_run = total_executions - len(cached_results)
             self.logger.info(f"  • {len(cached_results)} executions cached (will be skipped with --use-cache)")
-            self.logger.info(f"  • {total_executions - len(cached_results)} executions to run")
+            if executions_to_run > 0:
+                self.logger.info(f"  • {executions_to_run} executions to run")
+            else:
+                self.logger.info(f"  • All executions cached - nothing to run")
         self.logger.info(f"  • Report: {report_path}")
         self.logger.info(f"  • Metadata: {self.cfg.benchmark.workdir / METADATA_FILENAME}")
         self.logger.info("=" * 70)
