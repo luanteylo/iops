@@ -251,3 +251,18 @@ Rebuilt cache saved to: cache_rebuilt.db
 2. Store `(params, repetition, metrics, metadata)` in cache
 3. On duplicate (same params/repetition): update with latest result
 
+### Core-Hours Savings Tracking
+
+When using cache with a core-hours budget (`max_core_hours`), IOPS tracks how many core-hours were saved by cache hits. This appears in progress logs and the final summary:
+
+```
+Core-hours: 93.30/1200.00 (7.8% used, 1106.70 remaining, 45.20 saved by cache)
+```
+
+```
+Budget: 93.30 / 1200.00 core-hours (7.8% utilized) [OK]
+Cache savings: 45.20 core-hours saved by cache hits
+```
+
+This helps you understand the value of caching in terms of compute resources saved.
+

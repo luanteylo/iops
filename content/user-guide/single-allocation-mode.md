@@ -2,6 +2,10 @@
 title: "Single-Allocation Mode"
 ---
 
+> **Experimental Feature**
+>
+> Single-allocation mode is experimental. It may contain bugs or undergo breaking changes in future releases. Please report any issues you encounter.
+
 Single-allocation mode runs all tests within a single SLURM allocation instead of submitting separate jobs for each test. This guide explains how to configure this mode.
 
 ---

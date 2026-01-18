@@ -111,6 +111,25 @@ benchmark:
   cores_expr: "{{ nodes * processes_per_node }}"
 ```
 
+**How core-hours are calculated:**
+
+```
+core_hours = cores × (duration_seconds / 3600)
+```
+
+- **`cores`**: Evaluated from `cores_expr` using your test variables
+- **`duration_seconds`**: Actual script execution time from system info (preferred), or job timestamps as fallback
+
+**Important:** The `cores_expr` should reflect the cores you're actually being charged for. In exclusive mode, this is typically all cores on the node, not just the ones your application uses:
+
+```yaml
+# If using exclusive mode with 128-core nodes:
+cores_expr: "{{ nodes * 128 }}"  # Actual cores reserved
+
+# Not just the MPI tasks:
+# cores_expr: "{{ ntasks }}"  # Would undercount in exclusive mode
+```
+
 From command line:
 
 ```bash
@@ -121,6 +140,8 @@ iops run config.yaml --max-core-hours 1000
 iops run config.yaml --dry-run --time-estimate 300
 iops run config.yaml -n --time-estimate 300
 ```
+
+When using cache (`--use-cache`), cached tests don't count toward the budget, and IOPS reports how many core-hours were saved.
 
 ### Job Monitoring
 
