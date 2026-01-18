@@ -128,7 +128,8 @@ class BaseExecutor(ABC, HasLogger):
         meta = test.metadata
         meta.setdefault("__jobid", None)
         meta.setdefault("__executor_status", None)
-        meta.setdefault("__start", None)
+        meta.setdefault("__submission_time", None)
+        meta.setdefault("__job_start", None)
         meta.setdefault("__end", None)
         meta.setdefault("__error", None)
 
@@ -438,7 +439,10 @@ class LocalExecutor(BaseExecutor):
         self.logger.debug(f"  [LocalExec] Executing: bash {script_path.name}")
 
         try:
-            test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            # For local executor, submission and job start are the same (no queue)
+            now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            test.metadata["__submission_time"] = now
+            test.metadata["__job_start"] = now
             result = subprocess.run(
                 cmd,
                 cwd=test.execution_dir,
@@ -639,7 +643,7 @@ class SlurmExecutor(BaseExecutor):
         self.logger.debug(f"  [SlurmExec] ═══════════════════════════════════════════════════")
 
         try:
-            test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            test.metadata["__submission_time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
             # NOTE: check=True would raise on non-zero exit,
             # but sbatch typically returns 0 on successful submission.
@@ -1075,7 +1079,7 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
 
         # Record that we're waiting for this test
         test.metadata["__jobid"] = self.allocation_job_id
-        test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        test.metadata["__submission_time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         test.metadata["__executor_status"] = self.STATUS_PENDING
 
         self.logger.debug(
@@ -1251,6 +1255,10 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
 
         status = status_data.get("status", "UNKNOWN")
         test.metadata["__single_alloc_status"] = status_data
+
+        # Capture job start time from status file (written when test starts running)
+        if "__job_start" not in test.metadata and "start_time" in status_data:
+            test.metadata["__job_start"] = status_data["start_time"]
 
         if status == "RUNNING":
             test.metadata["__executor_status"] = self.STATUS_RUNNING

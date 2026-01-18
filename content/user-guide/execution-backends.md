@@ -10,10 +10,10 @@ IOPS supports two execution backends for running benchmarks: local execution and
 
 1. [Local Executor](#local-executor)
 2. [SLURM Executor](#slurm-executor)
-   - [Budget Control](#budget-control)
+   - [Budget Control](#budget-control) → [dedicated guide](../budget-control)
    - [Job Monitoring](#job-monitoring)
    - [Custom SLURM Commands](#custom-slurm-commands)
-   - [Single-Allocation Mode](#single-allocation-mode)
+   - [Single-Allocation Mode](#single-allocation-mode) → [dedicated guide](../single-allocation-mode)
 
 ---
 
@@ -103,7 +103,7 @@ scripts:
 
 ### Budget Control
 
-Prevent exceeding compute allocations with core-hours tracking:
+Track core-hours consumption and stop execution when a budget limit is reached:
 
 ```yaml
 benchmark:
@@ -111,37 +111,9 @@ benchmark:
   cores_expr: "{{ nodes * processes_per_node }}"
 ```
 
-**How core-hours are calculated:**
+Or from command line: `iops run config.yaml --max-core-hours 1000`
 
-```
-core_hours = cores × (duration_seconds / 3600)
-```
-
-- **`cores`**: Evaluated from `cores_expr` using your test variables
-- **`duration_seconds`**: Actual script execution time from system info (preferred), or job timestamps as fallback
-
-**Important:** The `cores_expr` should reflect the cores you're actually being charged for. In exclusive mode, this is typically all cores on the node, not just the ones your application uses:
-
-```yaml
-# If using exclusive mode with 128-core nodes:
-cores_expr: "{{ nodes * 128 }}"  # Actual cores reserved
-
-# Not just the MPI tasks:
-# cores_expr: "{{ ntasks }}"  # Would undercount in exclusive mode
-```
-
-From command line:
-
-```bash
-# Set budget limit
-iops run config.yaml --max-core-hours 1000
-
-# Estimate usage before running
-iops run config.yaml --dry-run --time-estimate 300
-iops run config.yaml -n --time-estimate 300
-```
-
-When using cache (`--use-cache`), cached tests don't count toward the budget, and IOPS reports how many core-hours were saved.
+For detailed configuration, accuracy considerations, and cache interaction, see the **[Budget Control](../budget-control)** guide.
 
 ### Job Monitoring
 

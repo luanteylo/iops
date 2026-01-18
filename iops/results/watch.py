@@ -34,9 +34,11 @@ from .find import (
     INDEX_FILENAME,
     PARAMS_FILENAME,
     STATUS_FILENAME,
+    METADATA_FILENAME,
     DEFAULT_TRUNCATE_WIDTH,
     _truncate_value,
     _read_status,
+    _read_run_metadata,
 )
 
 
@@ -80,6 +82,30 @@ STATUS_LABELS = {
     "SKIPPED": ("SKIP", "dim italic"),
     "UNKNOWN": ("???", "dim"),
 }
+
+
+def _compute_cores_from_expr(cores_expr: str, params: Dict[str, Any]) -> int:
+    """
+    Compute number of cores from a Jinja2-like expression.
+
+    Args:
+        cores_expr: Expression like "{{ nodes * ppn }}"
+        params: Dict of parameter values
+
+    Returns:
+        Number of cores (minimum 1)
+    """
+    if not cores_expr:
+        return 1
+
+    try:
+        from jinja2 import Template
+        template = Template(cores_expr)
+        cores_str = template.render(**params)
+        cores = int(eval(cores_str))
+        return max(1, cores)
+    except Exception:
+        return 1
 
 
 def _load_index(index_file: Path) -> Tuple[str, Dict[str, Any], int, int, bool, int, int]:
@@ -408,6 +434,52 @@ def _get_test_overall_status(rep_statuses: List[str]) -> str:
     if all(s == "SUCCEEDED" for s in rep_statuses):
         return "SUCCEEDED"
     return "UNKNOWN"
+
+
+def _compute_core_hours_stats(
+    tests: List[Dict],
+    cores_expr: Optional[str]
+) -> Tuple[float, float]:
+    """
+    Compute core-hours statistics from test data.
+
+    Args:
+        tests: List of test dicts from _collect_execution_data
+        cores_expr: Jinja2 expression to compute cores (e.g., "{{ nodes * ppn }}")
+
+    Returns:
+        Tuple of (executed_core_hours, cached_core_hours)
+    """
+    if not cores_expr:
+        return 0.0, 0.0
+
+    executed_core_hours = 0.0
+    cached_core_hours = 0.0
+
+    for test in tests:
+        # Skip tests without timing info
+        total_time = test.get("total_time")
+        if total_time is None:
+            continue
+
+        # Compute cores for this test
+        params = test.get("params", {})
+        cores = _compute_cores_from_expr(cores_expr, params)
+
+        # Compute core-hours
+        core_hours = cores * (total_time / 3600.0)
+
+        # Categorize as executed or cached
+        cached = test.get("cached")
+        if cached is True:
+            cached_core_hours += core_hours
+        elif cached is False:
+            executed_core_hours += core_hours
+        else:
+            # "partial" - count as executed (conservative)
+            executed_core_hours += core_hours
+
+    return executed_core_hours, cached_core_hours
 
 
 def _get_max_symbol_width() -> int:
@@ -767,7 +839,9 @@ def _build_progress_bar(
     total_expected: int,
     elapsed_seconds: float = 0,
     terminal_width: int = 80,
-    actual_avg_time: Optional[float] = None
+    actual_avg_time: Optional[float] = None,
+    executed_core_hours: float = 0.0,
+    cached_core_hours: float = 0.0
 ) -> Text:
     """
     Build a segmented progress bar with status counts and throughput.
@@ -778,6 +852,8 @@ def _build_progress_bar(
         elapsed_seconds: Elapsed time in seconds (fallback for throughput calculation)
         terminal_width: Terminal width for responsive sizing
         actual_avg_time: Average execution time from sysinfo (more accurate than wall-clock)
+        executed_core_hours: Core-hours consumed by executed tests
+        cached_core_hours: Core-hours saved by cached tests
 
     Returns:
         Rich Text object with progress bar and counts
@@ -877,6 +953,14 @@ def _build_progress_bar(
         if pending > 0:
             text.append("  Pending: ", style="dim")
             text.append(f"{pending}", style="dim bold")
+
+        # Core-hours info (if available)
+        if executed_core_hours > 0 or cached_core_hours > 0:
+            text.append("\n ")
+            text.append("Core-hours: ", style="dim")
+            text.append(f"{executed_core_hours:.2f}", style="cyan bold")
+            if cached_core_hours > 0:
+                text.append(f"  ({cached_core_hours:.2f} saved by cache)", style="dim italic")
 
     return text
 
@@ -986,6 +1070,10 @@ def watch_executions(
 
     if not executions:
         raise WatchModeError("No executions found in index.")
+
+    # Load run metadata for cores_expr (used for core-hours calculation)
+    run_metadata = _read_run_metadata(run_root)
+    cores_expr = run_metadata.get("benchmark", {}).get("cores_expr")
 
     console = Console()
     start_time = datetime.now()
@@ -1183,11 +1271,16 @@ def watch_executions(
                 actual_times = [t["avg_time"] for t in tests if t.get("avg_time") is not None]
                 actual_avg_time = sum(actual_times) / len(actual_times) if actual_times else None
 
+                # Compute core-hours statistics
+                executed_core_hours, cached_core_hours = _compute_core_hours_stats(tests, cores_expr)
+
                 # Progress bar (with elapsed time for throughput calculation)
                 elapsed_seconds = elapsed.total_seconds()
                 progress_bar = _build_progress_bar(
                     status_counts, total_expected, elapsed_seconds, terminal_width,
-                    actual_avg_time=actual_avg_time
+                    actual_avg_time=actual_avg_time,
+                    executed_core_hours=executed_core_hours,
+                    cached_core_hours=cached_core_hours
                 )
                 footer_text.append_text(progress_bar)
 

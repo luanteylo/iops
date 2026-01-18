@@ -201,7 +201,8 @@ def test_executor_init_metadata(mock_test_instance):
 
     assert "__jobid" in mock_test_instance.metadata
     assert "__executor_status" in mock_test_instance.metadata
-    assert "__start" in mock_test_instance.metadata
+    assert "__submission_time" in mock_test_instance.metadata
+    assert "__job_start" in mock_test_instance.metadata
     assert "__end" in mock_test_instance.metadata
     assert "__error" in mock_test_instance.metadata
 

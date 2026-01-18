@@ -1013,7 +1013,7 @@ def test_compute_core_hours_uses_sysinfo_duration(mock_runner, sample_sysinfo_da
     test.vars = {"nodes": 1, "ppn": 4}  # For cores calculation (will use default 1)
     test.metadata = {
         "__sysinfo": sample_sysinfo_data,  # duration_seconds = 120
-        "__start": "2024-01-01T00:00:00",
+        "__job_start": "2024-01-01T00:00:00",
         "__end": "2024-01-01T00:10:00",  # 10 minutes = 600 seconds
     }
 
@@ -1026,19 +1026,19 @@ def test_compute_core_hours_uses_sysinfo_duration(mock_runner, sample_sysinfo_da
 
 
 def test_compute_core_hours_falls_back_to_timestamps(mock_runner):
-    """Test that _compute_core_hours falls back to timestamps when sysinfo unavailable."""
+    """Test that _compute_core_hours falls back to __job_start when sysinfo unavailable."""
     test = Mock(spec=ExecutionInstance)
     test.execution_id = 1
     test.vars = {"nodes": 1}
     test.metadata = {
-        "__start": "2024-01-01T00:00:00",
+        "__job_start": "2024-01-01T00:00:00",
         "__end": "2024-01-01T00:10:00",  # 10 minutes = 600 seconds
         # No __sysinfo
     }
 
     result = mock_runner._compute_core_hours(test)
 
-    # Should use timestamps (600 seconds)
+    # Should use __job_start timestamps (600 seconds)
     expected = 1 * (600 / 3600.0)  # cores * hours
     assert result == pytest.approx(expected, abs=0.001)
 
@@ -1054,7 +1054,7 @@ def test_compute_core_hours_falls_back_when_sysinfo_missing_duration(mock_runner
             "cpu_cores": 32,
             # No duration_seconds field
         },
-        "__start": "2024-01-01T00:00:00",
+        "__job_start": "2024-01-01T00:00:00",
         "__end": "2024-01-01T00:05:00",  # 5 minutes = 300 seconds
     }
 
@@ -1087,7 +1087,7 @@ def test_compute_core_hours_handles_invalid_sysinfo_duration(mock_runner):
             "hostname": "test-node",
             "duration_seconds": "invalid",  # Not a number
         },
-        "__start": "2024-01-01T00:00:00",
+        "__job_start": "2024-01-01T00:00:00",
         "__end": "2024-01-01T00:02:00",  # 2 minutes = 120 seconds
     }
 
@@ -1101,24 +1101,25 @@ def test_compute_core_hours_handles_invalid_sysinfo_duration(mock_runner):
 def test_compute_core_hours_accurate_for_slurm_jobs(mock_runner, sample_sysinfo_data):
     """Test that core-hours are accurate for SLURM jobs (using actual execution time).
 
-    This test demonstrates the fix for the queue wait time issue. Previously,
-    _compute_core_hours used __start (job submission) to __end (job completion),
-    which included queue wait time. Now it uses duration_seconds from sysinfo
-    which captures only the actual script execution time.
+    This test demonstrates the fix for the queue wait time issue. The preferred
+    source is duration_seconds from sysinfo, which captures only the actual
+    script execution time. Fallback uses __job_start (actual job start) instead
+    of __submission_time (which includes queue wait time).
     """
     test = Mock(spec=ExecutionInstance)
     test.execution_id = 1
     test.vars = {"nodes": 1}
 
     # Simulate a job that was queued for 10 minutes, then ran for 2 minutes
-    # __start is when we submitted, __end is when we detected completion
+    # __submission_time is when we submitted, __job_start is when it started running
     test.metadata = {
         "__sysinfo": {
             "hostname": "compute-node",
             "duration_seconds": 120,  # Actual execution: 2 minutes
         },
-        "__start": "2024-01-01T00:00:00",  # Submitted at 00:00
-        "__end": "2024-01-01T00:12:00",    # Completed at 00:12 (10min queue + 2min run)
+        "__submission_time": "2024-01-01T00:00:00",  # Submitted at 00:00
+        "__job_start": "2024-01-01T00:10:00",  # Started running at 00:10 (after 10min queue)
+        "__end": "2024-01-01T00:12:00",    # Completed at 00:12
     }
 
     result = mock_runner._compute_core_hours(test)

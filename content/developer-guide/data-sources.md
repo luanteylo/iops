@@ -96,7 +96,7 @@ The report command reads from the run metadata file and the results output file.
 | Results data | Results file | `output.path` | All columns | CSV, Parquet, or SQLite |
 | Execution status | Results file | `output.path` | `metadata.__executor_status` | Filters to SUCCEEDED only |
 | Duration | Results file | `output.path` | `metadata.__sysinfo.duration_seconds` | For runtime calculations |
-| Timestamps | Results file | `output.path` | `metadata.__start`, `metadata.__end` | Fallback for duration |
+| Timestamps | Results file | `output.path` | `metadata.__job_start`, `metadata.__submission_time`, `metadata.__end` | Fallback for duration |
 
 **Results file types:**
 

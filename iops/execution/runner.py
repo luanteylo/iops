@@ -605,9 +605,8 @@ class IOPSRunner(HasLogger):
         Compute core-hours used by a test.
 
         Prefers duration_seconds from sysinfo (actual script execution time on compute node)
-        over __start/__end timestamps (which include queue wait time for SLURM jobs).
-        Falls back to __start/__end if sysinfo is not available (e.g., local executor
-        or collect_system_info disabled).
+        over __job_start/__end timestamps. Falls back to __submission_time/__end if
+        __job_start is not available (e.g., SLURM polling missed the transition).
         """
         duration_seconds = None
 
@@ -624,9 +623,11 @@ class IOPSRunner(HasLogger):
                     f"Invalid sysinfo duration_seconds for test {test.execution_id}, falling back to timestamps"
                 )
 
-        # Fall back to __start/__end timestamps if sysinfo not available
+        # Fall back to __job_start/__end timestamps (actual job execution time)
+        # If __job_start not available, fall back to __submission_time (includes queue wait)
         if duration_seconds is None:
-            start = test.metadata.get("__start")
+            # Prefer __job_start (actual execution start) over __submission_time (includes queue wait)
+            start = test.metadata.get("__job_start") or test.metadata.get("__submission_time")
             end = test.metadata.get("__end")
 
             if not start or not end:
@@ -641,8 +642,9 @@ class IOPSRunner(HasLogger):
                     end = datetime.fromisoformat(end)
 
                 duration_seconds = (end - start).total_seconds()
+                source = "__job_start" if test.metadata.get("__job_start") else "__submission_time"
                 self.logger.debug(
-                    f"Using __start/__end timestamps ({duration_seconds:.1f}s) for test {test.execution_id}"
+                    f"Using {source}/__end timestamps ({duration_seconds:.1f}s) for test {test.execution_id}"
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to parse timestamps for test {test.execution_id}: {e}")
@@ -1472,13 +1474,12 @@ class IOPSRunner(HasLogger):
             # Track completed tests for resource trace aggregation
             self.completed_tests.append(test)
 
-            # Track core-hours budget if enabled
-            if self.max_core_hours is not None:
-                core_hours_used = self._compute_core_hours(test)
-                if used_cache:
-                    self.saved_core_hours += core_hours_used
-                else:
-                    self.accumulated_core_hours += core_hours_used
+            # Track core-hours (always, for reporting even without budget)
+            core_hours_used = self._compute_core_hours(test)
+            if used_cache:
+                self.saved_core_hours += core_hours_used
+            else:
+                self.accumulated_core_hours += core_hours_used
 
             # Display progress and budget information periodically
             progress = self.planner.get_progress()
@@ -1494,12 +1495,16 @@ class IOPSRunner(HasLogger):
                 self.logger.info(f"Progress: {progress_bar} {progress['percentage']:.1f}%")
                 self.logger.info(f"  Completed: {progress['completed']}/{progress['total']} tests ({progress['remaining']} remaining)")
 
-                # Show core-hour usage if enabled
+                # Show core-hour usage (with budget info if configured)
                 if self.max_core_hours is not None:
                     used_pct = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
                     remaining_budget = self.max_core_hours - self.accumulated_core_hours
                     saved_str = f", {self.saved_core_hours:.2f} saved by cache" if self.saved_core_hours > 0 else ""
                     self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} ({used_pct:.1f}% used, {remaining_budget:.2f} remaining{saved_str})")
+                else:
+                    # Show core-hours without budget
+                    saved_str = f", {self.saved_core_hours:.2f} saved by cache" if self.saved_core_hours > 0 else ""
+                    self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}{saved_str}")
 
                 self.logger.info("-" * 70)
 
@@ -1511,14 +1516,17 @@ class IOPSRunner(HasLogger):
         else:
             self.logger.info(f"Benchmark completed: {test_count} tests total")
 
-        # Budget statistics
-        if self.max_core_hours is not None:
-            utilization = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
-            status_msg = "EXCEEDED" if self.budget_exceeded else "OK"
-            self.logger.info(
-                f"Budget: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours "
-                f"({utilization:.1f}% utilized) [{status_msg}]"
-            )
+        # Core-hours statistics (always show if any core-hours tracked)
+        if self.accumulated_core_hours > 0 or self.saved_core_hours > 0:
+            if self.max_core_hours is not None:
+                utilization = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
+                status_msg = "EXCEEDED" if self.budget_exceeded else "OK"
+                self.logger.info(
+                    f"Budget: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours "
+                    f"({utilization:.1f}% utilized) [{status_msg}]"
+                )
+            else:
+                self.logger.info(f"Core-hours: {self.accumulated_core_hours:.2f}")
             if self.saved_core_hours > 0:
                 self.logger.info(f"Cache savings: {self.saved_core_hours:.2f} core-hours saved by cache hits")
 

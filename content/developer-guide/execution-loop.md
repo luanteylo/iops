@@ -262,7 +262,9 @@ Runs benchmarks via subprocess:
 def submit(self, test):
     self._init_execution_metadata(test)
 
-    test.metadata["__start"] = timestamp
+    now = timestamp
+    test.metadata["__submission_time"] = now
+    test.metadata["__job_start"] = now  # No queue for local
     result = subprocess.run(
         ["bash", str(test.script_file)],
         cwd=test.execution_dir,
@@ -303,7 +305,7 @@ def submit(self, test):
     job_id = parse_job_id(result.stdout)
 
     test.metadata["__jobid"] = job_id
-    test.metadata["__start"] = timestamp
+    test.metadata["__submission_time"] = timestamp
 
     # Track for cleanup on interrupt
     if self.runner:
@@ -315,6 +317,8 @@ def wait_and_collect(self, test):
     # Poll until job leaves queue
     while True:
         state = get_job_state(job_id)
+        if state == "RUNNING" and not test.metadata.get("__job_start"):
+            test.metadata["__job_start"] = timestamp  # Job started running
         if state not in SLURM_ACTIVE_STATES:
             break
         time.sleep(poll_interval)
@@ -368,7 +372,8 @@ class ExecutionInstance:
 | Key | Set By | Description |
 |-----|--------|-------------|
 | `__jobid` | Executor | Job identifier (e.g., SLURM job ID) |
-| `__start` | Executor | Execution start timestamp |
+| `__submission_time` | Executor | Time when job was submitted |
+| `__job_start` | Executor | Time when job started running (after queue wait) |
 | `__end` | Executor | Execution end timestamp |
 | `__executor_status` | Executor | Final status (SUCCEEDED, FAILED, etc.) |
 | `__error` | Executor | Error message if failed |
