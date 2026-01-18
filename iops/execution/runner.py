@@ -1064,7 +1064,6 @@ class IOPSRunner(HasLogger):
                     job_start = cached_meta.get('__job_start') or cached_meta.get('__submission_time')
                     end_time = cached_meta.get('__end')
                     if job_start and end_time:
-                        from datetime import datetime
                         try:
                             start_dt = datetime.fromisoformat(job_start.replace('Z', '+00:00')) if isinstance(job_start, str) else job_start
                             end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00')) if isinstance(end_time, str) else end_time
