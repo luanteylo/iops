@@ -221,7 +221,7 @@ class TestKickoffModeValidation:
         sample_kickoff_config["benchmark"]["search_method"] = "bayesian"
         sample_kickoff_config["benchmark"]["bayesian_config"] = {
             "objective_metric": "throughput",
-            "direction": "maximize",
+            "objective": "maximize",
             "n_iterations": 10
         }
         config_file = tmp_path / "config.yaml"

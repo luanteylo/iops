@@ -48,12 +48,117 @@ from iops.config.models import (
     PlotDefaultsConfig,
 )
 
+# ----------------- Allowed Keys for Config Validation ----------------- #
+
+# Allowed keys for each config section (used for unknown key detection)
+ALLOWED_TOP_LEVEL_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting"}
+
+ALLOWED_BENCHMARK_KEYS = {
+    "name", "description", "workdir", "repetitions", "cache_file",
+    "search_method", "executor", "slurm_options", "random_seed",
+    "cache_exclude_vars", "exhaustive_vars", "max_core_hours", "cores_expr",
+    "estimated_time_seconds", "report_vars", "bayesian_config", "random_config",
+    "collect_system_info", "track_executions", "create_folders_upfront",
+    "trace_resources", "trace_interval",
+}
+
+ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
+ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
+ALLOWED_ALLOCATION_KEYS = {"mode", "allocation_script", "test_timeout"}
+
+ALLOWED_VAR_KEYS = {"type", "sweep", "expr", "when", "default"}
+ALLOWED_SWEEP_KEYS = {"mode", "values", "start", "end", "step"}
+
+ALLOWED_COMMAND_KEYS = {"template", "metadata", "labels", "env"}
+
+ALLOWED_SCRIPT_KEYS = {"name", "script_template", "submit", "post", "parser", "mpi"}
+ALLOWED_PARSER_KEYS = {"file", "metrics", "parser_script"}
+ALLOWED_POST_KEYS = {"script"}
+ALLOWED_METRIC_KEYS = {"name", "type", "path"}
+
+ALLOWED_OUTPUT_KEYS = {"sink"}
+ALLOWED_OUTPUT_SINK_KEYS = {"type", "path", "mode", "exclude", "include", "table"}
+
+ALLOWED_RANDOM_CONFIG_KEYS = {"n_samples", "percentage", "fallback_to_exhaustive"}
+ALLOWED_BAYESIAN_CONFIG_KEYS = {
+    "n_initial_points", "n_iterations", "acquisition_func", "base_estimator",
+    "xi", "kappa", "objective", "objective_metric", "fallback_to_exhaustive",
+}
+
+ALLOWED_CONSTRAINT_KEYS = {"name", "rule", "violation_policy", "description"}
+
+ALLOWED_REPORTING_KEYS = {
+    "enabled", "output_dir", "output_filename", "theme", "sections",
+    "best_results", "metrics", "default_plots", "plot_defaults",
+}
+ALLOWED_THEME_KEYS = {"style", "colors", "font_family"}
+ALLOWED_SECTIONS_KEYS = {
+    "test_summary", "best_results", "variable_impact", "parallel_coordinates",
+    "pareto_frontier", "bayesian_evolution", "custom_plots",
+}
+ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
+ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
+ALLOWED_PLOT_KEYS = {
+    "type", "x_var", "y_var", "z_metric", "group_by", "color_by", "size_by",
+    "title", "xaxis_label", "yaxis_label", "colorscale", "show_error_bars",
+    "show_outliers", "height", "width", "per_variable", "include_metric",
+    "row_vars", "col_var", "aggregation", "show_missing", "sort_rows_by",
+    "sort_cols_by", "sort_ascending",
+}
+
 
 # ----------------- Helper functions ----------------- #
 
 def _expand_path(p: str) -> Path:
     """Expand environment variables and user paths, then resolve to absolute path."""
     return Path(os.path.expandvars(p)).expanduser().resolve()
+
+
+def _validate_allowed_keys(
+    data: dict,
+    allowed_keys: Set[str],
+    parent_path: str = "",
+) -> List[str]:
+    """
+    Validate that a dict only contains allowed keys.
+
+    Returns list of error messages for unknown keys with "did you mean?" suggestions.
+
+    Args:
+        data: Dictionary to validate
+        allowed_keys: Set of allowed key names
+        parent_path: Full path to this section for error messages (e.g., "benchmark.slurm_options")
+
+    Returns:
+        List of error messages (empty if all keys are valid)
+    """
+    import difflib
+
+    if not isinstance(data, dict):
+        return []
+
+    errors = []
+    unknown = set(data.keys()) - allowed_keys
+
+    for key in sorted(unknown):  # Sort for deterministic error messages
+        # Find similar keys using difflib for "did you mean" suggestions
+        matches = difflib.get_close_matches(key, allowed_keys, n=3, cutoff=0.6)
+
+        full_path = f"{parent_path}.{key}" if parent_path else key
+        if matches:
+            if len(matches) > 1:
+                errors.append(
+                    f"Unknown key '{full_path}': did you mean '{matches[0]}' "
+                    f"(other options: {', '.join(matches[1:])})"
+                )
+            else:
+                errors.append(f"Unknown key '{full_path}': did you mean '{matches[0]}'?")
+        else:
+            errors.append(
+                f"Unknown key '{full_path}'. Allowed keys: {sorted(allowed_keys)}"
+            )
+
+    return errors
 
 
 # Jinja2 environment for template validation (matches matrix.py settings)
@@ -527,6 +632,12 @@ def _validate_structure(config_path: Path) -> Tuple[Optional[Dict[str, Any]], Li
     if errors:
         return None, errors
 
+    # Validate top-level keys
+    key_errors = _validate_allowed_keys(data, ALLOWED_TOP_LEVEL_KEYS)
+    if key_errors:
+        errors.extend(key_errors)
+        return None, errors
+
     return data, []
 
 
@@ -551,15 +662,37 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     # ---- benchmark ----
     b = data["benchmark"]
 
+    # Validate benchmark keys
+    key_errors = _validate_allowed_keys(b, ALLOWED_BENCHMARK_KEYS, "benchmark")
+    if key_errors:
+        raise ConfigValidationError("\n".join(key_errors))
+
     # Parse slurm_options if present
     slurm_options = None
     if "slurm_options" in b and b["slurm_options"] is not None:
         eo = b["slurm_options"]
 
+        # Validate slurm_options keys
+        key_errors = _validate_allowed_keys(eo, ALLOWED_SLURM_OPTIONS_KEYS, "benchmark.slurm_options")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+
+        # Validate commands keys if present
+        if "commands" in eo and eo["commands"] and isinstance(eo["commands"], dict):
+            key_errors = _validate_allowed_keys(eo["commands"], ALLOWED_SLURM_COMMANDS_KEYS, "benchmark.slurm_options.commands")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
+
         # Parse allocation config if present
         allocation_config = None
         if "allocation" in eo and eo["allocation"]:
             alloc = eo["allocation"]
+
+            # Validate allocation keys
+            key_errors = _validate_allowed_keys(alloc, ALLOWED_ALLOCATION_KEYS, "benchmark.slurm_options.allocation")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
+
             allocation_config = AllocationConfig(
                 mode=alloc.get("mode", "per-test"),
                 allocation_script=alloc.get("allocation_script"),
@@ -577,6 +710,12 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     search_method = b.get("search_method", "exhaustive")
     if "random_config" in b and b["random_config"] is not None:
         rc = b["random_config"]
+
+        # Validate random_config keys
+        key_errors = _validate_allowed_keys(rc, ALLOWED_RANDOM_CONFIG_KEYS, "benchmark.random_config")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+
         percentage = rc.get("percentage")
         # Clamp percentage > 1.0 to 1.0
         if percentage is not None and percentage > 1.0:
@@ -591,6 +730,12 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     bayesian_config = None
     if "bayesian_config" in b and b["bayesian_config"] is not None:
         bc = b["bayesian_config"]
+
+        # Validate bayesian_config keys
+        key_errors = _validate_allowed_keys(bc, ALLOWED_BAYESIAN_CONFIG_KEYS, "benchmark.bayesian_config")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+
         xi = bc.get("xi", 0.01)
         kappa = bc.get("kappa", 1.96)
         bayesian_config = BayesianConfig(
@@ -633,9 +778,23 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     # ---- vars ----
     vars_cfg: Dict[str, VarConfig] = {}
     for name, cfg in data.get("vars", {}).items():
+        if not isinstance(cfg, dict):
+            continue
+
+        # Validate var keys
+        key_errors = _validate_allowed_keys(cfg, ALLOWED_VAR_KEYS, f"vars.{name}")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+
         sweep_cfg = None
         if "sweep" in cfg:
             s = cfg["sweep"]
+            if isinstance(s, dict):
+                # Validate sweep keys
+                key_errors = _validate_allowed_keys(s, ALLOWED_SWEEP_KEYS, f"vars.{name}.sweep")
+                if key_errors:
+                    raise ConfigValidationError("\n".join(key_errors))
+
             # Normalize scalar values to a list (user-friendly: values: 2 -> values: [2])
             values = s.get("values")
             if values is not None and not isinstance(values, list):
@@ -657,6 +816,12 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
     # ---- command ----
     c = data["command"]
+
+    # Validate command keys
+    key_errors = _validate_allowed_keys(c, ALLOWED_COMMAND_KEYS, "command")
+    if key_errors:
+        raise ConfigValidationError("\n".join(key_errors))
+
     command = CommandConfig(
         template=c["template"],
         labels=c.get("labels", {}),
@@ -665,7 +830,14 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
     # ---- scripts ----
     scripts: List[ScriptConfig] = []
-    for s in data.get("scripts", []):
+    for idx, s in enumerate(data.get("scripts", [])):
+        script_name = s.get("name", f"script_{idx}")
+
+        # Validate script keys
+        key_errors = _validate_allowed_keys(s, ALLOWED_SCRIPT_KEYS, f"scripts[{idx}] ({script_name})")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+
         # Load script_template (inline or from file)
         script_template = _load_script_content(s["script_template"], config_dir)
 
@@ -673,6 +845,12 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         post_block = s.get("post")
         post_cfg = None
         if post_block is not None:
+            if isinstance(post_block, dict):
+                # Validate post keys
+                key_errors = _validate_allowed_keys(post_block, ALLOWED_POST_KEYS, f"scripts[{idx}].post")
+                if key_errors:
+                    raise ConfigValidationError("\n".join(key_errors))
+
             # YAML: post: { script: "..." }  OR post: \n  script: |
             post_script = post_block.get("script")
             if post_script:
@@ -683,6 +861,19 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         parser_block = s.get("parser")
         parser_cfg = None
         if parser_block is not None:
+            if isinstance(parser_block, dict):
+                # Validate parser keys
+                key_errors = _validate_allowed_keys(parser_block, ALLOWED_PARSER_KEYS, f"scripts[{idx}].parser")
+                if key_errors:
+                    raise ConfigValidationError("\n".join(key_errors))
+
+                # Validate metric keys
+                for m_idx, m in enumerate(parser_block.get("metrics", [])):
+                    if isinstance(m, dict):
+                        key_errors = _validate_allowed_keys(m, ALLOWED_METRIC_KEYS, f"scripts[{idx}].parser.metrics[{m_idx}]")
+                        if key_errors:
+                            raise ConfigValidationError("\n".join(key_errors))
+
             metrics_cfg = [
                 MetricConfig(
                     name=m["name"],
@@ -732,7 +923,20 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         )
 
     # ---- output ----
-    out = data["output"]["sink"]
+    output_data = data["output"]
+
+    # Validate output keys
+    key_errors = _validate_allowed_keys(output_data, ALLOWED_OUTPUT_KEYS, "output")
+    if key_errors:
+        raise ConfigValidationError("\n".join(key_errors))
+
+    out = output_data["sink"]
+
+    # Validate output.sink keys
+    key_errors = _validate_allowed_keys(out, ALLOWED_OUTPUT_SINK_KEYS, "output.sink")
+    if key_errors:
+        raise ConfigValidationError("\n".join(key_errors))
+
     output_type = out["type"]
 
     # Default path based on output type
@@ -759,6 +963,11 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     for idx, c_data in enumerate(constraints_data):
         if not isinstance(c_data, dict):
             raise ConfigValidationError(f"constraints[{idx}] must be a dictionary")
+
+        # Validate constraint keys
+        key_errors = _validate_allowed_keys(c_data, ALLOWED_CONSTRAINT_KEYS, f"constraints[{idx}]")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
 
         constraints.append(ConstraintConfig(
             name=c_data.get("name", f"constraint_{idx}"),
@@ -835,10 +1044,19 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     Raises:
         ConfigValidationError: If configuration is invalid
     """
+    # Validate top-level reporting keys
+    key_errors = _validate_allowed_keys(data, ALLOWED_REPORTING_KEYS, "reporting")
+    if key_errors:
+        raise ConfigValidationError("\n".join(key_errors))
+
     # Parse theme (optional)
     theme_cfg = ReportThemeConfig()
     if "theme" in data and data["theme"] is not None:
         theme_data = data["theme"]
+        if isinstance(theme_data, dict):
+            key_errors = _validate_allowed_keys(theme_data, ALLOWED_THEME_KEYS, "reporting.theme")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
         theme_cfg = ReportThemeConfig(
             style=theme_data.get("style", "plotly_white"),
             colors=theme_data.get("colors"),
@@ -849,6 +1067,10 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     sections_cfg = SectionConfig()
     if "sections" in data and data["sections"] is not None:
         sections_data = data["sections"]
+        if isinstance(sections_data, dict):
+            key_errors = _validate_allowed_keys(sections_data, ALLOWED_SECTIONS_KEYS, "reporting.sections")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
         sections_cfg = SectionConfig(
             test_summary=sections_data.get("test_summary", True),
             best_results=sections_data.get("best_results", True),
@@ -863,6 +1085,10 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     best_results_cfg = BestResultsConfig()
     if "best_results" in data and data["best_results"] is not None:
         br_data = data["best_results"]
+        if isinstance(br_data, dict):
+            key_errors = _validate_allowed_keys(br_data, ALLOWED_BEST_RESULTS_KEYS, "reporting.best_results")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
         best_results_cfg = BestResultsConfig(
             top_n=br_data.get("top_n", 5),
             show_command=br_data.get("show_command", True),
@@ -873,6 +1099,10 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     plot_defaults_cfg = PlotDefaultsConfig()
     if "plot_defaults" in data and data["plot_defaults"] is not None:
         pd_data = data["plot_defaults"]
+        if isinstance(pd_data, dict):
+            key_errors = _validate_allowed_keys(pd_data, ALLOWED_PLOT_DEFAULTS_KEYS, "reporting.plot_defaults")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
         plot_defaults_cfg = PlotDefaultsConfig(
             height=pd_data.get("height", 500),
             width=pd_data.get("width"),
@@ -887,7 +1117,13 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                 continue
 
             plots = []
-            for plot_data in metric_data["plots"]:
+            for plot_idx, plot_data in enumerate(metric_data["plots"]):
+                if isinstance(plot_data, dict):
+                    key_errors = _validate_allowed_keys(
+                        plot_data, ALLOWED_PLOT_KEYS, f"reporting.metrics.{metric_name}.plots[{plot_idx}]"
+                    )
+                    if key_errors:
+                        raise ConfigValidationError("\n".join(key_errors))
                 plot_cfg = PlotConfig(
                     type=plot_data["type"],
                     x_var=plot_data.get("x_var"),
@@ -921,7 +1157,13 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     # Parse default_plots (optional)
     default_plots = []
     if "default_plots" in data and data["default_plots"] is not None:
-        for plot_data in data["default_plots"]:
+        for plot_idx, plot_data in enumerate(data["default_plots"]):
+            if isinstance(plot_data, dict):
+                key_errors = _validate_allowed_keys(
+                    plot_data, ALLOWED_PLOT_KEYS, f"reporting.default_plots[{plot_idx}]"
+                )
+                if key_errors:
+                    raise ConfigValidationError("\n".join(key_errors))
             plot_cfg = PlotConfig(
                 type=plot_data["type"],
                 x_var=plot_data.get("x_var"),
