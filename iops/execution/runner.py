@@ -1283,8 +1283,12 @@ class IOPSRunner(HasLogger):
             f.write(f"Repetitions per test: {repetitions}\n")
             f.write(f"Total executions: {total_executions}\n")
             if cached_results:
+                executions_to_run = total_executions - len(cached_results)
                 f.write(f"Cached executions (will skip): {len(cached_results)}\n")
-                f.write(f"Executions to run: {total_executions - len(cached_results)}\n")
+                if executions_to_run > 0:
+                    f.write(f"Executions to run: {executions_to_run}\n")
+                else:
+                    f.write(f"All executions cached - nothing to run\n")
             f.write(f"Scripts location: {self.cfg.benchmark.workdir}\n")
             f.write(f"Executor: {self.cfg.benchmark.executor}\n")
             f.write("\n")
