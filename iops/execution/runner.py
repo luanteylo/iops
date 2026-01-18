@@ -1002,18 +1002,22 @@ class IOPSRunner(HasLogger):
             self.logger.info("")
 
         # Generate all test scripts using the planner
+        # Note: The planner reuses the same test object for each repetition,
+        # so we capture (test_ref, repetition, vars_snapshot) at collection time
         self.logger.info("Generating execution scripts...")
-        all_executions = []
+        all_executions = []  # List of (test, repetition, vars_dict) tuples
 
         while True:
             test = self.planner.next_test()
             if test is None:
                 break
-            all_executions.append(test)
+            # Capture current state: repetition and vars snapshot
+            # (test object will be reused with different repetition values)
+            all_executions.append((test, test.repetition, dict(test.vars)))
 
         total_executions = len(all_executions)
         # Count unique tests (unique execution_ids)
-        unique_test_ids = set(t.execution_id for t in all_executions)
+        unique_test_ids = set(t.execution_id for t, _, _ in all_executions)
         num_unique_tests = len(unique_test_ids)
         repetitions = self.cfg.benchmark.repetitions
 
@@ -1026,16 +1030,15 @@ class IOPSRunner(HasLogger):
         cached_results = {}  # Dict of (execution_id, repetition) -> cached_result
         if self.cache and self.use_cache_reads:
             self.logger.info("Checking cache for existing results...")
-            for execution in all_executions:
+            for test, repetition, vars_snapshot in all_executions:
                 cached_result = self.cache.get_cached_result(
-                    params=execution.vars,
-                    repetition=execution.repetition,
+                    params=vars_snapshot,
+                    repetition=repetition,
                 )
                 if cached_result and self._validate_cached_metrics(cached_result['metrics']):
-                    cached_results[(execution.execution_id, execution.repetition)] = cached_result
+                    cached_results[(test.execution_id, repetition)] = cached_result
 
             cached_count = len(cached_results)
-            to_execute_count = total_executions - cached_count
             # Count how many unique tests have all repetitions cached
             cached_test_ids = set(eid for eid, _ in cached_results.keys())
             fully_cached_tests = sum(
@@ -1057,10 +1060,10 @@ class IOPSRunner(HasLogger):
         cached_core_hours_list = []
         execution_details = []
 
-        for execution in all_executions:
-            cores = self._compute_cores(execution)
+        for test, repetition, vars_snapshot in all_executions:
+            cores = self._compute_cores(test)
             cores_list.append(cores)
-            cache_key = (execution.execution_id, execution.repetition)
+            cache_key = (test.execution_id, repetition)
             cached_result = cached_results.get(cache_key)
             is_cached = cached_result is not None
 
@@ -1104,10 +1107,10 @@ class IOPSRunner(HasLogger):
                 exec_cores_list.append(cores)
 
             execution_details.append({
-                'execution_id': execution.execution_id,
-                'repetition': execution.repetition,
+                'execution_id': test.execution_id,
+                'repetition': repetition,
                 'cores': cores,
-                'vars': execution.vars,
+                'vars': vars_snapshot,
                 'cached': is_cached
             })
 
@@ -1157,10 +1160,12 @@ class IOPSRunner(HasLogger):
                 self.logger.info(f"  Core-hours saved: {cached_total_core_hours:.2f} (using actual recorded durations)")
 
             # Report on executions to run (only if we have an estimate)
+            can_estimate_budget = False
             if self.estimated_time_seconds and exec_core_hours_list:
                 exec_total_core_hours = sum(exec_core_hours_list)
                 exec_count = len(exec_core_hours_list)
                 exec_avg_core_hours = exec_total_core_hours / exec_count if exec_count > 0 else 0
+                can_estimate_budget = True
 
                 self.logger.info(f"\nEstimated Core-Hours (for {exec_count} executions to run):")
                 self.logger.info(f"  Estimated time per execution: {self.estimated_time_seconds:.1f} seconds ({self.estimated_time_seconds/60:.1f} minutes)")
@@ -1171,6 +1176,7 @@ class IOPSRunner(HasLogger):
                 min_core_hours = min(core_hours_list)
                 max_core_hours = max(core_hours_list)
                 avg_core_hours = total_core_hours / len(core_hours_list)
+                can_estimate_budget = True
 
                 self.logger.info(f"\nEstimated Core-Hours (all {total_executions} executions):")
                 self.logger.info(f"  Estimated time per execution: {self.estimated_time_seconds:.1f} seconds ({self.estimated_time_seconds/60:.1f} minutes)")
@@ -1184,10 +1190,13 @@ class IOPSRunner(HasLogger):
                 # All executions are cached
                 exec_total_core_hours = 0
                 exec_count = 0
+                can_estimate_budget = True
                 self.logger.info(f"\nAll {total_executions} executions are cached - nothing to run")
             else:
-                exec_total_core_hours = sum(exec_core_hours_list) if exec_core_hours_list else 0
-                exec_count = len(exec_core_hours_list) if exec_core_hours_list else 0
+                # We have executions to run but no time estimate - can't calculate their core-hours
+                exec_total_core_hours = None
+                exec_count = total_executions - len(cached_results)
+                can_estimate_budget = False
 
             # Estimated wall-clock time (assuming sequential execution)
             if self.estimated_time_seconds and exec_count > 0:
@@ -1200,25 +1209,30 @@ class IOPSRunner(HasLogger):
                     self.logger.info(f"  Total: {exec_time_hours:.2f} hours ({exec_time_hours/24:.2f} days)")
 
             # Budget comparison (use actual execution cost when cache is enabled)
-            if self.max_core_hours and exec_total_core_hours is not None:
-                budget_ratio = (exec_total_core_hours / self.max_core_hours) * 100
-                remaining = self.max_core_hours - exec_total_core_hours
-
+            if self.max_core_hours:
                 self.logger.info(f"\nBudget Analysis:")
                 self.logger.info(f"  Budget limit: {self.max_core_hours:.2f} core-hours")
-                if cached_results:
-                    self.logger.info(f"  Estimated usage (with cache): {exec_total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
-                else:
-                    self.logger.info(f"  Estimated usage: {exec_total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
 
-                if exec_total_core_hours > self.max_core_hours:
-                    excess = exec_total_core_hours - self.max_core_hours
-                    exec_avg = exec_total_core_hours / exec_count if exec_count > 0 else 0
-                    executions_that_fit = int((self.max_core_hours / exec_avg)) if exec_avg > 0 else 0
-                    self.logger.warning(f"  ⚠️  BUDGET EXCEEDED by {excess:.2f} core-hours!")
-                    self.logger.warning(f"  ⚠️  Only ~{executions_that_fit} executions will complete before budget limit")
+                if can_estimate_budget and exec_total_core_hours is not None:
+                    budget_ratio = (exec_total_core_hours / self.max_core_hours) * 100
+                    remaining = self.max_core_hours - exec_total_core_hours
+
+                    if cached_results:
+                        self.logger.info(f"  Estimated usage (with cache): {exec_total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
+                    else:
+                        self.logger.info(f"  Estimated usage: {exec_total_core_hours:.2f} core-hours ({budget_ratio:.1f}%)")
+
+                    if exec_total_core_hours > self.max_core_hours:
+                        excess = exec_total_core_hours - self.max_core_hours
+                        exec_avg = exec_total_core_hours / exec_count if exec_count > 0 else 0
+                        executions_that_fit = int((self.max_core_hours / exec_avg)) if exec_avg > 0 else 0
+                        self.logger.warning(f"  ⚠️  BUDGET EXCEEDED by {excess:.2f} core-hours!")
+                        self.logger.warning(f"  ⚠️  Only ~{executions_that_fit} executions will complete before budget limit")
+                    else:
+                        self.logger.info(f"  ✓ Remaining budget: {remaining:.2f} core-hours")
                 else:
-                    self.logger.info(f"  ✓ Remaining budget: {remaining:.2f} core-hours")
+                    # Can't estimate - have executions to run but no time estimate
+                    self.logger.info(f"  ⚠️  Cannot estimate usage: {exec_count} executions to run but no --time-estimate provided")
 
         if not has_core_hours_data and not self.estimated_time_seconds:
             self.logger.info(f"\nCore-Hours Estimation:")
