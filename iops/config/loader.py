@@ -55,8 +55,8 @@ ALLOWED_TOP_LEVEL_KEYS = {"benchmark", "vars", "command", "scripts", "output", "
 
 ALLOWED_BENCHMARK_KEYS = {
     "name", "description", "workdir", "repetitions", "cache_file",
-    "search_method", "executor", "slurm_options", "random_seed",
-    "cache_exclude_vars", "exhaustive_vars", "max_core_hours", "cores_expr",
+    "search_method", "executor", "slurm_options", "executor_options",  # executor_options is deprecated
+    "random_seed", "cache_exclude_vars", "exhaustive_vars", "max_core_hours", "cores_expr",
     "estimated_time_seconds", "report_vars", "bayesian_config", "random_config",
     "collect_system_info", "track_executions", "create_folders_upfront",
     "trace_resources", "trace_interval",
@@ -666,6 +666,18 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     key_errors = _validate_allowed_keys(b, ALLOWED_BENCHMARK_KEYS, "benchmark")
     if key_errors:
         raise ConfigValidationError("\n".join(key_errors))
+
+    # Handle deprecated executor_options -> slurm_options rename
+    if "executor_options" in b and b["executor_options"] is not None:
+        import warnings
+        warnings.warn(
+            "benchmark.executor_options is deprecated, use benchmark.slurm_options instead",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        # Use executor_options if slurm_options not provided
+        if "slurm_options" not in b or b["slurm_options"] is None:
+            b["slurm_options"] = b["executor_options"]
 
     # Parse slurm_options if present
     slurm_options = None

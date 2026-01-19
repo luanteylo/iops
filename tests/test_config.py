@@ -333,3 +333,28 @@ def test_valid_config_passes_key_validation(sample_config_file):
     config = load_config(sample_config_file)
     assert config is not None
     assert config.benchmark.name == "Test Benchmark"
+
+
+def test_deprecated_executor_options_backwards_compat(tmp_path, sample_config_dict):
+    """Using deprecated executor_options should work but emit warning."""
+    sample_config_dict["benchmark"]["executor_options"] = {
+        "poll_interval": 60
+    }
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    import warnings
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        config = load_config(config_file)
+
+        # Should have emitted a deprecation warning
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+        assert "executor_options" in str(w[0].message)
+        assert "slurm_options" in str(w[0].message)
+
+    # Config should still load correctly with the value
+    assert config.benchmark.slurm_options is not None
+    assert config.benchmark.slurm_options.poll_interval == 60
