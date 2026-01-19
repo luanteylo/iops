@@ -174,3 +174,162 @@ def test_config_track_executions_disabled(tmp_path, sample_config_dict):
 
     config = load_config(config_file)
     assert config.benchmark.track_executions is False
+
+
+# ============== Unknown Key Validation Tests ==============
+
+
+def test_unknown_top_level_key(tmp_path, sample_config_dict):
+    """Unknown top-level keys should raise validation error."""
+    sample_config_dict["executor_options"] = {"submit": "sbatch"}  # Wrong key
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="Unknown key 'executor_options'"):
+        load_config(config_file)
+
+
+def test_unknown_benchmark_key_with_suggestion(tmp_path, sample_config_dict):
+    """Typos in benchmark keys should suggest correct key."""
+    sample_config_dict["benchmark"]["slurm_optionz"] = {}  # Typo
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'slurm_options'"):
+        load_config(config_file)
+
+
+def test_unknown_benchmark_key_no_suggestion(tmp_path, sample_config_dict):
+    """Completely unknown keys should list allowed keys."""
+    sample_config_dict["benchmark"]["foobar_xyz"] = "test"  # No close match
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="Allowed keys:"):
+        load_config(config_file)
+
+
+def test_unknown_slurm_options_key(tmp_path, sample_config_dict):
+    """Unknown keys in slurm_options should be rejected."""
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "submit_command": "sbatch"  # Wrong key (should be under commands)
+    }
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="Unknown key 'benchmark.slurm_options.submit_command'"):
+        load_config(config_file)
+
+
+def test_unknown_slurm_commands_key(tmp_path, sample_config_dict):
+    """Unknown keys in slurm_options.commands should be rejected."""
+    sample_config_dict["benchmark"]["slurm_options"] = {
+        "commands": {"submit_cmd": "sbatch"}  # Wrong key (should be 'submit')
+    }
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'submit'"):
+        load_config(config_file)
+
+
+def test_unknown_var_key(tmp_path, sample_config_dict):
+    """Unknown keys in variable definitions should be rejected."""
+    sample_config_dict["vars"]["nodes"]["value"] = [1, 2]  # Wrong key (should be in sweep)
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="Unknown key 'vars.nodes.value'"):
+        load_config(config_file)
+
+
+def test_unknown_sweep_key(tmp_path, sample_config_dict):
+    """Unknown keys in sweep config should be rejected."""
+    sample_config_dict["vars"]["nodes"]["sweep"]["vals"] = [1, 2]  # Typo (should be 'values')
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'values'"):
+        load_config(config_file)
+
+
+def test_unknown_command_key(tmp_path, sample_config_dict):
+    """Unknown keys in command section should be rejected."""
+    sample_config_dict["command"]["templates"] = "echo test"  # Typo
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'template'"):
+        load_config(config_file)
+
+
+def test_unknown_script_key(tmp_path, sample_config_dict):
+    """Unknown keys in script definitions should be rejected."""
+    sample_config_dict["scripts"][0]["script_templates"] = "echo test"  # Typo
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'script_template'"):
+        load_config(config_file)
+
+
+def test_unknown_parser_key(tmp_path, sample_config_dict):
+    """Unknown keys in parser config should be rejected."""
+    sample_config_dict["scripts"][0]["parser"]["parser_scripts"] = "def parse(f): pass"  # Typo
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'parser_script'"):
+        load_config(config_file)
+
+
+def test_unknown_output_sink_key(tmp_path, sample_config_dict):
+    """Unknown keys in output.sink should be rejected."""
+    sample_config_dict["output"]["sink"]["file_type"] = "csv"  # Wrong key
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="Unknown key 'output.sink.file_type'"):
+        load_config(config_file)
+
+
+def test_unknown_output_key(tmp_path, sample_config_dict):
+    """Unknown keys in output section should be rejected."""
+    sample_config_dict["output"]["sinks"] = {}  # Typo
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'sink'"):
+        load_config(config_file)
+
+
+def test_unknown_constraint_key(tmp_path, sample_config_dict):
+    """Unknown keys in constraint definitions should be rejected."""
+    sample_config_dict["constraints"] = [
+        {"name": "test", "rule": "nodes > 0", "violation_polcy": "skip"}  # Typo
+    ]
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="did you mean 'violation_policy'"):
+        load_config(config_file)
+
+
+def test_valid_config_passes_key_validation(sample_config_file):
+    """Ensure valid configs still load successfully after adding key validation."""
+    config = load_config(sample_config_file)
+    assert config is not None
+    assert config.benchmark.name == "Test Benchmark"

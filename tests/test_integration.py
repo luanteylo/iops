@@ -41,7 +41,6 @@ def simple_integration_config(tmp_path):
         "scripts": [
             {
                 "name": "simple_test",
-                "submit": "bash",
                 "script_template": (
                     "#!/bin/bash\n"
                     "SIZE={{ size }}\n"
@@ -169,7 +168,6 @@ def test_integration_with_post_script(tmp_path):
         "scripts": [
             {
                 "name": "with_post",
-                "submit": "bash",
                 "script_template": (
                     "#!/bin/bash\n"
                     "echo \"raw: {{ value }}\" > {{ execution_dir }}/raw.txt\n"

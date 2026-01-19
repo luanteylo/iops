@@ -67,7 +67,6 @@ command:
 
 scripts:
   - name: "ior" 
-    submit: "bash"
     script_template: |
       #!/bin/bash     
       

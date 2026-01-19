@@ -72,7 +72,6 @@ command:
 
 scripts:
   - name: "ost_benchmark"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       # Simulated benchmark - replace with actual benchmark command

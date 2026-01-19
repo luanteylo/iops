@@ -64,11 +64,27 @@ class BaseExecutor(ABC, HasLogger):
         return decorator
 
     @classmethod
-    def build(cls, cfg: GenericBenchmarkConfig) -> "BaseExecutor":
-        executor_cls = cls._registry.get(cfg.benchmark.executor.lower())
+    def build(cls, cfg: GenericBenchmarkConfig, kickoff_path: Path = None) -> "BaseExecutor":
+        executor_name = cfg.benchmark.executor.lower()
+
+        # Check for single-allocation mode (SLURM only)
+        if executor_name == "slurm":
+            eo = cfg.benchmark.slurm_options
+            if eo and eo.allocation:
+                if eo.allocation.mode == "single":
+                    # Single-allocation mode requires pre-generated kickoff path
+                    if kickoff_path is None:
+                        raise ValueError(
+                            "KickoffSingleAllocationExecutor requires kickoff_path. "
+                            "Use runner's single-allocation mode initialization."
+                        )
+                    return KickoffSingleAllocationExecutor(cfg, kickoff_path)
+
+        # Default registry lookup
+        executor_cls = cls._registry.get(executor_name)
         if executor_cls is None:
             raise ValueError(
-                f"Executor '{cfg.benchmark.executor.lower()}' is not registered."
+                f"Executor '{executor_name}' is not registered."
             )
         return executor_cls(cfg)
 
@@ -112,7 +128,8 @@ class BaseExecutor(ABC, HasLogger):
         meta = test.metadata
         meta.setdefault("__jobid", None)
         meta.setdefault("__executor_status", None)
-        meta.setdefault("__start", None)
+        meta.setdefault("__submission_time", None)
+        meta.setdefault("__job_start", None)
         meta.setdefault("__end", None)
         meta.setdefault("__error", None)
 
@@ -422,7 +439,10 @@ class LocalExecutor(BaseExecutor):
         self.logger.debug(f"  [LocalExec] Executing: bash {script_path.name}")
 
         try:
-            test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            # For local executor, submission and job start are the same (no queue)
+            now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            test.metadata["__submission_time"] = now
+            test.metadata["__job_start"] = now
             result = subprocess.run(
                 cmd,
                 cwd=test.execution_dir,
@@ -520,7 +540,7 @@ class SlurmExecutor(BaseExecutor):
     YAML-driven SLURM executor.
 
     Strategy:
-      1) Submit using YAML-driven test.submit_cmd (+ append script if missing)
+      1) Submit using slurm_options.commands.submit (default: sbatch)
       2) Poll status via squeue while present
       3) When job leaves squeue:
            - try scontrol show job <jobid> to get JobState/ExitCode
@@ -529,7 +549,7 @@ class SlurmExecutor(BaseExecutor):
                 * else -> FAILED
 
     Uses:
-      - test.submit_cmd (rendered from YAML scripts[].submit)
+      - slurm_options.commands.submit (or default "sbatch")
       - test.script_file (rendered script already written)
       - test.execution_dir (work dir for the execution)
 
@@ -543,7 +563,7 @@ class SlurmExecutor(BaseExecutor):
       - If scontrol has no record, fall back to parser success.
 
     Configurable Commands:
-      - Commands can be customized via executor_options.commands in YAML
+      - Commands can be customized via slurm_options.commands in YAML
       - Useful for systems with command wrappers or custom SLURM installations
     """
 
@@ -563,28 +583,28 @@ class SlurmExecutor(BaseExecutor):
         """Initialize SLURM executor with configurable command templates and polling interval."""
         super().__init__(cfg)
 
-        # Extract command overrides from executor_options
-        executor_options = cfg.benchmark.executor_options
+        # Extract command overrides from slurm_options
+        slurm_options = cfg.benchmark.slurm_options
         custom_commands = {}
-        if executor_options and executor_options.commands:
-            custom_commands = executor_options.commands
+        if slurm_options and slurm_options.commands:
+            custom_commands = slurm_options.commands
 
         # Set command templates with defaults
         # Templates support {job_id} placeholder for runtime substitution
-        # Note: submit can be overridden per-script via scripts[].submit
         self.cmd_submit = custom_commands.get("submit", "sbatch")
         self.cmd_status = custom_commands.get("status", "squeue -j {job_id} --noheader --format=%T")
         self.cmd_info = custom_commands.get("info", "scontrol show job {job_id}")
+        self.cmd_srun = custom_commands.get("srun", "srun")
         self.cmd_cancel = custom_commands.get("cancel", "scancel {job_id}")
 
         # Set polling interval with fallback chain:
-        # 1. executor_options.poll_interval
+        # 1. slurm_options.poll_interval
         # 2. execution.status_check_delay
         # 3. default: 30 seconds
-        if executor_options and executor_options.poll_interval is not None:
-            self.poll_interval = executor_options.poll_interval
+        if slurm_options and slurm_options.poll_interval is not None:
+            self.poll_interval = slurm_options.poll_interval
         else:
-            self.poll_interval = getattr(getattr(cfg, "execution", None), "status_check_delay", 30)
+            self.poll_interval = getattr(getattr(cfg, "execution", None), "status_check_delay", 30) 
 
     def submit(self, test) -> None:
         self._init_execution_metadata(test)
@@ -605,13 +625,8 @@ class SlurmExecutor(BaseExecutor):
             test.metadata["__error"] = msg
             return
 
-        # Use script-specific submit command, or fall back to executor default
-        submit_cmd = (test.submit_cmd or "").strip()
-        if not submit_cmd:
-            submit_cmd = self.cmd_submit
-            self.logger.debug(f"  [SlurmExec] Using default submit command: {submit_cmd}")
-
-        cmd = shlex.split(submit_cmd)
+        # Use submit command from slurm_options.commands.submit (or default "sbatch")
+        cmd = shlex.split(self.cmd_submit)
 
         # Ensure the script path is included (unless user already put it in submit)
         script_str = str(test.script_file)
@@ -625,30 +640,10 @@ class SlurmExecutor(BaseExecutor):
         self.logger.debug(f"  [SlurmExec] Working directory: {test.execution_dir}")
         self.logger.debug(f"  [SlurmExec] Script file: {test.script_file}")
         self.logger.debug(f"  [SlurmExec] Submit command: {' '.join(cmd)}")
-
-        # Show key SLURM variables if available
-        if hasattr(test, 'vars') and test.vars and isinstance(test.vars, dict):
-            slurm_vars = {k: v for k, v in test.vars.items() if k in ['nodes', 'ntasks', 'processes_per_node', 'ntasks_per_node']}
-            if slurm_vars:
-                vars_str = ", ".join(f"{k}={v}" for k, v in slurm_vars.items())
-                self.logger.debug(f"  [SlurmExec] SLURM variables: {vars_str}")
-
-        # Show first few lines of script for verification
-        try:
-            with open(test.script_file, 'r') as f:
-                script_lines = f.readlines()[:10]  # First 10 lines
-                sbatch_directives = [line.strip() for line in script_lines if line.strip().startswith('#SBATCH')]
-                if sbatch_directives:
-                    self.logger.debug(f"  [SlurmExec] SBATCH directives:")
-                    for directive in sbatch_directives:
-                        self.logger.debug(f"  [SlurmExec]   {directive}")
-        except Exception as e:
-            self.logger.debug(f"  [SlurmExec] Could not read script preview: {e}")
-
         self.logger.debug(f"  [SlurmExec] ═══════════════════════════════════════════════════")
 
         try:
-            test.metadata["__start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            test.metadata["__submission_time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
             # NOTE: check=True would raise on non-zero exit,
             # but sbatch typically returns 0 on successful submission.
@@ -962,5 +957,400 @@ class SlurmExecutor(BaseExecutor):
             return False
 
 
+# ============================================================================ #
+# Single-Allocation SLURM Executor
+# ============================================================================ #
+
+# Filename for the single-allocation execution script (written to run root)
+KICKOFF_SCRIPT_FILENAME = "__iops_kickoff.sh"
+
+# Status filename pattern (written by execution script to each test dir)
+KICKOFF_STATUS_FILENAME = "__iops_status.json"
+
+
+class KickoffSingleAllocationExecutor(SlurmExecutor):
+    """
+    SLURM executor for single-allocation mode.
+
+    In single-allocation mode, a pre-generated script runs ALL tests sequentially
+    within a single SLURM allocation. This eliminates per-test job submission
+    overhead and queue wait times.
+
+    Key features:
+    - Tests are prepared upfront (folders, scripts, params) before allocation starts
+    - An execution script is generated that sequences all tests
+    - The execution script is submitted via sbatch once
+    - Runner polls status files to track progress
+    - User controls srun directly in script_template (no MPI wrapping)
+
+    Execution flow:
+    1. First submit(): Submit execution script via sbatch
+    2. Subsequent submit(): Just register test, allocation already running
+    3. wait_and_collect(): Poll status file until test completes
+
+    The execution script writes status files as it progresses:
+    - RUNNING when starting each test
+    - SUCCEEDED/FAILED/TIMEOUT when test completes
+
+    Inherits from SlurmExecutor:
+    - SLURM_ACTIVE_STATES, SLURM_FAIL_STATES
+    - _parse_jobid(), _squeue_state(), _scontrol_info()
+    - Command setup (cmd_submit, cmd_status, cmd_cancel, poll_interval)
+    """
+
+    _LOG_PREFIX = "SingleAllocExec"
+
+    def __init__(self, cfg: GenericBenchmarkConfig, kickoff_path: Path):
+        """
+        Initialize single-allocation executor.
+
+        Args:
+            cfg: Benchmark configuration
+            kickoff_path: Path to the pre-generated execution script
+        """
+        # Initialize parent (sets up commands, poll_interval, etc.)
+        super().__init__(cfg)
+
+        # Extract allocation config
+        self.allocation = cfg.benchmark.slurm_options.allocation
+        self.kickoff_path = kickoff_path
+        self.test_timeout = self.allocation.test_timeout
+
+        # State tracking
+        self.allocation_job_id: Optional[str] = None
+        self.kickoff_submitted: bool = False
+        self.kickoff_failed: bool = False
+        self.kickoff_failure_reason: Optional[str] = None
+
+        # Poll interval for status file checks (faster than SLURM polling)
+        # Tests run sequentially, so we can poll quickly
+        self.status_poll_interval = 0.5  # seconds
+
+    def submit(self, test: ExecutionInstance) -> None:
+        """
+        Submit a test for execution within the single allocation.
+
+        On first call, submits the execution script via sbatch.
+        The execution script runs all tests sequentially; this method just
+        records that we're waiting for this test.
+
+        Args:
+            test: ExecutionInstance to execute
+        """
+        self._init_execution_metadata(test)
+
+        # Validate script_file
+        if test.script_file is None or not isinstance(test.script_file, Path) or not self._safe_is_file(test.script_file):
+            msg = "test.script_file is not set or invalid."
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_ERROR
+            test.metadata["__error"] = msg
+            return
+
+        # Validate execution_dir
+        if test.execution_dir is None or not isinstance(test.execution_dir, Path):
+            msg = "test.execution_dir is not set or invalid."
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_ERROR
+            test.metadata["__error"] = msg
+            return
+
+        # Check if allocation already failed
+        if self.kickoff_failed:
+            msg = f"Single allocation failed: {self.kickoff_failure_reason}"
+            self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_FAILED
+            test.metadata["__error"] = msg
+            return
+
+        # Submit execution script on first test
+        if not self.kickoff_submitted:
+            try:
+                self._submit_kickoff()
+                self.kickoff_submitted = True
+            except Exception as e:
+                msg = f"Failed to submit single allocation: {e}"
+                self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                self.kickoff_failed = True
+                self.kickoff_failure_reason = str(e)
+                test.metadata["__executor_status"] = self.STATUS_ERROR
+                test.metadata["__error"] = msg
+                return
+
+        # Record that we're waiting for this test
+        test.metadata["__jobid"] = self.allocation_job_id
+        test.metadata["__submission_time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        test.metadata["__executor_status"] = self.STATUS_PENDING
+
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Registered test exec_id={test.execution_id} "
+            f"rep={test.repetition} for single-allocation execution"
+        )
+
+    def wait_and_collect(self, test: ExecutionInstance) -> None:
+        """
+        Wait for test completion by polling its status file.
+
+        The execution script writes status files as it progresses through tests.
+        We poll until we see a terminal status (SUCCEEDED, FAILED, TIMEOUT, ERROR).
+
+        Args:
+            test: ExecutionInstance to collect results from
+        """
+        # Always create metrics dict early (handle parser=None safely)
+        parser = test.parser
+        metric_names = [m.name for m in (parser.metrics if parser else [])]
+        metrics = {name: None for name in metric_names}
+        test.metadata["metrics"] = metrics
+
+        # If allocation failed before this test, bail out
+        if self.kickoff_failed:
+            test.metadata["__executor_status"] = self.STATUS_FAILED
+            test.metadata["__error"] = f"Single allocation failed: {self.kickoff_failure_reason}"
+            return
+
+        # If test already marked as error (from submit), skip waiting
+        if test.metadata.get("__executor_status") == self.STATUS_ERROR:
+            return
+
+        # Poll status file until completion
+        status_file = test.execution_dir / KICKOFF_STATUS_FILENAME
+        terminal_statuses = {"SUCCEEDED", "FAILED", "TIMEOUT", "ERROR"}
+
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Waiting for test exec_id={test.execution_id} "
+            f"(polling {status_file})"
+        )
+
+        last_status = None
+        wait_start = None  # Only start timing once allocation is RUNNING
+        status_file_seen = False
+
+        while True:
+            # Check if allocation is still running (do this first to track state)
+            alloc_state = None
+            if self.allocation_job_id:
+                alloc_state = self._squeue_state(self.allocation_job_id)
+
+            # Start staleness timer once allocation is running
+            # Don't count queue wait time (PENDING) against test_timeout
+            if wait_start is None and alloc_state == "RUNNING":
+                wait_start = time.time()
+                self.logger.debug(
+                    f"  [{self._LOG_PREFIX}] Allocation running, starting staleness timer"
+                )
+
+            # Staleness checks only apply once allocation is running
+            if wait_start is not None:
+                elapsed = time.time() - wait_start
+
+                # Staleness check: if status file never appears, fail after test_timeout
+                # This handles cases where the bash script stops before reaching this test
+                if not status_file_seen and elapsed > self.test_timeout:
+                    msg = (
+                        f"Status file not found after {self.test_timeout}s. "
+                        f"The execution script may have stopped before reaching this test. "
+                        f"Expected: {status_file}"
+                    )
+                    self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = msg
+                    break
+
+                # Staleness check: if status file shows RUNNING for too long, fail
+                # This handles cases where the bash script itself is hung
+                if status_file_seen and elapsed > self.test_timeout:
+                    current = test.metadata.get("__executor_status")
+                    if current == self.STATUS_RUNNING:
+                        msg = (
+                            f"Test stuck in RUNNING state for {self.test_timeout}s. "
+                            f"The execution script may be hung."
+                        )
+                        self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                        test.metadata["__executor_status"] = self.STATUS_FAILED
+                        test.metadata["__error"] = msg
+                        break
+
+            # Handle allocation state changes
+            if self.allocation_job_id:
+                if alloc_state is None:
+                    # Allocation finished - check if test completed
+                    if self._check_status_file(test, status_file, terminal_statuses, metrics):
+                        break
+                    # Allocation ended without completing this test
+                    msg = f"Allocation {self.allocation_job_id} ended before test completed"
+                    self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = msg
+                    self.kickoff_failed = True
+                    self.kickoff_failure_reason = msg
+                    break
+                elif alloc_state in self.SLURM_FAIL_STATES:
+                    msg = f"Allocation {self.allocation_job_id} failed with state: {alloc_state}"
+                    self.logger.error(f"  [{self._LOG_PREFIX}] ERROR: {msg}")
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
+                    test.metadata["__error"] = msg
+                    self.kickoff_failed = True
+                    self.kickoff_failure_reason = msg
+                    break
+
+            # Check status file
+            if self._safe_is_file(status_file):
+                status_file_seen = True
+            if self._check_status_file(test, status_file, terminal_statuses, metrics):
+                break
+
+            # Log status changes
+            current_status = test.metadata.get("__executor_status")
+            if current_status != last_status:
+                self.logger.debug(
+                    f"  [{self._LOG_PREFIX}] Test exec_id={test.execution_id} "
+                    f"status: {current_status}"
+                )
+                last_status = current_status
+
+            time.sleep(self.status_poll_interval)
+
+        # Record end time
+        test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+        # Parse metrics if test succeeded
+        if test.metadata.get("__executor_status") == self.STATUS_SUCCEEDED:
+            if parser is not None:
+                self.logger.debug(f"  [{self._LOG_PREFIX}] Parsing metrics from output files")
+                self._try_parse_metrics(test, metrics)
+
+        metric_count = len([v for v in metrics.values() if v is not None])
+        self.logger.debug(
+            f"  [{self._LOG_PREFIX}] Collected {metric_count}/{len(metrics)} metrics: "
+            f"{list(metrics.keys())[:3]}{'...' if len(metrics) > 3 else ''}"
+        )
+
+        # Collect system info from compute node (if probe was enabled)
+        self._store_system_info(test)
+
+    def _check_status_file(
+        self,
+        test: ExecutionInstance,
+        status_file: Path,
+        terminal_statuses: set,
+        metrics: dict,
+    ) -> bool:
+        """
+        Check the status file and update test metadata.
+
+        Returns True if test reached a terminal status.
+        """
+        if not self._safe_is_file(status_file):
+            return False
+
+        try:
+            with open(status_file, "r") as f:
+                status_data = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            self.logger.debug(
+                f"  [{self._LOG_PREFIX}] Failed to read status file: {e}"
+            )
+            return False
+
+        status = status_data.get("status", "UNKNOWN")
+        test.metadata["__single_alloc_status"] = status_data
+
+        # Capture job start time from status file (written when test starts running)
+        if "__job_start" not in test.metadata and "start_time" in status_data:
+            test.metadata["__job_start"] = status_data["start_time"]
+
+        if status == "RUNNING":
+            test.metadata["__executor_status"] = self.STATUS_RUNNING
+            return False
+
+        if status in terminal_statuses:
+            # Map status file status to executor status
+            if status == "SUCCEEDED":
+                test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
+            elif status in ("FAILED", "TIMEOUT", "ERROR"):
+                test.metadata["__executor_status"] = self.STATUS_FAILED
+                test.metadata["__error"] = status_data.get(
+                    "error", f"Test {status.lower()}"
+                )
+                if status == "TIMEOUT":
+                    test.metadata["__error"] = (
+                        f"Test timed out after {self.test_timeout}s"
+                    )
+
+            # Extract metrics from status file if present
+            if "metrics" in status_data and status_data["metrics"]:
+                for name, value in status_data["metrics"].items():
+                    if name in metrics:
+                        metrics[name] = value
+
+            return True
+
+        return False
+
+    def _submit_kickoff(self) -> None:
+        """
+        Submit the single-allocation execution script via sbatch.
+
+        Sets self.allocation_job_id on success.
+
+        Raises:
+            RuntimeError: If submission fails
+        """
+        workdir = self.cfg.benchmark.workdir
+
+        # Use the pre-generated execution script
+        if not self._safe_is_file(self.kickoff_path):
+            raise RuntimeError(f"Execution script not found: {self.kickoff_path}")
+
+        self.logger.info(
+            f"  [{self._LOG_PREFIX}] Submitting single-allocation script: {self.kickoff_path}"
+        )
+
+        # Submit via sbatch
+        cmd = shlex.split(self.cmd_submit)
+        cmd.append(str(self.kickoff_path))
+
+        self.logger.debug(f"  [{self._LOG_PREFIX}] Submit command: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+        )
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"SLURM single-allocation submission failed (rc={result.returncode}): "
+                f"stderr='{stderr}' stdout='{stdout}'"
+            )
+
+        job_id = self._parse_jobid(stdout)
+        if not job_id:
+            raise RuntimeError(
+                f"Could not parse SLURM jobid from submission output: "
+                f"stdout='{stdout}' stderr='{stderr}'"
+            )
+
+        self.allocation_job_id = job_id
+        self.logger.info(f"  [{self._LOG_PREFIX}] Single allocation submitted: job_id={job_id}")
+
+        # Register job with runner for cleanup on interrupt (Ctrl+C)
+        if self.runner and hasattr(self.runner, "register_slurm_job"):
+            self.runner.register_slurm_job(job_id)
+
+
 # Module exports
-__all__ = ["BaseExecutor", "LocalExecutor", "SlurmExecutor", "SYSINFO_FILENAME"]
+__all__ = [
+    "BaseExecutor",
+    "LocalExecutor",
+    "SlurmExecutor",
+    "KickoffSingleAllocationExecutor",
+    "SYSINFO_FILENAME",
+    "KICKOFF_SCRIPT_FILENAME",
+    "KICKOFF_STATUS_FILENAME",
+]

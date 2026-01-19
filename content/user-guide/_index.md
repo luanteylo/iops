@@ -8,15 +8,16 @@ Comprehensive guide to using IOPS features and capabilities.
 ## Configuration
 
 - **[YAML Schema Reference](yaml-schema)** - Complete reference for all configuration options (`benchmark`, `vars`, `command`, `scripts`, `output`, `reporting`)
-- **[Jinja2 Templating](jinja2-templating)** - Dynamic values, conditionals, loops, and expressions in templates
-- **[Scripts and Context Variables](scripts-and-context)** - Template types, available context variables, and file vs inline content
+- **[Templating and Context](templating-and-context)** - Jinja2 syntax, dynamic values, conditionals, and context variables per configuration section
 - **[Matrix Generation](matrix-generation)** - How IOPS builds the parameter space from variables, including conditional variables
 
 ## Execution
 
 - **[Search Methods](search-methods)** - Parameter space exploration: exhaustive, random sampling, and Bayesian optimization
 - **[Execution Backends](execution-backends)** - Run locally or on SLURM clusters
+- **[Single-Allocation Mode](single-allocation-mode)** - Run all tests in one SLURM allocation (MPI setup, troubleshooting)
 - **[Result Caching](caching)** - Skip redundant tests with smart caching
+- **[Budget Control](budget-control)** - Limit core-hours consumption with `max_core_hours` and `cores_expr`
 - **[Resource Tracing](resource-tracing)** - Trace CPU and memory utilization during benchmark execution
 
 ## Results & Analysis

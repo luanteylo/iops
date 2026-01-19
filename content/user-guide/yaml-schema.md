@@ -17,7 +17,7 @@ title: "IOPS YAML Format Reference"
 7. [`output`](#output)
 8. [`reporting` (optional)](#reporting-optional)
 
-See also: [Jinja2 Templating](jinja2-templating.md) for dynamic values, conditionals, and expressions.
+See also: [Templating and Context Reference](../templating-and-context) for Jinja2 syntax, dynamic values, conditionals, and context variables.
 
 ---
 
@@ -64,13 +64,17 @@ benchmark:
     kappa: float                    #   Exploration parameter for LCB (default: 1.96)
 
   executor: string                  # Optional: "local" | "slurm" (default: "slurm")
-  executor_options:                 # Optional: executor-specific configuration
+  slurm_options:                 # Optional: SLURM-specific configuration
     commands:                       #   SLURM command templates
       submit: string                #     Submit command (default: "sbatch")
       status: string                #     Status template (default: "squeue -j {job_id} ...")
       info: string                  #     Info template (default: "scontrol show job {job_id}")
       cancel: string                #     Cancel template (default: "scancel {job_id}")
     poll_interval: integer          #   Status polling interval in seconds (default: 30)
+    allocation:                     #   Single-allocation mode (SLURM only)
+      mode: string                  #     "single" | "per-test" (default: "per-test")
+      allocation_script: string     #     SBATCH directives for allocation (required if mode: "single")
+      test_timeout: integer         #     Per-test timeout in seconds (default: 3600)
 
   random_seed: integer              # Optional: seed for randomization (default: 42)
   cache_file: path                  # Optional: cache file location
@@ -157,16 +161,16 @@ benchmark:
 Execution backend: `local` or `slurm`.
 
 <details>
-<summary><strong>executor_options</strong> (optional, SLURM only)</summary>
+<summary><strong>slurm_options</strong> (optional, SLURM only)</summary>
 
 Customize SLURM commands and polling behavior:
 
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     commands:
-      submit: "sbatch"
+      submit: "sbatch"                                     # Default submit command
       status: "squeue -j {job_id} --noheader --format=%T"
       info: "scontrol show job {job_id}"
       cancel: "scancel {job_id}"
@@ -175,6 +179,29 @@ benchmark:
 
 - `{job_id}` placeholder is replaced at runtime
 - Useful for systems with command wrappers or custom SLURM installations
+
+**Single-Allocation Mode:**
+
+Run all tests within ONE SLURM allocation instead of submitting individual jobs per test:
+
+```yaml
+benchmark:
+  executor: "slurm"
+  slurm_options:
+    allocation:
+      mode: "single"
+      test_timeout: 300  # 5 minutes per test (default: 3600)
+      allocation_script: |
+        #SBATCH --nodes=8
+        #SBATCH --time=02:00:00
+        #SBATCH --partition=batch
+        #SBATCH --account=myaccount
+        #SBATCH --exclusive
+```
+
+**When to use:** HPC systems with job limits, long queue wait times, or many small tests.
+
+See [Single-Allocation Mode](../single-allocation-mode) for details.
 
 </details>
 
@@ -194,7 +221,7 @@ Collect hardware/environment info from compute nodes.
 Write metadata files for `iops find` command.
 
 #### `trace_resources` (optional, default: false)
-Enable CPU and memory tracing during execution. See [Resource Tracing](resource-tracing.md).
+Enable CPU and memory tracing during execution. See [Resource Tracing](../resource-tracing).
 
 #### `trace_interval` (optional, default: 1.0)
 Sampling interval in seconds for resource tracing. Only used when `trace_resources: true`.
@@ -555,7 +582,6 @@ Defines execution scripts, submission commands, and result parsers.
 ```yaml
 scripts:
   - name: string                    # Required: script identifier
-    submit: string                  # Required: "bash" | "sbatch"
     script_template: |              # Required: script content (Jinja2)
       #!/bin/bash
       ...
@@ -579,10 +605,6 @@ scripts:
 #### `name` (required)
 Script identifier. Used for file naming.
 
-#### `submit` (required)
-- **Local executor**: `bash` or `sh`
-- **SLURM executor**: `sbatch`
-
 #### `script_template` (required)
 Script content as Jinja2 template. Use `{{ command.template }}` to include the command.
 
@@ -592,7 +614,6 @@ Script content as Jinja2 template. Use `{{ command.template }}` to include the c
 ```yaml
 scripts:
   - name: "ior"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       set -euo pipefail
@@ -609,7 +630,6 @@ scripts:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       #!/bin/bash
       #SBATCH --job-name=iops_{{ execution_id }}
@@ -632,7 +652,6 @@ Post-processing script executed after main script completes:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       ...
 
@@ -654,7 +673,6 @@ Defines how to extract metrics from benchmark output:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       ...
 

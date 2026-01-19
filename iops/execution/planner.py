@@ -10,16 +10,24 @@ This module contains all planner implementations:
 
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _render_template
 from iops.execution.constraints import check_constraints_for_vars
 
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
 from collections import defaultdict
+import logging
 import random
 import json
 import warnings
+
+# Try to import rich for progress bars
+try:
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
 
 
 # ============================================================================ #
@@ -359,8 +367,8 @@ class BasePlanner(ABC, HasLogger):
             self.logger.info("  estimated_time_seconds: %s", bench.estimated_time_seconds)
         if bench.report_vars:
             self.logger.info("  report_vars: %s", bench.report_vars)
-        if bench.executor_options:
-            self.logger.info("  executor_options: %s", bench.executor_options)
+        if bench.slurm_options:
+            self.logger.info("  slurm_options: %s", bench.slurm_options)
         if bench.bayesian_config:
             self.logger.info("  bayesian_config: %s", bench.bayesian_config)
         if bench.random_config:
@@ -420,6 +428,300 @@ class BasePlanner(ABC, HasLogger):
             'remaining': attempt_total - attempt_count
         }
 
+    # ------------------------------------------------------------------ #
+    # Single-Allocation Mode Support
+    # ------------------------------------------------------------------ #
+
+    def prepare_kickoff_mode(self, cache=None) -> Path:
+        """
+        Prepare all test folders and generate the single-allocation execution script.
+
+        This method is called by the runner when allocation.mode='single'.
+        It generates ALL test folders and scripts upfront, then creates
+        an execution script that runs uncached tests sequentially.
+
+        The execution script is a dispatcher that calls existing per-test scripts,
+        reusing all existing logic (resource tracing, exit handlers, MPI wrapping).
+
+        Args:
+            cache: Optional ExecutionCache to filter out cached tests
+
+        Returns:
+            Path to the generated execution script
+        """
+        from iops.execution.matrix import build_execution_matrix
+
+        self.logger.info("=" * 70)
+        self.logger.info("SINGLE-ALLOCATION MODE: Preparing all tests upfront")
+        self.logger.info("=" * 70)
+
+        # Build execution matrix
+        self.logger.info("Building execution matrix...")
+        kept_instances, skipped_instances = build_execution_matrix(self.cfg)
+
+        # Store for tracking
+        self.execution_matrix = kept_instances
+        self.skipped_matrix = skipped_instances
+        self._matrix_built = True
+
+        total_tests = len(kept_instances)
+        total_skipped = len(skipped_instances)
+        repetitions = max(1, int(getattr(self.cfg.benchmark, "repetitions", 1) or 1))
+
+        self.logger.info(f"  Total unique parameter combinations: {total_tests}")
+        self.logger.info(f"  Skipped by constraints: {total_skipped}")
+        self.logger.info(f"  Repetitions per test: {repetitions}")
+
+        # Create folders root
+        run_root = Path(self.cfg.benchmark.workdir)
+        runs_root = run_root / "runs"
+        runs_root.mkdir(parents=True, exist_ok=True)
+        self._folders_initialized = True  # Skip folder creation in _prepare_execution_artifacts
+        self._kickoff_preparation = True  # Flag for writing PENDING status in repetition folders
+
+        # Initialize interleaving state FIRST to use planner's selection logic
+        # This ensures execution script order matches what next_test() would produce
+        self._init_interleaving_state()
+
+        self.logger.info("Creating folders and scripts using planner selection order...")
+
+        # Determine execution order using planner's selection logic
+        # This simulates what next_test() would do, ensuring order consistency
+        self._kickoff_order = []  # List of (test_idx, repetition) tuples for next_test() replay
+        kickoff_tests = []  # For execution script generation
+
+        total_preparations = total_tests * repetitions
+
+        def _prepare_in_selection_order(progress=None, task=None):
+            """Prepare tests in planner's selection order (random interleaving)."""
+            while self._active_indices:
+                # Use same selection logic as next_test()
+                idx = self.random.choice(self._active_indices)
+                rep = self._next_rep_by_idx[idx] + 1  # 1-based
+
+                test = self.execution_matrix[idx]
+
+                # Prepare artifacts (creates folders, writes scripts)
+                self._prepare_execution_artifacts(test, rep)
+
+                # Check cache if available
+                is_cached = False
+                if cache is not None:
+                    cached_result = cache.get_cached_result(
+                        params=test.vars,
+                        repetition=rep,
+                    )
+                    is_cached = cached_result is not None
+
+                # Always add to order tracking (for next_test() to replay)
+                # Runner will handle cached tests by reading from cache and writing to sink
+                self._kickoff_order.append((idx, rep))
+
+                if not is_cached:
+                    # Add to execution script list (only non-cached tests run in bash)
+                    kickoff_tests.append({
+                        'execution_id': test.execution_id,
+                        'repetition': rep,
+                        'execution_dir': str(test.execution_dir),
+                        'script_file': str(test.script_file),
+                    })
+                else:
+                    self.logger.debug(
+                        f"  [Cache] exec_id={test.execution_id} rep={rep} will use cached result"
+                    )
+
+                # Update selection state (same as next_test would)
+                self._next_rep_by_idx[idx] += 1
+                if self._next_rep_by_idx[idx] >= self._total_reps_by_idx[idx]:
+                    self._active_indices.remove(idx)
+
+                # Update progress bar if available
+                if progress is not None and task is not None:
+                    progress.update(task, advance=1)
+
+        if RICH_AVAILABLE and total_preparations > 0:
+            # Use rich progress bar
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TextColumn("[dim]{task.completed}/{task.total}"),
+            )
+            with progress:
+                task = progress.add_task("Preparing tests", total=total_preparations)
+                _prepare_in_selection_order(progress, task)
+        else:
+            # Fall back to simple logging
+            _prepare_in_selection_order()
+
+        # Write complete index with single-allocation mode fields (folders_upfront, active_tests, etc.)
+        # This is needed for watch mode to properly track execution progress.
+        # Always call this, even with no skipped instances, to ensure index has all fields.
+        self._initialize_all_folders(kept_instances, skipped_instances)
+
+        cached_count = (total_tests * repetitions) - len(kickoff_tests)
+        self.logger.info(f"  Tests prepared: {total_tests * repetitions}")
+        self.logger.info(f"  Cached (from previous runs): {cached_count}")
+        self.logger.info(f"  To execute in single allocation: {len(kickoff_tests)}")
+
+        # Generate execution script (uses order from selection loop above)
+        kickoff_path = self._generate_kickoff_script(kickoff_tests)
+
+        self.logger.info(f"  Execution script: {kickoff_path}")
+        self.logger.info("=" * 70)
+
+        # Reset index for next_test() to replay from stored order
+        self._kickoff_index = 0
+        self._kickoff_mode_active = True
+        self._kickoff_preparation = False  # Done with initial preparation
+
+        return kickoff_path
+
+    def _generate_kickoff_script(self, tests: list) -> Path:
+        """
+        Generate the single-allocation execution script that runs all tests sequentially.
+
+        The execution script is a dispatcher that:
+        1. Sets up SBATCH directives (from user's allocation_script)
+        2. Defines a run_test() function with timeout and status reporting
+        3. Calls existing per-test scripts sequentially
+
+        This reuses all existing per-test logic (MPI wrapping, resource tracing,
+        exit handlers) by calling the generated scripts.
+
+        Args:
+            tests: List of test dicts with execution_id, repetition, execution_dir, script_file
+
+        Returns:
+            Path to the generated execution script
+        """
+        from datetime import datetime
+
+        allocation = self.cfg.benchmark.slurm_options.allocation
+        test_timeout = allocation.test_timeout
+        workdir = Path(self.cfg.benchmark.workdir)
+
+        # Create logs directory
+        logs_dir = workdir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Parse allocation_script: separate SBATCH directives from setup commands
+        # SLURM stops parsing #SBATCH when it encounters non-SBATCH lines,
+        # so we must put ALL #SBATCH directives at the top.
+        user_script = allocation.allocation_script.strip()
+        if user_script.startswith("#!"):
+            # Skip user's shebang
+            user_script = "\n".join(user_script.split('\n')[1:])
+
+        sbatch_lines = []
+        setup_lines = []
+        for line in user_script.split('\n'):
+            stripped = line.strip()
+            if stripped.startswith("#SBATCH"):
+                sbatch_lines.append(line)
+            else:
+                setup_lines.append(line)
+
+        # Build the execution script
+        lines = [
+            "#!/bin/bash",
+        ]
+
+        # 1. User's SBATCH directives
+        lines.extend(sbatch_lines)
+
+        # 2. IOPS-managed SBATCH directives
+        lines.extend([
+            "#SBATCH --job-name=iops_single_alloc",
+            f"#SBATCH --output={logs_dir}/single_alloc_%j.out",
+            f"#SBATCH --error={logs_dir}/single_alloc_%j.err",
+        ])
+
+        # 3. Informational comments
+        lines.extend([
+            "",
+            "# IOPS Single-Allocation Script - Runs all tests sequentially within allocation",
+            f"# Generated: {datetime.now().isoformat()}",
+            f"# Total tests: {len(tests)}",
+            f"# Timeout per test: {test_timeout}s",
+            "",
+        ])
+
+        # 4. User's setup commands (modules, env vars, etc.)
+        # Strip leading empty lines but preserve the rest
+        while setup_lines and not setup_lines[0].strip():
+            setup_lines.pop(0)
+        if setup_lines:
+            lines.extend(setup_lines)
+            lines.append("")
+
+        lines.extend([
+            "# ===== SINGLE-ALLOCATION DISPATCHER =====",
+            "",
+            f"_IOPS_TEST_TIMEOUT={test_timeout}",
+            "",
+            "run_test() {",
+            '    local test_dir="$1"',
+            '    local script_path="$2"',
+            '    local exec_id="$3"',
+            '    local rep="$4"',
+            '    local status_file="$test_dir/__iops_status.json"',
+            "",
+            '    cd "$test_dir" || {',
+            '        echo "{\\"status\\":\\"ERROR\\",\\"error\\":\\"Failed to cd to $test_dir\\"}" > "$status_file"',
+            "        return 0",
+            "    }",
+            "",
+            '    echo "{\\"status\\":\\"RUNNING\\",\\"start_time\\":\\"$(date -Iseconds)\\"}" > "$status_file"',
+            '    echo "[$(date +%H:%M:%S)] Starting $exec_id rep $rep"',
+            "",
+            "    # Run with timeout, capture exit code",
+            '    timeout "$_IOPS_TEST_TIMEOUT" bash "$script_path"',
+            "    local rc=$?",
+            "",
+            "    if [ $rc -eq 0 ]; then",
+            '        echo "{\\"status\\":\\"SUCCEEDED\\",\\"end_time\\":\\"$(date -Iseconds)\\"}" > "$status_file"',
+            '        echo "[$(date +%H:%M:%S)] $exec_id rep $rep: SUCCEEDED"',
+            "    elif [ $rc -eq 124 ]; then",
+            f'        echo "{{\\"status\\":\\"TIMEOUT\\",\\"end_time\\":\\"$(date -Iseconds)\\",\\"error\\":\\"Test timed out after {test_timeout}s\\"}}" > "$status_file"',
+            '        echo "[$(date +%H:%M:%S)] $exec_id rep $rep: TIMEOUT"',
+            "    else",
+            '        echo "{\\"status\\":\\"FAILED\\",\\"exit_code\\":$rc,\\"end_time\\":\\"$(date -Iseconds)\\"}" > "$status_file"',
+            '        echo "[$(date +%H:%M:%S)] $exec_id rep $rep: FAILED (rc=$rc)"',
+            "    fi",
+            "",
+            "    return 0  # Always continue to next test",
+            "}",
+            "",
+            f'echo "===== IOPS Single-Allocation Start: $(date -Iseconds) ====="',
+            f'echo "Total tests: {len(tests)}"',
+            'echo ""',
+            "",
+        ])
+
+        # Add test calls
+        for i, test in enumerate(tests, 1):
+            exec_id = f"exec_{test['execution_id']:04d}"
+            lines.extend([
+                f"# === Test {i}/{len(tests)}: {exec_id} rep {test['repetition']} ===",
+                f'run_test "{test["execution_dir"]}" "{test["script_file"]}" "{exec_id}" "{test["repetition"]}"',
+                "",
+            ])
+
+        lines.extend([
+            'echo ""',
+            f'echo "===== IOPS Single-Allocation Complete: $(date -Iseconds) ====="',
+        ])
+
+        # Write execution script
+        kickoff_path = workdir / "__iops_kickoff.sh"
+        with open(kickoff_path, "w") as f:
+            f.write("\n".join(lines))
+        kickoff_path.chmod(0o755)
+
+        return kickoff_path
+
     def _prepare_execution_artifacts(self, test: Any, repetition: int) -> None:
         """
         Create folders + scripts for one test execution and one repetition.
@@ -470,6 +772,13 @@ class BasePlanner(ABC, HasLogger):
 
         # Always create repetition folder (not created upfront)
         exec_dir.mkdir(parents=True, exist_ok=True)
+
+        # In single-allocation preparation mode, write PENDING status to repetition folder
+        # This allows watch mode to properly count pending tests before execution starts
+        if getattr(self, '_kickoff_preparation', False) and getattr(self.cfg.benchmark, 'track_executions', True):
+            rep_status_file = exec_dir / STATUS_FILENAME
+            with open(rep_status_file, "w") as f:
+                json.dump({"status": "PENDING"}, f)
 
         # Point to repetition dir (useful for templates like {{ execution_dir }})
         # Must be set before _write_params_file so derived variables render correctly
@@ -982,13 +1291,47 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
+    def _next_test_kickoff(self) -> Optional[Any]:
+        """
+        Return next test in pre-determined single-allocation order.
+
+        In single-allocation mode, prepare_kickoff_mode() already determined the
+        execution order and stored it in _kickoff_order. This method replays that
+        order to ensure the runner waits for tests in the same sequence the
+        execution script runs them.
+        """
+        if self._kickoff_index >= len(self._kickoff_order):
+            return None
+
+        test_idx, rep = self._kickoff_order[self._kickoff_index]
+        self._kickoff_index += 1
+        self._attempt_count += 1
+
+        test = self.execution_matrix[test_idx]
+
+        # Re-prepare artifacts to ensure test.execution_dir is set correctly
+        # (artifacts already exist from prepare_kickoff_mode, this just updates the object)
+        self._prepare_execution_artifacts(test, rep)
+
+        self.logger.debug(
+            f"  [Planner] Single-allocation test {self._kickoff_index}/{len(self._kickoff_order)}: "
+            f"exec_id={test.execution_id} rep={rep}"
+        )
+
+        return test
+
     def next_test(self) -> Any:
         """
         Returns the next test to run (including repetitions),
         or None when all tests are done.
 
-        Uses random interleaving of repetitions.
+        In single-allocation mode, returns tests in the pre-determined order from
+        prepare_kickoff_mode(). Otherwise, uses random interleaving.
         """
+        # Single-allocation mode: replay from stored order
+        if getattr(self, '_kickoff_mode_active', False):
+            return self._next_test_kickoff()
+
         while True:
             matrix_finished = (
                 self.execution_matrix is not None

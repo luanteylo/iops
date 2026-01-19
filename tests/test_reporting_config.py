@@ -132,7 +132,6 @@ def sample_benchmark_config_with_reporting(tmp_path) -> Dict[str, Any]:
         "scripts": [
             {
                 "name": "test_script",
-                "submit": "bash",
                 "script_template": "#!/bin/bash\necho test",
                 "parser": {
                     "file": "{{ execution_dir }}/output.txt",
@@ -694,7 +693,6 @@ class TestReportingInGenericConfig:
             "scripts": [
                 {
                     "name": "test_script",
-                    "submit": "bash",
                     "script_template": "#!/bin/bash\necho test",
                     "parser": {
                         "file": "{{ execution_dir }}/output.txt",

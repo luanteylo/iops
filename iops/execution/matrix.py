@@ -16,9 +16,14 @@ from iops.config.models import (
     VarConfig,
     ParserConfig,
     MetricConfig,
+    MPIConfig,
     ConfigValidationError,
 )
-from iops.execution.constraints import filter_execution_matrix
+from iops.execution.constraints import (
+    filter_execution_matrix,
+    classify_constraints,
+    check_constraints_for_vars,
+)
 
 
 # ----------------- Jinja helpers ----------------- #
@@ -309,7 +314,6 @@ class ExecutionInstance:
     # Script metadata
     script_name: str = ""
     script_template: str = ""
-    submit_cmd_template: str = ""
     script_file : Optional[Path] = None
 
     # Optional post-processing script template
@@ -318,6 +322,9 @@ class ExecutionInstance:
 
     # Parser template (with possibly templated .file)
     parser_template: ParserConfig | None = None
+
+    # MPI configuration for single-allocation mode
+    mpi_config: Optional[MPIConfig] = None
 
     # Output configuration (template + selection)
     output_path_template: str | None = None
@@ -485,16 +492,6 @@ class ExecutionInstance:
 
 
     @property
-    def submit_cmd(self) -> str:
-        """
-        Render the submit command (e.g., sbatch ...) if templated.
-        """
-        if not self.submit_cmd_template:
-            return ""
-        ctx = self._render_context()
-        return _render_template(self.submit_cmd_template, ctx)
-
-    @property
     def script_text(self) -> str:
         """
         Render the main script text from script_template, using:
@@ -613,7 +610,6 @@ class ExecutionInstance:
         # Script info
         lines.append(
             f"Script   : {self.script_name} "
-            f"(submit={self.submit_cmd})"
             f"(file={self.script_file})"
         )
         # post script
@@ -657,8 +653,8 @@ class ExecutionInstance:
 
     def describe(self) -> str:
         """
-        Verbose, multi-section representation for DEBUG logs.
-        Everything rendered lazily with current state.
+        Concise representation for DEBUG logs.
+        Shows metadata only - no script/command content (check execution_dir for files).
         """
         sep_start = sep_end = "#" * 80
         sep = "-" * 80
@@ -667,8 +663,8 @@ class ExecutionInstance:
             f"Execution #{self.execution_id}",
             f"Benchmark : {self.benchmark_name}",
             f"Workdir   : {self.workdir}",
-            f"Exeucution Dir: {self.execution_dir}",
-            f"Repetitions: {self.repetition}/{self.repetitions}",            
+            f"Execution Dir: {self.execution_dir}",
+            f"Repetitions: {self.repetition}/{self.repetitions}",
             f"Cache File: {self.cache_file}",
             sep,
             "Variables:",
@@ -678,29 +674,24 @@ class ExecutionInstance:
         for k in sorted(vars_map):
             lines.append(f"  {k} = {vars_map[k]!r}")
 
+        # Show script summary only (check execution_dir for actual content)
+        script_lines = self.script_text.strip().split('\n') if self.script_text else []
         lines.extend([
             sep,
-            "Command:",
-            self.command,
-            sep,
-            f"Script ({self.script_name}):",
-            self.script_text,
+            f"Script ({self.script_name}): {len(script_lines)} lines",
         ])
 
         if self.post_script:
-            lines.extend([sep, "Post-script:", self.post_script])
+            post_lines = self.post_script.strip().split('\n')
+            lines.append(f"Post-script: {len(post_lines)} lines")
 
         env_rendered = self.env
         if env_rendered:
-            lines.extend([sep, "Environment:"])
-            for k, v in env_rendered.items():
-                lines.append(f"  {k}={v}")
+            lines.append(f"Environment: {len(env_rendered)} variables")
 
         effective_labels = self.command_labels
         if effective_labels:
-            lines.extend([sep, "Labels:"])
-            for k, v in effective_labels.items():
-                lines.append(f"  {k}: {v}")
+            lines.append(f"Labels: {len(effective_labels)} defined")
 
         if self.output_path:
             lines.extend([
@@ -729,7 +720,8 @@ class ExecutionInstance:
             for m in parser_obj.metrics:
                 lines.append(f"    - {m.name} @ {m.path}")
             if parser_obj.parser_script:
-                lines.append(f"  parser_script: {parser_obj.parser_script}")
+                parser_lines = parser_obj.parser_script.strip().split('\n')
+                lines.append(f"  parser_script: {len(parser_lines)} lines")
 
         lines.append(sep_end)
 
@@ -796,9 +788,8 @@ def create_execution_instance(
     output_table = cfg.output.sink.table
     output_exclude = list(cfg.output.sink.exclude)
 
-    # Script templates
+    # Script template
     script_template = script_cfg.script_template
-    submit_cmd_template = script_cfg.submit
 
     # Optional post script template
     post_script_template = None
@@ -818,6 +809,9 @@ def create_execution_instance(
             parser_script=script_cfg.parser.parser_script,
         )
 
+    # MPI configuration (stored as-is from script config)
+    mpi_config: MPIConfig | None = script_cfg.mpi
+
     return ExecutionInstance(
         execution_id=execution_id,
         repetition=0,  # planner will set metadata["repetition"] per run
@@ -836,9 +830,9 @@ def create_execution_instance(
         labels_templates=labels_templates,
         script_name=script_cfg.name,
         script_template=script_template,
-        submit_cmd_template=submit_cmd_template,
         post_script_template=post_script_template,
         parser_template=parser_template,
+        mpi_config=mpi_config,
         output_path_template=output_path_template,
         output_type=output_type,
         output_mode=output_mode,
@@ -1021,6 +1015,52 @@ def build_execution_matrix(
                 exhaustive_assignment = dict(zip(exhaustive_names, exhaustive_combo)) if exhaustive_names else {}
                 combinations.append({**search_assignment, **exhaustive_assignment})
 
+    # ----------------- classify constraints for early/late evaluation ----------------- #
+
+    # Get names of swept and derived variables
+    swept_var_names_set = {name for name, _ in swept_vars}
+    derived_var_names_set = {name for name, _ in derived_vars}
+
+    # Classify constraints:
+    # - early_constraints: only reference swept variables (can filter before derived eval)
+    # - late_constraints: reference derived variables (must filter after derived eval)
+    early_constraints: List = []
+    late_constraints: List = []
+
+    if cfg.constraints:
+        early_constraints, late_constraints = classify_constraints(
+            cfg.constraints,
+            swept_var_names_set,
+            derived_var_names_set,
+        )
+
+    # ----------------- apply early constraints to filter combinations ----------------- #
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    early_skipped_count = 0
+    if early_constraints:
+        valid_combinations = []
+        for combo in combinations:
+            is_valid, violations = check_constraints_for_vars(combo, early_constraints)
+            if is_valid:
+                valid_combinations.append(combo)
+            else:
+                early_skipped_count += 1
+                # Log at debug level (can be many)
+                logger.debug(
+                    f"Early constraint filter: skipping combination {combo}"
+                )
+
+        combinations = valid_combinations
+
+        if early_skipped_count > 0:
+            logger.info(
+                f"Early constraint filtering: {early_skipped_count} combinations skipped "
+                f"before evaluating derived expressions"
+            )
+
     # ----------------- build ExecutionInstance objects ----------------- #
 
     executions: List[ExecutionInstance] = []
@@ -1042,24 +1082,22 @@ def build_execution_matrix(
 
             executions.append(exec_instance)
 
-    # Apply constraints if defined
-    skipped_instances: List[ExecutionInstance] = []
-    if cfg.constraints:
-        import logging
-        logger = logging.getLogger(__name__)
+    # ----------------- apply late constraints (may use derived vars) ----------------- #
 
+    skipped_instances: List[ExecutionInstance] = []
+    if late_constraints:
         executions, skipped_instances, violations = filter_execution_matrix(
             executions,
-            cfg.constraints,
+            late_constraints,
             logger
         )
 
-        # Log summary of constraint filtering
+        # Log summary of late constraint filtering
         if violations:
             skipped_count = sum(1 for v in violations if v.violation_policy == "skip")
             warned_count = sum(1 for v in violations if v.violation_policy == "warn")
             logger.info(
-                f"Constraint filtering complete: {len(executions)} instances remaining after filtering. "
+                f"Late constraint filtering complete: {len(executions)} instances remaining. "
                 f"({skipped_count} skipped, {warned_count} warned)"
             )
 

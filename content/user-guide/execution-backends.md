@@ -2,8 +2,20 @@
 title: "Execution Backends"
 ---
 
-
 IOPS supports two execution backends for running benchmarks: local execution and SLURM cluster submission.
+
+---
+
+## Table of Contents
+
+1. [Local Executor](#local-executor)
+2. [SLURM Executor](#slurm-executor)
+   - [Budget Control](#budget-control) → [dedicated guide](../budget-control)
+   - [Job Monitoring](#job-monitoring)
+   - [Custom SLURM Commands](#custom-slurm-commands)
+   - [Single-Allocation Mode](#single-allocation-mode) → [dedicated guide](../single-allocation-mode)
+
+---
 
 ## Local Executor
 
@@ -31,7 +43,6 @@ benchmark:
 
 scripts:
   - name: "benchmark"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       set -euo pipefail
@@ -77,7 +88,6 @@ vars:
 
 scripts:
   - name: "mpi_benchmark"
-    submit: "sbatch --parsable"
     script_template: |
       #!/bin/bash
       #SBATCH --job-name=bench_{{ execution_id }}
@@ -93,7 +103,7 @@ scripts:
 
 ### Budget Control
 
-Prevent exceeding compute allocations with core-hours tracking:
+Track core-hours consumption and stop execution when a budget limit is reached:
 
 ```yaml
 benchmark:
@@ -101,16 +111,9 @@ benchmark:
   cores_expr: "{{ nodes * processes_per_node }}"
 ```
 
-From command line:
+Or from command line: `iops run config.yaml --max-core-hours 1000`
 
-```bash
-# Set budget limit
-iops run config.yaml --max-core-hours 1000
-
-# Estimate usage before running
-iops run config.yaml --dry-run --time-estimate 300
-iops run config.yaml -n --time-estimate 300
-```
+For detailed configuration, accuracy considerations, and cache interaction, see the **[Budget Control](../budget-control)** guide.
 
 ### Job Monitoring
 
@@ -128,9 +131,9 @@ For systems with command wrappers or custom SLURM installations, you can customi
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     commands:
-      submit: "sbatch"                                      # Default submit command
+      submit: "sbatch"                                      # Submit command
       status: "squeue -j {job_id} --noheader --format=%T"  # Job status query template
       info: "scontrol show job {job_id}"                   # Job information template
       cancel: "scancel {job_id}"                           # Job cancellation template
@@ -142,7 +145,7 @@ benchmark:
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     commands:
       submit: "lrms-wrapper sbatch"
       status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags: -r instead of -j
@@ -154,7 +157,29 @@ benchmark:
 This allows IOPS to work with various SLURM configurations and wrapper systems commonly found in HPC environments. The `{job_id}` placeholder is replaced with the actual job ID at runtime, giving you complete control over command structure and flags.
 
 **Notes**:
-- The `submit` command specified in `executor_options` is a default. Individual scripts can override it via `scripts[].submit`.
 - The `{job_id}` placeholder is required for status, info, and cancel commands.
 - The `poll_interval` controls how often (in seconds) IOPS checks job status during execution. Default is 30 seconds.
+
+### Single-Allocation Mode
+
+By default, IOPS submits a separate SLURM job for each test (`per-test` mode). For scenarios where this creates too much scheduler overhead, you can run all tests within a single SLURM allocation.
+
+```yaml
+benchmark:
+  executor: "slurm"
+  slurm_options:
+    allocation:
+      mode: "single"
+      test_timeout: 300  # Per-test timeout in seconds (default: 3600)
+      allocation_script: |
+        #SBATCH --nodes=8
+        #SBATCH --time=02:00:00
+        #SBATCH --partition=batch
+        #SBATCH --account=myaccount
+        #SBATCH --exclusive
+```
+
+**When to use:** HPC systems with job limits, long queue wait times, or many small tests.
+
+For detailed configuration, MPI setup, troubleshooting, and complete examples, see the **[Single-Allocation Mode](../single-allocation-mode)** guide.
 

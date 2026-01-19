@@ -570,7 +570,9 @@ class ReportGenerator:
             if len(df_executed) == 0:
                 return None, None
 
-            start_times = pd.to_datetime(df_executed['metadata.__start'], errors='coerce')
+            # Use submission_time for wall-clock calculation (earliest submission to latest completion)
+            submission_col = 'metadata.__submission_time'
+            start_times = pd.to_datetime(df_executed.get(submission_col, pd.Series()), errors='coerce')
             end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
 
             if start_times.isna().all() or end_times.isna().all():
@@ -603,7 +605,8 @@ class ReportGenerator:
         Calculate total core-hours consumed by all tests.
 
         Prefers duration_seconds from sysinfo (actual script execution time) over
-        __start/__end timestamps (which include queue wait time for SLURM jobs).
+        __job_start/__end timestamps. Falls back to __submission_time if __job_start
+        is not available.
 
         Returns:
             Total core-hours or None if cannot be calculated
@@ -618,7 +621,17 @@ class ReportGenerator:
             has_sysinfo_duration = sysinfo_duration_col in self.df.columns
 
             # Parse timestamps as fallback
-            start_times = pd.to_datetime(self.df['metadata.__start'], errors='coerce')
+            # Prefer __job_start (actual job start) over __submission_time (includes queue wait)
+            job_start_col = 'metadata.__job_start'
+            submission_col = 'metadata.__submission_time'
+            if job_start_col in self.df.columns:
+                start_times = pd.to_datetime(self.df[job_start_col], errors='coerce')
+                # Fall back to submission_time where job_start is missing
+                if submission_col in self.df.columns:
+                    submission_times = pd.to_datetime(self.df[submission_col], errors='coerce')
+                    start_times = start_times.fillna(submission_times)
+            else:
+                start_times = pd.to_datetime(self.df.get(submission_col, pd.Series()), errors='coerce')
             end_times = pd.to_datetime(self.df['metadata.__end'], errors='coerce')
 
             # Calculate duration for each test in hours
@@ -1093,7 +1106,8 @@ class ReportGenerator:
                 html += f"<tr><td><strong>Executed Tests</strong></td><td>{executed_count}</td></tr>\n"
 
         # Execution time
-        if 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
+        has_timing = 'metadata.__submission_time' in self.df.columns and 'metadata.__end' in self.df.columns
+        if has_timing:
             execution_time, formatted_time = self._calculate_total_execution_time()
             if execution_time is not None:
                 exec_time_label = "Total Execution Time" + (" (executed tests only)" if cached_count > 0 else "")
@@ -1112,13 +1126,16 @@ class ReportGenerator:
                     html += f"<tr><td><strong>Average Test Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
 
         # SLURM-specific timing: Wait time and walltime
-        if executor == 'slurm' and '__job_start' in self.df.columns and 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
+        has_slurm_timing = ('metadata.__job_start' in self.df.columns and
+                           'metadata.__submission_time' in self.df.columns and
+                           'metadata.__end' in self.df.columns)
+        if executor == 'slurm' and has_slurm_timing:
             # Calculate wait time (submit to job start) and walltime (submit to completion)
             df_executed = self.df[self.df['metadata.__cached'] != True] if 'metadata.__cached' in self.df.columns else self.df
 
             if len(df_executed) > 0:
-                submit_times = pd.to_datetime(df_executed['metadata.__start'], errors='coerce')
-                job_start_times = pd.to_datetime(df_executed['__job_start'], errors='coerce')
+                submit_times = pd.to_datetime(df_executed['metadata.__submission_time'], errors='coerce')
+                job_start_times = pd.to_datetime(df_executed['metadata.__job_start'], errors='coerce')
                 end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
 
                 # Calculate wait times and walltimes

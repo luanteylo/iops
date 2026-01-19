@@ -50,7 +50,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -224,6 +224,22 @@ Examples:
                                         help='Disable progress bar')
     _add_common_args(archive_extract_parser)
 
+    # ---- cache command with subcommands ----
+    cache_parser = subparsers.add_parser('cache', help='Cache management commands',
+                                          description='Manage IOPS execution cache.')
+    cache_subparsers = cache_parser.add_subparsers(dest='cache_command', title='cache commands',
+                                                    metavar='<cache-command>')
+
+    # cache rebuild
+    cache_rebuild_parser = cache_subparsers.add_parser('rebuild', help='Rebuild cache with different excluded variables',
+                                                        description='Rebuild a cache database excluding additional variables from the hash.')
+    cache_rebuild_parser.add_argument('source', type=Path, help='Path to source cache database')
+    cache_rebuild_parser.add_argument('--exclude', type=str, required=True, metavar='VAR1,VAR2',
+                                      help='Comma-separated list of variables to exclude from hash')
+    cache_rebuild_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                      help='Output database path (default: <source>_rebuilt.db)')
+    _add_common_args(cache_rebuild_parser)
+
     args = parser.parse_args()
 
     # Show help if no command provided
@@ -314,22 +330,18 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug("Variables (vars)")
     logger.debug(sub)
 
+    swept_vars = []
+    derived_vars = []
     for name, var in cfg.vars.items():
-        logger.debug(f"  - {name}")
-        logger.debug(f"      type : {var.type}")
-
         if var.sweep:
-            logger.debug("      sweep:")
-            logger.debug(f"        mode : {var.sweep.mode}")
-            if var.sweep.mode == "range":
-                logger.debug(f"        start: {var.sweep.start}")
-                logger.debug(f"        end  : {var.sweep.end}")
-                logger.debug(f"        step : {var.sweep.step}")
-            elif var.sweep.mode == "list":
-                logger.debug(f"        values: {var.sweep.values}")
+            swept_vars.append(name)
+        elif var.expr:
+            derived_vars.append(name)
 
-        if var.expr:
-            logger.debug(f"      expr : {var.expr}")
+    if swept_vars:
+        logger.debug(f"  Swept: {', '.join(swept_vars)}")
+    if derived_vars:
+        logger.debug(f"  Derived: {', '.join(derived_vars)}")
 
     # ------------------------------------------------------------------
     # Exhaustive vars (if specified)
@@ -345,18 +357,12 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(sub)
     logger.debug("Command")
     logger.debug(sub)
-    logger.debug("  Template:")
-    logger.debug("  " + cfg.command.template.replace("\n", "\n  "))
-
+    cmd_lines = cfg.command.template.strip().split('\n')
+    logger.debug(f"  Template: {len(cmd_lines)} lines")
     if cfg.command.env:
-        logger.debug("  Environment:")
-        for k, v in cfg.command.env.items():
-            logger.debug(f"    {k}={v}")
-
+        logger.debug(f"  Environment: {len(cfg.command.env)} variables")
     if cfg.command.labels:
-        logger.debug("  Labels:")
-        for k, v in cfg.command.labels.items():
-            logger.debug(f"    {k}: {v}")
+        logger.debug(f"  Labels: {len(cfg.command.labels)} defined")
 
     # ------------------------------------------------------------------
     logger.debug(sub)
@@ -364,35 +370,19 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(sub)
 
     for i, script in enumerate(cfg.scripts, start=1):
-        logger.debug(f"  Script #{i}: {script.name}")
-        logger.debug(f"    Submit : {script.submit}")
+        script_lines = script.script_template.strip().split('\n')
+        logger.debug(f"  Script #{i}: {script.name} ({len(script_lines)} lines)")
 
-        logger.debug("    Script template:")
-        logger.debug("    " + script.script_template.replace("\n", "\n    "))
+        if script.mpi:
+            logger.debug(f"    MPI: nodes={script.mpi.nodes}, ppn={script.mpi.ppn}, launcher={script.mpi.launcher}, pass_env={script.mpi.pass_env}")
 
         if script.post:
-            logger.debug("    Post-processing script:")
-            logger.debug("    " + script.post.script.replace("\n", "\n    "))
+            post_lines = script.post.script.strip().split('\n')
+            logger.debug(f"    Post-script: {len(post_lines)} lines")
 
         if script.parser:
-            logger.debug("    Parser:")
-            logger.debug(f"      File : {script.parser.file}")
-            logger.debug(f"      metrics: {[m.name for m in script.parser.metrics]}")
-            logger.debug(f"      script: {script.parser.parser_script}")
-
-            if script.parser.metrics:
-                logger.debug("      Metrics:")
-                for m in script.parser.metrics:
-                    logger.debug(f"        - {m.name}")
-                    if m.path:
-                        logger.debug(f"            path: {m.path}")
-
-            if script.parser.parser_script:
-                logger.debug("      Custom parser script:")
-                logger.debug(
-                    "      "
-                    + script.parser.parser_script.replace("\n", "\n      ")
-                )
+            logger.debug(f"    Parser: file={script.parser.file}")
+            logger.debug(f"    Metrics: {[m.name for m in script.parser.metrics]}")
 
     # ------------------------------------------------------------------    
     logger.debug(sub)
@@ -639,6 +629,56 @@ def main():
             # No subcommand provided
             logger.error("No archive subcommand specified. Use 'iops archive create' or 'iops archive extract'.")
             logger.info("Run 'iops archive --help' for more information.")
+            return
+
+    # ---- cache command ----
+    if args.command == 'cache':
+        from iops.cache import rebuild_cache
+
+        if args.cache_command == 'rebuild':
+            try:
+                # Parse exclude vars
+                exclude_vars = [v.strip() for v in args.exclude.split(',') if v.strip()]
+                if not exclude_vars:
+                    logger.error("No variables specified in --exclude")
+                    return
+
+                # Determine output path
+                if args.output:
+                    output_path = args.output
+                else:
+                    source_stem = args.source.stem
+                    output_path = args.source.parent / f"{source_stem}_rebuilt.db"
+
+                stats = rebuild_cache(
+                    source_db=args.source,
+                    output_db=output_path,
+                    exclude_vars=exclude_vars,
+                    logger=logger,
+                )
+
+                logger.info("")
+                logger.info(stats.summary())
+                logger.info(f"Rebuilt cache saved to: {output_path}")
+
+            except FileNotFoundError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error rebuilding cache: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        else:
+            # No subcommand provided
+            logger.error("No cache subcommand specified. Use 'iops cache rebuild'.")
+            logger.info("Run 'iops cache --help' for more information.")
             return
 
     # ---- run command ----

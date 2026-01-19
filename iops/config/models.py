@@ -17,16 +17,66 @@ class ConfigValidationError(Exception):
 # ----------------- Core blocks ----------------- #
 
 @dataclass
-class ExecutorOptionsConfig:
+class AllocationConfig:
     """
-    Executor-specific configuration options.
+    Configuration for SLURM single-allocation mode.
 
-    For SLURM executor, you can override the commands used for job management.
+    In single-allocation mode, all tests run within ONE SLURM allocation instead of
+    submitting individual jobs per test. This reduces job submission overhead and is
+    useful for HPC systems with job limits or queue wait times.
+
+    The user provides SBATCH directives and setup code in `allocation_script`. IOPS will:
+    - Add shebang if not provided
+    - Add job-name, output, and error directives
+    - Generate an execution script that runs all tests sequentially
+
+    Allocation Modes:
+        - "per-test" (default): Each test is submitted as a separate SLURM job
+        - "single": Pre-generates an execution script that runs all tests sequentially
+          within a single allocation, reducing per-test overhead from ~5-30s to ~100ms
+
+    Attributes:
+        mode: Allocation mode - "single" or "per-test" (default)
+        allocation_script: SBATCH directives + setup code (required when mode="single")
+        test_timeout: Per-test timeout in seconds for single-allocation mode (default: 3600)
+
+    Example (single-allocation mode):
+        slurm_options:
+          allocation:
+            mode: "single"
+            test_timeout: 300  # 5 minutes per test
+            allocation_script: |
+              #SBATCH --nodes=8
+              #SBATCH --time=02:00:00
+              #SBATCH --partition=compute
+              #SBATCH --exclusive
+
+              module purge
+              module load mpi/openmpi/4.0.1
+
+              # Any setup that runs once before all tests
+
+    In single-allocation mode:
+    - allocation_script contains SBATCH directives AND setup (modules, env vars)
+    - script_template contains the srun command with Jinja2 variables
+    - User controls srun directly in script_template (no automatic MPI wrapping)
+    """
+    mode: str = "per-test"  # "single" or "per-test"
+    allocation_script: Optional[str] = None
+    test_timeout: int = 3600  # Per-test timeout in seconds for single-allocation mode
+
+
+@dataclass
+class SlurmOptionsConfig:
+    """
+    SLURM executor configuration options.
+
+    Override commands used for job management, configure polling, or enable single-allocation mode.
     Commands are templates that support {job_id} placeholder for dynamic substitution.
     This is useful when running on systems with command wrappers or custom SLURM installations.
 
     Example with default SLURM commands:
-        executor_options:
+        slurm_options:
           commands:
             submit: "sbatch"                                      # Default submit (per-script override)
             status: "squeue -j {job_id} --noheader --format=%T"  # Job status query
@@ -35,13 +85,27 @@ class ExecutorOptionsConfig:
           poll_interval: 30                                       # Status check interval (seconds)
 
     Example with wrapper and custom flags:
-        executor_options:
+        slurm_options:
           commands:
             submit: "lrms-wrapper sbatch"
             status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags
             info: "lrms-wrapper info {job_id}"
             cancel: "lrms-wrapper kill {job_id}"
           poll_interval: 10                                       # Check status every 10 seconds
+
+    Example with single-allocation mode:
+        slurm_options:
+          allocation:
+            mode: "single"
+            test_timeout: 300
+            allocation_script: |
+              #SBATCH --nodes=8
+              #SBATCH --time=02:00:00
+              #SBATCH --partition=batch
+              #SBATCH --account=myaccount
+
+              module purge
+              module load mpi/openmpi/4.0.1
 
     Placeholders:
         {job_id} - Replaced with the SLURM job ID at runtime
@@ -51,6 +115,7 @@ class ExecutorOptionsConfig:
     """
     commands: Optional[Dict[str, str]] = None
     poll_interval: Optional[int] = None  # Polling interval in seconds for SLURM job status checks
+    allocation: Optional[AllocationConfig] = None  # Single-allocation mode configuration
 
 
 @dataclass
@@ -118,7 +183,7 @@ class BenchmarkConfig:
     cache_file: Optional[Path] = None
     search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
-    executor_options: Optional[ExecutorOptionsConfig] = None  # executor-specific configuration
+    slurm_options: Optional[SlurmOptionsConfig] = None  # SLURM-specific configuration (commands, polling, allocation)
     random_seed: Optional[int] = None  # seed for any random operations
     cache_exclude_vars: Optional[List[str]] = None  # variables to exclude from cache hash
     exhaustive_vars: Optional[List[str]] = None  # variables to exhaustively test for each search point
@@ -193,12 +258,40 @@ class ParserConfig:
 
 
 @dataclass
+class MPIConfig:
+    """
+    DEPRECATED: MPI configuration is no longer supported.
+
+    In single-allocation mode, use srun directly in script_template with Jinja2 variables.
+
+    Example (single-allocation mode):
+        scripts:
+          - name: "benchmark"
+            script_template: |
+              #!/bin/bash
+              module load openmpi
+              srun --nodes={{ nodes }} --ntasks-per-node={{ ppn }} {{ command.template }}
+
+    This class is kept for backward compatibility with YAML parsing,
+    but using it will raise a ConfigValidationError.
+    """
+    launcher: str = "mpirun"
+    nodes: Optional[str] = "all"
+    ppn: Optional[str] = None
+    pass_env: Dict[str, str] = field(default_factory=lambda: {
+        "PATH": "$PATH",
+        "LD_LIBRARY_PATH": "$LD_LIBRARY_PATH"
+    })
+    extra_options: List[str] = field(default_factory=list)
+
+
+@dataclass
 class ScriptConfig:
     name: str
-    submit: str
     script_template: str
     post: Optional[PostConfig] = None      # optional
     parser: Optional[ParserConfig] = None  # optional
+    mpi: Optional[MPIConfig] = None        # DEPRECATED: raises error if used
 
 
 @dataclass

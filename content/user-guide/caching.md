@@ -8,6 +8,7 @@ title: "Execution Cache Usage Guide"
 
 1. [Overview](#overview)
 2. [Configuration](#configuration)
+3. [Rebuilding the Cache](#rebuilding-the-cache)
 
 ---
 
@@ -155,7 +156,7 @@ Since `block_size` hasn't changed, the cache hash remains the same, and you'll g
 ### Inspecting the Cache
 
 ```python
-from iops.execution.cache import ExecutionCache
+from iops.cache import ExecutionCache
 from pathlib import Path
 
 cache = ExecutionCache(Path("/path/to/cache.db"))
@@ -170,6 +171,74 @@ print(f"Date range: {stats['oldest_entry']} to {stats['newest_entry']}")
 cache.clear_cache()
 ```
 
+## Rebuilding the Cache
+
+Sometimes you discover after a long campaign of executions that a variable should have been excluded from the cache hash. For example, a path-based variable was included, causing every execution to have a unique hash even when the benchmark parameters were identical.
+
+The `iops cache rebuild` command allows you to create a new cache database with different excluded variables, consolidating entries that now hash to the same value.
+
+### Usage
+
+```bash
+# Rebuild cache excluding additional variables
+iops cache rebuild ./workdir/__iops_cache.db --exclude summary_file,output_path
+
+# Specify output file (default: <source>_rebuilt.db)
+iops cache rebuild ./workdir/__iops_cache.db --exclude summary_file -o new_cache.db
+```
+
+### Example Scenario
+
+You ran 100 executions with this configuration:
+
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep: { mode: list, values: [2, 4, 8] }
+  output_file:
+    type: str
+    expr: "{{ execution_dir }}/results.txt"  # Oops! Should have been excluded
+```
+
+The cache now has 100 unique hashes because `output_file` differs for each execution. After rebuilding with `--exclude output_file`, entries with the same `nodes` value will collapse to the same hash.
+
+```bash
+$ iops cache rebuild cache.db --exclude output_file
+
+Cache Rebuild Summary
+==================================================
+Source entries:        100
+Source unique hashes:  100
+Excluded variables:    output_file
+--------------------------------------------------
+Output entries:        100
+Output unique hashes:  3
+Collapsed entries:     97
+==================================================
+Rebuilt cache saved to: cache_rebuilt.db
+```
+
+### How It Works
+
+1. Reads all entries from the source cache
+2. Re-normalizes parameters excluding the specified variables
+3. Re-computes the hash for each entry
+4. Writes all entries to the new database
+
+**Important**: When multiple entries collapse to the same `(hash, repetition)`, all entries are preserved. The rebuilt database does not enforce uniqueness, allowing you to keep all historical data. When reading from the cache, IOPS uses `ORDER BY created_at DESC LIMIT 1` to return the most recent entry.
+
+### After Rebuilding
+
+1. Update your YAML config to use the rebuilt cache and add the excluded variables:
+   ```yaml
+   benchmark:
+     cache_file: "./workdir/cache_rebuilt.db"
+     cache_exclude_vars: ["output_file"]  # Prevent future issues
+   ```
+
+2. Future runs with `--use-cache` will now find cache hits for matching parameters.
+
 ### Cache Behavior Details
 
 **When cache is used:**
@@ -181,4 +250,10 @@ cache.clear_cache()
 1. After successful execution (`STATUS_SUCCEEDED`)
 2. Store `(params, repetition, metrics, metadata)` in cache
 3. On duplicate (same params/repetition): update with latest result
+
+### Core-Hours Savings Tracking
+
+When using cache with a core-hours budget (`max_core_hours`), cached tests don't count toward the budget and IOPS tracks how many core-hours were saved. This appears in progress logs and final summary.
+
+See the **[Budget Control](../budget-control#cache-interaction)** guide for details.
 

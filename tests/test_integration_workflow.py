@@ -260,12 +260,17 @@ class TestExhaustivePlannerWorkflow:
 
     def test_exhaustive_with_upfront_folders(self, mock_workdir, mock_config_file):
         """Test exhaustive run with create_folders_upfront enabled."""
+        # Use a constraint that references a derived variable (computed)
+        # so it's classified as a "late" constraint and creates skipped instances.
+        # Early constraints (using only swept vars) filter before instance creation.
         config_content = create_mock_config(
             workdir=str(mock_workdir),
             search_method="exhaustive",
             repetitions=1,
             create_folders_upfront=True,
-            constraints=[{"name": "limit_a", "rule": "param_a < 3", "policy": "skip"}],
+            # computed = param_a * param_b
+            # computed < 25 filters: (2,20)->40, (3,10)->30, (3,20)->60 = 3 skipped
+            constraints=[{"name": "limit_computed", "rule": "computed < 25", "policy": "skip"}],
         )
         config_file = mock_config_file(config_content)
         cfg = load_generic_config(config_file, logging.getLogger("test"))
@@ -284,8 +289,10 @@ class TestExhaustivePlannerWorkflow:
             index = json.load(f)
 
         assert index.get("folders_upfront") is True
-        assert index.get("active_tests") == 4  # param_a in [1, 2] * param_b in [10, 20]
-        assert index.get("skipped_tests") == 2  # param_a = 3 * param_b in [10, 20]
+        # Active: (1,10)->10, (1,20)->20, (2,10)->20 = 3
+        assert index.get("active_tests") == 3
+        # Skipped: (2,20)->40, (3,10)->30, (3,20)->60 = 3
+        assert index.get("skipped_tests") == 3
 
         # Check SKIPPED status files exist
         skipped_count = 0
@@ -300,7 +307,7 @@ class TestExhaustivePlannerWorkflow:
                 assert status["status"] == "SKIPPED"
                 assert status.get("reason") == "constraint"
 
-        assert skipped_count == 2
+        assert skipped_count == 3
 
 
 # =============================================================================

@@ -85,23 +85,27 @@ benchmark:
   # Options:
   #   - "local": Run scripts locally using subprocess
   #   - "slurm": Submit jobs to SLURM cluster via sbatch
-  
+
   # executor: "local"
-  
+
   executor: "slurm"
+
+  # ===========================================================================
+  # SLURM-ONLY CONFIGURATION
+  # ===========================================================================
+  # The following options only apply when executor: "slurm"
+  # ===========================================================================
+
   # ---------------------------------------------------------------------------
   # EXECUTOR OPTIONS (optional)
   # ---------------------------------------------------------------------------
-  # For SLURM executor: Customize commands used for job management
-  # Commands are templates that support {job_id} placeholder for runtime substitution
-  # Useful when running on systems with command wrappers or custom SLURM installations
-  #
-  # Uncomment to customize SLURM commands:
+  # Customize commands used for job management.
+  # Commands are templates that support {job_id} placeholder for runtime substitution.
+  # Useful when running on systems with command wrappers or custom SLURM installations.
   # ---------------------------------------------------------------------------
-  # executor_options:
+  # slurm_options:
   #   commands:
-  #     # Default submit command (default: "sbatch")
-  #     # Can be overridden per-script via scripts[].submit
+  #     # Submit command (default: "sbatch")
   #     submit: "sbatch"
   #
   #     # Command to query job status (default: "squeue -j {job_id} --noheader --format=%T")
@@ -118,6 +122,74 @@ benchmark:
   #   # Controls how often IOPS queries job status during wait_and_collect
   #   poll_interval: 30
   #
+  #   # -------------------------------------------------------------------------
+  #   # SINGLE-ALLOCATION MODE (optional)
+  #   # -------------------------------------------------------------------------
+  #   # Run all tests within ONE SLURM allocation instead of submitting individual
+  #   # jobs per test. This reduces job submission overhead and is useful for:
+  #   #   - HPC systems with job limits or long queue wait times
+  #   #   - Running many small tests efficiently
+  #   #   - Reducing scheduler load
+  #   #
+  #   # In single-allocation mode:
+  #   #   - IOPS submits ONE sbatch job using your allocation_script
+  #   #   - Tests run via: srun --jobid=<id> --overlap bash script.sh
+  #   #   - Each test's stdout/stderr is still captured separately
+  #   #   - Caching, parsing, and folder structure work identically
+  #   #   - Individual script #SBATCH directives are ignored
+  #   #
+  #   # IOPS injects: shebang (if missing), job-name, output/error paths,
+  #   # and a sleep command to keep the allocation alive.
+  #   #
+  #   # Script requirements:
+  #   #   - No #SBATCH directives needed (allocation_script controls resources)
+  #   #   - Load modules in the script (srun starts a fresh shell)
+  #   #   - For MPI programs, use the 'mpi:' block in scripts (see below)
+  #   # -------------------------------------------------------------------------
+  #   allocation:
+  #     # Allocation mode: "single" or "per-test" (default)
+  #     mode: "single"
+  #
+  #     # Per-test timeout in seconds (default: 3600)
+  #     # If a test exceeds this timeout, it is marked as failed
+  #     test_timeout: 300
+  #
+  #     # SBATCH directives for the allocation (required when mode="single")
+  #     # Include all resource requests: nodes, time, partition, account, etc.
+  #     allocation_script: |
+  #       #SBATCH --nodes=8
+  #       #SBATCH --time=02:00:00
+  #       #SBATCH --partition=batch
+  #       #SBATCH --account=myaccount
+  #       #SBATCH --exclusive
+  #       #SBATCH --constraint=ib
+
+  # ---------------------------------------------------------------------------
+  # BUDGET CONFIGURATION (optional)
+  # ---------------------------------------------------------------------------
+  # Control resource usage with core-hour budgets.
+  # Execution stops when budget is exhausted.
+  # ---------------------------------------------------------------------------
+
+  # Maximum CPU core-hours budget
+  # Can be overridden with --max-core-hours CLI argument
+  # max_core_hours: 1000
+
+  # Jinja expression to compute cores used per execution
+  # Used with max_core_hours for budget tracking
+  # Examples:
+  #   - "{{ ntasks }}" - total tasks across all nodes
+  #   - "{{ nodes * processes_per_node }}" - explicit calculation
+  # cores_expr: "{{ ntasks }}"
+
+  # Estimated execution time per test in seconds
+  # Used for dry-run budget analysis and scheduling estimates
+  # Can be overridden with --estimated-time CLI argument (supports scenarios: "120,240,360")
+  # estimated_time_seconds: 300
+
+  # ===========================================================================
+  # END SLURM-ONLY CONFIGURATION
+  # ===========================================================================
 
   # Optional: Random seed for reproducible random operations (default: None)
   # Used by random and bayesian search methods
@@ -177,23 +249,6 @@ benchmark:
   #   - IOPS tests all ost_num values: (4, 64, ost_num=1), (4, 64, ost_num=2), etc.
   # For exhaustive search: this has no effect (all combinations already tested)
   # exhaustive_vars: ["ost_num"]
-
-  # Optional: Budget configuration (SLURM only)
-  # Maximum CPU core-hours budget - execution stops when budget is exhausted
-  # Can be overridden with --max-core-hours CLI argument
-  # max_core_hours: 1000
-
-  # Optional: Jinja expression to compute cores used per execution (SLURM only)
-  # Used with max_core_hours for budget tracking
-  # Examples:
-  #   - "{{ ntasks }}" - total tasks across all nodes
-  #   - "{{ nodes * processes_per_node }}" - explicit calculation
-  # cores_expr: "{{ ntasks }}"
-
-  # Optional: Estimated execution time per test in seconds (SLURM only)
-  # Used for dry-run budget analysis and scheduling estimates
-  # Can be overridden with --estimated-time CLI argument (supports scenarios: "120,240,360")
-  # estimated_time_seconds: 300
 
   # Optional: Variables to include in analysis reports
   # When using --report, only these variables will be used in plots and Pareto frontier
@@ -388,9 +443,27 @@ scripts:
   # Script name (can define multiple scripts)
   - name: "ior"
 
-    # Submission method for this script (required for local and slurm executors)
-    # submit: "bash"      # for local executor
-    submit: "sbatch"      # for SLURM executor
+    # ---------------------------------------------------------------------------
+    # MPI CONFIGURATION (optional, single-allocation mode only)
+    # ---------------------------------------------------------------------------
+    # Simplifies MPI launching in single-allocation mode by automatically:
+    #   - Adding SLURM_NODEID check (only node 0 runs mpirun)
+    #   - Constructing NODELIST from SLURM_JOB_NODELIST
+    #   - Adding mpirun flags (--oversubscribe, --mca plm rsh, etc.)
+    #   - Passing environment variables specified in pass_env
+    #
+    # When 'mpi:' is configured, IOPS wraps your script with MPI launch logic.
+    # Your script just needs {{ command.template }} - IOPS handles the rest.
+    # ---------------------------------------------------------------------------
+    # mpi:
+    #   launcher: "mpirun"           # "mpirun" (default) or "srun"
+    #   nodes: "{{ nodes }}"         # Variable, number, or "all" (default)
+    #   ppn: "{{ ppn }}"             # Processes per node (required)
+    #   pass_env:                    # Env vars to pass (default: PATH, LD_LIBRARY_PATH)
+    #     - LD_PRELOAD               # Add any custom vars your script exports
+    #     - MY_CUSTOM_VAR
+    #   extra_options:               # Additional launcher flags
+    #     - "--mca btl tcp,self"
 
     # ---------------------------------------------------------------------------
     # SCRIPT TEMPLATE

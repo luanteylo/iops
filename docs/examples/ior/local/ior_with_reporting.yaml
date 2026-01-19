@@ -78,7 +78,6 @@ command:
 
 scripts:
   - name: "ior_benchmark"
-    submit: "bash"
 
     script_template: |
       #!/bin/bash
