@@ -30,60 +30,37 @@ All notable changes to IOPS are documented here.
 ## [3.4.0] - 2026-01-13
 
 ### Added
-- Archive module for workdir portability (`iops archive create/extract`)
-- Progress bars for archive operations
-- Conditional variables with `when`/`default` fields
-- Watch mode for real-time execution monitoring (`iops watch`)
-- Metrics display and filtering in watch mode
-- Cache indicator and `--cached` filter for find/watch commands
-- `fallback_to_exhaustive` option for Bayesian planner
-- `create_folders_upfront` benchmark option
-- Client-side search for documentation site
-
-### Changed
-- Centralized validation logic in loader.py
-- Restructured documentation for v3.0
-- Reorganized code structure to align with CLI commands
-
-### Fixed
-- Archive progress bar performance with compression level tuning
-- Metrics not showing when using `--hide` in watch mode
-- Duration tracking to use cached sysinfo
-- Bayesian planner edge case bugs
-- Search index to include full page content
-- File permission test when running as root
-
-## [3.3.0] - 2026-01-09
-
 - Subcommand-based CLI structure (`run`, `check`, `generate`, `report`, `find`)
 - `find` command to explore execution folders with parameter filtering
 - Execution status tracking with `--status` filter (SUCCEEDED, FAILED, ERROR)
-- `--show-command` and `--full` flags for find output
-- YAML file shorthand: `iops config.yaml` works as `iops run config.yaml`
-- `dryrun_` prefix for dry-run folders
-- Renamed `sqlite_db` to `cache_file`
-- Portable workdir metadata with relative paths
-- System info collection and config validation
-
-## [3.2.0] - 2026-01-08
-
+- Archive module for workdir portability (`iops archive create/extract`)
+- Watch mode for real-time execution monitoring (`iops watch`)
+- Conditional variables with `when`/`default` fields
 - Enhanced Bayesian optimization with `base_estimator`, `xi`, `kappa`, `n_iterations`
 - Search space efficiency statistics in Bayesian reports
-- Variable values shown on hover in Bayesian evolution plot
+- `fallback_to_exhaustive` option for Bayesian planner
+- `create_folders_upfront` benchmark option
+- System info collection and config validation
+- Client-side search for documentation site
+
+### Changed
+- YAML file shorthand: `iops config.yaml` works as `iops run config.yaml`
+- Renamed `sqlite_db` to `cache_file`
 - Renamed `target_metric` to `objective_metric`
 - Removed rounds feature and simplified planner architecture
 - Made pyarrow an optional dependency
+- Portable workdir metadata with relative paths
+- Centralized validation logic in loader.py
+- Restructured documentation for v3
 
-## [3.1.0] - 2025-12-23
+### Fixed
+- Bayesian planner edge case bugs
+- Archive progress bar performance with compression level tuning
+- Metrics not showing when using `--hide` in watch mode
+- Duration tracking to use cached sysinfo
+- Search index to include full page content
 
-- User-configurable reporting system with 8 plot types
-- `reporting` configuration section for plot customization
-- `--report-config` CLI option to regenerate reports with different settings
-- Auto-generated `report_config.yaml` templates after execution
-- Theme configuration (colors, fonts, plotly styles)
-- Spack package support
-
-## [3.0.0] - 2025-12-20
+## [3.2.0] - 2025-12
 
 Major overhaul transforming IOPS into a generic benchmark orchestration framework.
 
@@ -100,11 +77,16 @@ Major overhaul transforming IOPS into a generic benchmark orchestration framewor
 - Parameter constraints to filter invalid configurations
 - Configurable SLURM commands via `slurm_options`
 - `exhaustive_vars` for hybrid search strategies
+- User-configurable reporting system with 8 plot types
+- `reporting` configuration section for plot customization
+- `--report-config` CLI option to regenerate reports
+- Theme configuration (colors, fonts, plotly styles)
 - PyPI packaging as `iops-benchmark`
+- Spack package support
 
 ## [2.0.0] - 2024
 
-Internal development version that introduced architectural changes leading to 3.0.0.
+Internal development version that introduced architectural changes leading to 3.2.0.
 
 - Database-backed storage for results
 - Improved executor architecture with better SLURM support
