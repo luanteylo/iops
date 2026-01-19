@@ -157,9 +157,9 @@ Examples:
     # Executor type (mutually exclusive)
     executor_group = generate_parser.add_mutually_exclusive_group()
     executor_group.add_argument('--local', action='store_true', dest='executor_local',
-                                help="Generate template for local execution (default)")
+                                help="Generate template for local execution")
     executor_group.add_argument('--slurm', action='store_true', dest='executor_slurm',
-                                help="Generate template for SLURM cluster execution")
+                                help="Generate template for SLURM cluster execution (default)")
 
     # Benchmark type (mutually exclusive)
     benchmark_group = generate_parser.add_mutually_exclusive_group()
@@ -418,8 +418,8 @@ def main():
         from iops.setup import BenchmarkWizard
 
         try:
-            # Determine executor (default: local)
-            executor = "slurm" if args.executor_slurm else "local"
+            # Determine executor (default: slurm)
+            executor = "local" if args.executor_local else "slurm"
 
             # Determine benchmark (default: ior)
             benchmark = "mdtest" if args.benchmark_mdtest else "ior"

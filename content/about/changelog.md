@@ -4,6 +4,29 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [3.5.0] - Unreleased
+
+### Added
+- Resource tracing for CPU and memory monitoring (`trace_resources`, `trace_interval`)
+- Single-allocation mode for batch SLURM execution (`slurm_options.allocation`) [experimental]
+- `iops cache rebuild` command to exclude variables retroactively
+- Parser script context injection (`vars`, `env`, `execution_id`, `repetition` globals)
+- `--partial` and `--min-reps` flags for partial archive creation
+- Unknown key validation with "did you mean?" suggestions for YAML config
+- Core-hours tracking for cache hits in dry-run estimates
+
+### Changed
+- Renamed `executor_options` to `slurm_options` (old name deprecated, remove in 3.7.0)
+- Removed `scripts[].submit` field 
+- Removed `output.sink.include` option
+- `iops generate` now defaults to SLURM executor (use `--local` for local)
+- Separate user labels from IOPS internal metadata in output
+- Default output path when `output.sink.path` not specified
+
+### Fixed
+- Dry-run cache lookup using wrong repetition values
+- Constraint evaluation order (swept vars before derived expressions)
+
 ## [3.4.0] - 2026-01-13
 
 ### Added

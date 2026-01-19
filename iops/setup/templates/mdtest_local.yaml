@@ -60,7 +60,6 @@ command:
 
 scripts:
   - name: "mdtest"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       set -euo pipefail

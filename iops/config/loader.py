@@ -114,6 +114,31 @@ def _expand_path(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
 
 
+def _handle_deprecated_field(data: dict, old_name: str, new_name: str, section: str = "benchmark") -> None:
+    """
+    Handle renamed config fields with deprecation warning.
+
+    If old_name is present in data, emits a DeprecationWarning and copies the value
+    to new_name (if new_name is not already set).
+
+    Args:
+        data: Dictionary containing config data
+        old_name: Deprecated field name
+        new_name: New field name to use
+        section: Config section for error message (e.g., "benchmark")
+    """
+    if old_name in data and data[old_name] is not None:
+        import warnings
+        warnings.warn(
+            f"{section}.{old_name} is deprecated, use {section}.{new_name} instead. "
+            f"See https://iops.dev/about/deprecations for migration guide.",
+            DeprecationWarning,
+            stacklevel=4  # Caller -> _parse_to_config -> load_generic_config -> user code
+        )
+        if new_name not in data or data[new_name] is None:
+            data[new_name] = data[old_name]
+
+
 def _validate_allowed_keys(
     data: dict,
     allowed_keys: Set[str],
@@ -667,17 +692,8 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     if key_errors:
         raise ConfigValidationError("\n".join(key_errors))
 
-    # Handle deprecated executor_options -> slurm_options rename
-    if "executor_options" in b and b["executor_options"] is not None:
-        import warnings
-        warnings.warn(
-            "benchmark.executor_options is deprecated, use benchmark.slurm_options instead",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        # Use executor_options if slurm_options not provided
-        if "slurm_options" not in b or b["slurm_options"] is None:
-            b["slurm_options"] = b["executor_options"]
+    # Handle deprecated fields (see CLAUDE.md for deprecation schedule)
+    _handle_deprecated_field(b, "executor_options", "slurm_options", "benchmark")
 
     # Parse slurm_options if present
     slurm_options = None
