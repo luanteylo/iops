@@ -373,9 +373,6 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
         script_lines = script.script_template.strip().split('\n')
         logger.debug(f"  Script #{i}: {script.name} ({len(script_lines)} lines)")
 
-        if script.mpi:
-            logger.debug(f"    MPI: nodes={script.mpi.nodes}, ppn={script.mpi.ppn}, launcher={script.mpi.launcher}, pass_env={script.mpi.pass_env}")
-
         if script.post:
             post_lines = script.post.script.strip().split('\n')
             logger.debug(f"    Post-script: {len(post_lines)} lines")

@@ -36,7 +36,6 @@ from iops.config.models import (
     PostConfig,
     ParserConfig,
     MetricConfig,
-    MPIConfig,
     OutputConfig,
     OutputSinkConfig,
     ReportingConfig,
@@ -330,42 +329,89 @@ def validate_parser_script(
     return True, None
 
 
-def _load_script_content(content: str, config_dir: Path) -> str:
+def _looks_like_file_path(content: str) -> bool:
+    """
+    Determine if content looks like a file path rather than inline script.
+
+    Uses heuristics to detect file paths:
+    - Single line (no newlines)
+    - Common script extensions (.sh, .py, .bash, .pl, .rb)
+    - Starts with path prefixes (./, ../, /, ~/)
+    - Few or no Jinja2 template braces
+
+    Args:
+        content: String to check
+
+    Returns:
+        True if content appears to be a file path
+    """
+    if not content or "\n" in content:
+        return False
+
+    content = content.strip()
+
+    # Common script file extensions
+    script_extensions = (".sh", ".py", ".bash", ".pl", ".rb", ".zsh", ".fish")
+    if content.endswith(script_extensions):
+        return True
+
+    # Path prefixes that indicate file paths
+    path_prefixes = ("./", "../", "/", "~/")
+    if content.startswith(path_prefixes):
+        return True
+
+    # If it has many Jinja2 braces, it's likely inline content
+    if content.count("{") >= 3:
+        return False
+
+    # Single word without spaces and special chars could be a filename
+    # but we'll be conservative and only flag obvious paths
+    return False
+
+
+def _load_script_content(content: str, config_dir: Path, context: str = "script") -> str:
     """
     Load script content from inline text or file path.
 
-    If content looks like a file path and the file exists, reads and returns file contents.
-    Otherwise, returns the content as-is (inline script).
+    If content looks like a file path, attempts to load it and raises an error
+    if the file doesn't exist. Otherwise, returns the content as-is (inline script).
 
     Args:
         content: Either inline script text or a file path
         config_dir: Directory containing the YAML config (for relative paths)
+        context: Description of what's being loaded (for error messages)
 
     Returns:
         Script content (either from file or inline)
+
+    Raises:
+        ConfigValidationError: If content looks like a file path but file doesn't exist
     """
     if not content or not isinstance(content, str):
         return content
 
     content = content.strip()
 
-    # Heuristic: if it's a single line without newlines and looks like a path
-    if "\n" not in content and ("{" not in content or content.count("{") < 3):
-        # Try to interpret as file path
-        try:
-            # Try relative to config directory first
-            script_path = config_dir / content
-            if script_path.is_file():
-                with open(script_path, "r", encoding="utf-8") as f:
-                    return f.read()
+    # Check if this looks like a file path
+    if _looks_like_file_path(content):
+        # Try relative to config directory first
+        script_path = config_dir / content
+        if script_path.is_file():
+            with open(script_path, "r", encoding="utf-8") as f:
+                return f.read()
 
-            # Try absolute path
-            abs_path = Path(content).expanduser()
-            if abs_path.is_file():
-                with open(abs_path, "r", encoding="utf-8") as f:
-                    return f.read()
-        except Exception:
-            pass  # Not a valid file path, treat as inline content
+        # Try absolute path
+        abs_path = Path(content).expanduser()
+        if abs_path.is_file():
+            with open(abs_path, "r", encoding="utf-8") as f:
+                return f.read()
+
+        # File path looks valid but file doesn't exist - raise error
+        raise ConfigValidationError(
+            f"{context} appears to be a file path but the file was not found: '{content}'\n"
+            f"  Searched: {script_path}\n"
+            f"  Searched: {abs_path}"
+        )
 
     # Return as inline content
     return content
@@ -866,8 +912,18 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         if key_errors:
             raise ConfigValidationError("\n".join(key_errors))
 
+        # Reject deprecated mpi config
+        if s.get("mpi") is not None:
+            raise ConfigValidationError(
+                f"scripts[{idx}] ({script_name}) has 'mpi' config which is no longer supported. "
+                f"Use srun directly in script_template with Jinja2 variables. "
+                f"Example: srun --nodes={{{{ nodes }}}} --ntasks-per-node={{{{ ppn }}}} {{{{ command.template }}}}"
+            )
+
         # Load script_template (inline or from file)
-        script_template = _load_script_content(s["script_template"], config_dir)
+        script_template = _load_script_content(
+            s["script_template"], config_dir, f"scripts[{idx}].script_template"
+        )
 
         # optional post
         post_block = s.get("post")
@@ -882,7 +938,9 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             # YAML: post: { script: "..." }  OR post: \n  script: |
             post_script = post_block.get("script")
             if post_script:
-                post_script = _load_script_content(post_script, config_dir)
+                post_script = _load_script_content(
+                    post_script, config_dir, f"scripts[{idx}].post.script"
+                )
             post_cfg = PostConfig(script=post_script)
 
         # optional parser
@@ -912,32 +970,14 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             # Load parser_script (inline or from file)
             parser_script = parser_block.get("parser_script")
             if parser_script:
-                parser_script = _load_script_content(parser_script, config_dir)
+                parser_script = _load_script_content(
+                    parser_script, config_dir, f"scripts[{idx}].parser.parser_script"
+                )
 
             parser_cfg = ParserConfig(
                 file=parser_block["file"],
                 metrics=metrics_cfg,
                 parser_script=parser_script,
-            )
-
-        # optional mpi config
-        mpi_block = s.get("mpi")
-        mpi_cfg = None
-        if mpi_block is not None:
-            # Parse mpi configuration
-            # pass_env defaults to {PATH: "$PATH", LD_LIBRARY_PATH: "$LD_LIBRARY_PATH"}
-            pass_env = mpi_block.get("pass_env")
-            if pass_env is None:
-                pass_env = {"PATH": "$PATH", "LD_LIBRARY_PATH": "$LD_LIBRARY_PATH"}
-            elif isinstance(pass_env, list):
-                # Backwards compatibility: convert list to dict with shell expansion
-                pass_env = {var: f"${var}" for var in pass_env}
-            mpi_cfg = MPIConfig(
-                launcher=mpi_block.get("launcher", "mpirun"),
-                nodes=str(mpi_block.get("nodes", "all")),  # Always store as string
-                ppn=str(mpi_block.get("ppn")) if mpi_block.get("ppn") is not None else None,
-                pass_env=pass_env,
-                extra_options=mpi_block.get("extra_options", []),
             )
 
         scripts.append(
@@ -946,7 +986,6 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 script_template=script_template,
                 post=post_cfg,
                 parser=parser_cfg,
-                mpi=mpi_cfg,
             )
         )
 
@@ -1606,14 +1645,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"script '{s.name}' parser.metrics must be non-empty "
                     f"(positional mapping requires metric names)"
                 )
-
-        # mpi config is deprecated - raise error if used
-        if s.mpi is not None:
-            raise ConfigValidationError(
-                f"script '{s.name}' has 'mpi' config which is no longer supported. "
-                f"In single-allocation mode, use srun directly in script_template with Jinja2 variables. "
-                f"Example: srun --nodes={{{{ nodes }}}} --ntasks-per-node={{{{ ppn }}}} {{{{ command.template }}}}"
-            )
 
     # ---- output ----
     sink = cfg.output.sink

@@ -258,40 +258,11 @@ class ParserConfig:
 
 
 @dataclass
-class MPIConfig:
-    """
-    DEPRECATED: MPI configuration is no longer supported.
-
-    In single-allocation mode, use srun directly in script_template with Jinja2 variables.
-
-    Example (single-allocation mode):
-        scripts:
-          - name: "benchmark"
-            script_template: |
-              #!/bin/bash
-              module load openmpi
-              srun --nodes={{ nodes }} --ntasks-per-node={{ ppn }} {{ command.template }}
-
-    This class is kept for backward compatibility with YAML parsing,
-    but using it will raise a ConfigValidationError.
-    """
-    launcher: str = "mpirun"
-    nodes: Optional[str] = "all"
-    ppn: Optional[str] = None
-    pass_env: Dict[str, str] = field(default_factory=lambda: {
-        "PATH": "$PATH",
-        "LD_LIBRARY_PATH": "$LD_LIBRARY_PATH"
-    })
-    extra_options: List[str] = field(default_factory=list)
-
-
-@dataclass
 class ScriptConfig:
     name: str
     script_template: str
     post: Optional[PostConfig] = None      # optional
     parser: Optional[ParserConfig] = None  # optional
-    mpi: Optional[MPIConfig] = None        # DEPRECATED: raises error if used
 
 
 @dataclass

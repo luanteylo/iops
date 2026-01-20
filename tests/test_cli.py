@@ -312,7 +312,7 @@ class TestGenerate:
             # Verify custom path was passed with default options
             mock_wizard.run.assert_called_once_with(
                 output_path='custom.yaml',
-                executor='local',
+                executor='slurm',
                 benchmark='ior',
                 full_template=False,
                 copy_examples=False

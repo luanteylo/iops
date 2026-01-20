@@ -358,3 +358,106 @@ def test_deprecated_executor_options_backwards_compat(tmp_path, sample_config_di
     # Config should still load correctly with the value
     assert config.benchmark.slurm_options is not None
     assert config.benchmark.slurm_options.poll_interval == 60
+
+
+# ============================================================================
+# Script file path validation tests
+# ============================================================================
+
+def test_script_template_file_not_found(tmp_path, sample_config_dict):
+    """Test that missing script_template file raises error."""
+    sample_config_dict["scripts"][0]["script_template"] = "./missing_script.sh"
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="file was not found"):
+        load_config(config_file)
+
+
+def test_post_script_file_not_found(tmp_path, sample_config_dict):
+    """Test that missing post.script file raises error."""
+    sample_config_dict["scripts"][0]["post"] = {"script": "./missing_post.sh"}
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="file was not found"):
+        load_config(config_file)
+
+
+def test_parser_script_file_not_found(tmp_path, sample_config_dict):
+    """Test that missing parser_script file raises error."""
+    sample_config_dict["scripts"][0]["parser"]["parser_script"] = "./missing_parser.py"
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="file was not found"):
+        load_config(config_file)
+
+
+def test_script_template_file_loads_successfully(tmp_path, sample_config_dict):
+    """Test that existing script_template file loads correctly."""
+    script_file = tmp_path / "my_script.sh"
+    script_file.write_text("#!/bin/bash\necho 'Hello from file'\n")
+
+    sample_config_dict["scripts"][0]["script_template"] = str(script_file)
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert "Hello from file" in config.scripts[0].script_template
+
+
+def test_post_script_file_loads_successfully(tmp_path, sample_config_dict):
+    """Test that existing post.script file loads correctly."""
+    post_file = tmp_path / "cleanup.sh"
+    post_file.write_text("#!/bin/bash\nrm -rf /tmp/test\n")
+
+    sample_config_dict["scripts"][0]["post"] = {"script": str(post_file)}
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert "rm -rf /tmp/test" in config.scripts[0].post.script
+
+
+def test_parser_script_file_loads_successfully(tmp_path, sample_config_dict):
+    """Test that existing parser_script file loads correctly."""
+    parser_file = tmp_path / "parser.py"
+    parser_file.write_text("def parse(file_path):\n    return {'metric': 42.0}\n")
+
+    sample_config_dict["scripts"][0]["parser"]["parser_script"] = str(parser_file)
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert "return {'metric': 42.0}" in config.scripts[0].parser.parser_script
+
+
+def test_inline_script_not_mistaken_for_file(tmp_path, sample_config_dict):
+    """Test that inline scripts with multiple lines are not treated as file paths."""
+    # Multi-line inline script should work even if first line looks like a path
+    sample_config_dict["scripts"][0]["script_template"] = "#!/bin/bash\necho 'inline script'"
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert "inline script" in config.scripts[0].script_template
+
+
+def test_script_with_jinja_not_mistaken_for_file(tmp_path, sample_config_dict):
+    """Test that scripts with Jinja2 templates are not treated as file paths."""
+    # Single line with many braces should be treated as inline content
+    sample_config_dict["scripts"][0]["script_template"] = "echo {{ var1 }} {{ var2 }} {{ var3 }}"
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert "{{ var1 }}" in config.scripts[0].script_template
