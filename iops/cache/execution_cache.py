@@ -13,6 +13,14 @@ from datetime import datetime
 
 from iops.logger import HasLogger
 
+# Default timeout for SQLite connections (seconds)
+# Higher value helps with slow filesystems like NFS
+DEFAULT_SQLITE_TIMEOUT = 60
+
+# Retry settings for database lock errors
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 0.5  # seconds
+
 
 class ExecutionCache(HasLogger):
     """
@@ -32,18 +40,20 @@ class ExecutionCache(HasLogger):
             - created_at: TEXT (timestamp)
     """
 
-    def __init__(self, db_path: Path, exclude_vars: Optional[List[str]] = None):
+    def __init__(self, db_path: Path, exclude_vars: Optional[List[str]] = None, timeout: int = DEFAULT_SQLITE_TIMEOUT):
         """
         Initialize the execution cache.
 
         Args:
             db_path: Path to SQLite database file
             exclude_vars: List of variable names to exclude from cache hash
+            timeout: SQLite connection timeout in seconds (default: 60, helps with NFS)
         """
         super().__init__()
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.exclude_vars = set(exclude_vars or [])
+        self.timeout = timeout
 
         self._init_db()
 
@@ -55,9 +65,56 @@ class ExecutionCache(HasLogger):
         else:
             self.logger.info(f"Execution cache initialized at: {self.db_path}")
 
+    def _connect_with_retry(self):
+        """
+        Create a SQLite connection with retry logic for handling lock errors.
+
+        NFS and other network filesystems can have delayed file locking,
+        causing "database is locked" errors. This method retries with
+        exponential backoff to handle such cases.
+
+        Returns:
+            sqlite3.Connection: An open database connection
+
+        Raises:
+            sqlite3.OperationalError: If connection fails after all retries
+        """
+        import time
+
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                conn = sqlite3.connect(str(self.db_path), timeout=self.timeout)
+                # Set busy timeout as additional protection
+                conn.execute(f"PRAGMA busy_timeout = {self.timeout * 1000}")
+                return conn
+            except sqlite3.OperationalError as e:
+                last_error = e
+                error_msg = str(e).lower()
+                # Retry on lock-related errors
+                if "locked" in error_msg or "busy" in error_msg:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    self.logger.warning(
+                        f"Database locked, retrying in {delay:.1f}s "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES}): {e}"
+                    )
+                    time.sleep(delay)
+                else:
+                    # Non-lock error, raise immediately
+                    raise
+
+        # All retries exhausted
+        raise sqlite3.OperationalError(
+            f"Failed to connect to cache database after {MAX_RETRIES} attempts. "
+            f"Last error: {last_error}. "
+            f"This may be caused by a slow filesystem (e.g., NFS). "
+            f"Consider using a local filesystem for the cache file."
+        )
+
     def _init_db(self):
         """Create the cache table if it doesn't exist."""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        conn = self._connect_with_retry()
+        try:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cached_executions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +135,8 @@ class ExecutionCache(HasLogger):
             """)
 
             conn.commit()
+        finally:
+            conn.close()
 
     def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -151,7 +210,8 @@ class ExecutionCache(HasLogger):
         normalized = self._normalize_params(params)
         param_hash = self._hash_params(normalized)
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        conn = self._connect_with_retry()
+        try:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -181,6 +241,8 @@ class ExecutionCache(HasLogger):
                 f"  [Cache] MISS: hash={param_hash[:8]} rep={repetition}"
             )
             return None
+        finally:
+            conn.close()
 
     def store_result(
         self,
@@ -206,7 +268,8 @@ class ExecutionCache(HasLogger):
         metadata_json = json.dumps(metadata, default=str)
         created_at = datetime.now().isoformat()
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        conn = self._connect_with_retry()
+        try:
             try:
                 conn.execute("""
                     INSERT INTO cached_executions
@@ -239,6 +302,8 @@ class ExecutionCache(HasLogger):
                     f"  [Cache] UPDATE: hash={param_hash[:8]} rep={repetition} "
                     f"metrics={len(metrics)} keys"
                 )
+        finally:
+            conn.close()
 
     def get_cached_repetitions_count(
         self,
@@ -256,7 +321,8 @@ class ExecutionCache(HasLogger):
         normalized = self._normalize_params(params)
         param_hash = self._hash_params(normalized)
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        conn = self._connect_with_retry()
+        try:
             cursor = conn.cursor()
 
             cursor.execute("""
@@ -266,12 +332,17 @@ class ExecutionCache(HasLogger):
 
             count = cursor.fetchone()[0]
             return count
+        finally:
+            conn.close()
 
     def clear_cache(self):
         """Clear all cached results."""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        conn = self._connect_with_retry()
+        try:
             conn.execute("DELETE FROM cached_executions")
             conn.commit()
+        finally:
+            conn.close()
 
         self.logger.info("Cache cleared")
 
@@ -282,7 +353,8 @@ class ExecutionCache(HasLogger):
         Returns:
             Dict with cache statistics
         """
-        with sqlite3.connect(str(self.db_path)) as conn:
+        conn = self._connect_with_retry()
+        try:
             cursor = conn.cursor()
 
             # Total entries
@@ -308,6 +380,8 @@ class ExecutionCache(HasLogger):
                 'newest_entry': newest,
                 'db_path': str(self.db_path),
             }
+        finally:
+            conn.close()
 
 
 # Standalone functions for use in rebuild operations
