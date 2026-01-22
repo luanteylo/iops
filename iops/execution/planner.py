@@ -10,7 +10,7 @@ This module contains all planner implementations:
 
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _render_template
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _render_template, _eval_expr
 from iops.execution.constraints import check_constraints_for_vars
 
 from typing import List, Dict, Any, Optional
@@ -1926,6 +1926,36 @@ class BayesianPlanner(BasePlanner, HasLogger):
             result[name] = value
         return result
 
+    def _compute_derived_vars(self, base_vars: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Compute derived variables from base variables.
+
+        Derived variables are those with `expr` defined in the config.
+        They are computed using the base variables as context.
+
+        Args:
+            base_vars: Dictionary of base variable values (swept + fixed)
+
+        Returns:
+            Dictionary with base vars + computed derived vars
+        """
+        result = dict(base_vars)
+
+        # Build derived var configs from cfg.vars
+        for name, vcfg in self.cfg.vars.items():
+            if vcfg.sweep is None and vcfg.expr is not None:
+                try:
+                    value = _eval_expr(vcfg.expr, vcfg.type, result)
+                    result[name] = value
+                except Exception as e:
+                    self.logger.debug(
+                        f"  [Bayesian] Could not compute derived var '{name}': {e}"
+                    )
+                    # Continue without this derived var - constraint check will fail
+                    # if it references this variable
+
+        return result
+
     def _check_constraints(self, params: List[Any]) -> bool:
         """
         Check if parameters satisfy all constraints.
@@ -1940,6 +1970,11 @@ class BayesianPlanner(BasePlanner, HasLogger):
             return True
 
         vars_dict = self._params_to_dict(params)
+
+        # Compute derived variables before checking constraints
+        # This is needed because constraints may reference derived vars
+        vars_dict = self._compute_derived_vars(vars_dict)
+
         is_valid, violations = check_constraints_for_vars(vars_dict, self.cfg.constraints)
 
         if violations:
