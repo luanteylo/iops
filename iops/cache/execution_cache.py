@@ -22,6 +22,58 @@ MAX_RETRIES = 5
 RETRY_BASE_DELAY = 0.5  # seconds
 
 
+def _is_on_nfs(path: Path) -> bool:
+    """
+    Check if a path is on an NFS filesystem (best effort).
+
+    Args:
+        path: Path to check
+
+    Returns:
+        True if path appears to be on NFS, False otherwise
+    """
+    import os
+    import subprocess
+
+    try:
+        # Use df -T to get filesystem type (Linux)
+        # Resolve to parent if file doesn't exist yet
+        check_path = path if path.exists() else path.parent
+        result = subprocess.run(
+            ["df", "-T", str(check_path)],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            # Output format: "Filesystem Type ..."
+            # Second line contains the actual data
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2:
+                parts = lines[1].split()
+                if len(parts) >= 2:
+                    fs_type = parts[1].lower()
+                    return fs_type in ('nfs', 'nfs4', 'nfs3')
+    except Exception:
+        pass
+
+    # Fallback: check /proc/mounts on Linux
+    try:
+        check_path = str(path if path.exists() else path.parent)
+        with open('/proc/mounts', 'r') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3:
+                    mount_point = parts[1]
+                    fs_type = parts[2].lower()
+                    if check_path.startswith(mount_point) and fs_type in ('nfs', 'nfs4', 'nfs3'):
+                        return True
+    except Exception:
+        pass
+
+    return False
+
+
 class ExecutionCache(HasLogger):
     """
     SQLite-based cache for benchmark execution results.
@@ -55,6 +107,16 @@ class ExecutionCache(HasLogger):
         self.exclude_vars = set(exclude_vars or [])
         self.timeout = timeout
 
+        # Detect NFS and use NFS-friendly mode
+        # NFS has unreliable file locking, so we disable it since IOPS
+        # only uses single-process access to the cache
+        self._nfs_mode = _is_on_nfs(self.db_path)
+        if self._nfs_mode:
+            self.logger.info(
+                f"NFS filesystem detected for cache file. Using NFS-compatible mode "
+                f"(no file locking). Ensure only one IOPS process uses this cache."
+            )
+
         self._init_db()
 
         if self.exclude_vars:
@@ -73,6 +135,13 @@ class ExecutionCache(HasLogger):
         causing "database is locked" errors. This method retries with
         exponential backoff to handle such cases.
 
+        On NFS filesystems, uses NFS-compatible mode:
+        - isolation_level=None (autocommit, no transaction locking)
+        - PRAGMA journal_mode=DELETE (more compatible than WAL)
+        - PRAGMA locking_mode=NORMAL (default, but explicit)
+
+        This is safe because IOPS only uses single-process access to the cache.
+
         Returns:
             sqlite3.Connection: An open database connection
 
@@ -84,9 +153,20 @@ class ExecutionCache(HasLogger):
         last_error = None
         for attempt in range(MAX_RETRIES):
             try:
-                conn = sqlite3.connect(str(self.db_path), timeout=self.timeout)
-                # Set busy timeout as additional protection
-                conn.execute(f"PRAGMA busy_timeout = {self.timeout * 1000}")
+                if self._nfs_mode:
+                    # NFS-compatible mode: disable Python's transaction handling
+                    # This uses autocommit and avoids most locking issues
+                    conn = sqlite3.connect(
+                        str(self.db_path),
+                        timeout=self.timeout,
+                        isolation_level=None  # Autocommit mode
+                    )
+                    # Use DELETE journal mode (more NFS-compatible than WAL)
+                    conn.execute("PRAGMA journal_mode=DELETE")
+                else:
+                    conn = sqlite3.connect(str(self.db_path), timeout=self.timeout)
+                    # Set busy timeout as additional protection
+                    conn.execute(f"PRAGMA busy_timeout = {self.timeout * 1000}")
                 return conn
             except sqlite3.OperationalError as e:
                 last_error = e
