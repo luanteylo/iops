@@ -10,7 +10,7 @@ This module contains all planner implementations:
 
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _render_template, _eval_expr
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _render_template, _eval_expr, _cast_value
 from iops.execution.constraints import check_constraints_for_vars
 
 from typing import List, Dict, Any, Optional
@@ -1903,11 +1903,17 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         Also includes fixed values (single-value sweeps) that are not part of
         the search space but need to be included in the parameter dict.
+
+        Values are cast to their proper types (int, float, bool, str) as defined
+        in the config to ensure cache hash consistency with the exhaustive planner.
         """
         result = {}
 
         # First, add all fixed values (single-value sweeps)
-        result.update(self.fixed_values)
+        # These also need type casting
+        for name, value in self.fixed_values.items():
+            var_type = self.cfg.vars[name].type
+            result[name] = _cast_value(var_type, value)
 
         # Then add optimized parameters
         for name, value in zip(self.var_names, params):
@@ -1923,7 +1929,11 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 idx = max(0, min(idx, len(self.ordinal_mappings[name]) - 1))
                 value = self.ordinal_mappings[name][idx]
 
-            result[name] = value
+            # Cast value to proper type (int, float, bool, str) as defined in config
+            # This ensures cache hash consistency with exhaustive planner
+            var_type = self.cfg.vars[name].type
+            result[name] = _cast_value(var_type, value)
+
         return result
 
     def _compute_derived_vars(self, base_vars: Dict[str, Any]) -> Dict[str, Any]:
