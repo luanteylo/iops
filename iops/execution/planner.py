@@ -10,8 +10,7 @@ This module contains all planner implementations:
 
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _render_template, _eval_expr, _cast_value
-from iops.execution.constraints import check_constraints_for_vars
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _cast_value
 
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
@@ -1936,66 +1935,6 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         return result
 
-    def _compute_derived_vars(self, base_vars: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Compute derived variables from base variables.
-
-        Derived variables are those with `expr` defined in the config.
-        They are computed using the base variables as context.
-
-        Args:
-            base_vars: Dictionary of base variable values (swept + fixed)
-
-        Returns:
-            Dictionary with base vars + computed derived vars
-        """
-        result = dict(base_vars)
-
-        # Build derived var configs from cfg.vars
-        for name, vcfg in self.cfg.vars.items():
-            if vcfg.sweep is None and vcfg.expr is not None:
-                try:
-                    value = _eval_expr(vcfg.expr, vcfg.type, result)
-                    result[name] = value
-                except Exception as e:
-                    self.logger.debug(
-                        f"  [Bayesian] Could not compute derived var '{name}': {e}"
-                    )
-                    # Continue without this derived var - constraint check will fail
-                    # if it references this variable
-
-        return result
-
-    def _check_constraints(self, params: List[Any]) -> bool:
-        """
-        Check if parameters satisfy all constraints.
-
-        Args:
-            params: List of parameter values
-
-        Returns:
-            True if all constraints pass (or only have "warn" policy)
-        """
-        if not self.cfg.constraints:
-            return True
-
-        vars_dict = self._params_to_dict(params)
-
-        # Compute derived variables before checking constraints
-        # This is needed because constraints may reference derived vars
-        vars_dict = self._compute_derived_vars(vars_dict)
-
-        is_valid, violations = check_constraints_for_vars(vars_dict, self.cfg.constraints)
-
-        if violations:
-            for constraint, msg in violations:
-                if constraint.violation_policy == "warn":
-                    self.logger.warning(f"  [Bayesian] {msg} (proceeding anyway)")
-                else:
-                    self.logger.debug(f"  [Bayesian] Constraint violated: {msg}")
-
-        return is_valid
-
     def next_test(self) -> Optional[ExecutionInstance]:
         """
         Return the next test to execute.
@@ -2013,7 +1952,20 @@ class BayesianPlanner(BasePlanner, HasLogger):
             # Continue with repetitions of current configuration
             self.current_rep += 1
             self._attempt_count += 1
-            test = self._create_test_instance(self.current_params, self.current_rep)
+
+            # Create new instance for this repetition (params already validated)
+            vars_dict = self._params_to_dict(self.current_params)
+            test, _, _ = create_execution_instance(
+                cfg=self.cfg,
+                base_vars=vars_dict,
+                execution_id=self.iteration,
+                script_index=0,
+                search_var_names=self.var_names,
+            )
+            test.repetition = self.current_rep
+            test.repetitions = self.repetitions
+            self._prepare_execution_artifacts(test, self.current_rep)
+
             self.logger.debug(
                 f"  [Bayesian] Repetition {self.current_rep}/{self.repetitions} "
                 f"of iteration {self.iteration}"
@@ -2032,12 +1984,33 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.logger.info("=" * 70)
             return None
 
-        # Get next point from optimizer, checking constraints
+        # Get next point from optimizer, checking constraints via matrix.py
         max_constraint_retries = 100  # Avoid infinite loop if space is heavily constrained
+        valid_instance = None
+
         for retry in range(max_constraint_retries):
             next_params = self.optimizer.ask()
+            vars_dict = self._params_to_dict(next_params)
 
-            if self._check_constraints(next_params):
+            # Create instance and validate constraints in one step
+            instance, is_valid, violations = create_execution_instance(
+                cfg=self.cfg,
+                base_vars=vars_dict,
+                execution_id=self.iteration + 1,  # Will be set after we confirm validity
+                script_index=0,
+                search_var_names=self.var_names,
+            )
+
+            # Log any violations
+            for constraint, msg in violations:
+                if constraint.violation_policy == "warn":
+                    self.logger.warning(f"  [Bayesian] {msg} (proceeding anyway)")
+                else:
+                    self.logger.debug(f"  [Bayesian] Constraint violated: {msg}")
+
+            if is_valid:
+                valid_instance = instance
+                self.current_params = next_params
                 break
 
             # Constraint violated - tell optimizer this is a bad point
@@ -2046,29 +2019,31 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 f"(retry {retry + 1}/{max_constraint_retries})"
             )
             # Tell optimizer this point is infeasible with a large penalty
-            # Note: scikit-optimize always minimizes internally, so large positive is "worst"
-            # (for maximization, actual values are negated before telling the optimizer)
-            # Using 1e10 instead of inf because sklearn doesn't accept infinity values
             self.optimizer.tell(next_params, 1e10)
         else:
             self.logger.warning(
                 f"  [Bayesian] Could not find valid point after {max_constraint_retries} retries. "
                 f"Using last suggested point anyway."
             )
+            # Use the last instance even though it violated constraints
+            valid_instance = instance
+            self.current_params = next_params
 
-        self.current_params = next_params
         self.current_rep = 1
         self.iteration += 1
         self._attempt_count += 1
 
-        # Create test instance
-        test = self._create_test_instance(next_params, self.current_rep)
+        # Use the validated instance directly
+        test = valid_instance
+        test.execution_id = self.iteration
+        test.repetition = self.current_rep
+        test.repetitions = self.repetitions
+        self._prepare_execution_artifacts(test, self.current_rep)
         self.current_test = test
 
-        params_dict = self._params_to_dict(next_params)
         self.logger.info(
             f"[Bayesian] Iteration {self.iteration}/{self.n_iterations}: "
-            f"Testing {params_dict}"
+            f"Testing {test.base_vars}"
         )
 
         return test
@@ -2119,38 +2094,6 @@ class BayesianPlanner(BasePlanner, HasLogger):
             f"[Exhaustive fallback] Test {self._exhaustive_index}/{len(self._exhaustive_matrix)}: "
             f"{test.vars}"
         )
-
-        return test
-
-    def _create_test_instance(self, params: List[Any], repetition: int) -> ExecutionInstance:
-        """
-        Create an ExecutionInstance from parameters.
-
-        Uses create_execution_instance from matrix.py for clean instance creation.
-
-        Args:
-            params: List of parameter values
-            repetition: Repetition number (1-based)
-
-        Returns:
-            ExecutionInstance
-        """
-        vars_dict = self._params_to_dict(params)
-
-        # Create instance directly using the matrix helper
-        test = create_execution_instance(
-            cfg=self.cfg,
-            base_vars=vars_dict,
-            execution_id=self.iteration,
-            script_index=0,  # Use first script
-            search_var_names=self.var_names,
-        )
-
-        test.repetition = repetition
-        test.repetitions = self.repetitions
-
-        # Prepare execution artifacts (folders and scripts)
-        self._prepare_execution_artifacts(test, repetition)
 
         return test
 

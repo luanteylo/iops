@@ -733,14 +733,18 @@ def create_execution_instance(
     script_index: int = 0,
     search_var_names: Optional[List[str]] = None,
     exhaustive_var_names: Optional[List[str]] = None,
-) -> ExecutionInstance:
+) -> Tuple[ExecutionInstance, bool, List[Tuple[Any, str]]]:
     """
-    Create a single ExecutionInstance from explicit variable values.
+    Create a single ExecutionInstance from explicit variable values and validate constraints.
 
     This is useful for:
     - Bayesian optimization (create instance for optimizer-suggested parameters)
     - Testing specific parameter combinations
     - Any case where you want to create an instance without building the full matrix
+
+    The function creates the instance and validates it against constraints in one step,
+    ensuring all variable processing (including derived vars) is done before constraint
+    checking.
 
     Args:
         cfg: The benchmark configuration
@@ -751,7 +755,10 @@ def create_execution_instance(
         exhaustive_var_names: Names of exhaustive variables. If None, empty list.
 
     Returns:
-        ExecutionInstance with all templates set up for lazy rendering
+        Tuple of (instance, is_valid, violations):
+        - instance: ExecutionInstance with all templates set up for lazy rendering
+        - is_valid: True if all constraints pass (or only have "warn" policy)
+        - violations: List of (constraint, message) tuples for any violations
 
     Raises:
         IndexError: If script_index is out of range
@@ -805,7 +812,7 @@ def create_execution_instance(
             parser_script=script_cfg.parser.parser_script,
         )
 
-    return ExecutionInstance(
+    instance = ExecutionInstance(
         execution_id=execution_id,
         repetition=0,  # planner will set metadata["repetition"] per run
         repetitions=repetitions,
@@ -831,6 +838,13 @@ def create_execution_instance(
         output_table=output_table,
         output_exclude=output_exclude,
     )
+
+    # Validate constraints using computed vars (base + derived)
+    if not cfg.constraints:
+        return instance, True, []
+
+    is_valid, violations = check_constraints_for_vars(instance.vars, cfg.constraints)
+    return instance, is_valid, violations
 
 
 # ----------------- Main builder ----------------- #
@@ -1063,7 +1077,7 @@ def build_execution_matrix(
         for script_idx in range(len(cfg.scripts)):
             exec_id += 1
 
-            exec_instance = create_execution_instance(
+            exec_instance, _, _ = create_execution_instance(
                 cfg=cfg,
                 base_vars=base_vars,
                 execution_id=exec_id,
@@ -1071,6 +1085,9 @@ def build_execution_matrix(
                 search_var_names=search_names,
                 exhaustive_var_names=exhaustive_names,
             )
+            # Note: constraint validation is ignored here because build_execution_matrix
+            # handles early constraints before instance creation and late constraints
+            # after all instances are built via filter_execution_matrix
 
             executions.append(exec_instance)
 
