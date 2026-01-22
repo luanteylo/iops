@@ -1690,10 +1690,19 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Build search space from swept variables
         # This also populates self.ordinal_mappings for index-to-value conversion
         self.ordinal_mappings: Dict[str, List[Any]] = {}  # var_name -> list of valid values
+        self.fixed_values: Dict[str, Any] = {}  # var_name -> fixed value (for single-value sweeps)
         self.search_space, self.var_names = self._build_search_space()
 
         if not self.search_space:
-            raise ValueError("No swept variables found for Bayesian optimization")
+            if self.fixed_values:
+                raise ValueError(
+                    f"No optimizable variables for Bayesian optimization. "
+                    f"All swept variables have single values and are treated as fixed: "
+                    f"{list(self.fixed_values.keys())}. "
+                    f"Ensure at least one variable has multiple values to optimize."
+                )
+            else:
+                raise ValueError("No swept variables found for Bayesian optimization")
 
         # Build acquisition function kwargs
         acq_func_kwargs = {}
@@ -1821,6 +1830,15 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
             if sweep_cfg.mode == "range":
                 # Continuous or integer range
+                # Skip if start == end (single value, not a dimension to optimize)
+                if sweep_cfg.start == sweep_cfg.end:
+                    self.fixed_values[var_name] = sweep_cfg.start
+                    self.logger.debug(
+                        f"  [Bayesian] Variable '{var_name}': fixed value {sweep_cfg.start} "
+                        f"(range start == end, not added to search space)"
+                    )
+                    continue
+
                 if var_config.type == "int":
                     dim = Integer(
                         low=sweep_cfg.start,
@@ -1838,6 +1856,15 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
             elif sweep_cfg.mode == "list":
                 values = sweep_cfg.values
+
+                # Skip if only one value (not a dimension to optimize)
+                if len(values) == 1:
+                    self.fixed_values[var_name] = values[0]
+                    self.logger.debug(
+                        f"  [Bayesian] Variable '{var_name}': fixed value {values[0]} "
+                        f"(single-value list, not added to search space)"
+                    )
+                    continue
 
                 if var_config.type in ["int", "float"]:
                     # Numeric list: use ordinal encoding (index-based Integer dimension)
@@ -1873,8 +1900,16 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         For ordinal-encoded variables (numeric lists), converts the index back to
         the actual value from the sorted list.
+
+        Also includes fixed values (single-value sweeps) that are not part of
+        the search space but need to be included in the parameter dict.
         """
         result = {}
+
+        # First, add all fixed values (single-value sweeps)
+        result.update(self.fixed_values)
+
+        # Then add optimized parameters
         for name, value in zip(self.var_names, params):
             # Convert numpy types to native Python types
             if hasattr(value, 'item'):
