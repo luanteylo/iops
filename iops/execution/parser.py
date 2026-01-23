@@ -22,7 +22,7 @@ def _build_parse_fn(parser_script: str, context: Dict[str, Any] | None = None):
         parser_script: The parser script code defining a parse() function
         context: Optional dict of variables to inject into the script's namespace.
                  These will be available as global variables in the parser script.
-                 Typically includes: vars, env, execution_id, repetition
+                 Typically includes: vars, env, execution_id, execution_dir, workdir, repetition, repetitions
     """
     ns: Dict[str, Any] = {"__builtins__": __builtins__}
 
@@ -57,7 +57,10 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
         - vars: Dict of all execution variables (e.g., vars["nodes"], vars["block_size"])
         - env: Dict of rendered command.env variables
         - execution_id: The execution ID string
+        - execution_dir: The execution directory path (as string)
+        - workdir: The root working directory path (as string)
         - repetition: The current repetition number
+        - repetitions: Total number of repetitions
     """
     parser = test.parser
     if parser is None:
@@ -74,7 +77,10 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
         "vars": dict(test.vars),
         "env": dict(test.env),
         "execution_id": test.execution_id,
+        "execution_dir": str(test.execution_dir) if test.execution_dir else None,
+        "workdir": str(test.workdir) if test.workdir else None,
         "repetition": test.repetition,
+        "repetitions": test.repetitions,
     }
 
     parse_fn = _build_parse_fn(parser.parser_script, context)

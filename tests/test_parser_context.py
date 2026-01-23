@@ -4,7 +4,10 @@ Tests that parser scripts have access to execution context variables:
 - vars: Dict of all execution variables
 - env: Dict of rendered command.env variables
 - execution_id: The execution ID
+- execution_dir: The execution directory path
+- workdir: The root working directory path
 - repetition: The current repetition number
+- repetitions: Total number of repetitions
 """
 
 import pytest
@@ -68,6 +71,39 @@ def parse(file_path):
         result = fn("/tmp/test.txt")
         assert result == {"rep": 3}
 
+    def test_execution_dir_accessible_in_parser(self):
+        """Parser script can access execution_dir global."""
+        script = """
+def parse(file_path):
+    return {"exec_dir": execution_dir}
+"""
+        context = {"vars": {}, "env": {}, "execution_dir": "/path/to/exec_0001"}
+        fn = _build_parse_fn(script, context)
+        result = fn("/tmp/test.txt")
+        assert result == {"exec_dir": "/path/to/exec_0001"}
+
+    def test_workdir_accessible_in_parser(self):
+        """Parser script can access workdir global."""
+        script = """
+def parse(file_path):
+    return {"work_dir": workdir}
+"""
+        context = {"vars": {}, "env": {}, "workdir": "/path/to/workdir"}
+        fn = _build_parse_fn(script, context)
+        result = fn("/tmp/test.txt")
+        assert result == {"work_dir": "/path/to/workdir"}
+
+    def test_repetitions_accessible_in_parser(self):
+        """Parser script can access repetitions global."""
+        script = """
+def parse(file_path):
+    return {"total_reps": repetitions}
+"""
+        context = {"vars": {}, "env": {}, "repetitions": 5}
+        fn = _build_parse_fn(script, context)
+        result = fn("/tmp/test.txt")
+        assert result == {"total_reps": 5}
+
     def test_all_context_variables_accessible(self):
         """Parser script can access all context variables together."""
         script = """
@@ -76,14 +112,20 @@ def parse(file_path):
         "nodes": vars["nodes"],
         "env_val": env["TEST"],
         "exec": execution_id,
+        "exec_dir": execution_dir,
+        "work_dir": workdir,
         "rep": repetition,
+        "total_reps": repetitions,
     }
 """
         context = {
             "vars": {"nodes": 8, "ppn": 4},
             "env": {"TEST": "hello"},
             "execution_id": "exec_0001",
+            "execution_dir": "/workdir/runs/exec_0001",
+            "workdir": "/workdir",
             "repetition": 2,
+            "repetitions": 5,
         }
         fn = _build_parse_fn(script, context)
         result = fn("/tmp/test.txt")
@@ -91,7 +133,10 @@ def parse(file_path):
             "nodes": 8,
             "env_val": "hello",
             "exec": "exec_0001",
+            "exec_dir": "/workdir/runs/exec_0001",
+            "work_dir": "/workdir",
             "rep": 2,
+            "total_reps": 5,
         }
 
     def test_backwards_compatibility_without_context(self):
@@ -213,13 +258,19 @@ class TestParseMetricsFromExecution:
         parser_file: str,
         parser_script: str,
         metrics: list[str],
+        execution_dir: str = "/workdir/runs/exec_0001",
+        workdir: str = "/workdir",
+        repetitions: int = 3,
     ):
         """Create a mock ExecutionInstance with the given attributes."""
         mock = MagicMock()
         mock.vars = vars_dict
         mock.env = env_dict
         mock.execution_id = execution_id
+        mock.execution_dir = execution_dir
+        mock.workdir = workdir
         mock.repetition = repetition
+        mock.repetitions = repetitions
 
         # Create parser config
         metric_configs = [MetricConfig(name=name) for name in metrics]
@@ -327,6 +378,75 @@ def parse(file_path):
 
         result = parse_metrics_from_execution(mock_exec)
         assert result["metrics"]["rep_number"] == 5
+
+    def test_execution_dir_passed_to_parser(self, tmp_path):
+        """Execution dir from ExecutionInstance is passed to parser script."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("data\n")
+
+        parser_script = """
+def parse(file_path):
+    return {"exec_dir": execution_dir}
+"""
+        mock_exec = self._create_mock_execution(
+            vars_dict={},
+            env_dict={},
+            execution_id="exec_0001",
+            repetition=1,
+            parser_file=str(output_file),
+            parser_script=parser_script,
+            metrics=["exec_dir"],
+            execution_dir="/workdir/runs/exec_0042",
+        )
+
+        result = parse_metrics_from_execution(mock_exec)
+        assert result["metrics"]["exec_dir"] == "/workdir/runs/exec_0042"
+
+    def test_workdir_passed_to_parser(self, tmp_path):
+        """Workdir from ExecutionInstance is passed to parser script."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("data\n")
+
+        parser_script = """
+def parse(file_path):
+    return {"work_dir": workdir}
+"""
+        mock_exec = self._create_mock_execution(
+            vars_dict={},
+            env_dict={},
+            execution_id="exec_0001",
+            repetition=1,
+            parser_file=str(output_file),
+            parser_script=parser_script,
+            metrics=["work_dir"],
+            workdir="/my/workdir/path",
+        )
+
+        result = parse_metrics_from_execution(mock_exec)
+        assert result["metrics"]["work_dir"] == "/my/workdir/path"
+
+    def test_repetitions_passed_to_parser(self, tmp_path):
+        """Repetitions from ExecutionInstance is passed to parser script."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("data\n")
+
+        parser_script = """
+def parse(file_path):
+    return {"total_reps": repetitions}
+"""
+        mock_exec = self._create_mock_execution(
+            vars_dict={},
+            env_dict={},
+            execution_id="exec_0001",
+            repetition=1,
+            parser_file=str(output_file),
+            parser_script=parser_script,
+            metrics=["total_reps"],
+            repetitions=10,
+        )
+
+        result = parse_metrics_from_execution(mock_exec)
+        assert result["metrics"]["total_reps"] == 10
 
     def test_full_context_integration(self, tmp_path):
         """Full integration test with all context variables."""
