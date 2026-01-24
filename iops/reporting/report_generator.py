@@ -989,7 +989,7 @@ class ReportGenerator:
         <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         <p><strong>Benchmark Run:</strong> {timestamp}</p>
         <p><strong>Description:</strong> {self.metadata['benchmark'].get('description', 'N/A')}</p>
-        <p><strong>Total Tests:</strong> {len(self.df)}</p>
+        <p><strong>Total Executions:</strong> {len(self.df)}</p>
     </div>
 """
 
@@ -1027,6 +1027,26 @@ class ReportGenerator:
         search_method = benchmark_meta.get('search_method', 'exhaustive')
         html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
 
+        # Random seed
+        random_seed = benchmark_meta.get('random_seed')
+        if random_seed is not None:
+            html += f"<tr><td><strong>Random Seed</strong></td><td>{random_seed}</td></tr>\n"
+
+        # Parameter combinations and repetitions
+        repetitions = benchmark_meta.get('repetitions', 1)
+        total_rows = len(self.df)
+
+        # Calculate unique parameter combinations from execution_id
+        if 'execution.execution_id' in self.df.columns:
+            unique_combinations = self.df['execution.execution_id'].nunique()
+        else:
+            # Fallback: divide total rows by repetitions
+            unique_combinations = total_rows // repetitions if repetitions > 0 else total_rows
+
+        html += f"<tr><td><strong>Parameter Combinations</strong></td><td>{unique_combinations}</td></tr>\n"
+        html += f"<tr><td><strong>Repetitions per Combination</strong></td><td>{repetitions}</td></tr>\n"
+        html += f"<tr><td><strong>Total Executions</strong></td><td>{total_rows} ({unique_combinations} × {repetitions})</td></tr>\n"
+
         # Benchmark timing (if available, prefer detailed timing over legacy timestamp)
         if 'benchmark_start_time' in benchmark_meta and 'benchmark_end_time' in benchmark_meta:
             start_time = benchmark_meta['benchmark_start_time']
@@ -1047,20 +1067,6 @@ class ReportGenerator:
             # Fallback to legacy timestamp if detailed timing not available
             html += f"<tr><td><strong>Benchmark Started</strong></td><td>{benchmark_meta['timestamp']}</td></tr>\n"
 
-        # Report generation timestamp
-        report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        html += f"<tr><td><strong>Report Generated</strong></td><td>{report_timestamp}</td></tr>\n"
-
-        html += "</table>\n"
-
-        # Test Execution Statistics
-        html += "<h3>Test Execution Statistics</h3>\n<table>\n"
-        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-
-        # Total tests
-        total_tests = len(self.df)
-        html += f"<tr><td><strong>Total Parameter Combinations</strong></td><td>{total_tests}</td></tr>\n"
-
         # Success rate (if status column exists)
         if 'metadata.__executor_status' in self.df.columns:
             status_counts = self.df['metadata.__executor_status'].value_counts()
@@ -1068,43 +1074,43 @@ class ReportGenerator:
             failed = status_counts.get('FAILED', 0)
             cancelled = status_counts.get('CANCELLED', 0)
 
-            success_rate = (succeeded / total_tests * 100) if total_tests > 0 else 0
-            html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_tests} ({success_rate:.1f}%)</td></tr>\n"
+            success_rate = (succeeded / total_rows * 100) if total_rows > 0 else 0
+            html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_rows} ({success_rate:.1f}%)</td></tr>\n"
 
             if failed > 0:
-                html += f"<tr><td><strong>Failed Tests</strong></td><td>{failed}</td></tr>\n"
+                html += f"<tr><td><strong>Failed Executions</strong></td><td>{failed}</td></tr>\n"
             if cancelled > 0:
-                html += f"<tr><td><strong>Cancelled Tests</strong></td><td>{cancelled}</td></tr>\n"
+                html += f"<tr><td><strong>Cancelled Executions</strong></td><td>{cancelled}</td></tr>\n"
 
         # Check for cached results
         cached_count = 0
         if 'metadata.__cached' in self.df.columns:
             cached_count = (self.df['metadata.__cached'] == True).sum()
             if cached_count > 0:
-                executed_count = total_tests - cached_count
-                cache_rate = (cached_count / total_tests * 100) if total_tests > 0 else 0
+                executed_count = total_rows - cached_count
+                cache_rate = (cached_count / total_rows * 100) if total_rows > 0 else 0
                 html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({cache_rate:.1f}%)</td></tr>\n"
-                html += f"<tr><td><strong>Executed Tests</strong></td><td>{executed_count}</td></tr>\n"
+                html += f"<tr><td><strong>Actually Executed</strong></td><td>{executed_count}</td></tr>\n"
 
         # Execution time
         has_timing = 'metadata.__submission_time' in self.df.columns and 'metadata.__end' in self.df.columns
         if has_timing:
             execution_time, formatted_time = self._calculate_total_execution_time()
             if execution_time is not None:
-                exec_time_label = "Total Execution Time" + (" (executed tests only)" if cached_count > 0 else "")
+                exec_time_label = "Total Execution Time" + (" (executed only)" if cached_count > 0 else "")
                 html += f"<tr><td><strong>{exec_time_label}</strong></td><td>{formatted_time}</td></tr>\n"
 
-                # Average test duration
-                executed_count = total_tests - cached_count if cached_count > 0 else total_tests
-                if executed_count > 0:
-                    avg_duration = execution_time / executed_count
+                # Average execution duration
+                actual_executed = total_rows - cached_count if cached_count > 0 else total_rows
+                if actual_executed > 0:
+                    avg_duration = execution_time / actual_executed
                     if avg_duration < 60:
                         avg_duration_str = f"{avg_duration:.1f}s"
                     elif avg_duration < 3600:
                         avg_duration_str = f"{avg_duration / 60:.1f}m"
                     else:
                         avg_duration_str = f"{avg_duration / 3600:.1f}h"
-                    html += f"<tr><td><strong>Average Test Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
+                    html += f"<tr><td><strong>Average Execution Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
 
         # SLURM-specific timing: Wait time and walltime
         has_slurm_timing = ('metadata.__job_start' in self.df.columns and
@@ -1139,7 +1145,6 @@ class ReportGenerator:
 
                 if len(valid_wait) > 0:
                     avg_wait = valid_wait.mean()
-                    total_wait = valid_wait.sum()
                     if avg_wait < 60:
                         wait_str = f"{avg_wait:.1f}s"
                     elif avg_wait < 3600:
@@ -1156,7 +1161,7 @@ class ReportGenerator:
                         wall_str = f"{avg_wall/60:.1f}m"
                     else:
                         wall_str = f"{avg_wall/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Walltime (per test)</strong></td><td>{wall_str}</td></tr>\n"
+                    html += f"<tr><td><strong>Average Walltime</strong></td><td>{wall_str}</td></tr>\n"
 
                 if len(valid_run) > 0:
                     avg_run = valid_run.mean()
@@ -1166,7 +1171,7 @@ class ReportGenerator:
                         run_str = f"{avg_run/60:.1f}m"
                     else:
                         run_str = f"{avg_run/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Execution Time (per test)</strong></td><td>{run_str}</td></tr>\n"
+                    html += f"<tr><td><strong>Average Runtime</strong></td><td>{run_str}</td></tr>\n"
 
         # Core-hours (if cores_expr is defined)
         cores_expr = self.metadata['benchmark'].get('cores_expr')
@@ -1175,10 +1180,14 @@ class ReportGenerator:
             if total_core_hours is not None:
                 html += f"<tr><td><strong>Total Core-Hours</strong></td><td>{total_core_hours:.2f}</td></tr>\n"
 
-                # Average cores per test
-                avg_cores = self._calculate_average_cores()
-                if avg_cores is not None:
-                    html += f"<tr><td><strong>Average Cores per Test</strong></td><td>{avg_cores:.1f}</td></tr>\n"
+            # Average cores per execution
+            avg_cores = self._calculate_average_cores()
+            if avg_cores is not None:
+                html += f"<tr><td><strong>Average Cores per Execution</strong></td><td>{avg_cores:.1f}</td></tr>\n"
+
+        # Report generation timestamp
+        report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        html += f"<tr><td><strong>Report Generated</strong></td><td>{report_timestamp}</td></tr>\n"
 
         html += "</table>\n"
 
@@ -1426,13 +1435,13 @@ class ReportGenerator:
         if total_space_size > 0:
             coverage_pct = (n_iterations / total_space_size) * 100
             savings_pct = 100 - coverage_pct
-            tests_saved = total_space_size - n_iterations
+            combinations_saved = total_space_size - n_iterations
 
             html += "<h3>Search Space Efficiency</h3>\n<table>\n"
             html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} configurations</td></tr>\n"
-            html += f"<tr><td><strong>Bayesian Iterations</strong></td><td>{n_iterations:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
-            html += f"<tr><td><strong>Tests Saved</strong></td><td>{tests_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
+            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} parameter combinations</td></tr>\n"
+            html += f"<tr><td><strong>Combinations Tested</strong></td><td>{n_iterations:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
+            html += f"<tr><td><strong>Combinations Saved</strong></td><td>{combinations_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
             html += "</table>\n"
 
         # Create plots

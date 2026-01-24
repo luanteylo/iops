@@ -807,6 +807,7 @@ class IOPSRunner(HasLogger):
                     "description": self.cfg.benchmark.description or "",
                     "executor": self.cfg.benchmark.executor,
                     "repetitions": self.cfg.benchmark.repetitions,
+                    "random_seed": self.cfg.benchmark.random_seed,
                     "timestamp": datetime.now().isoformat(),
                     "test_count": test_count,
                     "report_vars": self.cfg.benchmark.report_vars,
