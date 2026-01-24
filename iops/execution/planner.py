@@ -10,7 +10,7 @@ This module contains all planner implementations:
 
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix, create_execution_instance, _cast_value
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix, _cast_value
 
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
@@ -1648,10 +1648,12 @@ class BayesianPlanner(BasePlanner, HasLogger):
         higher indices correlate with higher/lower metric values.
 
     The planner will:
-    1. Start with random exploration (n_initial_points)
-    2. Build a surrogate model (Random Forest by default) from observed results
-    3. Use acquisition function to suggest next promising point
-    4. Iteratively improve to find optimal parameters
+    1. Build the full execution matrix upfront (like other planners)
+    2. Start with random exploration (n_initial_points)
+    3. Build a surrogate model (Random Forest by default) from observed results
+    4. Use acquisition function to suggest next promising point
+    5. Map suggestions to nearest valid pre-built instance
+    6. Iteratively improve to find optimal parameters
 
     Requires scikit-optimize: pip install scikit-optimize
     """
@@ -1663,14 +1665,6 @@ class BayesianPlanner(BasePlanner, HasLogger):
             raise ImportError(
                 "scikit-optimize is required for Bayesian optimization. "
                 "Install it with: pip install scikit-optimize"
-            )
-
-        # Warn if upfront folder creation is enabled - not supported for Bayesian
-        # because parameter combinations are determined dynamically during optimization
-        if getattr(self.cfg.benchmark, 'create_folders_upfront', False):
-            self.logger.warning(
-                "create_folders_upfront is not supported for Bayesian optimization. "
-                "Parameters are selected dynamically by the optimizer. Using dynamic folder creation."
             )
 
         # Bayesian config is guaranteed by loader to be set when search_method is "bayesian"
@@ -1703,6 +1697,41 @@ class BayesianPlanner(BasePlanner, HasLogger):
             else:
                 raise ValueError("No swept variables found for Bayesian optimization")
 
+        # Build instance lookup from pre-built execution matrix
+        # This replaces dynamic instance creation with a lookup table
+        self._instance_lookup, self._skipped_instances = self._build_instance_lookup()
+        self._valid_search_points = list(self._instance_lookup.keys())
+
+        # Track variable ranges for distance calculation
+        self._var_ranges = self._compute_var_ranges()
+
+        # Total search space size (number of valid search points)
+        self.total_space_size = len(self._valid_search_points)
+
+        # Check for exhaustive fallback
+        self.fallback_to_exhaustive = self.bayesian_cfg.fallback_to_exhaustive
+        self._use_exhaustive_fallback = False
+        self._exhaustive_matrix: List[ExecutionInstance] = []
+        self._exhaustive_index = 0
+
+        if self.n_iterations >= self.total_space_size and self.total_space_size > 0:
+            if self.fallback_to_exhaustive:
+                self.logger.warning(
+                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
+                    f"Using full exhaustive search instead of Bayesian optimization."
+                )
+                self._use_exhaustive_fallback = True
+                # Flatten lookup into a list for exhaustive iteration
+                self._exhaustive_matrix = []
+                for instances in self._instance_lookup.values():
+                    self._exhaustive_matrix.extend(instances)
+            else:
+                self.logger.warning(
+                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
+                    f"Clamping to total_space."
+                )
+                self.n_iterations = self.total_space_size
+
         # Build acquisition function kwargs
         acq_func_kwargs = {}
         if self.acquisition_func in ['EI', 'PI']:
@@ -1729,33 +1758,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Progress tracking for get_progress()
         self._attempt_count: int = 0
         self._attempt_total: int = self.n_iterations * (cfg.benchmark.repetitions or 1)
-
-        # Total search space size (for comparison with exhaustive search)
-        self.total_space_size = self._compute_total_space_size()
-
-        # Check for exhaustive fallback
-        self.fallback_to_exhaustive = self.bayesian_cfg.fallback_to_exhaustive
-        self._use_exhaustive_fallback = False
-        self._exhaustive_matrix: List[ExecutionInstance] = []
-        self._exhaustive_index = 0
-
-        if self.n_iterations >= self.total_space_size and self.total_space_size > 0:
-            if self.fallback_to_exhaustive:
-                self.logger.warning(
-                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
-                    f"Using full exhaustive search instead of Bayesian optimization."
-                )
-                self._use_exhaustive_fallback = True
-                # Build full execution matrix for exhaustive iteration
-                kept, _ = build_execution_matrix(self.cfg, start_execution_id=1)
-                self._exhaustive_matrix = kept
-                self._attempt_total = len(kept) * (cfg.benchmark.repetitions or 1)
-            else:
-                self.logger.warning(
-                    f"Requested n_iterations={self.n_iterations} >= total_space={self.total_space_size}. "
-                    f"Clamping to total_space."
-                )
-                self.n_iterations = self.total_space_size
+        if self._use_exhaustive_fallback:
+            self._attempt_total = len(self._exhaustive_matrix) * (cfg.benchmark.repetitions or 1)
 
         # Best found so far
         self.best_params: Optional[Dict[str, Any]] = None
@@ -1764,10 +1768,16 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Repetitions per configuration
         self.repetitions = cfg.benchmark.repetitions or 1
 
-        # Current test being evaluated
+        # Current iteration state
         self.current_test: Optional[ExecutionInstance] = None
         self.current_params: Optional[List[Any]] = None
         self.current_rep = 0
+        self._current_search_point: Optional[tuple] = None
+        self._current_instances: List[ExecutionInstance] = []
+        self._current_instance_idx = 0
+
+        # Track which search points have been visited
+        self._visited_search_points: set = set()
 
         if self._use_exhaustive_fallback:
             self.logger.info(
@@ -1794,18 +1804,122 @@ class BayesianPlanner(BasePlanner, HasLogger):
                     f"saving {savings_pct:.1f}% vs exhaustive search."
                 )
 
-    def _compute_total_space_size(self) -> int:
+    def _build_instance_lookup(self) -> tuple:
         """
-        Compute the total number of configurations in the search space.
-
-        Uses build_execution_matrix to get the exact count of all possible
-        parameter combinations.
+        Build lookup index from search points to pre-built instances.
 
         Returns:
-            Total number of possible configurations
+            Tuple of (lookup_dict, skipped_instances):
+            - lookup_dict: Dict mapping search point tuples to lists of ExecutionInstance
+            - skipped_instances: List of instances that were skipped due to constraints
         """
-        kept, skipped = build_execution_matrix(self.cfg, start_execution_id=0)
-        return len(kept) + len(skipped)
+        kept, skipped = build_execution_matrix(self.cfg, start_execution_id=1)
+
+        lookup: Dict[tuple, List[ExecutionInstance]] = defaultdict(list)
+        for instance in kept:
+            search_point = self._instance_to_search_point(instance)
+            lookup[search_point].append(instance)
+
+        return dict(lookup), skipped
+
+    def _instance_to_search_point(self, instance: ExecutionInstance) -> tuple:
+        """
+        Convert an ExecutionInstance to a search point tuple.
+
+        The search point only includes variables that are in the optimizer's search space
+        (excluding fixed values and exhaustive vars).
+        """
+        return tuple(instance.base_vars.get(name) for name in sorted(self.var_names))
+
+    def _compute_var_ranges(self) -> Dict[str, float]:
+        """
+        Compute the range of each variable for distance normalization.
+
+        Returns:
+            Dictionary mapping variable names to their ranges
+        """
+        ranges = {}
+        for var_name in self.var_names:
+            var_cfg = self.cfg.vars[var_name]
+            if var_cfg.sweep.mode == "range":
+                ranges[var_name] = float(var_cfg.sweep.end - var_cfg.sweep.start)
+            elif var_name in self.ordinal_mappings:
+                values = self.ordinal_mappings[var_name]
+                ranges[var_name] = float(max(values) - min(values)) if len(values) > 1 else 1.0
+            else:
+                # Categorical: use 1.0 (0 if same, 1 if different)
+                ranges[var_name] = 1.0
+        return ranges
+
+    def _suggestion_to_search_point(self, params: List[Any]) -> tuple:
+        """
+        Convert optimizer suggestion to a search point tuple.
+
+        Args:
+            params: List of parameter values from optimizer.ask()
+
+        Returns:
+            Tuple of variable values in sorted order
+        """
+        vars_dict = self._params_to_dict(params)
+        return tuple(vars_dict.get(name) for name in sorted(self.var_names))
+
+    def _find_nearest_valid_point(self, suggested: tuple) -> tuple:
+        """
+        Find the nearest valid search point to the suggested point.
+
+        Uses normalized Euclidean distance for numeric vars, exact match for categorical.
+
+        Args:
+            suggested: Tuple of suggested parameter values
+
+        Returns:
+            Nearest valid search point tuple from the pre-built matrix
+        """
+        if suggested in self._instance_lookup:
+            return suggested  # Exact match
+
+        # Compute distances to all valid points
+        best_point = None
+        best_distance = float('inf')
+
+        for valid_point in self._valid_search_points:
+            dist = self._compute_distance(suggested, valid_point)
+            if dist < best_distance:
+                best_distance = dist
+                best_point = valid_point
+
+        return best_point
+
+    def _compute_distance(self, p1: tuple, p2: tuple) -> float:
+        """
+        Compute normalized distance between two search points.
+
+        Uses normalized Euclidean distance for numeric variables and
+        0/1 distance for categorical variables.
+
+        Args:
+            p1: First search point tuple
+            p2: Second search point tuple
+
+        Returns:
+            Distance between the two points
+        """
+        total = 0.0
+        for i, var_name in enumerate(sorted(self.var_names)):
+            v1, v2 = p1[i], p2[i]
+            var_cfg = self.cfg.vars[var_name]
+
+            if var_cfg.type in ('int', 'float'):
+                # Normalize by range
+                range_size = self._var_ranges.get(var_name, 1.0)
+                if range_size > 0:
+                    total += ((float(v1) - float(v2)) / range_size) ** 2
+            else:
+                # Categorical: 0 if same, 1 if different
+                total += 0 if v1 == v2 else 1
+
+        return total ** 0.5
 
     def _build_search_space(self):
         """
@@ -1939,6 +2053,10 @@ class BayesianPlanner(BasePlanner, HasLogger):
         """
         Return the next test to execute.
 
+        Uses pre-built instances from the execution matrix instead of
+        creating instances dynamically. Maps optimizer suggestions to
+        the nearest valid search point in the pre-built matrix.
+
         Returns:
             ExecutionInstance or None when optimization is complete
         """
@@ -1953,15 +2071,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.current_rep += 1
             self._attempt_count += 1
 
-            # Create new instance for this repetition (params already validated)
-            vars_dict = self._params_to_dict(self.current_params)
-            test, _, _ = create_execution_instance(
-                cfg=self.cfg,
-                base_vars=vars_dict,
-                execution_id=self.iteration,
-                script_index=0,
-                search_var_names=self.var_names,
-            )
+            # Reuse the same pre-built instance, just update repetition
+            test = self._current_instances[0]  # Use first instance for the search point
             test.repetition = self.current_rep
             test.repetitions = self.repetitions
             self._prepare_execution_artifacts(test, self.current_rep)
@@ -1984,57 +2095,53 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.logger.info("=" * 70)
             return None
 
-        # Get next point from optimizer, checking constraints via matrix.py
-        max_constraint_retries = 100  # Avoid infinite loop if space is heavily constrained
-        valid_instance = None
+        # Get next point from optimizer
+        next_params = self.optimizer.ask()
+        suggested_point = self._suggestion_to_search_point(next_params)
 
-        for retry in range(max_constraint_retries):
-            next_params = self.optimizer.ask()
-            vars_dict = self._params_to_dict(next_params)
+        # Map to nearest valid point from pre-built matrix
+        # This replaces the retry loop - constraints are already filtered in the matrix
+        search_point = self._find_nearest_valid_point(suggested_point)
 
-            # Create instance and validate constraints in one step
-            instance, is_valid, violations = create_execution_instance(
-                cfg=self.cfg,
-                base_vars=vars_dict,
-                execution_id=self.iteration + 1,  # Will be set after we confirm validity
-                script_index=0,
-                search_var_names=self.var_names,
+        if search_point is None:
+            # This shouldn't happen if the matrix was built correctly
+            self.logger.error(
+                f"  [Bayesian] No valid search points available. "
+                f"This indicates a configuration issue."
             )
+            return None
 
-            # Log any violations
-            for constraint, msg in violations:
-                if constraint.violation_policy == "warn":
-                    self.logger.warning(f"  [Bayesian] {msg} (proceeding anyway)")
-                else:
-                    self.logger.debug(f"  [Bayesian] Constraint violated: {msg}")
-
-            if is_valid:
-                valid_instance = instance
-                self.current_params = next_params
-                break
-
-            # Constraint violated - tell optimizer this is a bad point
+        # Log if we mapped to a different point
+        if suggested_point != search_point:
             self.logger.debug(
-                f"  [Bayesian] Suggested point violates constraints, asking for another "
-                f"(retry {retry + 1}/{max_constraint_retries})"
+                f"  [Bayesian] Mapped suggested point to nearest valid: "
+                f"{suggested_point} -> {search_point}"
             )
-            # Tell optimizer this point is infeasible with a large penalty
-            self.optimizer.tell(next_params, 1e10)
-        else:
-            self.logger.warning(
-                f"  [Bayesian] Could not find valid point after {max_constraint_retries} retries. "
-                f"Using last suggested point anyway."
+
+        # Check if we've already visited this search point
+        if search_point in self._visited_search_points:
+            self.logger.debug(
+                f"  [Bayesian] Search point already visited: {search_point}. "
+                f"Optimizer may be converging."
             )
-            # Use the last instance even though it violated constraints
-            valid_instance = instance
-            self.current_params = next_params
+
+        self._visited_search_points.add(search_point)
+
+        # Get instances for this search point
+        instances = self._instance_lookup[search_point]
+
+        # Set up current iteration state
+        self._current_search_point = search_point
+        self._current_instances = instances
+        self._current_instance_idx = 0
+        self.current_params = next_params
 
         self.current_rep = 1
         self.iteration += 1
         self._attempt_count += 1
 
-        # Use the validated instance directly
-        test = valid_instance
+        # Get the first instance for this search point
+        test = instances[0]
         test.execution_id = self.iteration
         test.repetition = self.current_rep
         test.repetitions = self.repetitions

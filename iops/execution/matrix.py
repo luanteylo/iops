@@ -726,7 +726,7 @@ class ExecutionInstance:
 
 # ----------------- Single instance creator ----------------- #
 
-def create_execution_instance(
+def _create_execution_instance(
     cfg: GenericBenchmarkConfig,
     base_vars: Dict[str, Any],
     execution_id: int,
@@ -771,6 +771,17 @@ def create_execution_instance(
 
     script_cfg = cfg.scripts[script_index]
     repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
+
+    # Apply 'when' clause logic: if a variable has a 'when' condition that evaluates
+    # to False, override its value with the default. This ensures conditional variables
+    # are handled correctly even when the planner suggests invalid combinations.
+    adjusted_vars = dict(base_vars)
+    for name, vcfg in cfg.vars.items():
+        if vcfg.when and name in adjusted_vars:
+            if not _evaluate_when_condition(vcfg.when, adjusted_vars):
+                # Condition is false, use default value
+                adjusted_vars[name] = _cast_value(vcfg.type, vcfg.default)
+    base_vars = adjusted_vars
 
     # Build derived var configs from cfg.vars
     # Note: expr validation is handled by loader.py's validate_generic_config()
@@ -1077,7 +1088,7 @@ def build_execution_matrix(
         for script_idx in range(len(cfg.scripts)):
             exec_id += 1
 
-            exec_instance, _, _ = create_execution_instance(
+            exec_instance, _, _ = _create_execution_instance(
                 cfg=cfg,
                 base_vars=base_vars,
                 execution_id=exec_id,
