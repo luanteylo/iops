@@ -82,6 +82,7 @@ ALLOWED_RANDOM_CONFIG_KEYS = {"n_samples", "percentage", "fallback_to_exhaustive
 ALLOWED_BAYESIAN_CONFIG_KEYS = {
     "n_initial_points", "n_iterations", "acquisition_func", "base_estimator",
     "xi", "kappa", "objective", "objective_metric", "fallback_to_exhaustive",
+    "early_stop_on_convergence", "convergence_patience", "xi_boost_factor",
 }
 
 ALLOWED_CONSTRAINT_KEYS = {"name", "rule", "violation_policy", "description"}
@@ -93,7 +94,7 @@ ALLOWED_REPORTING_KEYS = {
 ALLOWED_THEME_KEYS = {"style", "colors", "font_family"}
 ALLOWED_SECTIONS_KEYS = {
     "test_summary", "best_results", "variable_impact", "parallel_coordinates",
-    "bayesian_evolution", "custom_plots",
+    "bayesian_evolution", "bayesian_parameter_evolution", "custom_plots",
 }
 ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
 ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
@@ -822,6 +823,9 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             objective=bc.get("objective", "maximize"),
             objective_metric=bc.get("objective_metric"),
             fallback_to_exhaustive=bc.get("fallback_to_exhaustive", True),
+            early_stop_on_convergence=bc.get("early_stop_on_convergence", False),
+            convergence_patience=bc.get("convergence_patience", 3),
+            xi_boost_factor=float(bc.get("xi_boost_factor", 5.0)),
         )
 
     benchmark = BenchmarkConfig(
@@ -1144,6 +1148,7 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
             variable_impact=sections_data.get("variable_impact", True),
             parallel_coordinates=sections_data.get("parallel_coordinates", True),
             bayesian_evolution=sections_data.get("bayesian_evolution", True),
+            bayesian_parameter_evolution=sections_data.get("bayesian_parameter_evolution", False),
             custom_plots=sections_data.get("custom_plots", True),
         )
 

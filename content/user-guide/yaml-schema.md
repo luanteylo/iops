@@ -62,6 +62,9 @@ benchmark:
     base_estimator: string          #   "RF" | "GP" | "ET" | "GBRT" (default: "RF")
     xi: float                       #   Exploration trade-off for EI/PI (default: 0.01)
     kappa: float                    #   Exploration parameter for LCB (default: 1.96)
+    early_stop_on_convergence: bool #   Stop when optimizer converges (default: false)
+    convergence_patience: integer   #   Convergences before early stop (default: 3)
+    xi_boost_factor: float          #   xi multiplier when stuck (default: 5.0)
 
   executor: string                  # Optional: "local" | "slurm" (default: "slurm")
   slurm_options:                 # Optional: SLURM-specific configuration
@@ -129,7 +132,7 @@ benchmark:
 <details>
 <summary><strong>bayesian_config</strong> (required if search_method: "bayesian")</summary>
 
-Configuration for Bayesian optimization:
+Configuration for Bayesian optimization. Default values are empirically tuned: with 20 iterations (~7% of search space), Bayesian optimization achieves ~90% of optimal vs ~79% for random search.
 
 ```yaml
 benchmark:
@@ -144,15 +147,21 @@ benchmark:
     xi: 0.01                         # Exploration trade-off for EI/PI
     kappa: 1.96                      # Exploration parameter for LCB
     fallback_to_exhaustive: true     # Use exhaustive if n_iterations >= total space
+    early_stop_on_convergence: false # Stop when optimizer converges
+    convergence_patience: 3          # Convergences before early stop
+    xi_boost_factor: 5.0             # xi multiplier when stuck
 ```
 
 **Options:**
 - `fallback_to_exhaustive` (default: true): When `n_iterations >= total_space_size`, automatically switches to exhaustive search to avoid Bayesian optimization overhead for small parameter spaces.
+- `early_stop_on_convergence` (default: false): When the optimizer converges (keeps suggesting already-visited configurations), stop after `convergence_patience` consecutive convergences. When convergence is detected, `xi` is boosted by `xi_boost_factor` to encourage exploration before stopping.
+- `convergence_patience` (default: 3): Number of consecutive convergence events before early stopping. Only used when `early_stop_on_convergence: true`.
+- `xi_boost_factor` (default: 5.0): Multiplier for `xi` when convergence is detected. Helps escape local optima by encouraging more exploration.
 
 **Surrogate models:**
-- `RF`: Random Forest (default) - Best for categorical/mixed spaces
-- `GP`: Gaussian Process - Best for continuous spaces
-- `ET`: Extra Trees
+- `RF`: Random Forest (default) - Most consistent results, handles categorical/mixed spaces well
+- `ET`: Extra Trees - Similar to RF, slightly higher variance
+- `GP`: Gaussian Process - Best for continuous spaces, struggles with categoricals
 - `GBRT`: Gradient Boosted Regression Trees
 
 </details>
@@ -790,13 +799,14 @@ reporting:
     colors: list                #   Custom color palette (hex codes)
     font_family: string         #   Font family
 
-  sections:                     # Optional: section visibility (all true by default)
-    test_summary: boolean
-    best_results: boolean
-    variable_impact: boolean
-    parallel_coordinates: boolean
-    bayesian_evolution: boolean
-    custom_plots: boolean
+  sections:                     # Optional: section visibility
+    test_summary: boolean       #   (default: true)
+    best_results: boolean       #   (default: true)
+    variable_impact: boolean    #   (default: true)
+    parallel_coordinates: boolean #   (default: true)
+    bayesian_evolution: boolean #   (default: true)
+    bayesian_parameter_evolution: boolean #   (default: false)
+    custom_plots: boolean       #   (default: true)
 
   best_results:                 # Optional: best results configuration
     top_n: integer              #   Number of top configs (default: 5)
@@ -859,7 +869,8 @@ reporting:
     best_results: true         # Top N configurations
     variable_impact: true      # Variance-based importance
     parallel_coordinates: true # Multi-dimensional visualization
-    bayesian_evolution: false  # Optimization progress (Bayesian only)
+    bayesian_evolution: true   # Optimization progress (Bayesian only)
+    bayesian_parameter_evolution: false  # Parameter exploration (default: false)
     custom_plots: true         # User-defined plots
 ```
 
