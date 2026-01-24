@@ -366,7 +366,7 @@ class ReportGenerator:
 
         Priority:
         1. Use report_vars from benchmark config if specified
-        2. Otherwise, use all swept variables that are numeric (int/float)
+        2. Otherwise, use all swept variables that are numeric (int/float/bool)
         3. Exclude string variables by default (they don't plot well)
         """
         # Check if report_vars is explicitly specified
@@ -376,13 +376,13 @@ class ReportGenerator:
             # Use explicitly specified variables
             return report_vars
 
-        # Default: use numeric swept variables only
+        # Default: use numeric swept variables only (bool treated as 0/1)
         swept_vars = self._get_swept_vars()
         numeric_vars = []
 
         for var_name in swept_vars:
             var_type = self.metadata['variables'][var_name].get('type', '')
-            if var_type in ['int', 'float']:
+            if var_type in ['int', 'float', 'bool']:
                 numeric_vars.append(var_name)
 
         return numeric_vars
