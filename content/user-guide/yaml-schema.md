@@ -385,6 +385,7 @@ Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, 
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory |
+| `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
 
 </details>
 

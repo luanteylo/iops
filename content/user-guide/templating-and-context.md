@@ -54,6 +54,7 @@ These variables are available in all Jinja2 templates:
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory path |
+| `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
 | All user `vars` | varies | All swept and derived variables by name |
 
 ---
@@ -72,6 +73,32 @@ vars:
   summary_file:
     type: str
     expr: "{{ execution_dir }}/summary_{{ execution_id }}_r{{ repetition }}.json"
+```
+
+### System Environment Variables
+
+Access system environment variables via `os_env`:
+
+```yaml
+# Use system paths in commands
+command:
+  template: "{{ os_env.HOME }}/bin/benchmark --scratch {{ os_env.SCRATCH | default('/tmp') }}"
+
+# Reference environment in derived variables
+vars:
+  scratch_dir:
+    type: str
+    expr: "{{ os_env.SCRATCH | default('/tmp') }}/iops_{{ execution_id }}"
+
+# Conditional based on cluster environment
+scripts:
+  - name: "benchmark"
+    script_template: |
+      #!/bin/bash
+      {% if os_env.SLURM_JOB_ID is defined %}
+      echo "Running in SLURM job {{ os_env.SLURM_JOB_ID }}"
+      {% endif %}
+      {{ command.template }}
 ```
 
 ### Conditionals
@@ -478,6 +505,7 @@ The parser script does NOT support Jinja2 templating, but has access to executio
 |----------|------|-------------|
 | `vars` | dict | All execution variables (e.g., `vars["nodes"]`) |
 | `env` | dict | Rendered `command.env` variables |
+| `os_env` | dict | System environment variables (e.g., `os_env["PATH"]`) |
 | `execution_id` | str | The execution ID |
 | `repetition` | int | Current repetition number |
 
@@ -560,6 +588,27 @@ parser:
             return {"performance": data["read_bw"]}
 ```
 
+**Example 4: Using system environment variables**
+```yaml
+parser:
+  file: "{{ execution_dir }}/output.json"
+  metrics:
+    - name: throughput
+    - name: cluster
+  parser_script: |
+    import json
+
+    def parse(file_path):
+        with open(file_path) as f:
+            data = json.load(f)
+        # Include cluster name from environment for multi-cluster studies
+        cluster = os_env.get("CLUSTER_NAME", "unknown")
+        return {
+            "throughput": data["bandwidth"],
+            "cluster": cluster
+        }
+```
+
 #### External File
 
 ```yaml
@@ -576,7 +625,7 @@ The external file (`./parsers/my_parser.py`):
 import json
 
 def parse(file_path):
-    # Context globals available: vars, env, execution_id, repetition
+    # Context globals available: vars, env, os_env, execution_id, repetition
     with open(file_path) as f:
         data = json.load(f)
     return {"throughput": data["bandwidth"] / vars["nodes"]}
@@ -769,7 +818,7 @@ scripts:
         - name: read_bw
         - name: efficiency
 
-      # No Jinja2, but has access to vars, env, execution_id, repetition
+      # No Jinja2, but has access to vars, env, os_env, execution_id, repetition
       parser_script: |
         import json
 

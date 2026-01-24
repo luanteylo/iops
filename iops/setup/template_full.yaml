@@ -675,6 +675,7 @@ output:
 #   - {{ repetition }}            - Current repetition number (1-based)
 #   - {{ execution_dir }}         - Per-execution working directory
 #   - {{ workdir }}               - Base working directory
+#   - {{ os_env.VAR_NAME }}       - System environment variables (e.g., os_env.HOME)
 #   - {{ vars.variable_name }}    - Any variable from 'vars' section
 #   - {{ labels.key }}            - Any label from 'command.labels'
 #   - {{ command.template }}      - The rendered command

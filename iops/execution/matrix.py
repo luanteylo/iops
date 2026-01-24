@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -398,6 +399,7 @@ class ExecutionInstance:
         - vars mapping ({{ vars.my_var }})
         - metadata
         - repetition (from metadata or instance field)
+        - os_env: system environment variables ({{ os_env.PATH }}, etc.)
         """
         ctx0 = self._base_context_for_vars()
         all_vars = self._compute_all_vars()
@@ -407,6 +409,7 @@ class ExecutionInstance:
             **all_vars,
         }
         ctx["vars"] = all_vars
+        ctx["os_env"] = dict(os.environ)
 
         return ctx
 

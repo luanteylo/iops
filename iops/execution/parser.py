@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-
-from curses import raw
+import os
 from typing import Any, Dict, Callable
 import traceback
 import ast
@@ -56,6 +55,7 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
     The parser script has access to the following global variables:
         - vars: Dict of all execution variables (e.g., vars["nodes"], vars["block_size"])
         - env: Dict of rendered command.env variables
+        - os_env: Dict of system environment variables (e.g., os_env["PATH"])
         - execution_id: The execution ID string
         - execution_dir: The execution directory path (as string)
         - workdir: The root working directory path (as string)
@@ -76,6 +76,7 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
     context = {
         "vars": dict(test.vars),
         "env": dict(test.env),
+        "os_env": dict(os.environ),
         "execution_id": test.execution_id,
         "execution_dir": str(test.execution_dir) if test.execution_dir else None,
         "workdir": str(test.workdir) if test.workdir else None,

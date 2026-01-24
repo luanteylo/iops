@@ -10,7 +10,7 @@ All notable changes to IOPS are documented here.
 - Resource tracing for CPU and memory monitoring (`trace_resources`, `trace_interval`)
 - Single-allocation mode for batch SLURM execution (`slurm_options.allocation`) [experimental]
 - `iops cache rebuild` command to exclude variables retroactively
-- Parser script context injection (`vars`, `env`, `execution_id`, `repetition` globals)
+- Parser script context injection (`vars`, `env`, `os_env`, `execution_id`, `repetition` globals)
 - `--partial` and `--min-reps` flags for partial archive creation
 - Unknown key validation with "did you mean?" suggestions for YAML config
 - Core-hours tracking for cache hits in dry-run estimates
