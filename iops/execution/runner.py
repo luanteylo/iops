@@ -1452,9 +1452,11 @@ class IOPSRunner(HasLogger):
 
             # Execute if not using cache
             if not used_cache:
-                # Write RUNNING status before execution starts
+                # Write initial status before execution starts
+                # Local executor: RUNNING (runs immediately)
+                # SLURM executor: PENDING (job goes to queue first)
                 if getattr(self.cfg.benchmark, 'track_executions', True):
-                    self._write_status_file(test, status="RUNNING")
+                    self._write_status_file(test, status=self.executor.INITIAL_STATUS)
 
                 self.executor.submit(test)
                 self.executor.wait_and_collect(test)

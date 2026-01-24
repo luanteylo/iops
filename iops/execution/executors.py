@@ -53,6 +53,11 @@ class BaseExecutor(ABC, HasLogger):
     # Log prefix for executor-specific messages (override in subclasses)
     _LOG_PREFIX = "Exec"
 
+    # Initial status when job is submitted (override in subclasses)
+    # - Local: RUNNING (runs immediately)
+    # - SLURM: PENDING (goes to queue first)
+    INITIAL_STATUS = "RUNNING"
+
     _registry: dict[str, type["BaseExecutor"]] = {}
 
     @classmethod
@@ -607,6 +612,9 @@ class SlurmExecutor(BaseExecutor):
     }
 
     _LOG_PREFIX = "SlurmExec"
+
+    # SLURM jobs go to queue first, so initial status is PENDING
+    INITIAL_STATUS = "PENDING"
 
     def __init__(self, cfg):
         """Initialize SLURM executor with configurable command templates and polling interval."""
