@@ -1067,20 +1067,28 @@ class ReportGenerator:
         if random_seed is not None:
             html += f"<tr><td><strong>Random Seed</strong></td><td>{random_seed}</td></tr>\n"
 
-        # Parameter combinations and repetitions
+        # Search space, combinations tested, and repetitions
         repetitions = benchmark_meta.get('repetitions', 1)
         total_rows = len(self.df)
 
-        # Calculate unique parameter combinations from execution_id
+        # Get total search space size from planner stats (if available)
+        planner_stats = benchmark_meta.get('planner_stats') or {}
+        total_search_space = planner_stats.get('total_space_size', 0)
+
+        # Calculate unique parameter combinations actually tested from execution_id
         if 'execution.execution_id' in self.df.columns:
-            unique_combinations = self.df['execution.execution_id'].nunique()
+            combinations_tested = self.df['execution.execution_id'].nunique()
         else:
             # Fallback: divide total rows by repetitions
-            unique_combinations = total_rows // repetitions if repetitions > 0 else total_rows
+            combinations_tested = total_rows // repetitions if repetitions > 0 else total_rows
 
-        html += f"<tr><td><strong>Parameter Combinations</strong></td><td>{unique_combinations}</td></tr>\n"
+        # Show total search space if available (for bayesian/random search)
+        if total_search_space > 0:
+            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_search_space:,} parameter combinations</td></tr>\n"
+
+        html += f"<tr><td><strong>Combinations Tested</strong></td><td>{combinations_tested}</td></tr>\n"
         html += f"<tr><td><strong>Repetitions per Combination</strong></td><td>{repetitions}</td></tr>\n"
-        html += f"<tr><td><strong>Total Executions</strong></td><td>{total_rows} ({unique_combinations} × {repetitions})</td></tr>\n"
+        html += f"<tr><td><strong>Total Executions</strong></td><td>{total_rows} ({combinations_tested} × {repetitions})</td></tr>\n"
 
         # Benchmark timing (if available, prefer detailed timing over legacy timestamp)
         if 'benchmark_start_time' in benchmark_meta and 'benchmark_end_time' in benchmark_meta:
@@ -1456,7 +1464,7 @@ class ReportGenerator:
         html += "<h3>Optimization Configuration</h3>\n<table>\n"
         html += "<tr><th>Parameter</th><th>Value</th></tr>\n"
         html += f"<tr><td><strong>Objective Metric</strong></td><td>{target_metric} ({objective})</td></tr>\n"
-        html += f"<tr><td><strong>Total Iterations</strong></td><td>{n_iterations}</td></tr>\n"
+        html += f"<tr><td><strong>Max Iterations</strong></td><td>{n_iterations}</td></tr>\n"
         html += f"<tr><td><strong>Initial Random Points</strong></td><td>{n_initial_points}</td></tr>\n"
         html += f"<tr><td><strong>Acquisition Function</strong></td><td>{acquisition_func}</td></tr>\n"
         html += f"<tr><td><strong>Surrogate Model</strong></td><td>{base_estimator}</td></tr>\n"
@@ -1468,14 +1476,17 @@ class ReportGenerator:
 
         # Display search space statistics if available
         if total_space_size > 0:
-            coverage_pct = (n_iterations / total_space_size) * 100
+            # Use actual number of combinations tested from dataframe, not configured n_iterations
+            # (may differ due to early stopping, convergence, etc.)
+            actual_combinations_tested = self.df['execution.execution_id'].nunique()
+            coverage_pct = (actual_combinations_tested / total_space_size) * 100
             savings_pct = 100 - coverage_pct
-            combinations_saved = total_space_size - n_iterations
+            combinations_saved = total_space_size - actual_combinations_tested
 
             html += "<h3>Search Space Efficiency</h3>\n<table>\n"
             html += "<tr><th>Metric</th><th>Value</th></tr>\n"
             html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} parameter combinations</td></tr>\n"
-            html += f"<tr><td><strong>Combinations Tested</strong></td><td>{n_iterations:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
+            html += f"<tr><td><strong>Combinations Tested</strong></td><td>{actual_combinations_tested:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
             html += f"<tr><td><strong>Combinations Saved</strong></td><td>{combinations_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
             html += "</table>\n"
 
