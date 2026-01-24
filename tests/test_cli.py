@@ -443,7 +443,9 @@ class TestReport:
 
         mock_generate.assert_called_once_with(
             Path('/path/to/workdir'),
-            report_config=None
+            report_config=None,
+            export_plots=False,
+            plot_format='pdf'
         )
 
     @patch('iops.reporting.report_generator.generate_report_from_workdir')
@@ -463,7 +465,9 @@ class TestReport:
         mock_load_config.assert_called_once_with(Path('report.yaml'))
         mock_generate.assert_called_once_with(
             Path('/path/to/workdir'),
-            report_config=mock_report_config
+            report_config=mock_report_config,
+            export_plots=False,
+            plot_format='pdf'
         )
 
     @patch('iops.config.loader.load_report_config')
