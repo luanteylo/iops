@@ -402,6 +402,7 @@ def _collect_execution_data(
             "skip_reason": None,
             "cached": cached,
             "metrics": avg_metrics,
+            "folders_exist": len(rep_dirs) > 0,  # True if submitted (rep folders created)
         })
 
     # Sort tests numerically by execution ID
@@ -746,7 +747,12 @@ def _build_table(
 
             if "path" not in hide_columns:
                 path_display = Path(rel_path).name if rel_path else rel_path
-                if overall_status == "RUNNING":
+                # Show signal for active tests:
+                # - RUNNING: currently executing
+                # - PENDING with folders: submitted and waiting in queue (e.g., SLURM)
+                folders_exist = test.get("folders_exist", False)
+                is_active = overall_status == "RUNNING" or (overall_status == "PENDING" and folders_exist)
+                if is_active:
                     path_text = Text()
                     path_text.append("▶ ", style="yellow bold")
                     path_text.append(display_val(path_display), style="cyan")
