@@ -62,6 +62,7 @@ benchmark:
     base_estimator: string          #   "RF" | "GP" | "ET" | "GBRT" (default: "RF")
     xi: float                       #   Exploration trade-off for EI/PI (default: 0.01)
     kappa: float                    #   Exploration parameter for LCB (default: 1.96)
+    early_stop_on_convergence: bool #   Stop when optimizer converges (default: false)
 
   executor: string                  # Optional: "local" | "slurm" (default: "slurm")
   slurm_options:                 # Optional: SLURM-specific configuration
@@ -144,10 +145,12 @@ benchmark:
     xi: 0.01                         # Exploration trade-off for EI/PI
     kappa: 1.96                      # Exploration parameter for LCB
     fallback_to_exhaustive: true     # Use exhaustive if n_iterations >= total space
+    early_stop_on_convergence: false # Stop when optimizer converges
 ```
 
 **Options:**
 - `fallback_to_exhaustive` (default: true): When `n_iterations >= total_space_size`, automatically switches to exhaustive search to avoid Bayesian optimization overhead for small parameter spaces.
+- `early_stop_on_convergence` (default: false): When the optimizer converges (keeps suggesting already-visited configurations), stop immediately instead of falling back to random sampling from unvisited configurations.
 
 **Surrogate models:**
 - `RF`: Random Forest (default) - Best for categorical/mixed spaces

@@ -162,6 +162,8 @@ class BayesianConfig:
         objective: Optimization direction - "minimize" or "maximize" (default: "minimize")
         objective_metric: Metric name to optimize (required)
         fallback_to_exhaustive: If True and n_iterations >= total space, use exhaustive search
+        early_stop_on_convergence: If True, stop when optimizer converges instead of
+            falling back to random sampling (default: False)
     """
     n_initial_points: int = 5
     n_iterations: int = 20
@@ -172,6 +174,7 @@ class BayesianConfig:
     objective: Literal["minimize", "maximize"] = "minimize"
     objective_metric: Optional[str] = None
     fallback_to_exhaustive: bool = True
+    early_stop_on_convergence: bool = False
 
 
 @dataclass

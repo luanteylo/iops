@@ -82,6 +82,7 @@ ALLOWED_RANDOM_CONFIG_KEYS = {"n_samples", "percentage", "fallback_to_exhaustive
 ALLOWED_BAYESIAN_CONFIG_KEYS = {
     "n_initial_points", "n_iterations", "acquisition_func", "base_estimator",
     "xi", "kappa", "objective", "objective_metric", "fallback_to_exhaustive",
+    "early_stop_on_convergence",
 }
 
 ALLOWED_CONSTRAINT_KEYS = {"name", "rule", "violation_policy", "description"}
@@ -822,6 +823,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             objective=bc.get("objective", "maximize"),
             objective_metric=bc.get("objective_metric"),
             fallback_to_exhaustive=bc.get("fallback_to_exhaustive", True),
+            early_stop_on_convergence=bc.get("early_stop_on_convergence", False),
         )
 
     benchmark = BenchmarkConfig(

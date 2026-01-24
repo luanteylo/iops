@@ -52,6 +52,7 @@ benchmark:
 - **xi**: Exploration trade-off for EI/PI (default: 0.01)
 - **kappa**: Exploration parameter for LCB (default: 1.96)
 - **fallback_to_exhaustive** (bool, default: true): Use exhaustive search if n_iterations >= total space
+- **early_stop_on_convergence** (bool, default: false): Stop when optimizer converges instead of falling back to random sampling
 
 
 

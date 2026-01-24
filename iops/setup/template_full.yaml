@@ -72,6 +72,7 @@ benchmark:
   #   base_estimator: "RF"        # Surrogate model: "RF" (default), "GP", "ET", "GBRT"
   #   xi: 0.01                    # Exploration-exploitation for EI/PI (higher = more exploration)
   #   kappa: 1.96                 # Exploration parameter for LCB (higher = more exploration)
+  #   early_stop_on_convergence: false  # Stop when optimizer converges instead of random fallback
   #
   # Surrogate Models:
   #   - RF: Random Forest (default) - Best for categorical/mixed parameter spaces

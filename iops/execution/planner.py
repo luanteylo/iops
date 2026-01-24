@@ -1698,6 +1698,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         # Check for exhaustive fallback
         self.fallback_to_exhaustive = self.bayesian_cfg.fallback_to_exhaustive
+        self.early_stop_on_convergence = self.bayesian_cfg.early_stop_on_convergence
         self._use_exhaustive_fallback = False
         self._exhaustive_matrix: List[ExecutionInstance] = []
         self._exhaustive_index = 0
@@ -1889,6 +1890,64 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 params.append(value)
 
         return params
+
+    def _find_nearest_valid_point_by_indices(self, suggested_params: List[Any]) -> tuple:
+        """
+        Find the nearest valid search point using index-based distance.
+
+        This method works directly with the optimizer's raw suggestions (which may be
+        floating-point for Integer dimensions) and finds the nearest valid configuration
+        using squared Euclidean distance in index space. This matches the behavior of
+        standalone scikit-optimize usage and provides better nearest-neighbor selection
+        than truncating indices first.
+
+        When multiple points have the same minimum distance (ties), the point with
+        the lexicographically largest index vector is chosen. This provides consistent,
+        deterministic tie-breaking that tends to favor higher parameter values
+        (which often correlate with better performance for I/O benchmarks).
+
+        Args:
+            suggested_params: Raw parameter values from optimizer.ask() (may be floats)
+
+        Returns:
+            Nearest valid search point tuple (actual values, not indices)
+        """
+        # Convert suggested params to index representation (keeping floats)
+        suggested_indices = []
+        for i, name in enumerate(self.var_names):
+            value = suggested_params[i]
+            # Convert numpy types to native Python
+            if hasattr(value, 'item'):
+                value = value.item()
+            suggested_indices.append(float(value))
+
+        # Build index representation for all valid points (once, cached)
+        if not hasattr(self, '_valid_points_indices'):
+            self._valid_points_indices = []
+            for valid_point in self._valid_search_points:
+                indices = self._search_point_to_params(valid_point)
+                self._valid_points_indices.append((valid_point, tuple(float(x) for x in indices)))
+
+        # Find all points with minimum distance, then break ties deterministically
+        candidates = []
+        best_distance = float('inf')
+
+        for valid_point, valid_indices in self._valid_points_indices:
+            # Compute squared Euclidean distance in index space
+            dist = sum((s - v) ** 2 for s, v in zip(suggested_indices, valid_indices))
+            if dist < best_distance:
+                best_distance = dist
+                candidates = [(valid_point, valid_indices)]
+            elif dist == best_distance:
+                candidates.append((valid_point, valid_indices))
+
+        if len(candidates) == 1:
+            return candidates[0][0]
+
+        # Break ties: prefer lexicographically largest index vector
+        # This tends to favor higher parameter values (more nodes, higher transfer sizes, etc.)
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[0][0]
 
     def _find_nearest_valid_point(self, suggested: tuple) -> tuple:
         """
@@ -2130,10 +2189,11 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         for attempt in range(max_retries):
             next_params = self.optimizer.ask()
-            suggested_point = self._suggestion_to_search_point(next_params)
 
-            # Map to nearest valid point from pre-built matrix
-            candidate_point = self._find_nearest_valid_point(suggested_point)
+            # Use index-based nearest-neighbor search for better accuracy
+            # This works directly with the optimizer's raw suggestions (which may be floats)
+            # and finds the nearest valid configuration in index space
+            candidate_point = self._find_nearest_valid_point_by_indices(next_params)
 
             if candidate_point is None:
                 self.logger.error(
@@ -2142,6 +2202,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 )
                 return None
 
+            # Check if suggestion was mapped (for logging)
+            suggested_point = self._suggestion_to_search_point(next_params)
             was_mapped = (suggested_point != candidate_point)
 
             # Check if we've already visited this search point
@@ -2156,10 +2218,33 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 f"  [Bayesian] Attempt {attempt + 1}: suggestion maps to visited point, requesting new"
             )
 
-        # If all retries exhausted, randomly sample from unvisited configurations
+        # If all retries exhausted, handle convergence
         if search_point is None:
             unvisited = [p for p in self._valid_search_points if p not in self._visited_search_points]
-            if unvisited:
+            if not unvisited:
+                # All configurations visited - we're done
+                self.logger.info(
+                    f"  [Bayesian] All {len(self._valid_search_points)} configurations visited"
+                )
+                return None
+
+            if self.early_stop_on_convergence:
+                # Early stop: optimizer converged, stop instead of random sampling
+                self.logger.info("=" * 70)
+                self.logger.info("BAYESIAN OPTIMIZATION COMPLETE (early stop)")
+                self.logger.info("=" * 70)
+                self.logger.info(
+                    f"Optimizer converged after {self.iteration} iterations. "
+                    f"{len(unvisited)} configs remain unvisited."
+                )
+                if self.best_params:
+                    self.logger.info(f"Best parameters found: {self.best_params}")
+                    self.logger.info(f"Best {self.target_metric}: {self.best_value:.4f}")
+                self.logger.info(f"Total evaluations: {len(self.y_observed)}")
+                self.logger.info("=" * 70)
+                return None
+            else:
+                # Random fallback: sample from unvisited configurations
                 import random
                 rng = random.Random(self.cfg.benchmark.random_seed + self.iteration)
                 search_point = rng.choice(unvisited)
@@ -2167,12 +2252,6 @@ class BayesianPlanner(BasePlanner, HasLogger):
                     f"  [Bayesian] Optimizer converged; randomly sampling from "
                     f"{len(unvisited)} unvisited configurations"
                 )
-            else:
-                # All configurations visited - we're done
-                self.logger.info(
-                    f"  [Bayesian] All {len(self._valid_search_points)} configurations visited"
-                )
-                return None
 
         # Log if we mapped to a different point (this affects model learning)
         if was_mapped:
