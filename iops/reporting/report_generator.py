@@ -1247,7 +1247,11 @@ class ReportGenerator:
             if node_count <= 5:
                 nodes_str = ', '.join(nodes)
             else:
-                nodes_str = f"{nodes[0]}, {nodes[1]}, ... ({node_count} total)"
+                # Use expandable details element for long node lists
+                nodes_str = (
+                    f"<details><summary>{node_count} nodes (click to expand)</summary>"
+                    f"<div style='margin-top: 5px;'>{', '.join(nodes)}</div></details>"
+                )
             html += f"<tr><td><strong>Compute Nodes</strong></td><td>{nodes_str}</td></tr>\n"
 
         # CPU info
