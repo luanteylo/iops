@@ -1546,8 +1546,8 @@ class ReportGenerator:
             x=iterations,
             y=running_max,
             mode='lines',
-            name='Running Max',
-            line=dict(color='#2ecc71', width=2, dash='dash'),
+            name='Max so far',
+            line=dict(color='#e74c3c', width=2, dash='dash'),
             hovertemplate='Iteration %{x}<br>Max: %{y:.4f}<extra></extra>'
         ))
 
@@ -1556,8 +1556,8 @@ class ReportGenerator:
             x=iterations,
             y=running_min,
             mode='lines',
-            name='Running Min',
-            line=dict(color='#e74c3c', width=2, dash='dash'),
+            name='Min so far',
+            line=dict(color='#2ecc71', width=2, dash='dash'),
             hovertemplate='Iteration %{x}<br>Min: %{y:.4f}<extra></extra>'
         ))
 
@@ -1663,8 +1663,8 @@ class ReportGenerator:
             x=iterations,
             y=running_max,
             mode='lines',
-            name='Running Max',
-            line=dict(color='#2ecc71', width=2, dash='dash'),
+            name='Max so far',
+            line=dict(color='#e74c3c', width=2, dash='dash'),
             hovertemplate='Execution %{x}<br>Max: %{y:.4f}<extra></extra>'
         ))
 
@@ -1673,8 +1673,8 @@ class ReportGenerator:
             x=iterations,
             y=running_min,
             mode='lines',
-            name='Running Min',
-            line=dict(color='#e74c3c', width=2, dash='dash'),
+            name='Min so far',
+            line=dict(color='#2ecc71', width=2, dash='dash'),
             hovertemplate='Execution %{x}<br>Min: %{y:.4f}<extra></extra>'
         ))
 
