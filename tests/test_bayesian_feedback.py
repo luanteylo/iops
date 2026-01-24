@@ -372,8 +372,8 @@ class TestBayesianExhaustiveVars:
             f"got {len(planner.y_observed) - initial_observations}"
         )
 
-    def test_bayesian_exhaustive_aggregation_uses_mean(self, bayesian_exhaustive_config):
-        """Test that aggregation across exhaustive instances uses mean."""
+    def test_bayesian_exhaustive_aggregation_uses_max(self, bayesian_exhaustive_config):
+        """Test that aggregation across exhaustive instances uses max for maximization."""
         pytest.importorskip("skopt")
         from iops.execution.planner import BayesianPlanner
 
@@ -398,16 +398,16 @@ class TestBayesianExhaustiveVars:
             test.metadata['metrics'] = {'metric': metric_value}
             planner.record_completed_test(test)
 
-        # Check that the aggregated value is the mean
+        # Check that the aggregated value is the max (for maximization objective)
         # Each exhaustive instance has 2 reps, so:
-        # - exhaustive_param=10: mean of 2 reps = 100.0
-        # - exhaustive_param=20: mean of 2 reps = 200.0
-        # - Overall mean: (100.0 + 200.0) / 2 = 150.0
+        # - exhaustive_param=10: max of 2 reps = 100.0
+        # - exhaustive_param=20: max of 2 reps = 200.0
+        # - Overall max: max(100.0, 200.0) = 200.0
         # For maximization, y_observed stores -aggregated_value
         if len(planner.y_observed) > 0:
             # Since we're maximizing, y_value = -aggregated_value
             observed = -planner.y_observed[0]
-            expected = 150.0
+            expected = 200.0  # max of 100 and 200
             assert abs(observed - expected) < 0.01, (
                 f"Expected aggregated value ~{expected}, got {observed}"
             )

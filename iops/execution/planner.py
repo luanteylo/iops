@@ -20,6 +20,7 @@ import logging
 import random
 import json
 import warnings
+import copy
 
 # Try to import rich for progress bars
 try:
@@ -1702,9 +1703,15 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Check for exhaustive fallback
         self.fallback_to_exhaustive = self.bayesian_cfg.fallback_to_exhaustive
         self.early_stop_on_convergence = self.bayesian_cfg.early_stop_on_convergence
+        self.convergence_patience = self.bayesian_cfg.convergence_patience
+        self.xi_boost_factor = self.bayesian_cfg.xi_boost_factor
         self._use_exhaustive_fallback = False
         self._exhaustive_matrix: List[ExecutionInstance] = []
         self._exhaustive_index = 0
+
+        # Convergence tracking for early stop with xi boost
+        self._convergence_count = 0
+        self._original_xi = self.xi
 
         if self.n_iterations >= self.total_space_size and self.total_space_size > 0:
             if self.fallback_to_exhaustive:
@@ -1778,6 +1785,10 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # When exhaustive_vars is used, each search point has multiple instances
         # We collect metric values from each instance and aggregate before updating optimizer
         self._exhaustive_instance_results: List[float] = []
+
+        # Track metrics per iteration for repetition aggregation
+        # Key: (iteration, exhaustive_instance_idx), Value: list of metric values per repetition
+        self._iteration_metrics: Dict[tuple, List[float]] = {}
 
         # Track which search points have been visited
         self._visited_search_points: set = set()
@@ -2280,21 +2291,44 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 )
                 return None
 
+            # Convergence detected - optimizer keeps suggesting visited points
+            self._convergence_count += 1
+
             if self.early_stop_on_convergence:
-                # Early stop: optimizer converged, stop instead of random sampling
-                self.logger.info("=" * 70)
-                self.logger.info("BAYESIAN OPTIMIZATION COMPLETE (early stop)")
-                self.logger.info("=" * 70)
-                self.logger.info(
-                    f"Optimizer converged after {self.iteration} iterations. "
-                    f"{len(unvisited)} configs remain unvisited."
-                )
-                if self.best_params:
-                    self.logger.info(f"Best parameters found: {self.best_params}")
-                    self.logger.info(f"Best {self.target_metric}: {self.best_value:.4f}")
-                self.logger.info(f"Total evaluations: {len(self.y_observed)}")
-                self.logger.info("=" * 70)
-                return None
+                if self._convergence_count >= self.convergence_patience:
+                    # Patience exhausted - stop optimization
+                    self.logger.info("=" * 70)
+                    self.logger.info("BAYESIAN OPTIMIZATION COMPLETE (early stop)")
+                    self.logger.info("=" * 70)
+                    self.logger.info(
+                        f"Optimizer converged {self._convergence_count} times after "
+                        f"{self.iteration} iterations. {len(unvisited)} configs remain unvisited."
+                    )
+                    if self.best_params:
+                        self.logger.info(f"Best parameters found: {self.best_params}")
+                        self.logger.info(f"Best {self.target_metric}: {self.best_value:.4f}")
+                    self.logger.info(f"Total evaluations: {len(self.y_observed)}")
+                    self.logger.info("=" * 70)
+                    return None
+                else:
+                    # Boost xi to encourage exploration
+                    new_xi = self._original_xi * (self.xi_boost_factor ** self._convergence_count)
+                    self.logger.info(
+                        f"  [Bayesian] Convergence detected ({self._convergence_count}/{self.convergence_patience}). "
+                        f"Boosting xi: {self.xi:.4f} -> {new_xi:.4f}"
+                    )
+                    self.xi = new_xi
+                    # Update optimizer's acquisition function kwargs
+                    if self.acquisition_func in ['EI', 'PI']:
+                        self.optimizer.acq_func_kwargs['xi'] = self.xi
+
+                    # Random sample to continue exploration
+                    import random
+                    rng = random.Random(self.cfg.benchmark.random_seed + self.iteration)
+                    search_point = rng.choice(unvisited)
+                    self.logger.info(
+                        f"  [Bayesian] Randomly sampling from {len(unvisited)} unvisited configurations"
+                    )
             else:
                 # Random fallback: sample from unvisited configurations
                 import random
@@ -2304,6 +2338,20 @@ class BayesianPlanner(BasePlanner, HasLogger):
                     f"  [Bayesian] Optimizer converged; randomly sampling from "
                     f"{len(unvisited)} unvisited configurations"
                 )
+        else:
+            # Valid new point found - reset convergence counter and restore xi
+            if self._convergence_count > 0:
+                self.logger.debug(
+                    f"  [Bayesian] Resetting convergence counter (was {self._convergence_count})"
+                )
+                self._convergence_count = 0
+                if self.xi != self._original_xi:
+                    self.logger.info(
+                        f"  [Bayesian] Restoring xi: {self.xi:.4f} -> {self._original_xi:.4f}"
+                    )
+                    self.xi = self._original_xi
+                    if self.acquisition_func in ['EI', 'PI']:
+                        self.optimizer.acq_func_kwargs['xi'] = self.xi
 
         # Log if we mapped to a different point (this affects model learning)
         if was_mapped:
@@ -2424,6 +2472,15 @@ class BayesianPlanner(BasePlanner, HasLogger):
         """
         self.completed_tests.append(test)
 
+        # Store metric value for this repetition (for later aggregation)
+        metrics = test.metadata.get('metrics', {})
+        metric_value = metrics.get(self.target_metric)
+        if metric_value is not None:
+            key = (self.iteration, self._current_instance_idx)
+            if key not in self._iteration_metrics:
+                self._iteration_metrics[key] = []
+            self._iteration_metrics[key].append(metric_value)
+
         # In exhaustive fallback mode, we don't update the optimizer
         # (we're just running all configs, not optimizing)
         if self._use_exhaustive_fallback:
@@ -2436,35 +2493,27 @@ class BayesianPlanner(BasePlanner, HasLogger):
         if test.repetition != self.repetitions:
             return
 
-        # Extract target metric value for this instance
-        metrics = test.metadata.get('metrics', {})
-        metric_value = metrics.get(self.target_metric)
+        # Aggregate metrics across repetitions for this exhaustive instance
+        key = (self.iteration, self._current_instance_idx)
+        rep_values = self._iteration_metrics.get(key, [])
 
-        if metric_value is None:
+        if not rep_values:
             self.logger.warning(
-                f"Target metric '{self.target_metric}' not found in results. "
-                f"Available metrics: {list(metrics.keys())}"
+                f"Target metric '{self.target_metric}' not found in any repetition results."
             )
             # Still need to check if we should update optimizer (even with missing metric)
         else:
-            # Aggregate metric across repetitions for this exhaustive instance (use mean)
-            rep_values = []
-            current_instance = self._current_instances[self._current_instance_idx]
-            for completed_test in self.completed_tests:
-                # Match by both execution_id and base_vars (to identify the exact instance)
-                if (completed_test.execution_id == test.execution_id and
-                    completed_test.base_vars == current_instance.base_vars and
-                    completed_test.metadata.get('metrics', {}).get(self.target_metric) is not None):
-                    rep_values.append(completed_test.metadata['metrics'][self.target_metric])
-
-            if rep_values:
-                instance_mean = float(np.mean(rep_values))
-                self._exhaustive_instance_results.append(instance_mean)
-                self.logger.debug(
-                    f"  [Bayesian] Exhaustive instance {self._current_instance_idx + 1}/"
-                    f"{len(self._current_instances)} complete: "
-                    f"{self.target_metric}={instance_mean:.4f} (mean of {len(rep_values)} reps)"
-                )
+            # Use best value (max for maximize, min for minimize) instead of mean
+            if self.objective == 'maximize':
+                instance_best = float(np.max(rep_values))
+            else:
+                instance_best = float(np.min(rep_values))
+            self._exhaustive_instance_results.append(instance_best)
+            self.logger.debug(
+                f"  [Bayesian] Exhaustive instance {self._current_instance_idx + 1}/"
+                f"{len(self._current_instances)} complete: "
+                f"{self.target_metric}={instance_best:.4f} (best of {len(rep_values)} reps)"
+            )
 
         # Only update optimizer after ALL exhaustive instances and their repetitions are complete
         is_last_exhaustive_instance = self._current_instance_idx >= len(self._current_instances) - 1
@@ -2485,8 +2534,11 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.current_rep = 0
             return
 
-        # Aggregate across all exhaustive instances (mean)
-        aggregated_value = float(np.mean(self._exhaustive_instance_results))
+        # Aggregate across all exhaustive instances (use best value)
+        if self.objective == 'maximize':
+            aggregated_value = float(np.max(self._exhaustive_instance_results))
+        else:
+            aggregated_value = float(np.min(self._exhaustive_instance_results))
 
         # For maximization, negate the value (scikit-optimize minimizes)
         if self.objective == 'maximize':
@@ -2510,7 +2562,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.logger.info(
                 f"  [Bayesian] Iteration {self.iteration} complete: "
                 f"{self.target_metric}={aggregated_value:.4f} "
-                f"(mean of {n_exhaustive} exhaustive configs)"
+                f"(best of {n_exhaustive} exhaustive configs)"
             )
         else:
             self.logger.info(

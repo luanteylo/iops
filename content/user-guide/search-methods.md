@@ -19,20 +19,23 @@ benchmark:
 
 ## Bayesian Optimization
 
-Uses Gaussian Process regression to intelligently explore the parameter space, focusing on promising regions.
+Uses a surrogate model to intelligently explore the parameter space, focusing on promising regions. Default parameters are empirically tuned: with 20 iterations (~7% of search space), Bayesian optimization achieves ~90% of optimal vs ~79% for random search.
 
 ```yaml
 benchmark:
   search_method: "bayesian"
   bayesian_config:
     objective_metric: "throughput"  # Required: must match parser metric
-    objective: "maximize"  # or "minimize" (default: "minimize")
-    n_initial_points: 5
-    n_iterations: 20
-    acquisition_func: "EI"  # Expected Improvement
-    base_estimator: "RF"    # Random Forest (default)
-    early_stop_on_convergence: bool #   Stop when optimizer converges (default: false)
-    fallback_to_exhaustive: true  # Use exhaustive if n_iterations >= total space
+    objective: "maximize"           # or "minimize" (default: "minimize")
+    n_initial_points: 5             # Random samples before guided search
+    n_iterations: 20                # Total evaluations
+    acquisition_func: "EI"          # Expected Improvement (default)
+    base_estimator: "RF"            # Random Forest (default, most consistent)
+    xi: 0.01                        # Exploration trade-off (default)
+    fallback_to_exhaustive: true    # Use exhaustive if n_iterations >= total space
+    early_stop_on_convergence: false # Stop when optimizer converges
+    convergence_patience: 3         # Convergences before early stop
+    xi_boost_factor: 5.0            # xi multiplier when stuck
 ```
 
 ### Configuration Options
@@ -42,18 +45,20 @@ benchmark:
 - **n_initial_points**: Random samples before optimization starts (default: 5)
 - **n_iterations**: Total number of evaluations (default: 20)
 - **acquisition_func**: Acquisition function (default: `EI`)
-  - `EI`: Expected Improvement (balanced)
+  - `EI`: Expected Improvement (balanced exploration/exploitation)
   - `PI`: Probability of Improvement (more exploitative)
   - `LCB`: Lower Confidence Bound (more exploratory)
 - **base_estimator**: Surrogate model type (default: `RF`)
-  - `RF`: Random Forest (robust, handles categorical well)
-  - `GP`: Gaussian Process (best for continuous)
-  - `ET`: Extra Trees
+  - `RF`: Random Forest (most consistent results, handles categorical well)
+  - `ET`: Extra Trees (similar to RF, slightly higher variance)
+  - `GP`: Gaussian Process (best for continuous spaces)
   - `GBRT`: Gradient Boosted Regression Trees
-- **xi**: Exploration trade-off for EI/PI (default: 0.01)
+- **xi**: Exploration trade-off for EI/PI (default: 0.01, good balance)
 - **kappa**: Exploration parameter for LCB (default: 1.96)
 - **fallback_to_exhaustive** (bool, default: true): Use exhaustive search if n_iterations >= total space
-- **early_stop_on_convergence** (bool, default: false): Stop when optimizer converges instead of falling back to random sampling
+- **early_stop_on_convergence** (bool, default: false): Stop when optimizer converges instead of falling back to random sampling. When enabled, uses `convergence_patience` and `xi_boost_factor` to escape local optima before stopping.
+- **convergence_patience** (int, default: 3): Number of consecutive convergence events before early stopping. When convergence is detected, `xi` is boosted to encourage exploration.
+- **xi_boost_factor** (float, default: 5.0): Multiplier for `xi` when convergence is detected. Helps escape local optima by encouraging more exploration.
 
 
 
@@ -87,8 +92,10 @@ benchmark:
 | Method | Coverage | Speed | Best For | Deterministic |
 |--------|----------|-------|----------|---------------|
 | **Exhaustive** | Complete | Slow for large spaces | Small spaces, full coverage | Yes |
-| **Bayesian** | Focused | Fast for optimization | Finding optima, expensive tests | No |
-| **Random** | Statistical | Fast | Exploration, large spaces | With seed |
+| **Bayesian** | Focused (~90% optimal with 7% coverage) | Fast for optimization | Finding optima, expensive tests | No |
+| **Random** | Statistical (~79% optimal with 7% coverage) | Fast | Exploration, large spaces | With seed |
+
+*Performance figures based on empirical testing with 20 iterations across 10 seeds.*
 
 ## Exhaustive Variables
 

@@ -48,9 +48,20 @@ class IOPSRunner(HasLogger):
 
         if cfg.benchmark.cache_file:
             exclude_vars = cfg.benchmark.cache_exclude_vars or []
+
+            # For Bayesian optimization, configure cache to return best results
+            # instead of most recent (improves optimization consistency)
+            objective_metric = None
+            objective = "maximize"
+            if cfg.benchmark.search_method == "bayesian" and cfg.benchmark.bayesian_config:
+                objective_metric = cfg.benchmark.bayesian_config.objective_metric
+                objective = cfg.benchmark.bayesian_config.objective or "maximize"
+
             self.cache = ExecutionCache(
                 cfg.benchmark.cache_file,
-                exclude_vars=exclude_vars
+                exclude_vars=exclude_vars,
+                objective_metric=objective_metric,
+                objective=objective,
             )
 
             if args.use_cache:
@@ -1470,6 +1481,8 @@ class IOPSRunner(HasLogger):
                     )
                     if getattr(self.cfg.benchmark, 'track_executions', True):
                         self._write_status_file(test, status='SKIPPED')
+                    # Still notify planner so it can aggregate available repetitions
+                    self.planner.record_completed_test(test)
                     continue
 
                 # Write initial status before execution starts
