@@ -9,6 +9,7 @@ All notable changes to IOPS are documented here.
 ### Added
 - Resource tracing for CPU and memory monitoring (`trace_resources`, `trace_interval`)
 - Single-allocation mode for batch SLURM execution (`slurm_options.allocation`) [experimental]
+- MPI block for automatic MPI launching in single-allocation mode (`scripts[].mpi`)
 - `iops cache rebuild` command to exclude variables retroactively
 - Parser script context injection (`vars`, `env`, `os_env`, `execution_id`, `repetition` globals)
 - `os_env` context variable exposing system environment variables to Jinja2 templates
@@ -16,12 +17,17 @@ All notable changes to IOPS are documented here.
 - Unknown key validation with "did you mean?" suggestions for YAML config
 - Core-hours tracking for cache hits in dry-run estimates
 - Boolean variables now included in report generation by default (treated as 0/1)
+- Plot export to image files (`--export-plots`, `--plot-format`) with pdf, png, svg, jpg, webp support
+- Random search evolution section in HTML reports
+- NFS auto-detection with lock-free SQLite mode for cache
+- Real-time execution status tracking with executor-specific updates
 
 ### Changed
 - Renamed `executor_options` to `slurm_options` (old name deprecated, remove in 3.7.0)
 - Renamed `[pdf]` optional dependency to `[plots]` (supports pdf, png, svg, jpg, webp)
 - Removed `scripts[].submit` field
 - Removed `output.sink.include` option
+- Removed Pareto Frontier analysis from reports
 - `iops generate` now defaults to SLURM executor (use `--local` for local)
 - Separate user labels from IOPS internal metadata in output
 - Default output path when `output.sink.path` not specified
@@ -30,6 +36,7 @@ All notable changes to IOPS are documented here.
 - Dry-run cache lookup using wrong repetition values
 - Constraint evaluation order (swept vars before derived expressions)
 - Refactored BayesianPlanner to use pre-built execution matrix (consistent with other planners)
+- SQLite cache locking errors on NFS filesystems
 
 ## [3.4.0] - 2026-01-13
 
