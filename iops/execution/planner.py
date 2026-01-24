@@ -1649,6 +1649,9 @@ class BayesianPlanner(BasePlanner, HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig):
         super().__init__(cfg)
 
+        # Store exhaustive_var_names for filtering search space
+        self.exhaustive_var_names = set(cfg.benchmark.exhaustive_vars or [])
+
         if not SKOPT_AVAILABLE:
             raise ImportError(
                 "scikit-optimize is required for Bayesian optimization. "
@@ -1745,10 +1748,16 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.y_observed: List[float] = []      # Observed metric values
 
         # Progress tracking for get_progress()
+        # Account for multiple exhaustive instances per search point
         self._attempt_count: int = 0
-        self._attempt_total: int = self.n_iterations * (cfg.benchmark.repetitions or 1)
         if self._use_exhaustive_fallback:
             self._attempt_total = len(self._exhaustive_matrix) * (cfg.benchmark.repetitions or 1)
+        elif self._instance_lookup:
+            # Average number of exhaustive instances per search point
+            avg_exhaustive = sum(len(v) for v in self._instance_lookup.values()) / len(self._instance_lookup)
+            self._attempt_total = int(self.n_iterations * avg_exhaustive * (cfg.benchmark.repetitions or 1))
+        else:
+            self._attempt_total = self.n_iterations * (cfg.benchmark.repetitions or 1)
 
         # Best found so far
         self.best_params: Optional[Dict[str, Any]] = None
@@ -1764,6 +1773,11 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self._current_search_point: Optional[tuple] = None
         self._current_instances: List[ExecutionInstance] = []
         self._current_instance_idx = 0
+
+        # Track exhaustive instance results for aggregation
+        # When exhaustive_vars is used, each search point has multiple instances
+        # We collect metric values from each instance and aggregate before updating optimizer
+        self._exhaustive_instance_results: List[float] = []
 
         # Track which search points have been visited
         self._visited_search_points: set = set()
@@ -2024,6 +2038,14 @@ class BayesianPlanner(BasePlanner, HasLogger):
             if not var_config.sweep:
                 continue  # Skip non-swept variables
 
+            # Skip exhaustive variables - they are tested exhaustively, not optimized
+            if var_name in self.exhaustive_var_names:
+                self.logger.debug(
+                    f"  [Bayesian] Variable '{var_name}': excluded from search space "
+                    f"(exhaustive variable)"
+                )
+                continue
+
             sweep_cfg = var_config.sweep
 
             if sweep_cfg.mode == "range":
@@ -2142,6 +2164,11 @@ class BayesianPlanner(BasePlanner, HasLogger):
         creating instances dynamically. Maps optimizer suggestions to
         the nearest valid search point in the pre-built matrix.
 
+        When exhaustive_vars is configured, each search point may have multiple
+        instances (one for each combination of exhaustive variable values).
+        All instances for a search point are executed before moving to the
+        next search point from the optimizer.
+
         Returns:
             ExecutionInstance or None when optimization is complete
         """
@@ -2149,26 +2176,51 @@ class BayesianPlanner(BasePlanner, HasLogger):
         if self._use_exhaustive_fallback:
             return self._next_test_exhaustive()
 
-        # Handle repetitions for current test first
-        # (must finish all reps before checking termination)
+        # Handle repetitions for current exhaustive instance first
         if self.current_test and self.current_rep < self.repetitions:
-            # Continue with repetitions of current configuration
+            # Continue with repetitions of current instance
             self.current_rep += 1
             self._attempt_count += 1
 
-            # Reuse the same pre-built instance, just update repetition
-            test = self._current_instances[0]  # Use first instance for the search point
+            # Get the current exhaustive instance (not always instances[0])
+            test = self._current_instances[self._current_instance_idx]
             test.repetition = self.current_rep
             test.repetitions = self.repetitions
             self._prepare_execution_artifacts(test, self.current_rep)
 
             self.logger.debug(
-                f"  [Bayesian] Repetition {self.current_rep}/{self.repetitions} "
-                f"of iteration {self.iteration}"
+                f"  [Bayesian] Instance {self._current_instance_idx + 1}/{len(self._current_instances)}, "
+                f"Repetition {self.current_rep}/{self.repetitions}"
             )
             return test
 
-        # Check if we've completed all iterations (after finishing repetitions)
+        # Current instance's repetitions are done - check for more exhaustive instances
+        if self._current_instances and self._current_instance_idx < len(self._current_instances) - 1:
+            # Move to next exhaustive instance for this search point
+            self._current_instance_idx += 1
+            self.current_rep = 1
+            self._attempt_count += 1
+
+            test = self._current_instances[self._current_instance_idx]
+            test.execution_id = self.iteration
+            test.repetition = self.current_rep
+            test.repetitions = self.repetitions
+            self._prepare_execution_artifacts(test, self.current_rep)
+            self.current_test = test
+
+            self.logger.debug(
+                f"  [Bayesian] Moving to exhaustive instance "
+                f"{self._current_instance_idx + 1}/{len(self._current_instances)}"
+            )
+            if len(self._current_instances) > 1:
+                self.logger.info(
+                    f"  [Bayesian] Testing exhaustive config {self._current_instance_idx + 1}/"
+                    f"{len(self._current_instances)}: {test.base_vars}"
+                )
+            return test
+
+        # All exhaustive instances and their repetitions are done for this search point
+        # Check if we've completed all iterations
         if self.iteration >= self.n_iterations:
             self.logger.info("=" * 70)
             self.logger.info("BAYESIAN OPTIMIZATION COMPLETE")
@@ -2273,6 +2325,9 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self._current_instances = instances
         self._current_instance_idx = 0
 
+        # Reset exhaustive instance results for new search point
+        self._exhaustive_instance_results = []
+
         # CRITICAL: Store the actual indices for the search point we're evaluating,
         # not the suggested indices. This ensures the optimizer receives correct
         # feedback about what was actually evaluated, not what was suggested.
@@ -2296,6 +2351,10 @@ class BayesianPlanner(BasePlanner, HasLogger):
             f"[Bayesian] Iteration {self.iteration}/{self.n_iterations}: "
             f"Testing {test.base_vars}"
         )
+        if len(instances) > 1:
+            self.logger.info(
+                f"  [Bayesian] {len(instances)} exhaustive configurations for this search point"
+            )
 
         return test
 
@@ -2355,65 +2414,117 @@ class BayesianPlanner(BasePlanner, HasLogger):
         This is essential for Bayesian optimization - the optimizer needs
         to learn from completed tests to suggest better parameters.
 
+        When exhaustive_vars is configured, metrics are collected from each
+        exhaustive instance and aggregated before updating the optimizer.
+        The optimizer receives one feedback point per search point (the mean
+        across all exhaustive combinations).
+
         Args:
             test: Completed ExecutionInstance with metrics
         """
         self.completed_tests.append(test)
 
-        # Only update optimizer after all repetitions are complete
-        if test.repetition == self.repetitions:
-            # Extract target metric value
-            metrics = test.metadata.get('metrics', {})
-            metric_value = metrics.get(self.target_metric)
+        # In exhaustive fallback mode, we don't update the optimizer
+        # (we're just running all configs, not optimizing)
+        if self._use_exhaustive_fallback:
+            if test.repetition == self.repetitions:
+                self.current_test = None
+                self.current_rep = 0
+            return
 
-            if metric_value is None:
-                self.logger.warning(
-                    f"Target metric '{self.target_metric}' not found in results. "
-                    f"Available metrics: {list(metrics.keys())}"
-                )
-                return
+        # Only process after all repetitions for this exhaustive instance are complete
+        if test.repetition != self.repetitions:
+            return
 
-            # Aggregate metric across repetitions (use mean)
+        # Extract target metric value for this instance
+        metrics = test.metadata.get('metrics', {})
+        metric_value = metrics.get(self.target_metric)
+
+        if metric_value is None:
+            self.logger.warning(
+                f"Target metric '{self.target_metric}' not found in results. "
+                f"Available metrics: {list(metrics.keys())}"
+            )
+            # Still need to check if we should update optimizer (even with missing metric)
+        else:
+            # Aggregate metric across repetitions for this exhaustive instance (use mean)
             rep_values = []
+            current_instance = self._current_instances[self._current_instance_idx]
             for completed_test in self.completed_tests:
+                # Match by both execution_id and base_vars (to identify the exact instance)
                 if (completed_test.execution_id == test.execution_id and
+                    completed_test.base_vars == current_instance.base_vars and
                     completed_test.metadata.get('metrics', {}).get(self.target_metric) is not None):
                     rep_values.append(completed_test.metadata['metrics'][self.target_metric])
 
-            if not rep_values:
-                return
+            if rep_values:
+                instance_mean = float(np.mean(rep_values))
+                self._exhaustive_instance_results.append(instance_mean)
+                self.logger.debug(
+                    f"  [Bayesian] Exhaustive instance {self._current_instance_idx + 1}/"
+                    f"{len(self._current_instances)} complete: "
+                    f"{self.target_metric}={instance_mean:.4f} (mean of {len(rep_values)} reps)"
+                )
 
-            aggregated_value = float(np.mean(rep_values))
+        # Only update optimizer after ALL exhaustive instances and their repetitions are complete
+        is_last_exhaustive_instance = self._current_instance_idx >= len(self._current_instances) - 1
 
-            # For maximization, negate the value (scikit-optimize minimizes)
-            if self.objective == 'maximize':
-                y_value = -aggregated_value
-            else:
-                y_value = aggregated_value
+        if not is_last_exhaustive_instance:
+            # More exhaustive instances to run for this search point
+            return
 
-            # Update optimizer with observation
-            self.X_observed.append(self.current_params)
-            self.y_observed.append(y_value)
-
-            self.optimizer.tell(self.current_params, y_value)
-
-            # Update best found
-            if self.best_value is None or aggregated_value > (self.best_value if self.objective == 'maximize' else -self.best_value):
-                self.best_params = self._params_to_dict(self.current_params)
-                self.best_value = aggregated_value
-
-            self.logger.info(
-                f"  [Bayesian] Iteration {self.iteration} complete: "
-                f"{self.target_metric}={aggregated_value:.4f} (mean of {len(rep_values)} reps)"
+        # All exhaustive instances complete - aggregate and update optimizer
+        if not self._exhaustive_instance_results:
+            self.logger.warning(
+                f"  [Bayesian] No valid metrics collected for search point. "
+                f"Cannot update optimizer."
             )
-            self.logger.info(
-                f"  [Bayesian] Best so far: {self.best_value:.4f} at {self.best_params}"
-            )
-
             # Reset for next iteration
             self.current_test = None
             self.current_params = None
             self.current_rep = 0
+            return
+
+        # Aggregate across all exhaustive instances (mean)
+        aggregated_value = float(np.mean(self._exhaustive_instance_results))
+
+        # For maximization, negate the value (scikit-optimize minimizes)
+        if self.objective == 'maximize':
+            y_value = -aggregated_value
+        else:
+            y_value = aggregated_value
+
+        # Update optimizer with observation
+        self.X_observed.append(self.current_params)
+        self.y_observed.append(y_value)
+
+        self.optimizer.tell(self.current_params, y_value)
+
+        # Update best found
+        if self.best_value is None or aggregated_value > (self.best_value if self.objective == 'maximize' else -self.best_value):
+            self.best_params = self._params_to_dict(self.current_params)
+            self.best_value = aggregated_value
+
+        n_exhaustive = len(self._exhaustive_instance_results)
+        if n_exhaustive > 1:
+            self.logger.info(
+                f"  [Bayesian] Iteration {self.iteration} complete: "
+                f"{self.target_metric}={aggregated_value:.4f} "
+                f"(mean of {n_exhaustive} exhaustive configs)"
+            )
+        else:
+            self.logger.info(
+                f"  [Bayesian] Iteration {self.iteration} complete: "
+                f"{self.target_metric}={aggregated_value:.4f}"
+            )
+        self.logger.info(
+            f"  [Bayesian] Best so far: {self.best_value:.4f} at {self.best_params}"
+        )
+
+        # Reset for next iteration
+        self.current_test = None
+        self.current_params = None
+        self.current_rep = 0
 
 
 # Backwards compatibility alias
