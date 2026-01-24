@@ -2,6 +2,7 @@
 IOPS Report Generator - Creates HTML reports with interactive plots.
 """
 
+import base64
 import json
 import numpy as np
 import pandas as pd
@@ -45,6 +46,19 @@ def _get_iops_version() -> str:
         with version_file.open() as f:
             return f.read().strip()
     return "unknown"
+
+
+def _get_logo_base64() -> Optional[str]:
+    """Load the IOPS logo as a base64-encoded data URI."""
+    logo_file = Path(__file__).parent.parent.parent / "logo.png"
+    if logo_file.exists():
+        try:
+            with logo_file.open("rb") as f:
+                logo_data = base64.b64encode(f.read()).decode("utf-8")
+            return f"data:image/png;base64,{logo_data}"
+        except Exception:
+            return None
+    return None
 
 
 class ReportGenerator:
@@ -531,6 +545,7 @@ class ReportGenerator:
             variable_impact=data.get('sections', {}).get('variable_impact', True),
             parallel_coordinates=data.get('sections', {}).get('parallel_coordinates', True),
             bayesian_evolution=data.get('sections', {}).get('bayesian_evolution', True),
+            bayesian_parameter_evolution=data.get('sections', {}).get('bayesian_parameter_evolution', False),
             custom_plots=data.get('sections', {}).get('custom_plots', True),
         )
 
@@ -579,6 +594,7 @@ class ReportGenerator:
                 variable_impact=True,
                 parallel_coordinates=True,
                 bayesian_evolution=True,
+                bayesian_parameter_evolution=False,  # Disabled by default
                 custom_plots=True,  # Will use legacy plots
             ),
             metrics={},  # Empty triggers legacy plot generation
@@ -833,6 +849,12 @@ class ReportGenerator:
         """Generate HTML header."""
         benchmark_name = self.metadata['benchmark']['name']
         timestamp = self.metadata['benchmark']['timestamp']
+        logo_data_uri = _get_logo_base64()
+
+        # Build logo HTML if available
+        logo_html = ""
+        if logo_data_uri:
+            logo_html = f'<img src="{logo_data_uri}" alt="IOPS Logo" class="report-logo">'
 
         return f"""<!DOCTYPE html>
 <html>
@@ -855,10 +877,22 @@ class ReportGenerator:
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             border-radius: 8px;
         }}
+        .report-header {{
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }}
+        .report-logo {{
+            height: 64px;
+            width: auto;
+        }}
         h1 {{
             color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
+            margin: 0;
+            flex-grow: 1;
         }}
         h2 {{
             color: #34495e;
@@ -898,6 +932,54 @@ class ReportGenerator:
         }}
         tr:hover {{
             background-color: #f5f5f5;
+        }}
+        .section-header td {{
+            background-color: transparent;
+            border-bottom: 2px solid #3498db;
+            padding: 8px 0 0 0;
+            height: 0;
+            line-height: 0;
+        }}
+        details {{
+            margin: 15px 0;
+        }}
+        details summary {{
+            cursor: pointer;
+            padding: 10px 15px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-weight: 500;
+            color: #34495e;
+        }}
+        details summary:hover {{
+            background-color: #ecf0f1;
+        }}
+        details[open] summary {{
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            border-bottom: none;
+        }}
+        details .details-content {{
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            padding: 0;
+        }}
+        details .details-content table {{
+            margin: 0;
+            border: none;
+        }}
+        details .details-content table td,
+        details .details-content table th {{
+            border-left: none;
+            border-right: none;
+        }}
+        details .details-content table tr:first-child td {{
+            border-top: none;
+        }}
+        details .details-content table tr:last-child td {{
+            border-bottom: none;
         }}
         .plot-container {{
             margin: 30px 0;
@@ -984,12 +1066,15 @@ class ReportGenerator:
 </head>
 <body>
 <div class="container">
-    <h1>{benchmark_name} - Analysis Report</h1>
+    <div class="report-header">
+        {logo_html}
+        <h1>{benchmark_name} - Analysis Report</h1>
+    </div>
     <div class="info-box">
         <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         <p><strong>Benchmark Run:</strong> {timestamp}</p>
         <p><strong>Description:</strong> {self.metadata['benchmark'].get('description', 'N/A')}</p>
-        <p><strong>Total Tests:</strong> {len(self.df)}</p>
+        <p><strong>Total Executions:</strong> {len(self.df)}</p>
     </div>
 """
 
@@ -997,206 +1082,71 @@ class ReportGenerator:
         """Generate summary statistics section."""
         html = "<h2>Summary Statistics</h2>\n"
 
-        # Execution Overview
-        html += "<h3>Execution Overview</h3>\n<table>\n"
-        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-
-        # Benchmark metadata
+        # Gather all data needed for the overview
         benchmark_meta = self.metadata['benchmark']
-        html += f"<tr><td><strong>Benchmark Name</strong></td><td>{benchmark_meta.get('name', 'N/A')}</td></tr>\n"
-
-        # IOPS version (show run version, and note if report version differs)
-        run_ver = getattr(self, 'run_version', 'unknown')
-        report_ver = getattr(self, 'report_version', _get_iops_version())
-        if run_ver != 'unknown':
-            if run_ver != report_ver:
-                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver} <em>(report generated with v{report_ver})</em></td></tr>\n"
-            else:
-                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver}</td></tr>\n"
-
-        # Hostname (if available)
-        hostname = benchmark_meta.get('hostname')
-        if hostname:
-            html += f"<tr><td><strong>Hostname</strong></td><td>{hostname}</td></tr>\n"
-
-        # Executor type
         executor = benchmark_meta.get('executor', 'local')
-        html += f"<tr><td><strong>Executor</strong></td><td>{executor}</td></tr>\n"
-
-        # Search method
         search_method = benchmark_meta.get('search_method', 'exhaustive')
-        html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
+        repetitions = benchmark_meta.get('repetitions', 1)
+        total_rows = len(self.df)
 
-        # Benchmark timing (if available, prefer detailed timing over legacy timestamp)
-        if 'benchmark_start_time' in benchmark_meta and 'benchmark_end_time' in benchmark_meta:
-            start_time = benchmark_meta['benchmark_start_time']
-            end_time = benchmark_meta['benchmark_end_time']
-            html += f"<tr><td><strong>Benchmark Start Time</strong></td><td>{start_time}</td></tr>\n"
-            html += f"<tr><td><strong>Benchmark End Time</strong></td><td>{end_time}</td></tr>\n"
+        # Get planner stats and calculate combinations
+        planner_stats = benchmark_meta.get('planner_stats') or {}
+        total_search_space = planner_stats.get('total_space_size', 0)
 
-            if 'total_runtime_seconds' in benchmark_meta:
-                total_runtime = benchmark_meta['total_runtime_seconds']
-                if total_runtime < 60:
-                    runtime_str = f"{total_runtime:.1f}s"
-                elif total_runtime < 3600:
-                    runtime_str = f"{total_runtime/60:.1f}m ({total_runtime:.1f}s)"
-                else:
-                    runtime_str = f"{total_runtime/3600:.2f}h ({total_runtime/60:.1f}m)"
-                html += f"<tr><td><strong>Total Benchmark Runtime</strong></td><td>{runtime_str}</td></tr>\n"
-        elif 'timestamp' in benchmark_meta:
-            # Fallback to legacy timestamp if detailed timing not available
-            html += f"<tr><td><strong>Benchmark Started</strong></td><td>{benchmark_meta['timestamp']}</td></tr>\n"
-
-        # Report generation timestamp
-        report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        html += f"<tr><td><strong>Report Generated</strong></td><td>{report_timestamp}</td></tr>\n"
-
-        html += "</table>\n"
-
-        # Test Execution Statistics
-        html += "<h3>Test Execution Statistics</h3>\n<table>\n"
-        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-
-        # Total tests
-        total_tests = len(self.df)
-        html += f"<tr><td><strong>Total Parameter Combinations</strong></td><td>{total_tests}</td></tr>\n"
-
-        # Success rate (if status column exists)
-        if 'metadata.__executor_status' in self.df.columns:
-            status_counts = self.df['metadata.__executor_status'].value_counts()
-            succeeded = status_counts.get('SUCCEEDED', 0)
-            failed = status_counts.get('FAILED', 0)
-            cancelled = status_counts.get('CANCELLED', 0)
-
-            success_rate = (succeeded / total_tests * 100) if total_tests > 0 else 0
-            html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_tests} ({success_rate:.1f}%)</td></tr>\n"
-
-            if failed > 0:
-                html += f"<tr><td><strong>Failed Tests</strong></td><td>{failed}</td></tr>\n"
-            if cancelled > 0:
-                html += f"<tr><td><strong>Cancelled Tests</strong></td><td>{cancelled}</td></tr>\n"
+        if 'execution.execution_id' in self.df.columns:
+            combinations_tested = self.df['execution.execution_id'].nunique()
+        else:
+            combinations_tested = total_rows // repetitions if repetitions > 0 else total_rows
 
         # Check for cached results
         cached_count = 0
         if 'metadata.__cached' in self.df.columns:
             cached_count = (self.df['metadata.__cached'] == True).sum()
-            if cached_count > 0:
-                executed_count = total_tests - cached_count
-                cache_rate = (cached_count / total_tests * 100) if total_tests > 0 else 0
-                html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({cache_rate:.1f}%)</td></tr>\n"
-                html += f"<tr><td><strong>Executed Tests</strong></td><td>{executed_count}</td></tr>\n"
 
-        # Execution time
-        has_timing = 'metadata.__submission_time' in self.df.columns and 'metadata.__end' in self.df.columns
-        if has_timing:
-            execution_time, formatted_time = self._calculate_total_execution_time()
-            if execution_time is not None:
-                exec_time_label = "Total Execution Time" + (" (executed tests only)" if cached_count > 0 else "")
-                html += f"<tr><td><strong>{exec_time_label}</strong></td><td>{formatted_time}</td></tr>\n"
+        # ========== EXECUTION OVERVIEW (always visible) ==========
+        html += "<h3>Execution Overview</h3>\n<table>\n"
+        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
 
-                # Average test duration
-                executed_count = total_tests - cached_count if cached_count > 0 else total_tests
-                if executed_count > 0:
-                    avg_duration = execution_time / executed_count
-                    if avg_duration < 60:
-                        avg_duration_str = f"{avg_duration:.1f}s"
-                    elif avg_duration < 3600:
-                        avg_duration_str = f"{avg_duration / 60:.1f}m"
-                    else:
-                        avg_duration_str = f"{avg_duration / 3600:.1f}h"
-                    html += f"<tr><td><strong>Average Test Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
+        # Benchmark Name
+        html += f"<tr><td><strong>Benchmark Name</strong></td><td>{benchmark_meta.get('name', 'N/A')}</td></tr>\n"
 
-        # SLURM-specific timing: Wait time and walltime
-        has_slurm_timing = ('metadata.__job_start' in self.df.columns and
-                           'metadata.__submission_time' in self.df.columns and
-                           'metadata.__end' in self.df.columns)
-        if executor == 'slurm' and has_slurm_timing:
-            # Calculate wait time (submit to job start) and walltime (submit to completion)
-            df_executed = self.df[self.df['metadata.__cached'] != True] if 'metadata.__cached' in self.df.columns else self.df
+        # Search Method (with seed if applicable)
+        random_seed = benchmark_meta.get('random_seed')
+        if search_method in ('bayesian', 'random') and random_seed is not None:
+            html += f"<tr><td><strong>Search Method</strong></td><td>{search_method} (seed: {random_seed})</td></tr>\n"
+        else:
+            html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
 
-            if len(df_executed) > 0:
-                submit_times = pd.to_datetime(df_executed['metadata.__submission_time'], errors='coerce')
-                job_start_times = pd.to_datetime(df_executed['metadata.__job_start'], errors='coerce')
-                end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
+        if total_search_space > 0:
+            html += f"<tr><td><strong>Total Space</strong></td><td>{total_search_space:,} parameter combinations</td></tr>\n"
 
-                # Calculate wait times and walltimes
-                wait_times = (job_start_times - submit_times).dt.total_seconds()
-                walltimes = (end_times - submit_times).dt.total_seconds()
+        html += f"<tr><td><strong>Total Executions</strong></td><td>{combinations_tested} × {repetitions} = {total_rows}</td></tr>\n"
 
-                # Calculate runtimes - prefer sysinfo duration_seconds (most accurate)
-                sysinfo_duration_col = 'metadata.__sysinfo.duration_seconds'
-                if sysinfo_duration_col in df_executed.columns:
-                    sysinfo_runtimes = pd.to_numeric(df_executed[sysinfo_duration_col], errors='coerce')
-                    fallback_runtimes = (end_times - job_start_times).dt.total_seconds()
-                    runtimes = sysinfo_runtimes.fillna(fallback_runtimes)
-                else:
-                    runtimes = (end_times - job_start_times).dt.total_seconds()
+        # Runtime (essential)
+        runtime_str = None
+        if 'total_runtime_seconds' in benchmark_meta:
+            total_runtime = benchmark_meta['total_runtime_seconds']
+            if total_runtime < 60:
+                runtime_str = f"{total_runtime:.1f}s"
+            elif total_runtime < 3600:
+                runtime_str = f"{total_runtime/60:.1f}m"
+            else:
+                runtime_str = f"{total_runtime/3600:.2f}h"
+            html += f"<tr><td><strong>Total Runtime</strong></td><td>{runtime_str}</td></tr>\n"
 
-                # Filter out NaN values
-                valid_wait = wait_times[~wait_times.isna()]
-                valid_wall = walltimes[~walltimes.isna()]
-                valid_run = runtimes[~runtimes.isna()]
+        # Success rate (essential if there are failures)
+        if 'metadata.__executor_status' in self.df.columns:
+            status_counts = self.df['metadata.__executor_status'].value_counts()
+            succeeded = status_counts.get('SUCCEEDED', 0)
+            failed = status_counts.get('FAILED', 0)
 
-                if len(valid_wait) > 0:
-                    avg_wait = valid_wait.mean()
-                    total_wait = valid_wait.sum()
-                    if avg_wait < 60:
-                        wait_str = f"{avg_wait:.1f}s"
-                    elif avg_wait < 3600:
-                        wait_str = f"{avg_wait/60:.1f}m"
-                    else:
-                        wait_str = f"{avg_wait/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Queue Wait Time</strong></td><td>{wait_str}</td></tr>\n"
-
-                if len(valid_wall) > 0:
-                    avg_wall = valid_wall.mean()
-                    if avg_wall < 60:
-                        wall_str = f"{avg_wall:.1f}s"
-                    elif avg_wall < 3600:
-                        wall_str = f"{avg_wall/60:.1f}m"
-                    else:
-                        wall_str = f"{avg_wall/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Walltime (per test)</strong></td><td>{wall_str}</td></tr>\n"
-
-                if len(valid_run) > 0:
-                    avg_run = valid_run.mean()
-                    if avg_run < 60:
-                        run_str = f"{avg_run:.1f}s"
-                    elif avg_run < 3600:
-                        run_str = f"{avg_run/60:.1f}m"
-                    else:
-                        run_str = f"{avg_run/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Execution Time (per test)</strong></td><td>{run_str}</td></tr>\n"
-
-        # Core-hours (if cores_expr is defined)
-        cores_expr = self.metadata['benchmark'].get('cores_expr')
-        if cores_expr:
-            total_core_hours = self._calculate_total_core_hours()
-            if total_core_hours is not None:
-                html += f"<tr><td><strong>Total Core-Hours</strong></td><td>{total_core_hours:.2f}</td></tr>\n"
-
-                # Average cores per test
-                avg_cores = self._calculate_average_cores()
-                if avg_cores is not None:
-                    html += f"<tr><td><strong>Average Cores per Test</strong></td><td>{avg_cores:.1f}</td></tr>\n"
+            if failed > 0 or succeeded != total_rows:
+                success_rate = (succeeded / total_rows * 100) if total_rows > 0 else 0
+                html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_rows} ({success_rate:.1f}%)</td></tr>\n"
 
         html += "</table>\n"
 
-        # Variable ranges
-        html += "<h3>Report Variables</h3>\n<table>\n"
-        html += "<tr><th>Variable</th><th>Type</th><th>Values</th></tr>\n"
-
-        for var in report_vars:
-            col = self._get_var_column(var)
-            var_info = self.metadata['variables'][var]
-            var_type = var_info['type']
-            unique_values = sorted(self.df[col].unique())
-            values_str = ", ".join(str(v) for v in unique_values)
-            html += f"<tr><td><strong>{var}</strong></td><td>{var_type}</td><td>{values_str}</td></tr>\n"
-
-        html += "</table>\n"
-
-        # Metric statistics
+        # ========== METRICS OVERVIEW (always visible) ==========
         html += "<h3>Metrics Overview</h3>\n<table>\n"
         html += "<tr><th>Metric</th><th>Min</th><th>Max</th><th>Mean</th><th>Std Dev</th></tr>\n"
 
@@ -1211,6 +1161,125 @@ class ReportGenerator:
                 html += f"<td>{stats['std']:.4f}</td></tr>\n"
 
         html += "</table>\n"
+
+        # ========== COLLAPSIBLE DETAILS ==========
+        html += "<details>\n<summary>Execution Details</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
+        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
+
+        # Environment details
+        run_ver = getattr(self, 'run_version', 'unknown')
+        report_ver = getattr(self, 'report_version', _get_iops_version())
+        if run_ver != 'unknown':
+            if run_ver != report_ver:
+                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver} <em>(report: v{report_ver})</em></td></tr>\n"
+            else:
+                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver}</td></tr>\n"
+
+        hostname = benchmark_meta.get('hostname')
+        if hostname:
+            html += f"<tr><td><strong>Hostname</strong></td><td>{hostname}</td></tr>\n"
+
+        html += f"<tr><td><strong>Executor</strong></td><td>{executor}</td></tr>\n"
+
+        # Detailed timing
+        if 'benchmark_start_time' in benchmark_meta:
+            start_time = benchmark_meta['benchmark_start_time']
+            # Format ISO timestamp more readably
+            if 'T' in str(start_time):
+                start_time = str(start_time).replace('T', ' ').split('.')[0]
+            html += f"<tr><td><strong>Start Time</strong></td><td>{start_time}</td></tr>\n"
+
+        if 'benchmark_end_time' in benchmark_meta:
+            end_time = benchmark_meta['benchmark_end_time']
+            if 'T' in str(end_time):
+                end_time = str(end_time).replace('T', ' ').split('.')[0]
+            html += f"<tr><td><strong>End Time</strong></td><td>{end_time}</td></tr>\n"
+
+        # Cached results
+        if cached_count > 0:
+            executed_count = total_rows - cached_count
+            cache_rate = (cached_count / total_rows * 100) if total_rows > 0 else 0
+            html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({cache_rate:.1f}%)</td></tr>\n"
+            html += f"<tr><td><strong>Actually Executed</strong></td><td>{executed_count}</td></tr>\n"
+
+        # Average execution duration
+        has_timing = 'metadata.__submission_time' in self.df.columns and 'metadata.__end' in self.df.columns
+        if has_timing:
+            execution_time, formatted_time = self._calculate_total_execution_time()
+            if execution_time is not None:
+                actual_executed = total_rows - cached_count if cached_count > 0 else total_rows
+                if actual_executed > 0:
+                    avg_duration = execution_time / actual_executed
+                    if avg_duration < 60:
+                        avg_duration_str = f"{avg_duration:.1f}s"
+                    elif avg_duration < 3600:
+                        avg_duration_str = f"{avg_duration / 60:.1f}m"
+                    else:
+                        avg_duration_str = f"{avg_duration / 3600:.1f}h"
+                    html += f"<tr><td><strong>Avg Execution Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
+
+        # SLURM-specific timing
+        has_slurm_timing = ('metadata.__job_start' in self.df.columns and
+                           'metadata.__submission_time' in self.df.columns and
+                           'metadata.__end' in self.df.columns)
+        if executor == 'slurm' and has_slurm_timing:
+            df_executed = self.df[self.df['metadata.__cached'] != True] if 'metadata.__cached' in self.df.columns else self.df
+
+            if len(df_executed) > 0:
+                submit_times = pd.to_datetime(df_executed['metadata.__submission_time'], errors='coerce')
+                job_start_times = pd.to_datetime(df_executed['metadata.__job_start'], errors='coerce')
+                end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
+
+                wait_times = (job_start_times - submit_times).dt.total_seconds()
+                valid_wait = wait_times[~wait_times.isna()]
+
+                if len(valid_wait) > 0:
+                    avg_wait = valid_wait.mean()
+                    if avg_wait < 60:
+                        wait_str = f"{avg_wait:.1f}s"
+                    elif avg_wait < 3600:
+                        wait_str = f"{avg_wait/60:.1f}m"
+                    else:
+                        wait_str = f"{avg_wait/3600:.2f}h"
+                    html += f"<tr><td><strong>Avg Queue Wait</strong></td><td>{wait_str}</td></tr>\n"
+
+        # Core-hours
+        cores_expr = self.metadata['benchmark'].get('cores_expr')
+        if cores_expr:
+            total_core_hours = self._calculate_total_core_hours()
+            if total_core_hours is not None:
+                html += f"<tr><td><strong>Total Core-Hours</strong></td><td>{total_core_hours:.2f}</td></tr>\n"
+
+            avg_cores = self._calculate_average_cores()
+            if avg_cores is not None:
+                html += f"<tr><td><strong>Avg Cores per Execution</strong></td><td>{avg_cores:.1f}</td></tr>\n"
+
+        html += "</table>\n</div>\n</details>\n"
+
+        # Search Space (collapsible) - show ALL swept variables including strings
+        html += "<details>\n<summary>Search Space</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
+        html += "<tr><th>Variable</th><th>Type</th><th>Values</th></tr>\n"
+
+        all_swept_vars = self._get_swept_vars()
+        for var in all_swept_vars:
+            col = self._get_var_column(var)
+            var_info = self.metadata['variables'].get(var, {})
+            var_type = var_info.get('type', 'unknown')
+            if col in self.df.columns:
+                unique_values = self.df[col].unique()
+                # Sort if possible (strings and numbers)
+                try:
+                    unique_values = sorted(unique_values)
+                except TypeError:
+                    pass  # Mixed types, keep original order
+                values_str = ", ".join(str(v) for v in unique_values)
+            else:
+                values_str = "N/A"
+            html += f"<tr><td><strong>{var}</strong></td><td>{var_type}</td><td>{values_str}</td></tr>\n"
+
+        html += "</table>\n</div>\n</details>\n"
 
         return html
 
@@ -1236,8 +1305,9 @@ class ReportGenerator:
         html = "<h2>System Environment</h2>\n"
         html += "<p>Information collected from compute nodes during benchmark execution:</p>\n"
 
-        # Summary table
-        html += "<h3>Hardware Summary</h3>\n<table>\n"
+        # Summary table (collapsible)
+        html += "<details>\n<summary>Hardware Summary</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Property</th><th>Value</th></tr>\n"
 
         # Node count
@@ -1283,18 +1353,19 @@ class ReportGenerator:
                 kernel = ', '.join(kernel)
             html += f"<tr><td><strong>Kernel</strong></td><td>{kernel}</td></tr>\n"
 
-        html += "</table>\n"
+        html += "</table>\n</div>\n</details>\n"
 
-        # Parallel Filesystems
+        # Parallel Filesystems (collapsible)
         filesystems = sys_env.get('filesystems', [])
         if filesystems:
-            html += "<h3>Parallel Filesystems</h3>\n<table>\n"
+            html += "<details>\n<summary>Parallel Filesystems</summary>\n"
+            html += '<div class="details-content">\n<table>\n'
             html += "<tr><th>Type</th><th>Mount Point</th></tr>\n"
             for fs in filesystems:
                 if ':' in fs:
                     fs_type, mount = fs.split(':', 1)
                     html += f"<tr><td>{fs_type}</td><td>{mount}</td></tr>\n"
-            html += "</table>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         # Interconnect
         interconnect = sys_env.get('interconnect', [])
@@ -1322,8 +1393,6 @@ class ReportGenerator:
             if metric_col not in self.df.columns:
                 continue
 
-            html += f"<h3>Best for {metric}</h3>\n"
-
             # Group by parameter combination and get mean
             group_cols = var_cols
             df_grouped = self.df.groupby(group_cols)[metric_col].agg(['mean', 'std', 'count']).reset_index()
@@ -1333,14 +1402,16 @@ class ReportGenerator:
             df_filtered = df_grouped[df_grouped['count'] >= min_samples]
 
             if len(df_filtered) == 0:
-                html += f"<p><em>No configurations with at least {min_samples} samples found.</em></p>\n"
+                html += f"<details>\n<summary>Best for {metric}</summary>\n"
+                html += f'<div class="details-content"><p><em>No configurations with at least {min_samples} samples found.</em></p></div>\n</details>\n'
                 continue
 
             # Sort by mean (descending for most metrics, ascending for latency/time)
             ascending = 'latency' in metric.lower() or 'time' in metric.lower()
             df_top = df_filtered.sort_values('mean', ascending=ascending).head(top_n)
 
-            html += "<table>\n<tr><th>Rank</th>"
+            html += f"<details>\n<summary>Best for {metric}</summary>\n"
+            html += '<div class="details-content">\n<table>\n<tr><th>Rank</th>'
             for var in report_vars:
                 html += f"<th>{var}</th>"
             html += f"<th>{metric} (mean)</th><th>Std Dev</th><th>Samples</th></tr>\n"
@@ -1374,7 +1445,7 @@ class ReportGenerator:
                 html += f"<tr><td colspan='{len(report_vars) + 3}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
                 html += f"<strong>Command:</strong> {rendered_command}</td></tr>\n"
 
-            html += "</table>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         return html
 
@@ -1408,11 +1479,12 @@ class ReportGenerator:
         planner_stats = self.metadata['benchmark'].get('planner_stats') or {}
         total_space_size = planner_stats.get('total_space_size', 0)
 
-        # Display Bayesian optimization configuration
-        html += "<h3>Optimization Configuration</h3>\n<table>\n"
+        # Display Bayesian optimization configuration (collapsible)
+        html += "<details>\n<summary>Optimization Configuration</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Parameter</th><th>Value</th></tr>\n"
         html += f"<tr><td><strong>Objective Metric</strong></td><td>{target_metric} ({objective})</td></tr>\n"
-        html += f"<tr><td><strong>Total Iterations</strong></td><td>{n_iterations}</td></tr>\n"
+        html += f"<tr><td><strong>Max Iterations</strong></td><td>{n_iterations}</td></tr>\n"
         html += f"<tr><td><strong>Initial Random Points</strong></td><td>{n_initial_points}</td></tr>\n"
         html += f"<tr><td><strong>Acquisition Function</strong></td><td>{acquisition_func}</td></tr>\n"
         html += f"<tr><td><strong>Surrogate Model</strong></td><td>{base_estimator}</td></tr>\n"
@@ -1420,20 +1492,24 @@ class ReportGenerator:
             html += f"<tr><td><strong>Xi (exploration)</strong></td><td>{xi}</td></tr>\n"
         if acquisition_func == 'LCB':
             html += f"<tr><td><strong>Kappa (exploration)</strong></td><td>{kappa}</td></tr>\n"
-        html += "</table>\n"
+        html += "</table>\n</div>\n</details>\n"
 
-        # Display search space statistics if available
+        # Display search space statistics if available (collapsible)
         if total_space_size > 0:
-            coverage_pct = (n_iterations / total_space_size) * 100
+            # Use actual number of combinations tested from dataframe, not configured n_iterations
+            # (may differ due to early stopping, convergence, etc.)
+            actual_combinations_tested = self.df['execution.execution_id'].nunique()
+            coverage_pct = (actual_combinations_tested / total_space_size) * 100
             savings_pct = 100 - coverage_pct
-            tests_saved = total_space_size - n_iterations
+            combinations_saved = total_space_size - actual_combinations_tested
 
-            html += "<h3>Search Space Efficiency</h3>\n<table>\n"
+            html += "<details>\n<summary>Search Space Efficiency</summary>\n"
+            html += '<div class="details-content">\n<table>\n'
             html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} configurations</td></tr>\n"
-            html += f"<tr><td><strong>Bayesian Iterations</strong></td><td>{n_iterations:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
-            html += f"<tr><td><strong>Tests Saved</strong></td><td>{tests_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
-            html += "</table>\n"
+            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} parameter combinations</td></tr>\n"
+            html += f"<tr><td><strong>Combinations Tested</strong></td><td>{actual_combinations_tested:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
+            html += f"<tr><td><strong>Combinations Saved</strong></td><td>{combinations_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         # Create plots
         # 1. Metric evolution over iterations
@@ -1445,14 +1521,15 @@ class ReportGenerator:
         )
         html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution', plot_name=f'bayesian_{target_metric}_evolution')}</div>\n"
 
-        # 2. Parameter evolution over iterations
-        html += "<h3>Parameter Evolution</h3>\n"
-        html += "<p>Shows which parameter values were explored at each iteration. "
-        html += "Colors indicate the metric value achieved.</p>\n"
-        fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
-            report_vars, target_metric, objective, n_initial_points
-        )
-        html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution', plot_name='bayesian_parameter_evolution')}</div>\n"
+        # 2. Parameter evolution over iterations (optional, disabled by default)
+        if self.report_config.sections.bayesian_parameter_evolution:
+            html += "<h3>Parameter Evolution</h3>\n"
+            html += "<p>Shows which parameter values were explored at each iteration. "
+            html += "Colors indicate the metric value achieved.</p>\n"
+            fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
+                report_vars, target_metric, objective, n_initial_points
+            )
+            html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution', plot_name='bayesian_parameter_evolution')}</div>\n"
 
         return html
 

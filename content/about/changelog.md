@@ -21,6 +21,10 @@ All notable changes to IOPS are documented here.
 - Random search evolution section in HTML reports
 - NFS auto-detection with lock-free SQLite mode for cache
 - Real-time execution status tracking with executor-specific updates
+- `early_stop_on_convergence` option for Bayesian optimization to stop when optimizer converges
+- `convergence_patience` option to control early stopping sensitivity (default: 3)
+- `xi_boost_factor` option to dynamically increase exploration when stuck (default: 5.0)
+- `--cache-only` CLI option for cache-only execution (skip tests not in cache)
 
 ### Changed
 - Renamed `executor_options` to `slurm_options` (old name deprecated, remove in 3.7.0)
@@ -31,12 +35,14 @@ All notable changes to IOPS are documented here.
 - `iops generate` now defaults to SLURM executor (use `--local` for local)
 - Separate user labels from IOPS internal metadata in output
 - Default output path when `output.sink.path` not specified
+- Bayesian optimization now uses MAX/MIN aggregation for repetitions (matching objective) instead of MEAN
 
 ### Fixed
 - Dry-run cache lookup using wrong repetition values
 - Constraint evaluation order (swept vars before derived expressions)
 - Refactored BayesianPlanner to use pre-built execution matrix (consistent with other planners)
 - SQLite cache locking errors on NFS filesystems
+- Bayesian optimization nearest-neighbor tie-breaking now deterministic (prefers higher parameter values)
 
 ## [3.4.0] - 2026-01-13
 

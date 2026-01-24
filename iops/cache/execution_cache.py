@@ -92,7 +92,14 @@ class ExecutionCache(HasLogger):
             - created_at: TEXT (timestamp)
     """
 
-    def __init__(self, db_path: Path, exclude_vars: Optional[List[str]] = None, timeout: int = DEFAULT_SQLITE_TIMEOUT):
+    def __init__(
+        self,
+        db_path: Path,
+        exclude_vars: Optional[List[str]] = None,
+        timeout: int = DEFAULT_SQLITE_TIMEOUT,
+        objective_metric: Optional[str] = None,
+        objective: str = "maximize",
+    ):
         """
         Initialize the execution cache.
 
@@ -100,12 +107,17 @@ class ExecutionCache(HasLogger):
             db_path: Path to SQLite database file
             exclude_vars: List of variable names to exclude from cache hash
             timeout: SQLite connection timeout in seconds (default: 60, helps with NFS)
+            objective_metric: If set, cache lookup returns the entry with best metric value
+                             instead of most recent. Used for Bayesian optimization.
+            objective: "maximize" or "minimize" - determines what "best" means
         """
         super().__init__()
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.exclude_vars = set(exclude_vars or [])
         self.timeout = timeout
+        self.objective_metric = objective_metric
+        self.objective = objective
 
         # Detect NFS and use NFS-friendly mode
         # NFS has unreliable file locking, so we disable it since IOPS
@@ -280,6 +292,9 @@ class ExecutionCache(HasLogger):
         """
         Retrieve cached result for given parameters and repetition.
 
+        If objective_metric is set, returns the entry with the best metric value
+        (max for maximize, min for minimize). Otherwise returns most recent entry.
+
         Args:
             params: Execution parameters
             repetition: Repetition number (1-based)
@@ -295,15 +310,69 @@ class ExecutionCache(HasLogger):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT metrics_json, metadata_json, created_at
-                FROM cached_executions
-                WHERE param_hash = ? AND repetition = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (param_hash, repetition))
+            # If objective_metric is set, find the best entry for this (hash, repetition)
+            # This handles cases where multiple entries exist for the same key
+            if self.objective_metric:
+                cursor.execute("""
+                    SELECT metrics_json, metadata_json, created_at
+                    FROM cached_executions
+                    WHERE param_hash = ? AND repetition = ?
+                """, (param_hash, repetition))
 
-            row = cursor.fetchone()
+                rows = cursor.fetchall()
+
+                if not rows:
+                    self.logger.debug(
+                        f"  [Cache] MISS: hash={param_hash[:8]} rep={repetition}"
+                    )
+                    return None
+
+                # Find the entry with the best metric value
+                best_row = None
+                best_value = None
+
+                for row in rows:
+                    metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
+                    metric_value = metrics.get(self.objective_metric)
+
+                    if metric_value is None:
+                        continue
+
+                    if best_value is None:
+                        best_value = metric_value
+                        best_row = row
+                    elif self.objective == "maximize" and metric_value > best_value:
+                        best_value = metric_value
+                        best_row = row
+                    elif self.objective == "minimize" and metric_value < best_value:
+                        best_value = metric_value
+                        best_row = row
+
+                if best_row:
+                    self.logger.debug(
+                        f"  [Cache] HIT: hash={param_hash[:8]} rep={repetition} "
+                        f"(best {self.objective_metric}={best_value:.2f} from {len(rows)} entries)"
+                    )
+
+                    return {
+                        'metrics': json.loads(best_row['metrics_json']) if best_row['metrics_json'] else {},
+                        'metadata': json.loads(best_row['metadata_json']) if best_row['metadata_json'] else {},
+                        'cached_at': best_row['created_at'],
+                    }
+
+                # No entry with the metric found, fall back to most recent
+                row = rows[-1]
+            else:
+                # Default behavior: return most recent entry
+                cursor.execute("""
+                    SELECT metrics_json, metadata_json, created_at
+                    FROM cached_executions
+                    WHERE param_hash = ? AND repetition = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (param_hash, repetition))
+
+                row = cursor.fetchone()
 
             if row:
                 self.logger.debug(

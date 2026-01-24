@@ -8,14 +8,26 @@ Tests that:
 4. Plot files have correct naming (numbered and descriptive)
 5. Different formats work correctly (pdf, png, svg, jpg, webp)
 6. KALEIDO_AVAILABLE flag works correctly
+
+These tests are slow due to Kaleido rendering. Run explicitly with:
+    pytest tests/test_pdf_export.py -v
 """
 
 import json
 from pathlib import Path
 from unittest import mock
 
+import os
+
 import pandas as pd
 import pytest
+
+# Skip this entire module by default (slow tests due to Kaleido rendering)
+# Run with: RUN_SLOW_TESTS=1 pytest tests/test_pdf_export.py -v
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("RUN_SLOW_TESTS"),
+    reason="PDF export tests are slow; run with RUN_SLOW_TESTS=1"
+)
 
 
 class TestKaleidoAvailability:

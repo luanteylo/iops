@@ -89,6 +89,7 @@ def test_end_to_end_execution(simple_integration_config):
     # Create mock args
     args = Mock()
     args.use_cache = False
+    args.cache_only = False
     args.log_level = "INFO"
     args.max_core_hours = None
 
@@ -125,6 +126,7 @@ def test_integration_with_cache(simple_integration_config, tmp_path):
     # First run
     args = Mock()
     args.use_cache = False
+    args.cache_only = False
     args.log_level = "INFO"
     args.max_core_hours = None
 
@@ -209,6 +211,7 @@ def test_integration_with_post_script(tmp_path):
 
     args = Mock()
     args.use_cache = False
+    args.cache_only = False
     args.log_level = "INFO"
     args.max_core_hours = None
 
