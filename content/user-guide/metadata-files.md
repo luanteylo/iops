@@ -54,7 +54,13 @@ Located in `workdir/run_XXX/exec_XXXX/`:
 | File | Purpose |
 |------|---------|
 | `__iops_params.json` | Parameter values for this execution |
-| `__iops_status.json` | Execution status (also in repetition folders) |
+| `__iops_skipped` | Marker file for skipped tests (only present if skipped) |
+
+Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
+
+| File | Purpose |
+|------|---------|
+| `__iops_status.json` | Repetition execution status |
 
 ### System Info Files
 
@@ -80,7 +86,7 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 
 ### Disable Execution Tracking
 
-To disable `__iops_index.json`, `__iops_params.json`, and `__iops_status.json`:
+To disable `__iops_index.json`, `__iops_params.json`, `__iops_skipped`, and `__iops_status.json`:
 
 ```yaml
 benchmark:
@@ -240,17 +246,43 @@ All paths are relative to the run root, making workdirs portable across systems.
 
 ---
 
+### `__iops_skipped`
+
+**Location:** `workdir/run_001/exec_0001/__iops_skipped`
+
+**Written:** When a test is skipped (constraint violation or planner decision)
+
+**Purpose:** Marker file indicating that a test was skipped. Only present for skipped tests. If this file does not exist, watch mode assumes the test is pending or active.
+
+**Structure:**
+```json
+{
+  "reason": "constraint:nodes * ppn <= 64",
+  "message": "Optional detailed message"
+}
+```
+
+**Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `reason` | Why the test was skipped (constraint rule, planner decision, etc.) |
+| `message` | Optional detailed explanation |
+
+**Controlled by:** `benchmark.track_executions`
+
+---
+
 ### `__iops_status.json`
 
-**Location:**
-- Test level: `workdir/run_001/exec_0001/__iops_status.json`
-- Repetition level: `workdir/run_001/exec_0001/repetition_1/__iops_status.json`
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_status.json`
 
 **Written:**
-- Test level: When a test is skipped (constraint or planner decision)
-- Repetition level: After each repetition completes
+- When a job is submitted (initial status)
+- After each repetition completes or fails
+- During SLURM job execution when status changes (PENDING → RUNNING)
 
-**Purpose:** Tracks execution status for `iops find` filtering and watch mode.
+**Purpose:** Tracks repetition execution status for `iops find` filtering and watch mode. Enables real-time status updates during SLURM job execution.
 
 **Structure:**
 ```json
@@ -270,24 +302,22 @@ All paths are relative to the run root, making workdirs portable across systems.
 | `SUCCEEDED` | Execution completed successfully |
 | `FAILED` | Execution failed with non-zero exit code |
 | `ERROR` | Error during setup or execution |
-| `SKIPPED` | Skipped due to constraint or planner decision |
 | `RUNNING` | Currently executing |
-| `PENDING` | Waiting to execute |
+| `PENDING` | Waiting in queue (SLURM jobs) |
 | `UNKNOWN` | Status could not be determined |
+
+**Initial status by executor:**
+
+| Executor | Initial Status | Reason |
+|----------|----------------|--------|
+| `local` | `RUNNING` | Local jobs start executing immediately |
+| `slurm` | `PENDING` | SLURM jobs go to queue before running |
 
 The `error` field contains the error message when status is FAILED or ERROR.
 
 The `cached` field indicates whether the result was retrieved from cache (`true`) or freshly executed (`false`). This is set when running with `--use-cache` and a cached result is found.
 
 The `duration_seconds` field contains the actual execution time in seconds from the probe script. This is available for both executed and cached results (the sysinfo is stored in the cache).
-
-For skipped tests, a `reason` field explains why:
-```json
-{
-  "status": "SKIPPED",
-  "reason": "constraint:nodes * ppn <= 64"
-}
-```
 
 **Controlled by:** `benchmark.track_executions`
 
