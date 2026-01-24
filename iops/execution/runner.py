@@ -733,6 +733,9 @@ class IOPSRunner(HasLogger):
             "cached": test.metadata.get("__cached", False),
             "duration_seconds": duration,
             "metrics": metrics,
+            # Timing for queue wait calculation (SLURM)
+            "submission_time": test.metadata.get("__submission_time"),
+            "job_start": test.metadata.get("__job_start"),
         }
 
         try:

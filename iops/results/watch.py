@@ -171,13 +171,15 @@ def _collect_execution_data(
 
     Returns:
         Tuple of (test_list, status_counts)
-        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time, skip_reason, cached, metrics
+        test_list contains dicts with: exec_key, rel_path, params, command, rep_statuses, avg_time, total_time, avg_wait_time, skip_reason, cached, metrics, folders_exist
         rep_statuses is a list of status strings for each repetition
         avg_time is the average duration in seconds for successful repetitions (or None)
         total_time is the sum of durations for all successful repetitions (or None)
+        avg_wait_time is the average queue wait time in seconds (SLURM) (or None)
         skip_reason is the skip reason for SKIPPED tests (or None)
         cached is True if all reps are cached, False if none, "partial" if mixed
         metrics is a dict of metric_name -> average value across successful repetitions (or None)
+        folders_exist is True if repetition folders have been created (test submitted)
     """
     # Collect tests and count statuses
     tests = []
@@ -260,6 +262,7 @@ def _collect_execution_data(
         rep_statuses = []
         rep_cached_flags = []
         rep_durations = []  # Duration in seconds for successful reps
+        rep_wait_times = []  # Queue wait times in seconds (job_start - submission_time)
         all_metrics: Dict[str, list] = {}  # Collect metrics for averaging
 
         # Scan for repetition subdirectories
@@ -295,6 +298,22 @@ def _collect_execution_data(
                             rep_durations.append(float(duration))
                         except (ValueError, TypeError):
                             pass
+
+                # Collect queue wait time from ANY test that has started running
+                # (not just completed - allows early ETA estimation)
+                submission_time = status_info.get("submission_time")
+                job_start = status_info.get("job_start")
+                if submission_time and job_start:
+                    try:
+                        from datetime import datetime
+                        fmt = "%Y-%m-%d %H:%M:%S"
+                        submit_dt = datetime.strptime(submission_time, fmt)
+                        start_dt = datetime.strptime(job_start, fmt)
+                        wait_seconds = (start_dt - submit_dt).total_seconds()
+                        if wait_seconds >= 0:
+                            rep_wait_times.append(wait_seconds)
+                    except (ValueError, TypeError):
+                        pass
 
                 # Collect metrics from successful repetitions for averaging
                 rep_metrics = status_info.get("metrics")
@@ -341,6 +360,11 @@ def _collect_execution_data(
         if rep_durations:
             total_time = sum(rep_durations)
             avg_time = total_time / len(rep_durations)
+
+        # Calculate average wait time (queue time for SLURM)
+        avg_wait_time = None
+        if rep_wait_times:
+            avg_wait_time = sum(rep_wait_times) / len(rep_wait_times)
 
         # Calculate average metrics (only for numeric values)
         avg_metrics = None
@@ -399,6 +423,7 @@ def _collect_execution_data(
             "rep_statuses": rep_statuses,
             "avg_time": avg_time,
             "total_time": total_time,
+            "avg_wait_time": avg_wait_time,  # Queue wait time (SLURM)
             "skip_reason": None,
             "cached": cached,
             "metrics": avg_metrics,
@@ -846,6 +871,7 @@ def _build_progress_bar(
     elapsed_seconds: float = 0,
     terminal_width: int = 80,
     actual_avg_time: Optional[float] = None,
+    actual_avg_wait_time: Optional[float] = None,
     executed_core_hours: float = 0.0,
     cached_core_hours: float = 0.0
 ) -> Text:
@@ -858,6 +884,7 @@ def _build_progress_bar(
         elapsed_seconds: Elapsed time in seconds (fallback for throughput calculation)
         terminal_width: Terminal width for responsive sizing
         actual_avg_time: Average execution time from sysinfo (more accurate than wall-clock)
+        actual_avg_wait_time: Average queue wait time in seconds (SLURM)
         executed_core_hours: Core-hours consumed by executed tests
         cached_core_hours: Core-hours saved by cached tests
 
@@ -926,13 +953,23 @@ def _build_progress_bar(
                     avg_time_per_rep = elapsed_seconds / completed
                     time_source = "wall"  # Wall-clock time (includes queue wait, overhead)
 
-                # Estimate remaining time = remaining reps × average time per rep
-                eta_seconds = remaining * avg_time_per_rep
+                # Estimate remaining time = remaining reps × (execution time + queue wait time)
+                eta_exec_seconds = remaining * avg_time_per_rep
+                eta_wait_seconds = 0.0
+                if actual_avg_wait_time is not None and actual_avg_wait_time > 0:
+                    eta_wait_seconds = remaining * actual_avg_wait_time
+                eta_seconds = eta_exec_seconds + eta_wait_seconds
 
                 text.append("", style="dim")
                 text.append("AVG: ", style="dim")
                 text.append(f"{avg_time_per_rep:.1f}s", style="cyan")
                 text.append("/test", style="dim")
+
+                # Show queue wait time if significant (> 1 second average)
+                if actual_avg_wait_time is not None and actual_avg_wait_time > 1:
+                    text.append(" + ", style="dim")
+                    text.append(f"{actual_avg_wait_time:.0f}s", style="yellow")
+                    text.append(" wait", style="dim")
 
                 if eta_seconds < 60:
                     text.append(f"  ~{eta_seconds:.0f}s left", style="dim italic")
@@ -1095,6 +1132,11 @@ def watch_executions(
     # Determine if we should show only active tests (when many tests)
     show_only_active = False
 
+    # Track observed state transitions for fallback wait time estimation
+    # Key: (exec_key, rep_num), Value: {"pending_seen": datetime, "running_seen": datetime}
+    observed_transitions: Dict[Tuple[str, int], Dict[str, datetime]] = {}
+    observed_wait_times: List[float] = []  # Computed from observed transitions
+
     try:
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while not interrupted:
@@ -1110,6 +1152,30 @@ def watch_executions(
                     expected_repetitions=repetitions, folders_upfront=folders_upfront,
                     cached_filter=cached_filter, metric_filters=metric_filter_dict
                 )
+
+                # Track state transitions for fallback wait time estimation
+                # This helps in the beginning when status files don't have timing yet
+                now = datetime.now()
+                for test in tests:
+                    exec_key = test["exec_key"]
+                    for rep_idx, rep_status in enumerate(test["rep_statuses"]):
+                        key = (exec_key, rep_idx)
+                        if key not in observed_transitions:
+                            observed_transitions[key] = {}
+
+                        # Track when we first see PENDING
+                        if rep_status == "PENDING" and "pending_seen" not in observed_transitions[key]:
+                            observed_transitions[key]["pending_seen"] = now
+
+                        # Track when we first see RUNNING (or beyond) and compute wait time
+                        if rep_status in ("RUNNING", "SUCCEEDED", "FAILED", "ERROR"):
+                            if "running_seen" not in observed_transitions[key]:
+                                observed_transitions[key]["running_seen"] = now
+                                # Compute observed wait time if we saw it pending first
+                                if "pending_seen" in observed_transitions[key]:
+                                    wait = (now - observed_transitions[key]["pending_seen"]).total_seconds()
+                                    if wait >= 0:
+                                        observed_wait_times.append(wait)
 
                 total_in_index = len(executions)
                 all_complete = _is_all_complete(status_counts, total_in_index, total_expected, repetitions)
@@ -1277,6 +1343,17 @@ def watch_executions(
                 actual_times = [t["avg_time"] for t in tests if t.get("avg_time") is not None]
                 actual_avg_time = sum(actual_times) / len(actual_times) if actual_times else None
 
+                # Calculate average queue wait time (SLURM)
+                # Priority: 1) from status files, 2) from observed transitions (fallback)
+                actual_wait_times = [t["avg_wait_time"] for t in tests if t.get("avg_wait_time") is not None]
+                if actual_wait_times:
+                    actual_avg_wait_time = sum(actual_wait_times) / len(actual_wait_times)
+                elif observed_wait_times:
+                    # Fallback: use wait times from observed state transitions
+                    actual_avg_wait_time = sum(observed_wait_times) / len(observed_wait_times)
+                else:
+                    actual_avg_wait_time = None
+
                 # Compute core-hours statistics
                 executed_core_hours, cached_core_hours = _compute_core_hours_stats(tests, cores_expr)
 
@@ -1285,6 +1362,7 @@ def watch_executions(
                 progress_bar = _build_progress_bar(
                     status_counts, total_expected, elapsed_seconds, terminal_width,
                     actual_avg_time=actual_avg_time,
+                    actual_avg_wait_time=actual_avg_wait_time,
                     executed_core_hours=executed_core_hours,
                     cached_core_hours=cached_core_hours
                 )

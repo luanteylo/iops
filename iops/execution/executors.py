@@ -158,6 +158,9 @@ class BaseExecutor(ABC, HasLogger):
             "error": test.metadata.get("__error"),
             "end_time": test.metadata.get("__end"),
             "cached": test.metadata.get("__cached", False),
+            # Include timing for real-time wait time tracking in watch mode
+            "submission_time": test.metadata.get("__submission_time"),
+            "job_start": test.metadata.get("__job_start"),
         }
 
         try:
