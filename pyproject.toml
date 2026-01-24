@@ -37,6 +37,7 @@ dependencies = [
 [project.optional-dependencies]
 parquet = ["pyarrow"]
 watch = ["rich"]
+pdf = ["kaleido"]
 
 [project.urls]
 Homepage = "https://gitlab.inria.fr/lgouveia/iops"

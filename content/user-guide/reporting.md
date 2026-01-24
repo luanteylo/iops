@@ -30,8 +30,9 @@ The reporting feature allows you to:
 - **Customize themes** and styling to match your preferences
 - **Control report sections** to include only relevant analyses
 - **Regenerate reports** with different configurations without re-running benchmarks
+- **Export plots as PDF** for publications and presentations (optional, requires kaleido)
 
-Reports are generated as self-contained HTML files with embedded interactive Plotly visualizations.
+Reports are generated as self-contained HTML files with embedded interactive Plotly visualizations. Optionally, all plots can be exported as PDF files for use in external documents.
 
 ---
 
@@ -572,6 +573,32 @@ reporting:
 ```
 
 **Default behavior**: If `output_dir` is not specified, reports are saved to the run's workdir (e.g., `/workdir/run_001/analysis_report.html`).
+
+### PDF Plot Export (Optional)
+
+When the `kaleido` package is installed, IOPS automatically exports all plots as PDF files in an `__iops_plots` folder alongside the HTML report. This allows you to use the plots in publications or presentations.
+
+**Installation:**
+
+```bash
+pip install iops-benchmark[pdf]
+```
+
+**Output structure:**
+
+```
+workdir/run_001/
+├── analysis_report.html
+└── __iops_plots/
+    ├── 001_test_summary.pdf
+    ├── 002_best_configurations_bandwidth.pdf
+    ├── 003_bayesian_evolution_bandwidth.pdf
+    └── ...
+```
+
+PDF files are numbered in the order they appear in the report, with descriptive names based on the plot type and metric.
+
+**Note:** PDF export is completely optional. If `kaleido` is not installed, the HTML report is still generated with all interactive plots embedded.
 
 ---
 

@@ -45,6 +45,7 @@ Located in `workdir/run_XXX/`:
 | `__iops_index.json` | Fast execution lookup for `iops find` |
 | `__iops_resource_summary.csv` | Aggregated CPU/memory metrics |
 | `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
+| `__iops_plots/` | PDF exports of report plots (requires kaleido) |
 
 ### Execution Tracking Files
 
@@ -478,6 +479,33 @@ run_test "/path/to/exec_0001/repetition_002" "run_script.sh" "exec_0001" "2"
 - Status files (`__iops_status.json`) updated for each test (RUNNING → SUCCEEDED/FAILED/TIMEOUT)
 
 **Controlled by:** `slurm_options.allocation.mode: "single"`
+
+---
+
+### `__iops_plots/`
+
+**Location:** `workdir/run_001/__iops_plots/`
+
+**Written:** When generating HTML reports via `iops report` (if kaleido is installed)
+
+**Purpose:** Contains PDF exports of all plots from the HTML report, allowing users to include plots in publications or presentations.
+
+**Structure:**
+```
+__iops_plots/
+├── 001_test_summary.pdf
+├── 002_best_configurations_bandwidth.pdf
+├── 003_bayesian_evolution_bandwidth.pdf
+├── 004_variable_impact_bandwidth.pdf
+└── ...
+```
+
+**File naming:**
+- Files are numbered in the order they appear in the report (001, 002, ...)
+- Names include the plot type and metric for easy identification
+- Special characters are sanitized to underscores
+
+**Controlled by:** Automatic when `kaleido` package is installed (`pip install iops-benchmark[pdf]`)
 
 ## Best Practices
 

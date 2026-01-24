@@ -20,6 +20,13 @@ try:
 except ImportError:
     PYARROW_AVAILABLE = False
 
+# Optional kaleido for PDF export
+try:
+    import kaleido
+    KALEIDO_AVAILABLE = True
+except ImportError:
+    KALEIDO_AVAILABLE = False
+
 from iops.config.models import (
     ReportingConfig,
     ReportThemeConfig,
@@ -181,6 +188,8 @@ class ReportGenerator:
         self.metadata: Optional[Dict[str, Any]] = None
         self.df: Optional[pd.DataFrame] = None
         self.report_config: Optional[ReportingConfig] = report_config
+        self.plots_dir: Optional[Path] = None
+        self._plot_counter: int = 0
 
     def load_metadata(self):
         """Load runtime metadata and reporting configuration."""
@@ -412,17 +421,36 @@ class ReportGenerator:
             return converted
         return result
 
-    def _fig_to_html(self, fig: go.Figure, div_id: str = None) -> str:
+    def _fig_to_html(self, fig: go.Figure, div_id: str = None, plot_name: str = None) -> str:
         """
         Convert a Plotly figure to HTML with standard config for interactivity.
+        Also saves the figure as PDF if plots_dir is set.
 
         Args:
             fig: Plotly figure to convert
             div_id: Optional div ID for the plot
+            plot_name: Optional name for the PDF file (without extension)
 
         Returns:
             HTML string with the plot
         """
+        # Save as PDF if plots directory is configured and kaleido is available
+        if self.plots_dir is not None and KALEIDO_AVAILABLE:
+            self._plot_counter += 1
+            if plot_name:
+                # Sanitize plot name for filename
+                safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in plot_name)
+                pdf_filename = f"{self._plot_counter:03d}_{safe_name}.pdf"
+            else:
+                pdf_filename = f"{self._plot_counter:03d}_plot.pdf"
+
+            pdf_path = self.plots_dir / pdf_filename
+            try:
+                fig.write_image(pdf_path, format='pdf', width=1200, height=800)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug(f"Could not save PDF plot: {e}")
+
         kwargs = {
             'full_html': False,
             'include_plotlyjs': False,
@@ -729,6 +757,12 @@ class ReportGenerator:
         if output_path is None:
             output_path = self.workdir / "analysis_report.html"
 
+        # Create plots directory for PDF exports (only if kaleido is available)
+        if KALEIDO_AVAILABLE:
+            self.plots_dir = self.workdir / "__iops_plots"
+            self.plots_dir.mkdir(exist_ok=True)
+            self._plot_counter = 0
+
         # Get report variables and metrics
         report_vars = self._get_report_vars()
         metrics = self._get_metrics()
@@ -753,19 +787,21 @@ class ReportGenerator:
         # Best configurations immediately after summary
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
-        # Add search evolution section if applicable (before plots)
+        # Add search evolution section
         search_method = self.metadata['benchmark'].get('search_method', '').lower()
         if search_method == 'bayesian':
             html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
         elif search_method == 'random':
             html_parts.append(self._generate_random_search_section(metrics, report_vars))
+        else:
+            # Exhaustive or other search methods
+            html_parts.append(self._generate_exhaustive_search_section(metrics, report_vars))
 
         # Add comprehensive variable analysis section
         html_parts.append(self._generate_variable_analysis_section(metrics, report_vars))
 
-        # All detailed plots at the end
-        for metric in metrics:
-            html_parts.append(self._generate_metric_section(metric, report_vars))
+        # Custom plots defined by user in reporting config
+        html_parts.append(self._generate_custom_plots_section(metrics, report_vars))
 
         html_parts.append(self._generate_footer())
 
@@ -1386,7 +1422,7 @@ class ReportGenerator:
         fig_metric_evolution = self._create_bayesian_metric_evolution_plot(
             target_metric, objective, n_initial_points, report_vars
         )
-        html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution')}</div>\n"
+        html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution', plot_name=f'bayesian_{target_metric}_evolution')}</div>\n"
 
         # 2. Parameter evolution over iterations
         html += "<h3>Parameter Evolution</h3>\n"
@@ -1395,7 +1431,7 @@ class ReportGenerator:
         fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
             report_vars, target_metric, objective, n_initial_points
         )
-        html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution')}</div>\n"
+        html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution', plot_name='bayesian_parameter_evolution')}</div>\n"
 
         return html
 
@@ -1414,7 +1450,7 @@ class ReportGenerator:
 
             try:
                 fig = self._create_random_metric_evolution_plot(metric, report_vars)
-                html += f"<div>{self._fig_to_html(fig, div_id=f'random_evolution_{metric}')}</div>\n"
+                html += f"<div>{self._fig_to_html(fig, div_id=f'random_evolution_{metric}', plot_name=f'random_{metric}_evolution')}</div>\n"
             except Exception as e:
                 html += f'<p class="error">Error generating evolution plot for {metric}: {str(e)}</p>\n'
 
@@ -1450,13 +1486,15 @@ class ReportGenerator:
         df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
-        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        # Use normalized iteration numbers (1, 2, 3, ...) since execution IDs may have gaps
+        execution_ids = self._to_python_list(df_grouped['execution.execution_id'].values)
+        iterations = list(range(1, len(df_grouped) + 1))
         metric_values = self._to_python_list(df_grouped[metric_col].values)
 
-        # Build hover text with variable values
+        # Build hover text with variable values (include actual execution ID)
         hover_texts = []
-        for idx, row in df_grouped.iterrows():
-            hover_parts = [f"Iteration: {int(row['execution.execution_id'])}"]
+        for i, (idx, row) in enumerate(df_grouped.iterrows()):
+            hover_parts = [f"Iteration: {iterations[i]} (exec_id: {int(row['execution.execution_id'])})"]
             hover_parts.append(f"{metric}: {row[metric_col]:.4f}")
             hover_parts.append("")  # Empty line separator
             for var_name, col in var_cols:
@@ -1514,138 +1552,213 @@ class ReportGenerator:
 
         return fig
 
-    def _generate_metric_section(self, metric: str, swept_vars: List[str]) -> str:
-        """Generate plots section for a specific metric."""
-        html = f'<div class="metric-section">\n'
-        html += f"<h2>Analysis: {metric}</h2>\n"
+    def _generate_exhaustive_search_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate exhaustive search exploration section."""
+        html = "<h2>Exhaustive Search Exploration</h2>\n"
+        html += "<p>This section shows the exploration behavior of the exhaustive search. "
+        html += "All parameter combinations are tested systematically. Running maximum and minimum "
+        html += "lines show the range of values discovered over execution order.</p>\n"
 
-        metric_col = self._get_metric_column(metric)
-        if metric_col not in self.df.columns:
-            html += f"<p>Metric '{metric}' not found in results.</p>\n"
-            html += "</div>\n"
-            return html
+        # Generate evolution plot for each metric
+        for metric in metrics:
+            html += f"<h3>{metric} Evolution</h3>\n"
+            html += "<p>Shows metric values in execution order. Running max and min lines help visualize "
+            html += "the range of values discovered over time.</p>\n"
 
-        # Check if custom plots are defined for this metric
-        has_custom_plots = metric in self.report_config.metrics and len(self.report_config.metrics[metric].plots) > 0
-        has_default_plots = len(self.report_config.default_plots) > 0
+            try:
+                fig = self._create_exhaustive_metric_evolution_plot(metric, report_vars)
+                html += f"<div>{self._fig_to_html(fig, div_id=f'exhaustive_evolution_{metric}', plot_name=f'exhaustive_{metric}_evolution')}</div>\n"
+            except Exception as e:
+                html += f'<p class="error">Error generating evolution plot for {metric}: {str(e)}</p>\n'
 
-        if has_custom_plots:
-            # Use custom plots from config
-            html += self._generate_custom_plots(metric, self.report_config.metrics[metric].plots, swept_vars)
-        elif has_default_plots:
-            # Use default plots from config
-            html += self._generate_custom_plots(metric, self.report_config.default_plots, swept_vars)
-        else:
-            # Fall back to legacy plot generation
-            html += self._generate_legacy_plots(metric, swept_vars)
-
-        html += '</div>\n'
         return html
 
-    def _generate_custom_plots(self, metric: str, plot_configs: List[PlotConfig], swept_vars: List[str]) -> str:
-        """Generate plots using the plot factory from plot configs."""
+    def _create_exhaustive_metric_evolution_plot(self, metric: str, report_vars: List[str]) -> go.Figure:
+        """
+        Create plot showing metric evolution over exhaustive search iterations.
+
+        Shows:
+        - Observed metric values at each iteration
+        - Running maximum (cumulative max)
+        - Running minimum (cumulative min)
+        - Variable values on hover
+
+        This allows comparison with other search methods.
+        """
+        metric_col = self._get_metric_column(metric)
+
+        # Get variable columns
+        var_cols = []
+        for var in report_vars:
+            col = self._get_var_column(var)
+            if col in self.df.columns:
+                var_cols.append((var, col))
+
+        # Build aggregation dict - metric mean and first value for each variable
+        agg_dict = {metric_col: 'mean'}
+        for var_name, col in var_cols:
+            agg_dict[col] = 'first'  # Variables are same for all reps of same execution
+
+        # Group by execution_id and compute mean across repetitions
+        df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
+        df_grouped = df_grouped.sort_values('execution.execution_id')
+
+        # Use normalized execution numbers (1, 2, 3, ...) for consistent x-axis
+        execution_ids = self._to_python_list(df_grouped['execution.execution_id'].values)
+        iterations = list(range(1, len(df_grouped) + 1))
+        metric_values = self._to_python_list(df_grouped[metric_col].values)
+
+        # Build hover text with variable values (include actual execution ID)
+        hover_texts = []
+        for i, (idx, row) in enumerate(df_grouped.iterrows()):
+            hover_parts = [f"Execution: {iterations[i]} (exec_id: {int(row['execution.execution_id'])})"]
+            hover_parts.append(f"{metric}: {row[metric_col]:.4f}")
+            hover_parts.append("")  # Empty line separator
+            for var_name, col in var_cols:
+                hover_parts.append(f"{var_name}: {row[col]}")
+            hover_texts.append("<br>".join(hover_parts))
+
+        # Compute running max and min
+        running_max = self._to_python_list(pd.Series(metric_values).cummax().values)
+        running_min = self._to_python_list(pd.Series(metric_values).cummin().values)
+
+        # Create figure
+        fig = go.Figure()
+
+        # Observed values
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=metric_values,
+            mode='markers+lines',
+            name='Observed',
+            marker=dict(size=10, color='#9b59b6', line=dict(width=1, color='white')),
+            line=dict(color='lightgray', width=1),
+            hovertemplate='%{text}<extra></extra>',
+            text=hover_texts
+        ))
+
+        # Running maximum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_max,
+            mode='lines',
+            name='Running Max',
+            line=dict(color='#2ecc71', width=2, dash='dash'),
+            hovertemplate='Execution %{x}<br>Max: %{y:.4f}<extra></extra>'
+        ))
+
+        # Running minimum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_min,
+            mode='lines',
+            name='Running Min',
+            line=dict(color='#e74c3c', width=2, dash='dash'),
+            hovertemplate='Execution %{x}<br>Min: %{y:.4f}<extra></extra>'
+        ))
+
+        fig.update_layout(
+            title=f'{metric} Evolution Over Exhaustive Search',
+            xaxis_title='Execution',
+            yaxis_title=metric,
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
+        )
+
+        return fig
+
+    def _generate_custom_plots_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate custom plots section based on user-defined reporting config."""
         from iops.reporting.plots import create_plot
 
-        html = ""
+        # Check if any custom plots are defined
+        has_any_plots = False
+        for metric in metrics:
+            if metric in self.report_config.metrics and len(self.report_config.metrics[metric].plots) > 0:
+                has_any_plots = True
+                break
 
-        for plot_config in plot_configs:
-            # Handle per_variable plots (generate one plot per swept variable)
-            if plot_config.per_variable:
-                for var in swept_vars:
-                    # Create a modified config for this specific variable
-                    var_config = PlotConfig(
-                        type=plot_config.type,
-                        x_var=var,
-                        y_var=plot_config.y_var,
-                        z_metric=plot_config.z_metric,
-                        group_by=plot_config.group_by,
-                        color_by=plot_config.color_by,
-                        title=plot_config.title or f"{metric} vs {var}",
-                        xaxis_label=plot_config.xaxis_label,
-                        yaxis_label=plot_config.yaxis_label,
-                        colorscale=plot_config.colorscale,
-                        show_error_bars=plot_config.show_error_bars,
-                        show_outliers=plot_config.show_outliers,
-                        height=plot_config.height,
-                        width=plot_config.width,
-                        per_variable=False,
-                    )
+        if not has_any_plots:
+            return ""  # No custom plots defined, return empty
 
+        html = '<div class="metric-section">\n'
+        html += "<h2>Custom Metric Plots</h2>\n"
+        html += "<p>User-defined plots from the reporting configuration.</p>\n"
+
+        for metric in metrics:
+            if metric not in self.report_config.metrics:
+                continue
+
+            metric_plots = self.report_config.metrics[metric].plots
+            if not metric_plots:
+                continue
+
+            metric_col = self._get_metric_column(metric)
+            if metric_col not in self.df.columns:
+                html += f"<p>Metric '{metric}' not found in results.</p>\n"
+                continue
+
+            html += f"<h3>{metric}</h3>\n"
+
+            for plot_config in metric_plots:
+                # Handle per_variable plots
+                if plot_config.per_variable:
+                    for var in report_vars:
+                        var_config = PlotConfig(
+                            type=plot_config.type,
+                            x_var=var,
+                            y_var=plot_config.y_var,
+                            z_metric=plot_config.z_metric,
+                            group_by=plot_config.group_by,
+                            color_by=plot_config.color_by,
+                            title=plot_config.title or f"{metric} vs {var}",
+                            xaxis_label=plot_config.xaxis_label,
+                            yaxis_label=plot_config.yaxis_label,
+                            colorscale=plot_config.colorscale,
+                            show_error_bars=plot_config.show_error_bars,
+                            show_outliers=plot_config.show_outliers,
+                            height=plot_config.height,
+                            width=plot_config.width,
+                            per_variable=False,
+                        )
+                        try:
+                            plot = create_plot(
+                                plot_type=var_config.type,
+                                df=self.df,
+                                metric=metric,
+                                plot_config=var_config,
+                                theme=self.report_config.theme,
+                                var_column_fn=self._get_var_column,
+                                metric_column_fn=self._get_metric_column,
+                            )
+                            fig = plot.generate()
+                            html += '<div class="plot-container">\n'
+                            html += self._fig_to_html(fig, plot_name=f'{metric}_{var_config.type}_{var}')
+                            html += '</div>\n'
+                        except Exception as e:
+                            html += f'<p class="error">Error generating {var_config.type} plot for {var}: {str(e)}</p>\n'
+                else:
+                    # Single plot
                     try:
                         plot = create_plot(
-                            plot_type=var_config.type,
+                            plot_type=plot_config.type,
                             df=self.df,
                             metric=metric,
-                            plot_config=var_config,
+                            plot_config=plot_config,
                             theme=self.report_config.theme,
                             var_column_fn=self._get_var_column,
                             metric_column_fn=self._get_metric_column,
                         )
                         fig = plot.generate()
                         html += '<div class="plot-container">\n'
-                        html += self._fig_to_html(fig)
+                        html += self._fig_to_html(fig, plot_name=f'{metric}_{plot_config.type}')
                         html += '</div>\n'
                     except Exception as e:
-                        html += f'<p class="error">Error generating {var_config.type} plot for {var}: {str(e)}</p>\n'
-            else:
-                # Single plot
-                try:
-                    plot = create_plot(
-                        plot_type=plot_config.type,
-                        df=self.df,
-                        metric=metric,
-                        plot_config=plot_config,
-                        theme=self.report_config.theme,
-                        var_column_fn=self._get_var_column,
-                        metric_column_fn=self._get_metric_column,
-                    )
-                    fig = plot.generate()
-                    html += '<div class="plot-container">\n'
-                    html += self._fig_to_html(fig)
-                    html += '</div>\n'
-                except Exception as e:
-                    html += f'<p class="error">Error generating {plot_config.type} plot: {str(e)}</p>\n'
+                        html += f'<p class="error">Error generating {plot_config.type} plot: {str(e)}</p>\n'
 
-        return html
-
-    def _generate_legacy_plots(self, metric: str, swept_vars: List[str]) -> str:
-        """Generate plots using legacy hardcoded logic (for backward compatibility)."""
-        from iops.reporting.plots import create_plot
-
-        html = ""
-
-        # 1. Execution scatter plot - shows each execution with all vars on hover
-        html += "<h3>All Executions</h3>\n"
-        html += "<p>Each point represents one execution. Hover to see all parameter values.</p>\n"
-        try:
-            exec_scatter_config = PlotConfig(
-                type="execution_scatter",
-                title=f"{metric} per Execution",
-            )
-            plot = create_plot(
-                plot_type="execution_scatter",
-                df=self.df,
-                metric=metric,
-                plot_config=exec_scatter_config,
-                theme=self.report_config.theme,
-                var_column_fn=self._get_var_column,
-                metric_column_fn=self._get_metric_column,
-            )
-            fig = plot.generate()
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-        except Exception as e:
-            html += f'<p class="error">Error generating execution scatter plot: {str(e)}</p>\n'
-
-        # 2. Heatmap if we have exactly 2 swept variables
-        if len(swept_vars) == 2:
-            html += "<h3>Heatmap</h3>\n"
-            fig = self._create_heatmap(metric, swept_vars[0], swept_vars[1])
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-
+        html += '</div>\n'
         return html
 
     def _create_bayesian_metric_evolution_plot(
@@ -1678,13 +1791,15 @@ class ReportGenerator:
         df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
-        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        # Use normalized iteration numbers (1, 2, 3, ...) for consistent x-axis
+        execution_ids = self._to_python_list(df_grouped['execution.execution_id'].values)
+        iterations = list(range(1, len(df_grouped) + 1))
         metric_values = self._to_python_list(df_grouped[metric_col].values)
 
-        # Build hover text with variable values
+        # Build hover text with variable values (include actual execution ID)
         hover_texts = []
-        for idx, row in df_grouped.iterrows():
-            hover_parts = [f"Iteration: {int(row['execution.execution_id'])}"]
+        for i, (idx, row) in enumerate(df_grouped.iterrows()):
+            hover_parts = [f"Iteration: {iterations[i]} (exec_id: {int(row['execution.execution_id'])})"]
             hover_parts.append(f"{target_metric}: {row[metric_col]:.4f}")
             hover_parts.append("")  # Empty line separator
             for var_name, col in var_cols:
@@ -1700,7 +1815,7 @@ class ReportGenerator:
         # Create figure with two traces
         fig = go.Figure()
 
-        # Observed values with phase coloring
+        # Observed values with phase coloring (blue for exploration, green for exploitation)
         colors = ['#3498db' if i < n_initial_points else '#2ecc71' for i in range(len(iterations))]
 
         fig.add_trace(go.Scatter(
@@ -1765,7 +1880,8 @@ class ReportGenerator:
         df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
-        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        # Use normalized iteration numbers (1, 2, 3, ...) for consistent x-axis
+        iterations = list(range(1, len(df_grouped) + 1))
         metric_values = self._to_python_list(df_grouped[metric_col].values)
 
         # Create subplots - one per parameter
@@ -2151,7 +2267,7 @@ class ReportGenerator:
             fig_parallel = self._create_parallel_coordinates(metric, report_vars)
             if fig_parallel is not None:
                 html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig_parallel)
+                html += self._fig_to_html(fig_parallel, plot_name=f'parallel_coordinates_{metric}')
                 html += '</div>\n'
 
         # 2. Variable impact analysis
@@ -2172,7 +2288,7 @@ class ReportGenerator:
             fig_impact = self._create_variable_impact_plot(metric, report_vars)
             if fig_impact is not None:
                 html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig_impact)
+                html += self._fig_to_html(fig_impact, plot_name=f'variable_impact_{metric}')
                 html += '</div>\n'
 
         html += '</div>\n'
