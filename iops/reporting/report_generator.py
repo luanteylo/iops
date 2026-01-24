@@ -931,14 +931,12 @@ class ReportGenerator:
         tr:hover {{
             background-color: #f5f5f5;
         }}
-        .section-header {{
-            background-color: #f8f9fa;
-            font-weight: 600;
-            color: #2c3e50;
-        }}
         .section-header td {{
+            background-color: transparent;
             border-bottom: 2px solid #3498db;
-            padding-top: 16px;
+            padding: 8px 0 0 0;
+            height: 0;
+            line-height: 0;
         }}
         details {{
             margin: 15px 0;
@@ -1103,7 +1101,7 @@ class ReportGenerator:
         if 'metadata.__cached' in self.df.columns:
             cached_count = (self.df['metadata.__cached'] == True).sum()
 
-        # ========== ESSENTIAL INFO (always visible) ==========
+        # ========== EXECUTION OVERVIEW (always visible) ==========
         html += "<h3>Execution Overview</h3>\n<table>\n"
         html += "<tr><th>Metric</th><th>Value</th></tr>\n"
 
@@ -1117,18 +1115,10 @@ class ReportGenerator:
         else:
             html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
 
-        # Search Space section header
-        html += '<tr class="section-header"><td colspan="2">Search Space</td></tr>\n'
-
         if total_search_space > 0:
             html += f"<tr><td><strong>Total Space</strong></td><td>{total_search_space:,} parameter combinations</td></tr>\n"
 
-        html += f"<tr><td><strong>Tested</strong></td><td>{combinations_tested}</td></tr>\n"
-        html += f"<tr><td><strong>Repetitions</strong></td><td>{repetitions}</td></tr>\n"
-        html += f"<tr><td><strong>Total Executions</strong></td><td>{total_rows}</td></tr>\n"
-
-        # Timing section header
-        html += '<tr class="section-header"><td colspan="2">Timing</td></tr>\n'
+        html += f"<tr><td><strong>Total Executions</strong></td><td>{combinations_tested} × {repetitions} = {total_rows}</td></tr>\n"
 
         # Runtime (essential)
         runtime_str = None
@@ -1151,6 +1141,22 @@ class ReportGenerator:
             if failed > 0 or succeeded != total_rows:
                 success_rate = (succeeded / total_rows * 100) if total_rows > 0 else 0
                 html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_rows} ({success_rate:.1f}%)</td></tr>\n"
+
+        html += "</table>\n"
+
+        # ========== METRICS OVERVIEW (always visible) ==========
+        html += "<h3>Metrics Overview</h3>\n<table>\n"
+        html += "<tr><th>Metric</th><th>Min</th><th>Max</th><th>Mean</th><th>Std Dev</th></tr>\n"
+
+        for metric in metrics:
+            col = self._get_metric_column(metric)
+            if col in self.df.columns:
+                stats = self.df[col].describe()
+                html += f"<tr><td><strong>{metric}</strong></td>"
+                html += f"<td>{stats['min']:.4f}</td>"
+                html += f"<td>{stats['max']:.4f}</td>"
+                html += f"<td>{stats['mean']:.4f}</td>"
+                html += f"<td>{stats['std']:.4f}</td></tr>\n"
 
         html += "</table>\n"
 
@@ -1247,41 +1253,31 @@ class ReportGenerator:
             if avg_cores is not None:
                 html += f"<tr><td><strong>Avg Cores per Execution</strong></td><td>{avg_cores:.1f}</td></tr>\n"
 
-        # Report generation timestamp
-        report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        html += f"<tr><td><strong>Report Generated</strong></td><td>{report_timestamp}</td></tr>\n"
-
         html += "</table>\n</div>\n</details>\n"
 
-        # Variable ranges
-        html += "<h3>Report Variables</h3>\n<table>\n"
+        # Search Space (collapsible) - show ALL swept variables including strings
+        html += "<details>\n<summary>Search Space</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Variable</th><th>Type</th><th>Values</th></tr>\n"
 
-        for var in report_vars:
+        all_swept_vars = self._get_swept_vars()
+        for var in all_swept_vars:
             col = self._get_var_column(var)
-            var_info = self.metadata['variables'][var]
-            var_type = var_info['type']
-            unique_values = sorted(self.df[col].unique())
-            values_str = ", ".join(str(v) for v in unique_values)
+            var_info = self.metadata['variables'].get(var, {})
+            var_type = var_info.get('type', 'unknown')
+            if col in self.df.columns:
+                unique_values = self.df[col].unique()
+                # Sort if possible (strings and numbers)
+                try:
+                    unique_values = sorted(unique_values)
+                except TypeError:
+                    pass  # Mixed types, keep original order
+                values_str = ", ".join(str(v) for v in unique_values)
+            else:
+                values_str = "N/A"
             html += f"<tr><td><strong>{var}</strong></td><td>{var_type}</td><td>{values_str}</td></tr>\n"
 
-        html += "</table>\n"
-
-        # Metric statistics
-        html += "<h3>Metrics Overview</h3>\n<table>\n"
-        html += "<tr><th>Metric</th><th>Min</th><th>Max</th><th>Mean</th><th>Std Dev</th></tr>\n"
-
-        for metric in metrics:
-            col = self._get_metric_column(metric)
-            if col in self.df.columns:
-                stats = self.df[col].describe()
-                html += f"<tr><td><strong>{metric}</strong></td>"
-                html += f"<td>{stats['min']:.4f}</td>"
-                html += f"<td>{stats['max']:.4f}</td>"
-                html += f"<td>{stats['mean']:.4f}</td>"
-                html += f"<td>{stats['std']:.4f}</td></tr>\n"
-
-        html += "</table>\n"
+        html += "</table>\n</div>\n</details>\n"
 
         return html
 
@@ -1307,8 +1303,9 @@ class ReportGenerator:
         html = "<h2>System Environment</h2>\n"
         html += "<p>Information collected from compute nodes during benchmark execution:</p>\n"
 
-        # Summary table
-        html += "<h3>Hardware Summary</h3>\n<table>\n"
+        # Summary table (collapsible)
+        html += "<details>\n<summary>Hardware Summary</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Property</th><th>Value</th></tr>\n"
 
         # Node count
@@ -1354,18 +1351,19 @@ class ReportGenerator:
                 kernel = ', '.join(kernel)
             html += f"<tr><td><strong>Kernel</strong></td><td>{kernel}</td></tr>\n"
 
-        html += "</table>\n"
+        html += "</table>\n</div>\n</details>\n"
 
-        # Parallel Filesystems
+        # Parallel Filesystems (collapsible)
         filesystems = sys_env.get('filesystems', [])
         if filesystems:
-            html += "<h3>Parallel Filesystems</h3>\n<table>\n"
+            html += "<details>\n<summary>Parallel Filesystems</summary>\n"
+            html += '<div class="details-content">\n<table>\n'
             html += "<tr><th>Type</th><th>Mount Point</th></tr>\n"
             for fs in filesystems:
                 if ':' in fs:
                     fs_type, mount = fs.split(':', 1)
                     html += f"<tr><td>{fs_type}</td><td>{mount}</td></tr>\n"
-            html += "</table>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         # Interconnect
         interconnect = sys_env.get('interconnect', [])
@@ -1393,8 +1391,6 @@ class ReportGenerator:
             if metric_col not in self.df.columns:
                 continue
 
-            html += f"<h3>Best for {metric}</h3>\n"
-
             # Group by parameter combination and get mean
             group_cols = var_cols
             df_grouped = self.df.groupby(group_cols)[metric_col].agg(['mean', 'std', 'count']).reset_index()
@@ -1404,14 +1400,16 @@ class ReportGenerator:
             df_filtered = df_grouped[df_grouped['count'] >= min_samples]
 
             if len(df_filtered) == 0:
-                html += f"<p><em>No configurations with at least {min_samples} samples found.</em></p>\n"
+                html += f"<details>\n<summary>Best for {metric}</summary>\n"
+                html += f'<div class="details-content"><p><em>No configurations with at least {min_samples} samples found.</em></p></div>\n</details>\n'
                 continue
 
             # Sort by mean (descending for most metrics, ascending for latency/time)
             ascending = 'latency' in metric.lower() or 'time' in metric.lower()
             df_top = df_filtered.sort_values('mean', ascending=ascending).head(top_n)
 
-            html += "<table>\n<tr><th>Rank</th>"
+            html += f"<details>\n<summary>Best for {metric}</summary>\n"
+            html += '<div class="details-content">\n<table>\n<tr><th>Rank</th>'
             for var in report_vars:
                 html += f"<th>{var}</th>"
             html += f"<th>{metric} (mean)</th><th>Std Dev</th><th>Samples</th></tr>\n"
@@ -1445,7 +1443,7 @@ class ReportGenerator:
                 html += f"<tr><td colspan='{len(report_vars) + 3}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
                 html += f"<strong>Command:</strong> {rendered_command}</td></tr>\n"
 
-            html += "</table>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         return html
 
@@ -1479,8 +1477,9 @@ class ReportGenerator:
         planner_stats = self.metadata['benchmark'].get('planner_stats') or {}
         total_space_size = planner_stats.get('total_space_size', 0)
 
-        # Display Bayesian optimization configuration
-        html += "<h3>Optimization Configuration</h3>\n<table>\n"
+        # Display Bayesian optimization configuration (collapsible)
+        html += "<details>\n<summary>Optimization Configuration</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Parameter</th><th>Value</th></tr>\n"
         html += f"<tr><td><strong>Objective Metric</strong></td><td>{target_metric} ({objective})</td></tr>\n"
         html += f"<tr><td><strong>Max Iterations</strong></td><td>{n_iterations}</td></tr>\n"
@@ -1491,9 +1490,9 @@ class ReportGenerator:
             html += f"<tr><td><strong>Xi (exploration)</strong></td><td>{xi}</td></tr>\n"
         if acquisition_func == 'LCB':
             html += f"<tr><td><strong>Kappa (exploration)</strong></td><td>{kappa}</td></tr>\n"
-        html += "</table>\n"
+        html += "</table>\n</div>\n</details>\n"
 
-        # Display search space statistics if available
+        # Display search space statistics if available (collapsible)
         if total_space_size > 0:
             # Use actual number of combinations tested from dataframe, not configured n_iterations
             # (may differ due to early stopping, convergence, etc.)
@@ -1502,12 +1501,13 @@ class ReportGenerator:
             savings_pct = 100 - coverage_pct
             combinations_saved = total_space_size - actual_combinations_tested
 
-            html += "<h3>Search Space Efficiency</h3>\n<table>\n"
+            html += "<details>\n<summary>Search Space Efficiency</summary>\n"
+            html += '<div class="details-content">\n<table>\n'
             html += "<tr><th>Metric</th><th>Value</th></tr>\n"
             html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} parameter combinations</td></tr>\n"
             html += f"<tr><td><strong>Combinations Tested</strong></td><td>{actual_combinations_tested:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
             html += f"<tr><td><strong>Combinations Saved</strong></td><td>{combinations_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
-            html += "</table>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         # Create plots
         # 1. Metric evolution over iterations
