@@ -8,6 +8,8 @@ title: "Execution Cache Usage Guide"
 
 1. [Overview](#overview)
 2. [Configuration](#configuration)
+   - [Basic Usage](#basic-usage)
+   - [Cache-Only Mode](#cache-only-mode)
 3. [Rebuilding the Cache](#rebuilding-the-cache)
 
 ---
@@ -46,6 +48,41 @@ iops run config.yaml
 # Second run with --use-cache: reuses cached results
 iops run config.yaml --use-cache
 ```
+
+### Cache-Only Mode
+
+The `--cache-only` flag runs IOPS using only cached results, skipping any tests not found in the cache. This is useful for:
+
+- Regenerating CSV/output files from an existing cache without running new tests
+- Extracting a subset of results from a large campaign
+- Verifying what's in the cache without executing anything
+
+```bash
+# Only use cached results, skip tests not in cache
+iops run config.yaml --cache-only
+
+# Preview what would be cached vs skipped
+iops run config.yaml --cache-only --dry-run
+```
+
+**Behavior:**
+- Tests found in cache are loaded and written to the output file
+- Tests not in cache are marked as `SKIPPED` with reason "Not in cache (cache-only mode)"
+- Skipped tests appear in `iops find --status SKIPPED`
+- The final summary shows how many tests were from cache vs skipped
+
+**Example output:**
+```
+[  1] exec_0001 (rep 1/1) → SUCCEEDED [CACHED] | result=100
+[  2] exec_0002 (rep 1/1) -> SKIPPED (not in cache)
+[  3] exec_0003 (rep 1/1) → SUCCEEDED [CACHED] | result=200
+
+Benchmark completed (cache-only mode): 3 tests processed
+  From cache: 2
+  Skipped (not in cache): 1
+```
+
+**Note:** `--cache-only` requires `benchmark.cache_file` to be configured in the YAML file. Using `--cache-only` automatically enables `--use-cache`.
 
 
 ### Parameter Hashing

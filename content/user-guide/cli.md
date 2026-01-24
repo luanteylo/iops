@@ -48,6 +48,7 @@ Runs the benchmark defined in the configuration file.
 **Options:**
 - `--dry-run, -n` - Preview execution plan without running
 - `--use-cache` - Skip tests with cached results
+- `--cache-only` - Only use cached results; skip tests not in cache (requires `cache_file`)
 - `--max-core-hours N` - Set core-hours budget limit (SLURM only)
 - `--time-estimate SEC` - Estimated test duration in seconds
 - `--log-file PATH` - Write logs to file
@@ -67,6 +68,9 @@ iops run benchmark.yaml -n
 
 # With caching and verbose logging
 iops run benchmark.yaml --use-cache --log-level DEBUG
+
+# Cache-only mode: only use cached results, skip uncached tests
+iops run benchmark.yaml --cache-only
 
 # With budget limit and time estimate
 iops run benchmark.yaml --max-core-hours 1000 --time-estimate 300

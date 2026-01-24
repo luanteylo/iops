@@ -78,6 +78,10 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser):
                 except ValueError:
                     parser.error(f"Invalid --time-estimate value: '{part}' (expected positive number)")
 
+        # --cache-only implies --use-cache
+        if getattr(args, 'cache_only', False):
+            args.use_cache = True
+
 def parse_arguments():
     _preprocess_args()
 
@@ -112,6 +116,8 @@ Examples:
                             help="Maximum CPU core-hours budget for execution")
     run_parser.add_argument('--time-estimate', type=str, default=None, metavar='SEC',
                             help="Estimated time per test (e.g., '120' or '60,120,300')")
+    run_parser.add_argument('--cache-only', action='store_true',
+                            help="Only use cached results; skip tests not in cache (requires cache_file)")
     _add_common_args(run_parser)
 
     # ---- find command ----
@@ -701,6 +707,11 @@ def main():
             logger.error(f"Failed to load configuration: {e}")
             if args.verbose:
                 raise
+            return
+
+        # Validate --cache-only requires cache_file to be configured
+        if getattr(args, 'cache_only', False) and not cfg.benchmark.cache_file:
+            logger.error("--cache-only requires benchmark.cache_file to be configured in the YAML file")
             return
 
         log_execution_context(cfg, args, logger)

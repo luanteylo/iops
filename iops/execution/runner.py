@@ -83,9 +83,15 @@ class IOPSRunner(HasLogger):
         # Pass runner reference to executor for job tracking (used by SLURM)
         self.executor.set_runner(self)
 
+        # Cache-only mode: skip tests not in cache instead of executing
+        self.cache_only = getattr(args, 'cache_only', False) and self.cache is not None
+        if self.cache_only:
+            self.logger.info("Cache-only mode: uncached tests will be SKIPPED")
+
         # Statistics
         self.cache_hits = 0
         self.cache_misses = 0
+        self.skipped_cache_only = 0  # Tests skipped due to cache-only mode
 
         # Track actual output path (rendered from template)
         self.actual_output_path: Optional[Path] = None
@@ -1452,6 +1458,19 @@ class IOPSRunner(HasLogger):
 
             # Execute if not using cache
             if not used_cache:
+                # In cache-only mode, skip execution for tests not in cache
+                if self.cache_only:
+                    self.skipped_cache_only += 1
+                    test.metadata['__executor_status'] = 'SKIPPED'
+                    test.metadata['__skip_reason'] = 'Not in cache (cache-only mode)'
+                    self.logger.info(
+                        f"[{test_count:3d}] {test.execution_id} (rep {test.repetition}/{test.repetitions}) "
+                        f"-> SKIPPED (not in cache)"
+                    )
+                    if getattr(self.cfg.benchmark, 'track_executions', True):
+                        self._write_status_file(test, status='SKIPPED')
+                    continue
+
                 # Write initial status before execution starts
                 # Local executor: RUNNING (runs immediately)
                 # SLURM executor: PENDING (job goes to queue first)
@@ -1565,6 +1584,10 @@ class IOPSRunner(HasLogger):
 
         if self.budget_exceeded:
             self.logger.info(f"Benchmark stopped: {test_count} tests completed (budget limit reached)")
+        elif self.cache_only and self.skipped_cache_only > 0:
+            self.logger.info(f"Benchmark completed (cache-only mode): {test_count} tests processed")
+            self.logger.info(f"  From cache: {self.cache_hits}")
+            self.logger.info(f"  Skipped (not in cache): {self.skipped_cache_only}")
         else:
             self.logger.info(f"Benchmark completed: {test_count} tests total")
 
@@ -1584,9 +1607,10 @@ class IOPSRunner(HasLogger):
 
         if self.cache and self.use_cache_reads:
             hit_rate = (self.cache_hits / test_count * 100) if test_count > 0 else 0
-            self.logger.info(
-                f"Cache statistics: {self.cache_hits} hits, {self.cache_misses} misses ({hit_rate:.1f}% hit rate)"
-            )
+            cache_stats = f"Cache statistics: {self.cache_hits} hits, {self.cache_misses} misses ({hit_rate:.1f}% hit rate)"
+            if self.skipped_cache_only > 0:
+                cache_stats += f", {self.skipped_cache_only} skipped (cache-only mode)"
+            self.logger.info(cache_stats)
         elif self.cache:
             self.logger.info(f"Cache: {test_count} results written to database")
 
