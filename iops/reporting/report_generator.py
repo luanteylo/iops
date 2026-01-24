@@ -170,13 +170,21 @@ class ReportGenerator:
             return self.report_config.theme.colors
         return None
 
-    def __init__(self, workdir: Path, report_config: Optional[ReportingConfig] = None):
+    def __init__(
+        self,
+        workdir: Path,
+        report_config: Optional[ReportingConfig] = None,
+        export_plots: bool = False,
+        plot_format: str = 'pdf'
+    ):
         """
         Initialize report generator.
 
         Args:
             workdir: Path to the benchmark working directory (e.g., /path/to/run_001)
             report_config: Optional reporting configuration (overrides metadata config)
+            export_plots: Whether to export plots as image files
+            plot_format: Image format for exported plots (pdf, png, svg, jpg, webp)
         """
         self.workdir = Path(workdir)
         # Try new filename first, fall back to legacy for backward compatibility
@@ -188,6 +196,8 @@ class ReportGenerator:
         self.metadata: Optional[Dict[str, Any]] = None
         self.df: Optional[pd.DataFrame] = None
         self.report_config: Optional[ReportingConfig] = report_config
+        self.export_plots: bool = export_plots
+        self.plot_format: str = plot_format
         self.plots_dir: Optional[Path] = None
         self._plot_counter: int = 0
 
@@ -424,32 +434,32 @@ class ReportGenerator:
     def _fig_to_html(self, fig: go.Figure, div_id: str = None, plot_name: str = None) -> str:
         """
         Convert a Plotly figure to HTML with standard config for interactivity.
-        Also saves the figure as PDF if plots_dir is set.
+        Also saves the figure as an image file if plots_dir is set.
 
         Args:
             fig: Plotly figure to convert
             div_id: Optional div ID for the plot
-            plot_name: Optional name for the PDF file (without extension)
+            plot_name: Optional name for the image file (without extension)
 
         Returns:
             HTML string with the plot
         """
-        # Save as PDF if plots directory is configured and kaleido is available
+        # Save as image if plots directory is configured and kaleido is available
         if self.plots_dir is not None and KALEIDO_AVAILABLE:
             self._plot_counter += 1
             if plot_name:
                 # Sanitize plot name for filename
                 safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in plot_name)
-                pdf_filename = f"{self._plot_counter:03d}_{safe_name}.pdf"
+                image_filename = f"{self._plot_counter:03d}_{safe_name}.{self.plot_format}"
             else:
-                pdf_filename = f"{self._plot_counter:03d}_plot.pdf"
+                image_filename = f"{self._plot_counter:03d}_plot.{self.plot_format}"
 
-            pdf_path = self.plots_dir / pdf_filename
+            image_path = self.plots_dir / image_filename
             try:
-                fig.write_image(pdf_path, format='pdf', width=1200, height=800)
+                fig.write_image(image_path, format=self.plot_format, width=1200, height=800)
             except Exception as e:
                 import logging
-                logging.getLogger(__name__).debug(f"Could not save PDF plot: {e}")
+                logging.getLogger(__name__).debug(f"Could not save {self.plot_format.upper()} plot: {e}")
 
         kwargs = {
             'full_html': False,
@@ -757,11 +767,18 @@ class ReportGenerator:
         if output_path is None:
             output_path = self.workdir / "analysis_report.html"
 
-        # Create plots directory for PDF exports (only if kaleido is available)
-        if KALEIDO_AVAILABLE:
-            self.plots_dir = self.workdir / "__iops_plots"
-            self.plots_dir.mkdir(exist_ok=True)
-            self._plot_counter = 0
+        # Create plots directory for image exports (only if explicitly requested and kaleido is available)
+        if self.export_plots:
+            if KALEIDO_AVAILABLE:
+                self.plots_dir = self.workdir / "__iops_plots"
+                self.plots_dir.mkdir(exist_ok=True)
+                self._plot_counter = 0
+            else:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Plot export requested but kaleido is not installed. "
+                    "Install with: pip install iops-benchmark[pdf]"
+                )
 
         # Get report variables and metrics
         report_vars = self._get_report_vars()
@@ -2666,7 +2683,9 @@ document.addEventListener('keydown', function(e) {{
 def generate_report_from_workdir(
     workdir: Path,
     output_path: Optional[Path] = None,
-    report_config: Optional[ReportingConfig] = None
+    report_config: Optional[ReportingConfig] = None,
+    export_plots: bool = False,
+    plot_format: str = 'pdf'
 ) -> Path:
     """
     Convenience function to generate report from a workdir.
@@ -2675,11 +2694,18 @@ def generate_report_from_workdir(
         workdir: Path to benchmark working directory
         output_path: Optional custom output path
         report_config: Optional reporting configuration (overrides metadata config)
+        export_plots: Whether to export plots as image files
+        plot_format: Image format for exported plots (pdf, png, svg, jpg, webp)
 
     Returns:
         Path to generated HTML report
     """
-    generator = ReportGenerator(workdir, report_config=report_config)
+    generator = ReportGenerator(
+        workdir,
+        report_config=report_config,
+        export_plots=export_plots,
+        plot_format=plot_format
+    )
     generator.load_metadata()
     generator.load_results()
     return generator.generate_report(output_path)

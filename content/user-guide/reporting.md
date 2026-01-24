@@ -574,15 +574,38 @@ reporting:
 
 **Default behavior**: If `output_dir` is not specified, reports are saved to the run's workdir (e.g., `/workdir/run_001/analysis_report.html`).
 
-### PDF Plot Export (Optional)
+### Plot Export (Optional)
 
-When the `kaleido` package is installed, IOPS automatically exports all plots as PDF files in an `__iops_plots` folder alongside the HTML report. This allows you to use the plots in publications or presentations.
+IOPS can export all plots as image files for use in publications, presentations, or external documents. This feature requires the `kaleido` package and is enabled via CLI options.
 
 **Installation:**
 
 ```bash
 pip install iops-benchmark[pdf]
 ```
+
+**Usage:**
+
+```bash
+# Export plots as PDF (default format)
+iops report ./workdir/run_001 --export-plots
+
+# Export plots as PNG
+iops report ./workdir/run_001 --export-plots --plot-format png
+
+# Export plots as SVG (vector format, editable)
+iops report ./workdir/run_001 --export-plots --plot-format svg
+```
+
+**Supported formats:**
+
+| Format | Extension | Type | Best For |
+|--------|-----------|------|----------|
+| `pdf` | .pdf | Vector | Publications, LaTeX documents |
+| `png` | .png | Raster | Web, presentations, general use |
+| `svg` | .svg | Vector | Editable in Inkscape, Illustrator |
+| `jpg` | .jpg | Raster | Smaller file size (lossy) |
+| `webp` | .webp | Raster | Modern web format, good compression |
 
 **Output structure:**
 
@@ -596,9 +619,9 @@ workdir/run_001/
     └── ...
 ```
 
-PDF files are numbered in the order they appear in the report, with descriptive names based on the plot type and metric.
+Files are numbered in the order they appear in the report, with descriptive names based on the plot type and metric.
 
-**Note:** PDF export is completely optional. If `kaleido` is not installed, the HTML report is still generated with all interactive plots embedded.
+**Note:** Plot export is opt-in. Without the `--export-plots` flag, only the HTML report is generated. If `kaleido` is not installed and `--export-plots` is used, a warning is displayed.
 
 ---
 

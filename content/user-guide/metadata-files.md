@@ -516,9 +516,9 @@ run_test "/path/to/exec_0001/repetition_002" "run_script.sh" "exec_0001" "2"
 
 **Location:** `workdir/run_001/__iops_plots/`
 
-**Written:** When generating HTML reports via `iops report` (if kaleido is installed)
+**Written:** When generating HTML reports via `iops report --export-plots` (requires kaleido)
 
-**Purpose:** Contains PDF exports of all plots from the HTML report, allowing users to include plots in publications or presentations.
+**Purpose:** Contains image exports of all plots from the HTML report, allowing users to include plots in publications or presentations.
 
 **Structure:**
 ```
@@ -534,8 +534,11 @@ __iops_plots/
 - Files are numbered in the order they appear in the report (001, 002, ...)
 - Names include the plot type and metric for easy identification
 - Special characters are sanitized to underscores
+- Extension matches the chosen format (pdf, png, svg, jpg, webp)
 
-**Controlled by:** Automatic when `kaleido` package is installed (`pip install iops-benchmark[pdf]`)
+**Controlled by:** `--export-plots` flag when running `iops report`. Requires `kaleido` package (`pip install iops-benchmark[pdf]`)
+
+**Supported formats:** Use `--plot-format FORMAT` to select output format (default: pdf)
 
 ## Best Practices
 

@@ -139,7 +139,7 @@ iops generate full_config.yaml --full
 iops generate my_config.yaml --examples
 ```
 
-### analyze - Generate Report
+### report - Generate Report
 
 Generate an interactive HTML report from results:
 
@@ -151,15 +151,26 @@ Creates visualization reports with plots and statistical analysis.
 
 **Options:**
 - `--report-config PATH` - Use custom report configuration
+- `--export-plots` - Export plots as image files to `__iops_plots` folder (requires kaleido)
+- `--plot-format FORMAT` - Image format for exported plots: `pdf` (default), `png`, `svg`, `jpg`, `webp`
 
 **Examples:**
 
 ```bash
-# Generate report
+# Generate HTML report only
 iops report ./workdir/run_001
 
 # With custom report config
 iops report ./workdir/run_001 --report-config custom_report.yaml
+
+# Export plots as PDF files (default format)
+iops report ./workdir/run_001 --export-plots
+
+# Export plots as PNG files
+iops report ./workdir/run_001 --export-plots --plot-format png
+
+# Export plots as SVG for vector editing
+iops report ./workdir/run_001 --export-plots --plot-format svg
 ```
 
 ### find - Explore Executions

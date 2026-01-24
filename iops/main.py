@@ -146,6 +146,11 @@ Examples:
     report_parser.add_argument('path', type=Path, help="Path to the run directory (e.g., ./workdir/run_001)")
     report_parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
                                help="Custom report config YAML (auto-detects report_config.yaml in workdir)")
+    report_parser.add_argument('--export-plots', action='store_true',
+                               help="Export plots as image files to __iops_plots folder")
+    report_parser.add_argument('--plot-format', type=str, default='pdf',
+                               choices=['pdf', 'png', 'svg', 'jpg', 'webp'],
+                               help="Image format for exported plots (default: pdf)")
     _add_common_args(report_parser)
 
     # ---- generate command ----
@@ -519,7 +524,12 @@ def main():
                 return
 
         try:
-            report_path = generate_report_from_workdir(args.path, report_config=report_config)
+            report_path = generate_report_from_workdir(
+                args.path,
+                report_config=report_config,
+                export_plots=args.export_plots,
+                plot_format=args.plot_format
+            )
             logger.info(f"✓ Report generated: {report_path}")
             logger.info("=" * 70)
         except Exception as e:
