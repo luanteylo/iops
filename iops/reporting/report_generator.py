@@ -492,7 +492,6 @@ class ReportGenerator:
             best_results=data.get('sections', {}).get('best_results', True),
             variable_impact=data.get('sections', {}).get('variable_impact', True),
             parallel_coordinates=data.get('sections', {}).get('parallel_coordinates', True),
-            pareto_frontier=data.get('sections', {}).get('pareto_frontier', True),
             bayesian_evolution=data.get('sections', {}).get('bayesian_evolution', True),
             custom_plots=data.get('sections', {}).get('custom_plots', True),
         )
@@ -541,7 +540,6 @@ class ReportGenerator:
                 best_results=True,
                 variable_impact=True,
                 parallel_coordinates=True,
-                pareto_frontier=True,
                 bayesian_evolution=True,
                 custom_plots=True,  # Will use legacy plots
             ),
@@ -715,74 +713,6 @@ class ReportGenerator:
         except Exception as e:
             return None
 
-    def _compute_pareto_frontier(self, metrics: List[str], objectives: Dict[str, str], report_vars: List[str]) -> pd.DataFrame:
-        """
-        Compute Pareto frontier for multiple metrics.
-
-        Args:
-            metrics: List of metric names to consider
-            objectives: Dict mapping metric name to objective ('maximize' or 'minimize')
-            report_vars: List of variables to group by
-
-        Returns:
-            DataFrame with Pareto-optimal configurations
-        """
-        if self.df is None:
-            return pd.DataFrame()
-
-        var_cols = [self._get_var_column(v) for v in report_vars]
-        metric_cols = [self._get_metric_column(m) for m in metrics]
-
-        # Filter out rows with NaN values in any of the metrics
-        df_clean = self.df.copy()
-        for metric_col in metric_cols:
-            df_clean = df_clean[df_clean[metric_col].notna()]
-
-        if len(df_clean) == 0:
-            return pd.DataFrame()
-
-        # Group by parameter combination and get mean of metrics
-        df_grouped = df_clean.groupby(var_cols)[metric_cols].mean().reset_index()
-
-        # Normalize metrics based on objectives
-        df_normalized = df_grouped.copy()
-        for metric in metrics:
-            col = self._get_metric_column(metric)
-            if objectives.get(metric, 'maximize') == 'minimize':
-                # For minimization, negate the values
-                df_normalized[col] = -df_normalized[col]
-
-        # Find Pareto frontier
-        is_pareto = pd.Series([True] * len(df_normalized))
-
-        for i in range(len(df_normalized)):
-            if not is_pareto[i]:
-                continue
-
-            for j in range(len(df_normalized)):
-                if i == j or not is_pareto[j]:
-                    continue
-
-                # Check if j dominates i
-                dominates = True
-                strictly_better = False
-
-                for col in metric_cols:
-                    val_i = df_normalized.iloc[i][col]
-                    val_j = df_normalized.iloc[j][col]
-
-                    if val_j < val_i:
-                        dominates = False
-                        break
-                    elif val_j > val_i:
-                        strictly_better = True
-
-                if dominates and strictly_better:
-                    is_pareto[i] = False
-                    break
-
-        return df_grouped[is_pareto].reset_index(drop=True)
-
     def generate_report(self, output_path: Optional[Path] = None) -> Path:
         """
         Generate complete HTML report with all plots.
@@ -822,10 +752,6 @@ class ReportGenerator:
 
         # Best configurations immediately after summary
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
-
-        # Add Pareto frontier section if we have multiple metrics
-        if len(metrics) >= 2:
-            html_parts.append(self._generate_pareto_section(metrics, report_vars))
 
         # Add Bayesian optimization section if applicable (before plots)
         search_method = self.metadata['benchmark'].get('search_method', '').lower()
@@ -1471,98 +1397,6 @@ class ReportGenerator:
 
         return html
 
-    def _generate_pareto_section(self, metrics: List[str], report_vars: List[str]) -> str:
-        """Generate Pareto frontier analysis section."""
-        html = "<h2>Pareto Frontier Analysis</h2>\n"
-        html += "<p>The Pareto frontier shows configurations where you cannot improve one metric without degrading another. "
-        html += "These are the optimal trade-off points when optimizing multiple objectives.</p>\n"
-
-        # Determine objectives automatically
-        objectives = {}
-        for metric in metrics:
-            # Common patterns for metrics to minimize
-            if any(keyword in metric.lower() for keyword in ['latency', 'time', 'duration', 'delay', 'overhead']):
-                objectives[metric] = 'minimize'
-            else:
-                objectives[metric] = 'maximize'
-
-        html += "<h3>Objectives</h3>\n<ul>\n"
-        for metric in metrics:
-            obj = objectives[metric]
-            icon = "↓" if obj == "minimize" else "↑"
-            html += f"<li><strong>{metric}</strong>: {obj} {icon}</li>\n"
-        html += "</ul>\n"
-
-        # Compute Pareto frontier
-        pareto_df = self._compute_pareto_frontier(metrics, objectives, report_vars)
-
-        if len(pareto_df) == 0:
-            html += "<p>No Pareto-optimal configurations found.</p>\n"
-            return html
-
-        html += f"<h3>Pareto-Optimal Configurations ({len(pareto_df)} found)</h3>\n"
-
-        # Table of Pareto-optimal configs
-        var_cols = [self._get_var_column(v) for v in report_vars]
-        metric_cols = [self._get_metric_column(m) for m in metrics]
-
-        html += "<table>\n<tr><th>Rank</th>"
-        for var in report_vars:
-            html += f"<th>{var}</th>"
-        for metric in metrics:
-            html += f"<th>{metric}</th>"
-        html += "</tr>\n"
-
-        for idx, (i, row) in enumerate(pareto_df.iterrows(), 1):
-            # Get all variable values for command rendering
-            var_values = {}
-            for var_name in self.metadata['variables'].keys():
-                var_col = self._get_var_column(var_name)
-                if var_col in self.df.columns:
-                    # Find matching row
-                    mask = True
-                    for report_var in report_vars:
-                        col = self._get_var_column(report_var)
-                        mask = mask & (self.df[col] == row[col])
-                    matching_rows = self.df[mask]
-                    if len(matching_rows) > 0:
-                        var_values[var_name] = matching_rows.iloc[0][var_col]
-
-            rendered_command = self._render_command(var_values)
-
-            html += f"<tr><td rowspan='2'>{idx}</td>"
-            for var_col in var_cols:
-                html += f"<td>{row[var_col]}</td>"
-            for metric_col in metric_cols:
-                html += f"<td><strong>{row[metric_col]:.4f}</strong></td>"
-            html += "</tr>\n"
-
-            # Add command row
-            num_cols = len(report_vars) + len(metrics)
-            html += f"<tr><td colspan='{num_cols}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
-            html += f"<strong>Command:</strong> {rendered_command}</td></tr>\n"
-
-        html += "</table>\n"
-
-        # Generate Pareto plots (2D scatter plots for pairs of metrics)
-        if len(metrics) >= 2:
-            html += "<h3>Pareto Frontier Visualization</h3>\n"
-
-            # Create plots for first two metrics (most common case)
-            fig = self._create_pareto_plot(metrics[0], metrics[1], objectives, report_vars)
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-
-            # If we have 3+ metrics, create additional pairwise plots
-            if len(metrics) >= 3:
-                fig2 = self._create_pareto_plot(metrics[0], metrics[2], objectives, report_vars)
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig2)
-                html += '</div>\n'
-
-        return html
-
     def _generate_metric_section(self, metric: str, swept_vars: List[str]) -> str:
         """Generate plots section for a specific metric."""
         html = f'<div class="metric-section">\n'
@@ -2194,94 +2028,6 @@ class ReportGenerator:
             ),
             template='plotly_white',
             height=600
-        )
-
-        return fig
-
-    def _create_pareto_plot(self, metric1: str, metric2: str, objectives: Dict[str, str], report_vars: List[str]) -> go.Figure:
-        """Create 2D Pareto frontier plot."""
-        metric1_col = self._get_metric_column(metric1)
-        metric2_col = self._get_metric_column(metric2)
-
-        var_cols = [self._get_var_column(v) for v in report_vars]
-
-        # Filter out rows with NaN values in either metric
-        df_clean = self.df[
-            self.df[metric1_col].notna() & self.df[metric2_col].notna()
-        ].copy()
-
-        # Get all configurations grouped by parameters
-        df_grouped = df_clean.groupby(var_cols)[[metric1_col, metric2_col]].mean().reset_index()
-
-        # Compute Pareto frontier
-        pareto_df = self._compute_pareto_frontier([metric1, metric2], objectives, report_vars)
-
-        # Merge to identify which points are on frontier
-        merge_cols = var_cols
-        df_with_pareto = df_grouped.merge(
-            pareto_df[merge_cols].assign(_is_pareto=True),
-            on=merge_cols,
-            how='left'
-        )
-        df_with_pareto['_is_pareto'] = df_with_pareto['_is_pareto'].notna()
-
-        # Create hover text with parameter values
-        hover_text = []
-        for _, row in df_with_pareto.iterrows():
-            text_parts = [f"{var}: {row[self._get_var_column(var)]}" for var in report_vars]
-            text_parts.append(f"{metric1}: {row[metric1_col]:.4f}")
-            text_parts.append(f"{metric2}: {row[metric2_col]:.4f}")
-            hover_text.append("<br>".join(text_parts))
-
-        fig = go.Figure()
-
-        # Non-Pareto points
-        df_non_pareto = df_with_pareto[~df_with_pareto['_is_pareto']]
-        if len(df_non_pareto) > 0:
-            fig.add_trace(go.Scatter(
-                x=df_non_pareto[metric1_col],
-                y=df_non_pareto[metric2_col],
-                mode='markers',
-                name='Non-optimal',
-                marker=dict(size=10, color='lightgray', opacity=0.6),
-                text=[hover_text[i] for i in df_non_pareto.index],
-                hovertemplate='%{text}<extra></extra>'
-            ))
-
-        # Pareto points
-        df_pareto_plot = df_with_pareto[df_with_pareto['_is_pareto']]
-        if len(df_pareto_plot) > 0:
-            # Sort for line connection
-            if objectives.get(metric1, 'maximize') == 'maximize':
-                df_pareto_plot = df_pareto_plot.sort_values(metric1_col)
-            else:
-                df_pareto_plot = df_pareto_plot.sort_values(metric1_col, ascending=False)
-
-            fig.add_trace(go.Scatter(
-                x=df_pareto_plot[metric1_col],
-                y=df_pareto_plot[metric2_col],
-                mode='markers+lines',
-                name='Pareto Frontier',
-                marker=dict(size=14, color='red', symbol='star'),
-                line=dict(color='red', width=2, dash='dash'),
-                text=[hover_text[i] for i in df_pareto_plot.index],
-                hovertemplate='%{text}<extra></extra>'
-            ))
-
-        # Add axis labels with objectives
-        obj1 = objectives.get(metric1, 'maximize')
-        obj2 = objectives.get(metric2, 'maximize')
-        icon1 = "↑" if obj1 == "maximize" else "↓"
-        icon2 = "↑" if obj2 == "maximize" else "↓"
-
-        fig.update_layout(
-            title=f"Pareto Frontier: {metric1} vs {metric2}",
-            xaxis_title=f"{metric1} ({obj1} {icon1})",
-            yaxis_title=f"{metric2} ({obj2} {icon2})",
-            template='plotly_white',
-            height=600,
-            hovermode='closest',
-            showlegend=True
         )
 
         return fig

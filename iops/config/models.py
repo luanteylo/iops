@@ -347,7 +347,6 @@ class SectionConfig:
     best_results: bool = True
     variable_impact: bool = True
     parallel_coordinates: bool = True
-    pareto_frontier: bool = True
     bayesian_evolution: bool = True
     custom_plots: bool = True
 

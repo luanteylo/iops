@@ -143,16 +143,6 @@ Multi-dimensional visualization showing relationships between all variables and 
 
 **When to use**: Understanding complex relationships in multi-variable optimization.
 
-### Pareto Frontier
-
-Multi-objective optimization analysis (shown when 2+ metrics are present):
-
-- Identifies non-dominated configurations
-- Visualizes trade-offs between competing metrics
-- Highlights optimal configurations for different objectives
-
-**When to use**: Benchmarks with multiple conflicting metrics (e.g., bandwidth vs latency).
-
 ### Bayesian Evolution
 
 Shows optimization progress over iterations (Bayesian search only):
@@ -180,7 +170,6 @@ reporting:
     best_results: true           # Top configurations
     variable_impact: true        # Variance analysis
     parallel_coordinates: true   # Multi-dimensional plot
-    pareto_frontier: true        # Multi-objective analysis
     bayesian_evolution: false    # Skip (not using Bayesian)
     custom_plots: true           # User-defined plots
 ```
@@ -614,7 +603,6 @@ reporting:
     best_results: true
     variable_impact: true
     parallel_coordinates: true
-    pareto_frontier: true
     bayesian_evolution: false      # Not using Bayesian search
     custom_plots: true
 

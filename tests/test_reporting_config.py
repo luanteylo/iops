@@ -52,7 +52,6 @@ def full_reporting_data() -> Dict[str, Any]:
             "best_results": False,
             "variable_impact": True,
             "parallel_coordinates": False,
-            "pareto_frontier": True,
             "bayesian_evolution": False,
             "custom_plots": True,
         },
@@ -271,7 +270,6 @@ class TestDataclassDefaults:
         assert sections.best_results is True
         assert sections.variable_impact is True
         assert sections.parallel_coordinates is True
-        assert sections.pareto_frontier is True
         assert sections.bayesian_evolution is True
         assert sections.custom_plots is True
 
@@ -282,7 +280,6 @@ class TestDataclassDefaults:
             best_results=True,
             variable_impact=False,
             parallel_coordinates=False,
-            pareto_frontier=True,
             bayesian_evolution=False,
             custom_plots=True,
         )

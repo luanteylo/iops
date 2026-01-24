@@ -148,7 +148,7 @@ benchmark:
   # estimated_time_seconds: 300
 
   # Optional: Variables to include in analysis reports
-  # When using --analyze, only these variables will be used in plots and Pareto frontier
+  # When using --analyze, only these variables will be used in plots
   # Useful when you have string variables that shouldn't be plotted
   # If omitted, all numeric swept variables are included
   report_vars: ["nodes", "processes_per_node", "files_per_task", "tree_depth", "branch_factor", "file_size_bytes"]
@@ -515,7 +515,6 @@ reporting:
     best_results: true           # Top configurations per metric
     variable_impact: true        # Variable importance analysis
     parallel_coordinates: true   # Multi-dimensional visualization
-    pareto_frontier: true        # Multi-objective optimization
     custom_plots: true           # User-defined plots
 
   # -------------------- Best Results Configuration --------------------

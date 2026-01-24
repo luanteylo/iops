@@ -101,7 +101,6 @@ def metadata_with_reporting() -> Dict[str, Any]:
             "best_results": False,
             "variable_impact": True,
             "parallel_coordinates": True,
-            "pareto_frontier": False,
             "bayesian_evolution": True,
             "custom_plots": True,
         },
@@ -445,7 +444,6 @@ class TestCreateLegacyDefaults:
         assert config.sections.best_results is True
         assert config.sections.variable_impact is True
         assert config.sections.parallel_coordinates is True
-        assert config.sections.pareto_frontier is True
         assert config.sections.bayesian_evolution is True
         assert config.sections.custom_plots is True
 

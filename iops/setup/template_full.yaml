@@ -251,7 +251,7 @@ benchmark:
   # exhaustive_vars: ["ost_num"]
 
   # Optional: Variables to include in analysis reports
-  # When using --report, only these variables will be used in plots and Pareto frontier
+  # When using --report, only these variables will be used in plots
   # Useful when you have string variables that shouldn't be plotted
   # If omitted, all numeric swept variables are included
   report_vars: ["nodes", "processes_per_node", "volume_size_gb"]

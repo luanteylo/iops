@@ -247,7 +247,6 @@ reporting:
     best_results: true           # Top configurations per metric
     variable_impact: true        # Variable importance analysis
     parallel_coordinates: true   # Multi-dimensional visualization
-    pareto_frontier: true        # Multi-objective optimization
     custom_plots: true           # User-defined plots
 
   # -------------------- Best Results Configuration --------------------

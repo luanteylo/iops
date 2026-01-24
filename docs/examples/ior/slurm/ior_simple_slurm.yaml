@@ -7,7 +7,7 @@
 # - Cache exclusion: cache_exclude_vars to exclude path-based variables from cache keys
 # - Estimated time: estimated_time_seconds for dry-run analysis
 # - Metadata saving: Automatic run_metadata.json for report generation
-# - Analysis reports: Use --analyze to generate HTML reports with plots and Pareto frontier
+# - Analysis reports: Use --analyze to generate HTML reports with plots
 # - Report vars: report_vars to specify which variables to use in reports (useful when you have string vars)
 #
 # Usage:

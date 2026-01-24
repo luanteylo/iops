@@ -183,7 +183,6 @@ reporting:
     best_results: true           # Top N configurations per metric
     variable_impact: true        # Variance-based importance analysis
     parallel_coordinates: true   # Multi-dimensional visualization
-    pareto_frontier: true        # Multi-objective optimization (2+ metrics)
     bayesian_evolution: false    # Skip (only relevant for Bayesian search)
     custom_plots: true           # User-defined plots (defined below)
 
@@ -318,7 +317,6 @@ reporting:
 #    - Best Results: Top 5 configurations for each metric (bandwidth, iops, latency)
 #    - Variable Impact: Which variables affect metrics most (variance analysis)
 #    - Parallel Coordinates: Multi-dimensional view of all parameters and metrics
-#    - Pareto Frontier: Trade-offs between competing metrics
 #    - Custom Plots: All the plots defined in the metrics section above
 #
 # ==================== PLOT TYPE GUIDE ====================

@@ -794,7 +794,6 @@ reporting:
     best_results: boolean
     variable_impact: boolean
     parallel_coordinates: boolean
-    pareto_frontier: boolean
     bayesian_evolution: boolean
     custom_plots: boolean
 
@@ -859,7 +858,6 @@ reporting:
     best_results: true         # Top N configurations
     variable_impact: true      # Variance-based importance
     parallel_coordinates: true # Multi-dimensional visualization
-    pareto_frontier: true      # Multi-objective analysis
     bayesian_evolution: false  # Optimization progress (Bayesian only)
     custom_plots: true         # User-defined plots
 ```

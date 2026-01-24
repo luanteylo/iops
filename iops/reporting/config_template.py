@@ -70,7 +70,6 @@ def serialize_reporting_config(reporting: "ReportingConfig") -> Optional[Dict[st
             "best_results": reporting.sections.best_results,
             "variable_impact": reporting.sections.variable_impact,
             "parallel_coordinates": reporting.sections.parallel_coordinates,
-            "pareto_frontier": reporting.sections.pareto_frontier,
             "bayesian_evolution": reporting.sections.bayesian_evolution,
             "custom_plots": reporting.sections.custom_plots,
         },
@@ -175,17 +174,6 @@ def _create_clean_report_config(
             metrics_config[metric_name] = {"plots": plots}
         config["metrics"] = metrics_config
 
-    # Get metrics from execution to suggest expansions
-    all_metrics = _get_all_metrics(scripts)
-
-    # Add suggestions for metrics not yet configured
-    unconfigured_metrics = [m for m in all_metrics if m not in reporting.metrics.keys()]
-    if unconfigured_metrics:
-        config["_suggestions"] = {
-            "unconfigured_metrics": unconfigured_metrics,
-            "hint": "Add plot configurations for these metrics to customize their visualizations"
-        }
-
     # Default plots
     if reporting.default_plots:
         default_plots = []
@@ -261,19 +249,6 @@ def _generate_default_report_config(
             })
 
         template["metrics"][first_metric] = {"plots": plots}
-
-        # Add comment about other metrics
-        if len(metrics) > 1:
-            template["_comment"] = f"Add plot configs for other metrics: {', '.join(metrics[1:])}"
-
-    # Add default plots
-    template["default_plots"] = [
-        {
-            "type": "bar",
-            "per_variable": True,
-            "show_error_bars": True,
-        }
-    ]
 
     return template
 
