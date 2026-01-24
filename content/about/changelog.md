@@ -4,20 +4,29 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [3.6.0] - Unreleased
+
+### Added
+- `os_env` context variable exposing system environment variables to templates and parser scripts
+- Boolean variables now included in report generation by default (treated as 0/1)
+
+### Changed
+- Renamed `[pdf]` optional dependency to `[plots]` (supports pdf, png, svg, jpg, webp)
+
 ## [3.5.0] - Unreleased
 
 ### Added
 - Resource tracing for CPU and memory monitoring (`trace_resources`, `trace_interval`)
 - Single-allocation mode for batch SLURM execution (`slurm_options.allocation`) [experimental]
 - `iops cache rebuild` command to exclude variables retroactively
-- Parser script context injection (`vars`, `env`, `os_env`, `execution_id`, `repetition` globals)
+- Parser script context injection (`vars`, `env`, `execution_id`, `repetition` globals)
 - `--partial` and `--min-reps` flags for partial archive creation
 - Unknown key validation with "did you mean?" suggestions for YAML config
 - Core-hours tracking for cache hits in dry-run estimates
 
 ### Changed
 - Renamed `executor_options` to `slurm_options` (old name deprecated, remove in 3.7.0)
-- Removed `scripts[].submit` field 
+- Removed `scripts[].submit` field
 - Removed `output.sink.include` option
 - `iops generate` now defaults to SLURM executor (use `--local` for local)
 - Separate user labels from IOPS internal metadata in output
