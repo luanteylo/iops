@@ -777,7 +777,7 @@ class ReportGenerator:
                 import logging
                 logging.getLogger(__name__).warning(
                     "Plot export requested but kaleido is not installed. "
-                    "Install with: pip install iops-benchmark[pdf]"
+                    "Install with: pip install iops-benchmark[plots]"
                 )
 
         # Get report variables and metrics

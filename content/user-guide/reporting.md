@@ -581,7 +581,7 @@ IOPS can export all plots as image files for use in publications, presentations,
 **Installation:**
 
 ```bash
-pip install iops-benchmark[pdf]
+pip install iops-benchmark[plots]
 ```
 
 **Usage:**

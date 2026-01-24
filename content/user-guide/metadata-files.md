@@ -536,7 +536,7 @@ __iops_plots/
 - Special characters are sanitized to underscores
 - Extension matches the chosen format (pdf, png, svg, jpg, webp)
 
-**Controlled by:** `--export-plots` flag when running `iops report`. Requires `kaleido` package (`pip install iops-benchmark[pdf]`)
+**Controlled by:** `--export-plots` flag when running `iops report`. Requires `kaleido` package (`pip install iops-benchmark[plots]`)
 
 **Supported formats:** Use `--plot-format FORMAT` to select output format (default: pdf)
 
