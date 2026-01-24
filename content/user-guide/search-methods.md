@@ -31,6 +31,7 @@ benchmark:
     n_iterations: 20
     acquisition_func: "EI"  # Expected Improvement
     base_estimator: "RF"    # Random Forest (default)
+    early_stop_on_convergence: bool #   Stop when optimizer converges (default: false)
     fallback_to_exhaustive: true  # Use exhaustive if n_iterations >= total space
 ```
 
