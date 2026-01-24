@@ -133,6 +133,35 @@ class BaseExecutor(ABC, HasLogger):
         meta.setdefault("__end", None)
         meta.setdefault("__error", None)
 
+    def _write_status_update(self, test: ExecutionInstance, status: str) -> None:
+        """
+        Write a status update to the status file.
+
+        This enables real-time status tracking for watch mode. Called when
+        the executor status changes (e.g., PENDING -> RUNNING).
+
+        Args:
+            test: ExecutionInstance with execution_dir set
+            status: New status to write (e.g., "RUNNING", "PENDING")
+        """
+        if test.execution_dir is None:
+            return
+
+        status_file = test.execution_dir / "__iops_status.json"
+        status_data = {
+            "status": status,
+            "error": test.metadata.get("__error"),
+            "end_time": test.metadata.get("__end"),
+            "cached": test.metadata.get("__cached", False),
+        }
+
+        try:
+            with open(status_file, "w") as f:
+                json.dump(status_data, f, indent=2, default=str)
+            self.logger.debug(f"  [{self._LOG_PREFIX}] Status update: {status}")
+        except Exception as e:
+            self.logger.debug(f"  [{self._LOG_PREFIX}] Failed to write status update: {e}")
+
     # ------------------------------------------------------------------ #
     # Filesystem helpers with retry for HPC shared filesystems
     # ------------------------------------------------------------------ #
@@ -722,13 +751,21 @@ class SlurmExecutor(BaseExecutor):
 
             test.metadata["__slurm_state_live"] = state
             if state == "PENDING":
-                test.metadata["__executor_status"] = self.STATUS_PENDING
+                new_status = self.STATUS_PENDING
             else:
-                test.metadata["__executor_status"] = self.STATUS_RUNNING
+                new_status = self.STATUS_RUNNING
                 # Record when job transitions from PENDING to RUNNING (actual job start)
                 if last_state == "PENDING" and "__job_start" not in test.metadata:
                     test.metadata["__job_start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                     self.logger.debug(f"  [SlurmExec] Job {job_id} started running at {test.metadata['__job_start']}")
+
+            # Update status in metadata
+            old_status = test.metadata.get("__executor_status")
+            test.metadata["__executor_status"] = new_status
+
+            # Write status file when status changes (enables real-time watch)
+            if new_status != old_status:
+                self._write_status_update(test, new_status)
 
             if state != last_state:
                 self.logger.info("SLURM job %s state: %s", job_id, state)

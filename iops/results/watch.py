@@ -34,6 +34,7 @@ from .find import (
     INDEX_FILENAME,
     PARAMS_FILENAME,
     STATUS_FILENAME,
+    SKIPPED_MARKER_FILENAME,
     METADATA_FILENAME,
     DEFAULT_TRUNCATE_WIDTH,
     _truncate_value,
@@ -203,30 +204,29 @@ def _collect_execution_data(
         # Get the exec_XXXX folder
         exec_path = run_root / rel_path
 
-        # Check for test-level status (upfront mode)
-        # In upfront mode, SKIPPED tests have a status file in exec_XXXX folder
+        # Check for skipped marker (indicates test was skipped)
         skip_reason = None
-        test_status = None
+        is_skipped = False
 
         if folders_upfront:
-            # Check index for status (faster than reading file)
-            test_status = exec_data.get("status")
+            # Check index for skipped status (faster than reading file)
+            is_skipped = exec_data.get("skipped", False)
             skip_reason = exec_data.get("skip_reason")
 
-        # If not in index, try to read from test-level status file
-        if test_status is None:
-            test_status_file = exec_path / STATUS_FILENAME
-            if test_status_file.exists():
+        # If not in index, check for skipped marker file
+        if not is_skipped:
+            skipped_marker = exec_path / SKIPPED_MARKER_FILENAME
+            if skipped_marker.exists():
+                is_skipped = True
                 try:
-                    with open(test_status_file, 'r') as f:
-                        test_status_data = json.load(f)
-                        test_status = test_status_data.get("status")
-                        skip_reason = test_status_data.get("reason")
+                    with open(skipped_marker, 'r') as f:
+                        marker_data = json.load(f)
+                        skip_reason = marker_data.get("reason")
                 except (json.JSONDecodeError, OSError):
                     pass
 
         # Handle SKIPPED tests (no repetitions)
-        if test_status == "SKIPPED":
+        if is_skipped:
             # SKIPPED tests count once in status counts
             status_counts["SKIPPED"] += 1
 

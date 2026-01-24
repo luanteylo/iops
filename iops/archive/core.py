@@ -82,7 +82,8 @@ CRITICAL_METADATA_PATTERNS = [
     "__iops_index.json",
     "__iops_run_metadata.json",
     "__iops_params.json",
-    "__iops_status.json",
+    "__iops_status.json",  # Repetition-level status
+    "__iops_skipped",  # Test-level skipped marker
 ]
 
 
@@ -1002,16 +1003,23 @@ class ArchiveReader(HasLogger):
                     "cached": cached,
                 }
 
-            # No repetition folders - check test-level status file
-            test_status_path = f"{base_path}/__iops_status.json"
+            # No repetition folders - check for skipped marker
+            skipped_marker_path = f"{base_path}/__iops_skipped"
             try:
-                status_file = tar.extractfile(test_status_path)
-                if status_file:
-                    return json.load(status_file)
+                skipped_file = tar.extractfile(skipped_marker_path)
+                if skipped_file:
+                    marker_data = json.load(skipped_file)
+                    return {
+                        "status": "SKIPPED",
+                        "reason": marker_data.get("reason"),
+                        "error": None,
+                        "cached": False,
+                    }
             except (KeyError, json.JSONDecodeError):
                 pass
 
-        return {"status": "UNKNOWN", "error": None, "cached": False}
+        # No repetition folders and no skipped marker - PENDING
+        return {"status": "PENDING", "error": None, "cached": False}
 
     def list_executions(
         self,

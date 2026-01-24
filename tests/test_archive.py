@@ -62,9 +62,11 @@ def sample_run_dir(tmp_path):
         with open(exec_dir / "__iops_params.json", "w") as f:
             json.dump(params, f)
 
-        # Create __iops_status.json
+        # Create repetition directory with status file
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir()
         status = {"status": "SUCCEEDED"}
-        with open(exec_dir / "__iops_status.json", "w") as f:
+        with open(rep_dir / "__iops_status.json", "w") as f:
             json.dump(status, f)
 
         # Create some output files
@@ -616,20 +618,27 @@ class TestArchiveInspection:
         (run_dir / "__iops_index.json").write_text(json.dumps(index))
 
         # Create executions with different statuses
+        # exec_0001: SUCCEEDED (via repetition status)
         exec1 = run_dir / "exec_0001"
         exec1.mkdir()
         (exec1 / "__iops_params.json").write_text(json.dumps({"n": 1}))
-        (exec1 / "__iops_status.json").write_text(json.dumps({"status": "SUCCEEDED"}))
+        rep1 = exec1 / "repetition_001"
+        rep1.mkdir()
+        (rep1 / "__iops_status.json").write_text(json.dumps({"status": "SUCCEEDED"}))
 
+        # exec_0002: FAILED (via repetition status)
         exec2 = run_dir / "exec_0002"
         exec2.mkdir()
         (exec2 / "__iops_params.json").write_text(json.dumps({"n": 2}))
-        (exec2 / "__iops_status.json").write_text(json.dumps({"status": "FAILED", "error": "test error"}))
+        rep2 = exec2 / "repetition_001"
+        rep2.mkdir()
+        (rep2 / "__iops_status.json").write_text(json.dumps({"status": "FAILED", "error": "test error"}))
 
+        # exec_0003: SKIPPED (via skipped marker file)
         exec3 = run_dir / "exec_0003"
         exec3.mkdir()
         (exec3 / "__iops_params.json").write_text(json.dumps({"n": 3}))
-        (exec3 / "__iops_status.json").write_text(json.dumps({"status": "SKIPPED", "reason": "constraint"}))
+        (exec3 / "__iops_skipped").write_text(json.dumps({"reason": "constraint"}))
 
         # Create archive
         archive_path = tmp_path / "test.tar.gz"
@@ -690,12 +699,16 @@ class TestArchiveInspection:
         exec1 = run_dir / "exec_0001"
         exec1.mkdir()
         (exec1 / "__iops_params.json").write_text(json.dumps({"n": 1}))
-        (exec1 / "__iops_status.json").write_text(json.dumps({"status": "SUCCEEDED"}))
+        rep1 = exec1 / "repetition_001"
+        rep1.mkdir()
+        (rep1 / "__iops_status.json").write_text(json.dumps({"status": "SUCCEEDED"}))
 
         exec2 = run_dir / "exec_0002"
         exec2.mkdir()
         (exec2 / "__iops_params.json").write_text(json.dumps({"n": 2}))
-        (exec2 / "__iops_status.json").write_text(json.dumps({"status": "FAILED"}))
+        rep2 = exec2 / "repetition_001"
+        rep2.mkdir()
+        (rep2 / "__iops_status.json").write_text(json.dumps({"status": "FAILED"}))
 
         archive_path = tmp_path / "test.tar.gz"
         create_archive(run_dir, archive_path)
@@ -786,12 +799,16 @@ class TestFindWithArchive:
         exec1 = run_dir / "exec_0001"
         exec1.mkdir()
         (exec1 / "__iops_params.json").write_text(json.dumps({"n": 1}))
-        (exec1 / "__iops_status.json").write_text(json.dumps({"status": "SUCCEEDED"}))
+        rep1 = exec1 / "repetition_001"
+        rep1.mkdir()
+        (rep1 / "__iops_status.json").write_text(json.dumps({"status": "SUCCEEDED"}))
 
         exec2 = run_dir / "exec_0002"
         exec2.mkdir()
         (exec2 / "__iops_params.json").write_text(json.dumps({"n": 2}))
-        (exec2 / "__iops_status.json").write_text(json.dumps({"status": "FAILED"}))
+        rep2 = exec2 / "repetition_001"
+        rep2.mkdir()
+        (rep2 / "__iops_status.json").write_text(json.dumps({"status": "FAILED"}))
 
         archive_path = tmp_path / "test.tar.gz"
         create_archive(run_dir, archive_path)

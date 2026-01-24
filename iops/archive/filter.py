@@ -16,6 +16,7 @@ import pandas as pd
 from iops.results.find import (
     INDEX_FILENAME,
     STATUS_FILENAME,
+    SKIPPED_MARKER_FILENAME,
     _read_status,
 )
 
@@ -36,17 +37,12 @@ def _count_completed_repetitions(exec_path: Path) -> Tuple[int, int, Set[int]]:
     rep_dirs = sorted(exec_path.glob("repetition_*"))
 
     if not rep_dirs:
-        # No repetition folders - check exec-level status
-        status_file = exec_path / STATUS_FILENAME
-        if status_file.exists():
-            try:
-                with open(status_file, "r") as f:
-                    status_data = json.load(f)
-                    status = status_data.get("status", "UNKNOWN")
-                    if status in ("SUCCEEDED", "FAILED"):
-                        return 1, 1, {0}
-            except (json.JSONDecodeError, OSError):
-                pass
+        # No repetition folders - check for skipped marker
+        skipped_marker = exec_path / SKIPPED_MARKER_FILENAME
+        if skipped_marker.exists():
+            # Skipped tests count as 0 completed
+            return 0, 0, set()
+        # No marker and no reps - pending
         return 0, 1, set()
 
     completed_count = 0

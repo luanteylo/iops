@@ -294,18 +294,17 @@ class TestExhaustivePlannerWorkflow:
         # Skipped: (2,20)->40, (3,10)->30, (3,20)->60 = 3
         assert index.get("skipped_tests") == 3
 
-        # Check SKIPPED status files exist
+        # Check SKIPPED marker files exist (uses __iops_skipped instead of status file)
         skipped_count = 0
         for exec_key, exec_data in index.get("executions", {}).items():
-            if exec_data.get("status") == "SKIPPED":
+            if exec_data.get("skipped") is True:
                 skipped_count += 1
                 exec_path = run_dirs[0] / exec_data["path"]
-                status_file = exec_path / "__iops_status.json"
-                assert status_file.exists()
-                with open(status_file) as f:
-                    status = json.load(f)
-                assert status["status"] == "SKIPPED"
-                assert status.get("reason") == "constraint"
+                marker_file = exec_path / "__iops_skipped"
+                assert marker_file.exists()
+                with open(marker_file) as f:
+                    marker = json.load(f)
+                assert marker.get("reason") == "constraint"
 
         assert skipped_count == 3
 

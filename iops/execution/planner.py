@@ -69,14 +69,12 @@ PARAMS_FILENAME = "__iops_params.json"
 # Filename for the execution index (written to run root)
 INDEX_FILENAME = "__iops_index.json"
 
-# Filename for the execution status (written to exec_XXXX directory after completion)
+# Filename for the repetition-level status (written to repetition_XXX directory)
 STATUS_FILENAME = "__iops_status.json"
 
-# Test-level status constants (written by planner to exec_XXXX directory)
-# These are distinct from repetition-level status (written by executor to repetition_YYY directory)
-TEST_STATUS_SKIPPED = "SKIPPED"    # Test will not be executed (constraint or planner decision)
-TEST_STATUS_PENDING = "PENDING"    # Test is queued, no repetitions started yet
-TEST_STATUS_COMPLETE = "COMPLETE"  # All repetitions finished
+# Filename for skipped test marker (written to exec_XXXX directory for skipped tests only)
+# This simple marker file indicates a test was skipped. If absent, test is active.
+SKIPPED_MARKER_FILENAME = "__iops_skipped"
 
 # Exit handler template - centralized EXIT trap coordinator
 # This script is sourced first and provides a single EXIT trap that other
@@ -996,40 +994,34 @@ class BasePlanner(ABC, HasLogger):
         with open(index_file, "w") as f:
             json.dump(index, f, indent=2, default=str)
 
-    def _write_test_status(
+    def _write_skipped_marker(
         self,
         exec_dir: Path,
-        status: str,
         reason: str = None,
         message: str = None
     ) -> None:
         """
-        Write test-level status file in exec_XXXX folder.
+        Write a marker file indicating this test was skipped.
 
-        This is distinct from repetition-level status (written by runner).
-        Test-level status tracks the overall state of a test configuration:
-        - SKIPPED: Test will not be executed (constraint or planner decision)
-        - PENDING: Test is queued, no repetitions started yet
-        - COMPLETE: All repetitions finished
+        The presence of __iops_skipped in exec_XXXX indicates the test was
+        skipped due to constraints or planner decision. If absent, the test
+        is active (watch will check repetition directories for status).
 
         Args:
             exec_dir: The exec_XXXX directory
-            status: One of TEST_STATUS_SKIPPED, TEST_STATUS_PENDING, TEST_STATUS_COMPLETE
-            reason: Skip reason (for SKIPPED status): "constraint" or "planner"
+            reason: Skip reason: "constraint" or "planner"
             message: Additional message (e.g., constraint violation message)
         """
         if not getattr(self.cfg.benchmark, 'track_executions', True):
             return
 
-        status_file = exec_dir / STATUS_FILENAME
-        status_data = {"status": status}
-        if reason:
-            status_data["reason"] = reason
+        marker_file = exec_dir / SKIPPED_MARKER_FILENAME
+        marker_data = {"reason": reason or "unknown"}
         if message:
-            status_data["message"] = message
+            marker_data["message"] = message
 
-        with open(status_file, "w") as f:
-            json.dump(status_data, f, indent=2, default=str)
+        with open(marker_file, "w") as f:
+            json.dump(marker_data, f, indent=2, default=str)
 
     def _initialize_all_folders(
         self,
@@ -1037,10 +1029,10 @@ class BasePlanner(ABC, HasLogger):
         skipped_instances: List[ExecutionInstance]
     ) -> None:
         """
-        Create all execution folders upfront with test-level status.
+        Create all execution folders upfront.
 
         Called when create_folders_upfront=True. Creates folders for both
-        active tests (status=PENDING) and skipped tests (status=SKIPPED).
+        active tests and skipped tests. Skipped tests get a marker file.
 
         This enables watch mode to show the full parameter space from the start,
         including which tests were skipped and why.
@@ -1059,7 +1051,7 @@ class BasePlanner(ABC, HasLogger):
         # Track all instances for index
         all_index_entries = []
 
-        # Active instances: create folder with PENDING status
+        # Active instances: create folder with params only (no status file needed)
         for instance in active_instances:
             exec_dir = runs_root / f"exec_{instance.execution_id:04d}"
             exec_dir.mkdir(parents=True, exist_ok=True)
@@ -1075,20 +1067,16 @@ class BasePlanner(ABC, HasLogger):
             with open(params_file, "w") as f:
                 json.dump(params, f, indent=2, default=str)
 
-            # Write test-level status
-            self._write_test_status(exec_dir, TEST_STATUS_PENDING)
-
-            # Add to index
+            # Add to index (no status field - watch infers PENDING from absence of skipped marker)
             exec_rel_path = exec_dir.relative_to(run_root)
             all_index_entries.append({
                 "exec_key": f"exec_{instance.execution_id:04d}",
                 "path": str(exec_rel_path),
                 "params": params,
                 "command": instance.command,
-                "status": TEST_STATUS_PENDING,
             })
 
-        # Skipped instances: create folder with SKIPPED status
+        # Skipped instances: create folder with params + skipped marker
         for instance in skipped_instances:
             exec_dir = runs_root / f"exec_{instance.execution_id:04d}"
             exec_dir.mkdir(parents=True, exist_ok=True)
@@ -1108,17 +1096,17 @@ class BasePlanner(ABC, HasLogger):
             reason = instance.metadata.get("__skip_reason", "unknown")
             message = instance.metadata.get("__skip_message")
 
-            # Write test-level status
-            self._write_test_status(exec_dir, TEST_STATUS_SKIPPED, reason, message)
+            # Write skipped marker file
+            self._write_skipped_marker(exec_dir, reason, message)
 
-            # Add to index
+            # Add to index with skip info
             exec_rel_path = exec_dir.relative_to(run_root)
             entry = {
                 "exec_key": f"exec_{instance.execution_id:04d}",
                 "path": str(exec_rel_path),
                 "params": params,
                 "command": instance.command,
-                "status": TEST_STATUS_SKIPPED,
+                "skipped": True,
                 "skip_reason": reason,
             }
             if message:
