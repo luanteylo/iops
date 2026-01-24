@@ -29,6 +29,7 @@ All notable changes to IOPS are documented here.
 ### Fixed
 - Dry-run cache lookup using wrong repetition values
 - Constraint evaluation order (swept vars before derived expressions)
+- Refactored BayesianPlanner to use pre-built execution matrix (consistent with other planners)
 
 ## [3.4.0] - 2026-01-13
 
