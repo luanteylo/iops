@@ -753,10 +753,12 @@ class ReportGenerator:
         # Best configurations immediately after summary
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
-        # Add Bayesian optimization section if applicable (before plots)
+        # Add search evolution section if applicable (before plots)
         search_method = self.metadata['benchmark'].get('search_method', '').lower()
         if search_method == 'bayesian':
             html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
+        elif search_method == 'random':
+            html_parts.append(self._generate_random_search_section(metrics, report_vars))
 
         # Add comprehensive variable analysis section
         html_parts.append(self._generate_variable_analysis_section(metrics, report_vars))
@@ -1397,6 +1399,121 @@ class ReportGenerator:
 
         return html
 
+    def _generate_random_search_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate random search exploration section."""
+        html = "<h2>Random Search Exploration</h2>\n"
+        html += "<p>This section shows the exploration behavior of the random search. "
+        html += "Since random sampling has no optimization objective, both running maximum and minimum "
+        html += "are displayed. Compare with Bayesian optimization to assess exploration efficiency.</p>\n"
+
+        # Generate evolution plot for each metric
+        for metric in metrics:
+            html += f"<h3>{metric} Evolution</h3>\n"
+            html += "<p>Shows metric values in execution order. Running max and min lines help visualize "
+            html += "the range of values discovered over time.</p>\n"
+
+            try:
+                fig = self._create_random_metric_evolution_plot(metric, report_vars)
+                html += f"<div>{self._fig_to_html(fig, div_id=f'random_evolution_{metric}')}</div>\n"
+            except Exception as e:
+                html += f'<p class="error">Error generating evolution plot for {metric}: {str(e)}</p>\n'
+
+        return html
+
+    def _create_random_metric_evolution_plot(self, metric: str, report_vars: List[str]) -> go.Figure:
+        """
+        Create plot showing metric evolution over random search iterations.
+
+        Shows:
+        - Observed metric values at each iteration
+        - Running maximum (cumulative max)
+        - Running minimum (cumulative min)
+        - Variable values on hover
+
+        This allows comparison with Bayesian optimization to assess exploration behavior.
+        """
+        metric_col = self._get_metric_column(metric)
+
+        # Get variable columns
+        var_cols = []
+        for var in report_vars:
+            col = self._get_var_column(var)
+            if col in self.df.columns:
+                var_cols.append((var, col))
+
+        # Build aggregation dict - metric mean and first value for each variable
+        agg_dict = {metric_col: 'mean'}
+        for var_name, col in var_cols:
+            agg_dict[col] = 'first'  # Variables are same for all reps of same execution
+
+        # Group by execution_id and compute mean across repetitions
+        df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
+        df_grouped = df_grouped.sort_values('execution.execution_id')
+
+        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        metric_values = self._to_python_list(df_grouped[metric_col].values)
+
+        # Build hover text with variable values
+        hover_texts = []
+        for idx, row in df_grouped.iterrows():
+            hover_parts = [f"Iteration: {int(row['execution.execution_id'])}"]
+            hover_parts.append(f"{metric}: {row[metric_col]:.4f}")
+            hover_parts.append("")  # Empty line separator
+            for var_name, col in var_cols:
+                hover_parts.append(f"{var_name}: {row[col]}")
+            hover_texts.append("<br>".join(hover_parts))
+
+        # Compute running max and min
+        running_max = self._to_python_list(pd.Series(metric_values).cummax().values)
+        running_min = self._to_python_list(pd.Series(metric_values).cummin().values)
+
+        # Create figure
+        fig = go.Figure()
+
+        # Observed values
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=metric_values,
+            mode='markers+lines',
+            name='Observed',
+            marker=dict(size=10, color='#3498db', line=dict(width=1, color='white')),
+            line=dict(color='lightgray', width=1),
+            hovertemplate='%{text}<extra></extra>',
+            text=hover_texts
+        ))
+
+        # Running maximum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_max,
+            mode='lines',
+            name='Running Max',
+            line=dict(color='#2ecc71', width=2, dash='dash'),
+            hovertemplate='Iteration %{x}<br>Max: %{y:.4f}<extra></extra>'
+        ))
+
+        # Running minimum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_min,
+            mode='lines',
+            name='Running Min',
+            line=dict(color='#e74c3c', width=2, dash='dash'),
+            hovertemplate='Iteration %{x}<br>Min: %{y:.4f}<extra></extra>'
+        ))
+
+        fig.update_layout(
+            title=f'{metric} Evolution Over Random Iterations',
+            xaxis_title='Iteration',
+            yaxis_title=metric,
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
+        )
+
+        return fig
+
     def _generate_metric_section(self, metric: str, swept_vars: List[str]) -> str:
         """Generate plots section for a specific metric."""
         html = f'<div class="metric-section">\n'
@@ -1497,7 +1614,7 @@ class ReportGenerator:
 
         html = ""
 
-        # 0. Execution scatter plot - shows each execution with all vars on hover
+        # 1. Execution scatter plot - shows each execution with all vars on hover
         html += "<h3>All Executions</h3>\n"
         html += "<p>Each point represents one execution. Hover to see all parameter values.</p>\n"
         try:
@@ -1521,26 +1638,7 @@ class ReportGenerator:
         except Exception as e:
             html += f'<p class="error">Error generating execution scatter plot: {str(e)}</p>\n'
 
-        # 1. Bar plots - one for each variable
-        html += "<h3>Bar Plots by Variable</h3>\n"
-        for var in swept_vars:
-            fig = self._create_bar_plot(metric, var)
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-
-        # 2. Line plots - one for each variable, grouped by others
-        if len(swept_vars) >= 2:
-            html += "<h3>Line Plots with Grouping</h3>\n"
-            for i, var in enumerate(swept_vars):
-                # For each variable, create line plot grouped by the next variable (cyclically)
-                group_var = swept_vars[(i + 1) % len(swept_vars)]
-                fig = self._create_line_plot(metric, var, group_var)
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig)
-                html += '</div>\n'
-
-        # 3. Heatmap if we have exactly 2 swept variables
+        # 2. Heatmap if we have exactly 2 swept variables
         if len(swept_vars) == 2:
             html += "<h3>Heatmap</h3>\n"
             fig = self._create_heatmap(metric, swept_vars[0], swept_vars[1])
