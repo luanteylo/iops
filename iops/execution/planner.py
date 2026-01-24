@@ -1852,6 +1852,44 @@ class BayesianPlanner(BasePlanner, HasLogger):
         vars_dict = self._params_to_dict(params)
         return tuple(vars_dict.get(name) for name in sorted(self.var_names))
 
+    def _search_point_to_params(self, search_point: tuple) -> List[Any]:
+        """
+        Convert a search point tuple back to optimizer parameter format.
+
+        This is the inverse of _suggestion_to_search_point. For ordinal-encoded
+        variables, converts the actual value back to an index.
+
+        Args:
+            search_point: Tuple of variable values in sorted(var_names) order
+
+        Returns:
+            List of parameter values in var_names order (optimizer format)
+        """
+        # First, build a dict from search point (sorted order)
+        sorted_names = sorted(self.var_names)
+        values_dict = {name: search_point[i] for i, name in enumerate(sorted_names)}
+
+        # Then, convert to optimizer format (var_names order, with indices for ordinals)
+        params = []
+        for name in self.var_names:
+            value = values_dict[name]
+
+            # Convert ordinal values back to indices
+            if name in self.ordinal_mappings:
+                try:
+                    idx = self.ordinal_mappings[name].index(value)
+                    params.append(idx)
+                except ValueError:
+                    # Value not in mapping, find nearest
+                    sorted_values = self.ordinal_mappings[name]
+                    idx = min(range(len(sorted_values)),
+                              key=lambda i: abs(sorted_values[i] - value))
+                    params.append(idx)
+            else:
+                params.append(value)
+
+        return params
+
     def _find_nearest_valid_point(self, suggested: tuple) -> tuple:
         """
         Find the nearest valid search point to the suggested point.
@@ -2083,34 +2121,67 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.logger.info("=" * 70)
             return None
 
-        # Get next point from optimizer
-        next_params = self.optimizer.ask()
-        suggested_point = self._suggestion_to_search_point(next_params)
+        # Get next point from optimizer, avoiding already-visited configurations
+        # The optimizer may suggest points that map to visited configs (due to nearest-neighbor mapping)
+        # We retry a few times before falling back to random sampling from unvisited configs
+        max_retries = 10
+        search_point = None
+        was_mapped = False
 
-        # Map to nearest valid point from pre-built matrix
-        # This replaces the retry loop - constraints are already filtered in the matrix
-        search_point = self._find_nearest_valid_point(suggested_point)
+        for attempt in range(max_retries):
+            next_params = self.optimizer.ask()
+            suggested_point = self._suggestion_to_search_point(next_params)
 
+            # Map to nearest valid point from pre-built matrix
+            candidate_point = self._find_nearest_valid_point(suggested_point)
+
+            if candidate_point is None:
+                self.logger.error(
+                    f"  [Bayesian] No valid search points available. "
+                    f"This indicates a configuration issue."
+                )
+                return None
+
+            was_mapped = (suggested_point != candidate_point)
+
+            # Check if we've already visited this search point
+            if candidate_point not in self._visited_search_points:
+                search_point = candidate_point
+                break
+
+            # This point was already visited; tell optimizer about it to help it learn
+            # and then request a new suggestion
+            actual_params = self._search_point_to_params(candidate_point)
+            self.logger.debug(
+                f"  [Bayesian] Attempt {attempt + 1}: suggestion maps to visited point, requesting new"
+            )
+
+        # If all retries exhausted, randomly sample from unvisited configurations
         if search_point is None:
-            # This shouldn't happen if the matrix was built correctly
-            self.logger.error(
-                f"  [Bayesian] No valid search points available. "
-                f"This indicates a configuration issue."
-            )
-            return None
+            unvisited = [p for p in self._valid_search_points if p not in self._visited_search_points]
+            if unvisited:
+                import random
+                rng = random.Random(self.cfg.benchmark.random_seed + self.iteration)
+                search_point = rng.choice(unvisited)
+                self.logger.info(
+                    f"  [Bayesian] Optimizer converged; randomly sampling from "
+                    f"{len(unvisited)} unvisited configurations"
+                )
+            else:
+                # All configurations visited - we're done
+                self.logger.info(
+                    f"  [Bayesian] All {len(self._valid_search_points)} configurations visited"
+                )
+                return None
 
-        # Log if we mapped to a different point
-        if suggested_point != search_point:
-            self.logger.debug(
-                f"  [Bayesian] Mapped suggested point to nearest valid: "
-                f"{suggested_point} -> {search_point}"
+        # Log if we mapped to a different point (this affects model learning)
+        if was_mapped:
+            self.logger.info(
+                f"  [Bayesian] Suggestion mapped to nearest valid point "
+                f"(optimizer will learn about actual point evaluated)"
             )
-
-        # Check if we've already visited this search point
-        if search_point in self._visited_search_points:
             self.logger.debug(
-                f"  [Bayesian] Search point already visited: {search_point}. "
-                f"Optimizer may be converging."
+                f"  [Bayesian] Mapping details: {suggested_point} -> {search_point}"
             )
 
         self._visited_search_points.add(search_point)
@@ -2122,7 +2193,13 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self._current_search_point = search_point
         self._current_instances = instances
         self._current_instance_idx = 0
-        self.current_params = next_params
+
+        # CRITICAL: Store the actual indices for the search point we're evaluating,
+        # not the suggested indices. This ensures the optimizer receives correct
+        # feedback about what was actually evaluated, not what was suggested.
+        # When suggestions are mapped to nearest valid points, this prevents
+        # the surrogate model from learning incorrect associations.
+        self.current_params = self._search_point_to_params(search_point)
 
         self.current_rep = 1
         self.iteration += 1
