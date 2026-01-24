@@ -94,7 +94,7 @@ ALLOWED_REPORTING_KEYS = {
 ALLOWED_THEME_KEYS = {"style", "colors", "font_family"}
 ALLOWED_SECTIONS_KEYS = {
     "test_summary", "best_results", "variable_impact", "parallel_coordinates",
-    "bayesian_evolution", "custom_plots",
+    "bayesian_evolution", "bayesian_parameter_evolution", "custom_plots",
 }
 ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
 ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
@@ -1146,6 +1146,7 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
             variable_impact=sections_data.get("variable_impact", True),
             parallel_coordinates=sections_data.get("parallel_coordinates", True),
             bayesian_evolution=sections_data.get("bayesian_evolution", True),
+            bayesian_parameter_evolution=sections_data.get("bayesian_parameter_evolution", False),
             custom_plots=sections_data.get("custom_plots", True),
         )
 

@@ -351,6 +351,7 @@ class SectionConfig:
     variable_impact: bool = True
     parallel_coordinates: bool = True
     bayesian_evolution: bool = True
+    bayesian_parameter_evolution: bool = False  # Disabled by default (verbose with many params)
     custom_plots: bool = True
 
 

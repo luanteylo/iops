@@ -154,6 +154,15 @@ Shows optimization progress over iterations (Bayesian search only):
 
 **When to use**: Only relevant when using `search_method: "bayesian"`.
 
+### Bayesian Parameter Evolution
+
+Shows which parameter values were explored at each iteration, with colors indicating the metric value achieved.
+
+- Disabled by default (can be verbose with many parameters)
+- Enable with `bayesian_parameter_evolution: true` in the `sections` config
+
+**When to use**: When you want detailed visualization of parameter exploration patterns.
+
 ### Custom Plots
 
 User-defined plots specified in the `metrics` section (see below).
@@ -171,7 +180,8 @@ reporting:
     best_results: true           # Top configurations
     variable_impact: true        # Variance analysis
     parallel_coordinates: true   # Multi-dimensional plot
-    bayesian_evolution: false    # Skip (not using Bayesian)
+    bayesian_evolution: true     # Optimization progress (Bayesian only)
+    bayesian_parameter_evolution: false  # Parameter exploration (default: false)
     custom_plots: true           # User-defined plots
 ```
 

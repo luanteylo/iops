@@ -793,13 +793,14 @@ reporting:
     colors: list                #   Custom color palette (hex codes)
     font_family: string         #   Font family
 
-  sections:                     # Optional: section visibility (all true by default)
-    test_summary: boolean
-    best_results: boolean
-    variable_impact: boolean
-    parallel_coordinates: boolean
-    bayesian_evolution: boolean
-    custom_plots: boolean
+  sections:                     # Optional: section visibility
+    test_summary: boolean       #   (default: true)
+    best_results: boolean       #   (default: true)
+    variable_impact: boolean    #   (default: true)
+    parallel_coordinates: boolean #   (default: true)
+    bayesian_evolution: boolean #   (default: true)
+    bayesian_parameter_evolution: boolean #   (default: false)
+    custom_plots: boolean       #   (default: true)
 
   best_results:                 # Optional: best results configuration
     top_n: integer              #   Number of top configs (default: 5)
@@ -862,7 +863,8 @@ reporting:
     best_results: true         # Top N configurations
     variable_impact: true      # Variance-based importance
     parallel_coordinates: true # Multi-dimensional visualization
-    bayesian_evolution: false  # Optimization progress (Bayesian only)
+    bayesian_evolution: true   # Optimization progress (Bayesian only)
+    bayesian_parameter_evolution: false  # Parameter exploration (default: false)
     custom_plots: true         # User-defined plots
 ```
 

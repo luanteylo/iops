@@ -626,11 +626,13 @@ output:
 #     style: "plotly_white"  # plotly, plotly_dark, ggplot2, seaborn, simple_white
 #     colors: ["#3498db", "#e74c3c", "#2ecc71"]
 #
-#   # Optional: Control report sections (all true by default)
+#   # Optional: Control report sections (all true by default unless noted)
 #   sections:
 #     test_summary: true
 #     best_results: true
 #     variable_impact: true
+#     bayesian_evolution: true           # Optimization progress (Bayesian only)
+#     bayesian_parameter_evolution: false # Parameter exploration plot (default: false)
 #     custom_plots: true
 #
 #   # Optional: Best results configuration

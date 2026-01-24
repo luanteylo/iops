@@ -545,6 +545,7 @@ class ReportGenerator:
             variable_impact=data.get('sections', {}).get('variable_impact', True),
             parallel_coordinates=data.get('sections', {}).get('parallel_coordinates', True),
             bayesian_evolution=data.get('sections', {}).get('bayesian_evolution', True),
+            bayesian_parameter_evolution=data.get('sections', {}).get('bayesian_parameter_evolution', False),
             custom_plots=data.get('sections', {}).get('custom_plots', True),
         )
 
@@ -593,6 +594,7 @@ class ReportGenerator:
                 variable_impact=True,
                 parallel_coordinates=True,
                 bayesian_evolution=True,
+                bayesian_parameter_evolution=False,  # Disabled by default
                 custom_plots=True,  # Will use legacy plots
             ),
             metrics={},  # Empty triggers legacy plot generation
@@ -1519,14 +1521,15 @@ class ReportGenerator:
         )
         html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution', plot_name=f'bayesian_{target_metric}_evolution')}</div>\n"
 
-        # 2. Parameter evolution over iterations
-        html += "<h3>Parameter Evolution</h3>\n"
-        html += "<p>Shows which parameter values were explored at each iteration. "
-        html += "Colors indicate the metric value achieved.</p>\n"
-        fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
-            report_vars, target_metric, objective, n_initial_points
-        )
-        html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution', plot_name='bayesian_parameter_evolution')}</div>\n"
+        # 2. Parameter evolution over iterations (optional, disabled by default)
+        if self.report_config.sections.bayesian_parameter_evolution:
+            html += "<h3>Parameter Evolution</h3>\n"
+            html += "<p>Shows which parameter values were explored at each iteration. "
+            html += "Colors indicate the metric value achieved.</p>\n"
+            fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
+                report_vars, target_metric, objective, n_initial_points
+            )
+            html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution', plot_name='bayesian_parameter_evolution')}</div>\n"
 
         return html
 
