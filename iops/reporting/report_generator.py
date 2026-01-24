@@ -2,6 +2,7 @@
 IOPS Report Generator - Creates HTML reports with interactive plots.
 """
 
+import base64
 import json
 import numpy as np
 import pandas as pd
@@ -45,6 +46,19 @@ def _get_iops_version() -> str:
         with version_file.open() as f:
             return f.read().strip()
     return "unknown"
+
+
+def _get_logo_base64() -> Optional[str]:
+    """Load the IOPS logo as a base64-encoded data URI."""
+    logo_file = Path(__file__).parent.parent.parent / "logo.png"
+    if logo_file.exists():
+        try:
+            with logo_file.open("rb") as f:
+                logo_data = base64.b64encode(f.read()).decode("utf-8")
+            return f"data:image/png;base64,{logo_data}"
+        except Exception:
+            return None
+    return None
 
 
 class ReportGenerator:
@@ -833,6 +847,12 @@ class ReportGenerator:
         """Generate HTML header."""
         benchmark_name = self.metadata['benchmark']['name']
         timestamp = self.metadata['benchmark']['timestamp']
+        logo_data_uri = _get_logo_base64()
+
+        # Build logo HTML if available
+        logo_html = ""
+        if logo_data_uri:
+            logo_html = f'<img src="{logo_data_uri}" alt="IOPS Logo" class="report-logo">'
 
         return f"""<!DOCTYPE html>
 <html>
@@ -855,10 +875,22 @@ class ReportGenerator:
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             border-radius: 8px;
         }}
+        .report-header {{
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }}
+        .report-logo {{
+            height: 64px;
+            width: auto;
+        }}
         h1 {{
             color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
+            margin: 0;
+            flex-grow: 1;
         }}
         h2 {{
             color: #34495e;
@@ -984,7 +1016,10 @@ class ReportGenerator:
 </head>
 <body>
 <div class="container">
-    <h1>{benchmark_name} - Analysis Report</h1>
+    <div class="report-header">
+        {logo_html}
+        <h1>{benchmark_name} - Analysis Report</h1>
+    </div>
     <div class="info-box">
         <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         <p><strong>Benchmark Run:</strong> {timestamp}</p>
