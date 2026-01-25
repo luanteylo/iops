@@ -47,7 +47,7 @@ The `--cache-only` flag ensures all results come from the pre-populated cache, s
 
 ### How the Nested Execution Works
 
-The script template generates YAML configurations dynamically using embedded Python, then invokes IOPS with that configuration. The parser analyzes each run's CSV output to extract the best bandwidth found, number of iterations, and unique configurations explored.
+The script template generates YAML configurations dynamically using embedded Python, then invokes IOPS with that configuration. The parser analyzes each run's CSV output to extract the best bandwidth found, number of iterations, and unique configurations explored (see the [full configuration](#full-configuration) below for more details).
 
 ---
 
