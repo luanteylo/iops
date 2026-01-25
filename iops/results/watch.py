@@ -1543,7 +1543,8 @@ def watch_executions(
                         elif key in ('j', '\x1b[B', '\x1b[6~'):  # j, down arrow, or Page Down
                             if pause_mode:
                                 page_size = max_rows if max_rows else 20
-                                scroll_offset += page_size
+                                max_scroll = max(0, total_items_for_scroll - page_size)
+                                scroll_offset = min(scroll_offset + page_size, max_scroll)
                                 break
                         elif key in ('k', '\x1b[A', '\x1b[5~'):  # k, up arrow, or Page Up
                             if pause_mode:
