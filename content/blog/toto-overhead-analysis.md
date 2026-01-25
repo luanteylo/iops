@@ -12,8 +12,7 @@ Before deploying TOTO in production, we needed to quantify its overhead across d
 1. **Baseline comparison**: Every test must run both *with* and *without* TOTO
 2. **Multi-dimensional space**: Overhead varies with process count, I/O size, access pattern, and TOTO's analysis frequency
 3. **[Conditional parameters]({{< ref "/user-guide/matrix-generation#conditional-variables" >}})**: TOTO-specific settings only make sense when TOTO is enabled
-4. **LD_PRELOAD headaches**: Setting `LD_PRELOAD` in scripts can break SLURM commands
-5. **[Resource monitoring]({{< ref "/user-guide/resource-tracing" >}})**: We need CPU and memory data, not just execution time
+4. **[Resource monitoring]({{< ref "/user-guide/resource-tracing" >}})**: We need CPU and memory data, not just execution time
 
 This turned out to be a perfect use case for IOPS. Here's how we tackled it.
 
