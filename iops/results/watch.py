@@ -867,6 +867,7 @@ def _build_progress_bar(
     elapsed_seconds: float = 0,
     terminal_width: int = 80,
     actual_avg_time: Optional[float] = None,
+    actual_avg_wait_time: Optional[float] = None,
     executed_core_hours: float = 0.0,
     cached_core_hours: float = 0.0
 ) -> Text:
@@ -879,6 +880,7 @@ def _build_progress_bar(
         elapsed_seconds: Elapsed time in seconds (fallback for throughput calculation)
         terminal_width: Terminal width for responsive sizing
         actual_avg_time: Average execution time from sysinfo (more accurate than wall-clock)
+        actual_avg_wait_time: Average queue wait time (displayed but NOT included in ETA)
         executed_core_hours: Core-hours consumed by executed tests
         cached_core_hours: Core-hours saved by cached tests
 
@@ -961,6 +963,12 @@ def _build_progress_bar(
                 else:
                     eta_hours = eta_seconds / 3600
                     text.append(f"  ~{eta_hours:.1f}h left", style="dim italic")
+
+                # Show queue wait time if significant (informational, not in ETA)
+                if actual_avg_wait_time is not None and actual_avg_wait_time > 1:
+                    text.append("  (", style="dim")
+                    text.append(f"~{actual_avg_wait_time:.0f}s", style="yellow")
+                    text.append(" queue)", style="dim")
 
         # Status counts with full names on new line
         text.append("\n ")
@@ -1296,6 +1304,17 @@ def watch_executions(
                 actual_times = [t["avg_time"] for t in tests if t.get("avg_time") is not None]
                 actual_avg_time = sum(actual_times) / len(actual_times) if actual_times else None
 
+                # Calculate average queue wait time (sliding window of last 20 tests)
+                # This is informational only - NOT included in ETA calculation
+                WAIT_TIME_WINDOW = 20
+                wait_times = [t["avg_wait_time"] for t in tests if t.get("avg_wait_time") is not None]
+                if wait_times:
+                    # Use last N wait times for more recent/relevant average
+                    recent_wait_times = wait_times[-WAIT_TIME_WINDOW:]
+                    actual_avg_wait_time = sum(recent_wait_times) / len(recent_wait_times)
+                else:
+                    actual_avg_wait_time = None
+
                 # Compute core-hours statistics
                 executed_core_hours, cached_core_hours = _compute_core_hours_stats(tests, cores_expr)
 
@@ -1304,6 +1323,7 @@ def watch_executions(
                 progress_bar = _build_progress_bar(
                     status_counts, total_expected, elapsed_seconds, terminal_width,
                     actual_avg_time=actual_avg_time,
+                    actual_avg_wait_time=actual_avg_wait_time,
                     executed_core_hours=executed_core_hours,
                     cached_core_hours=cached_core_hours
                 )
