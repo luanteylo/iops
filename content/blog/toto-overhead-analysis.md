@@ -3,39 +3,27 @@ title: "TOTO Overhead Analysis"
 weight: 10
 ---
 
-*Evaluating the runtime overhead of a transparent I/O interception library*
+When you intercept I/O system calls to analyze application behavior, how much overhead do you actually add? That's the question we needed to answer for TOTO (Transparent and Online Tool for I/O), a library that hooks into I/O calls via `LD_PRELOAD` to provide runtime analysis of parallel file system access patterns.
+
+Before deploying TOTO in production, we needed to quantify its overhead across different workloads. Sounds simple, but there were a few complications:
+
+1. **Baseline comparison**: Every test must run both *with* and *without* TOTO
+2. **Multi-dimensional space**: Overhead varies with process count, I/O size, access pattern, and TOTO's analysis frequency
+3. **Conditional parameters**: TOTO-specific settings only make sense when TOTO is enabled
+4. **LD_PRELOAD headaches**: Setting `LD_PRELOAD` in scripts can break SLURM commands
+5. **Resource monitoring**: We need CPU and memory data, not just execution time
+
+This turned out to be a perfect use case for IOPS. Here's how we tackled it.
 
 ---
 
-## The Challenge
+## The Key Tricks
 
-**TOTO** (Transparent and Online Tool for I/O) is a library that intercepts I/O system calls via `LD_PRELOAD` to provide runtime analysis and optimization of parallel file system access patterns. Before deploying such a library in production, researchers need to quantify its overhead across different workloads.
+### Conditional Variables
 
-The challenge involves several complexities:
+TOTO has an `analysis_period` parameter that controls how often it gathers I/O statistics. But this parameter is meaningless when TOTO is disabled—we'd just be creating redundant test combinations.
 
-1. **Baseline comparison**: Every test configuration must run both *with* and *without* TOTO to measure overhead
-2. **Multi-dimensional parameter space**: Overhead may vary with process count, I/O request size, access pattern, and TOTO's internal analysis period
-3. **Conditional parameters**: TOTO-specific parameters (like `analysis_period`) only apply when TOTO is enabled
-4. **LD_PRELOAD complications**: Setting `LD_PRELOAD` in scripts can break SLURM commands (`scontrol`, `squeue`) and module loading
-5. **Resource monitoring**: Need CPU and memory utilization data to understand where overhead comes from
-
----
-
-## The Solution with IOPS
-
-IOPS addresses each challenge with specific features:
-
-| Challenge | IOPS Feature |
-|-----------|--------------|
-| Baseline comparison | `with_toto` boolean variable in sweep |
-| Conditional parameters | `when` clause on `analysis_period` |
-| LD_PRELOAD issues | `pass_env` with Jinja conditionals (single-allocation mode) |
-| Resource monitoring | `trace_resources: true` with configurable sampling |
-| Multi-dimensional sweep | Exhaustive search with constraints |
-
-### Key Technique: Conditional Variables
-
-The `analysis_period` parameter controls how often TOTO gathers and analyzes I/O statistics. This parameter is **only relevant when TOTO is enabled**. Without conditional variables, you'd have redundant test combinations.
+IOPS has a `when` clause for exactly this situation:
 
 ```yaml
 vars:
@@ -54,55 +42,62 @@ vars:
     default: 0           # Use 0 when TOTO is disabled
 ```
 
-**Without `when`**: 2 (with_toto) x 5 (analysis_period) = 10 combinations per parameter set
-**With `when`**: 5 (with TOTO) + 1 (baseline) = 6 combinations per parameter set
+Without `when`, we'd have 2 × 5 = 10 combinations. With `when`, we get 5 (with TOTO) + 1 (baseline) = 6 combinations. The savings add up quickly when you have multiple conditional parameters.
 
-This eliminates redundant tests where `analysis_period` varies but TOTO isn't even running.
+### Resource Tracing
 
-### Key Technique: Resource Tracing
-
-IOPS can sample CPU and memory utilization during benchmark execution:
+Execution time alone doesn't tell the whole story. We wanted CPU and memory utilization data to understand *where* the overhead comes from. IOPS can sample these during execution:
 
 ```yaml
 benchmark:
   trace_resources: true    # Enable tracing
-  trace_interval: 0.05     # Sample every 50ms (aggressive for overhead studies)
+  trace_interval: 0.05     # Sample every 50ms
 ```
 
-This generates:
-- Per-node trace files: `__iops_trace_<hostname>.csv` with timestamped CPU/memory samples
-- Aggregated summary: `__iops_resource_summary.csv` with mean/max/std statistics per execution
+This generates per-node trace files with timestamped samples, plus a summary CSV with mean/max/std statistics. We can then compare resource footprints between baseline and instrumented runs directly.
 
-The summary CSV enables direct comparison of resource footprint between baseline and instrumented runs.
+### The LD_PRELOAD Problem
+
+Here's something that bit us: when you `export LD_PRELOAD=...` in a SLURM job script, it affects everything that runs after—including `scontrol`, `squeue`, and `module load`. Those commands break spectacularly.
+
+The solution is IOPS's single-allocation mode with `pass_env`. Instead of exporting variables in the script, we pass them directly to mpirun via `-x` flags:
+
+```yaml
+scripts:
+  - name: "ior"
+    mpi:
+      pass_env:
+        LD_PRELOAD: "{{ '/path/to/toto.so' if with_toto else '' }}"
+        TOTO_ANALYSIS_PERIOD: "{{ analysis_period if with_toto else '' }}"
+```
+
+Empty values are automatically skipped (no `-x` flag generated). The script stays clean, `module load` works normally, and environment variables only affect the actual benchmark command.
 
 ---
 
-## Configuration Examples
+## Two Ways to Run It
 
-IOPS supports two SLURM execution modes. Here are complete configurations for both approaches.
+IOPS supports two SLURM modes. Here are complete configurations for both.
 
-### Per-Test Mode (Traditional)
+### Per-Test Mode (Simple)
 
-Each test submits a separate SLURM job. Simpler but slower when running many tests due to queue wait times.
+Each test submits a separate SLURM job. Straightforward, but slower when running many tests due to queue wait times.
 
 ```yaml
 benchmark:
   name: "toto+base+all"
-  description: "TOTO Study: All tests with toto + baseline (without toto)"
+  description: "TOTO overhead study: all tests with and without TOTO"
   workdir: "/home/user/workdir"
   repetitions: 6
   search_method: "exhaustive"
   executor: "slurm"
 
-  # Resource tracing for overhead measurement
   trace_resources: true
   trace_interval: 0.05
-
   collect_system_info: true
   track_executions: true
 
 vars:
-  # Boolean to toggle TOTO on/off
   with_toto:
     type: bool
     sweep:
@@ -133,7 +128,6 @@ vars:
       mode: list
       values: [16]
 
-  # Conditional: only swept when with_toto is true
   analysis_period:
     type: int
     sweep:
@@ -154,7 +148,6 @@ vars:
       mode: list
       values: ['shared-file', 'file-per-proc']
 
-  # Derived variables
   procs_per_node:
     type: int
     expr: "{{ total_procs // nodes }}"
@@ -195,7 +188,6 @@ scripts:
       #SBATCH --exclusive
 
       {% if with_toto %}
-      # TOTO environment variables
       export TOTO_PFS_PATHS=/beegfs
       export TOTO_LOG_LEVEL='ERROR'
       export TOTO_LOG_TO_STDOUT=0
@@ -244,16 +236,14 @@ reporting:
   enabled: true
 ```
 
-### Single-Allocation Mode (Recommended for Many Tests)
+### Single-Allocation Mode (Recommended)
 
-All tests run within one SLURM allocation. Faster and avoids queue wait times, but requires careful handling of `LD_PRELOAD`.
-
-The key difference: environment variables are passed via `mpi.pass_env` instead of shell exports. This avoids `LD_PRELOAD` breaking `scontrol` and `module` commands.
+All tests run within one SLURM allocation. Faster, avoids queue wait times, and cleanly handles `LD_PRELOAD` via `pass_env`.
 
 ```yaml
 benchmark:
   name: "toto+base+all"
-  description: "TOTO Study: All tests with toto + baseline (without toto)"
+  description: "TOTO overhead study: all tests with and without TOTO"
   workdir: "/home/user/workdir"
   repetitions: 6
   search_method: "exhaustive"
@@ -268,10 +258,8 @@ benchmark:
         #SBATCH --exclusive
         #SBATCH --constraint=bora
 
-  # Resource tracing for overhead measurement
   trace_resources: true
   trace_interval: 0.05
-
   collect_system_info: true
   track_executions: true
 
@@ -359,8 +347,6 @@ command:
 
 scripts:
   - name: "ior"
-    # MPI configuration with conditional environment variables
-    # Empty values are automatically skipped (no -x flag generated)
     mpi:
       nodes: "{{ nodes }}"
       ppn: "{{ procs_per_node }}"
@@ -380,8 +366,6 @@ scripts:
         - "--mca pml ^ucx"
         - "--mca btl_openib_allow_ib 1"
 
-    # Script is clean - no exports needed!
-    # Environment variables are passed directly via mpirun -x flags
     script_template: |
       #!/bin/bash
 
@@ -436,51 +420,39 @@ reporting:
 
 ---
 
-## Why Single-Allocation Mode for LD_PRELOAD?
+## Some Results
 
-In per-test mode, the script runs as a SLURM job script. Any `export LD_PRELOAD=...` statement affects subsequent commands, including `scontrol` and `module load`. This breaks SLURM's internal tools.
+The resource tracing data lets us visualize overhead in different ways. Here are some plots from a real study:
 
-In single-allocation mode with `mpi.pass_env`:
-1. The script runs *before* any exports happen
-2. `module load` commands work normally
-3. Environment variables are passed *only* to the mpirun command via `-x` flags
-4. Jinja conditionals ensure variables are only passed when needed
+### CPU Overhead
 
----
+How TOTO's CPU overhead scales with process count and analysis period:
 
-## Results Visualization
-
-The resource tracing data enables detailed overhead analysis. Here are example visualizations from a real study:
-
-### CPU Overhead by Process Count and Analysis Period
-
-Shows how TOTO's CPU overhead scales with the number of MPI processes and the analysis period:
-
-![CPU Overhead Heatmap](../../images/showcase/cpu_overhead_heatmap.png)
+![CPU Overhead Heatmap](../../images/blog/cpu_overhead_heatmap.png)
 
 ### Memory Overhead
 
 Memory footprint comparison between baseline and instrumented runs:
 
-![Memory Overhead Heatmap](../../images/showcase/memory_overhead_heatmap.png)
+![Memory Overhead Heatmap](../../images/blog/memory_overhead_heatmap.png)
 
-### Combined Overhead View
+### Combined View
 
-Simultaneous view of CPU and memory overhead across configurations:
+CPU and memory overhead side by side:
 
-![Combined Overhead Heatmap](../../images/showcase/overhead_heatmap_combined.png)
+![Combined Overhead Heatmap](../../images/blog/overhead_heatmap_combined.png)
 
-### Overhead Summary by Process Count
+### Overhead by Process Count
 
-Aggregate overhead statistics showing the relationship between parallelism and instrumentation cost:
+The relationship between parallelism and instrumentation cost:
 
-![Overhead Summary](../../images/showcase/overhead_summary_by_procs.png)
+![Overhead Summary](../../images/blog/overhead_summary_by_procs.png)
 
 ### Resource Scaling by Analysis Period
 
-How TOTO's resource consumption changes with different analysis periods:
+How TOTO's resource consumption changes with different analysis frequencies:
 
-![Resource Scaling](../../images/showcase/resource_scaling_by_period.png)
+![Resource Scaling](../../images/blog/resource_scaling_by_period.png)
 
 ---
 
@@ -490,35 +462,37 @@ How TOTO's resource consumption changes with different analysis periods:
 # Validate configuration
 iops check toto_tests.yaml
 
-# Preview execution plan (dry run)
+# Preview execution plan
 iops run toto_tests.yaml --dry-run
 
-# Execute the study
+# Execute
 iops run toto_tests.yaml
 
-# Generate report after completion
+# Generate report
 iops report /path/to/workdir/run_001
 ```
 
 ---
 
-## Key Takeaways
+## What We Learned
 
-1. **Conditional variables** eliminate redundant test combinations when parameters only apply under certain conditions
+A few things that made this study work well:
 
-2. **Resource tracing** provides the data needed to quantify runtime overhead beyond just execution time
+1. **Conditional variables** saved us from running redundant tests where TOTO-specific parameters varied but TOTO wasn't even enabled
 
-3. **Single-allocation mode with `pass_env`** cleanly handles `LD_PRELOAD` without breaking SLURM commands
+2. **Resource tracing** gave us the CPU and memory data we needed—execution time alone wouldn't have told the full story
 
-4. **Constraints** prevent invalid parameter combinations (e.g., more nodes than processes)
+3. **Single-allocation mode with `pass_env`** was the cleanest way to handle `LD_PRELOAD` without breaking SLURM commands
 
-5. **Jinja conditionals** in `pass_env` values enable clean A/B testing with environment variable injection
+4. **Constraints** caught invalid parameter combinations early (like requesting more nodes than processes)
+
+5. **Jinja conditionals in `pass_env`** made A/B testing with environment variables straightforward
 
 ---
 
 ## Related Documentation
 
-- [Single-Allocation Mode](/user-guide/single-allocation-mode) - Detailed guide to MPI configuration and troubleshooting
-- [Resource Tracing](/user-guide/resource-tracing) - CPU and memory monitoring configuration
+- [Single-Allocation Mode](/user-guide/single-allocation-mode) - MPI configuration details
+- [Resource Tracing](/user-guide/resource-tracing) - CPU and memory monitoring
 - [Conditional Variables](/user-guide/matrix-generation#conditional-variables) - How `when` clauses work
 - [YAML Schema Reference](/user-guide/yaml-schema) - Complete configuration reference

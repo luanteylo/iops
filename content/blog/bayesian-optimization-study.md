@@ -3,11 +3,11 @@ title: "Bayesian Optimization Benchmark"
 weight: 2
 ---
 
-IOPS can use Bayesian Optimization when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's random search. The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it. So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. So we ran `iops generate` and started editing a YAML file to make IOPS run itself, like in the movie Inception. Below you can see the results, which show the efficiency of BO for this problem.
 
----
 
 ## Overview
+
+IOPS can use Bayesian Optimization when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's random search. The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it. So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. So we ran `iops generate` and started editing a YAML file to make IOPS run itself, like in the movie Inception. 
 
 In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from cached results. Using the `--cache-only` flag, we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
 
@@ -56,19 +56,19 @@ The script template generates YAML configurations dynamically using embedded Pyt
 
 The boxplot below shows the best bandwidth found by each method across 25 seeds:
 
-![Performance Boxplot](../../images/showcase/performance_boxplot.png)
+![Performance Boxplot](../../images/blog/performance_boxplot.png)
 
 The optimal configuration achieves 72.4 GB/s. Bayesian optimization finds configurations within 10% of optimal in most runs, while random sampling shows higher variance and generally lower performance.
 
 ### Search Effectiveness
 
-![Percentage of Optimal](../../images/showcase/percentage_optimal.png)
+![Percentage of Optimal](../../images/blog/percentage_optimal.png)
 
 Bayesian optimization achieves a 10 percentage point improvement over random sampling while exploring only 6% of the parameter space. The Extra Trees (ET) estimator provides a slight edge over Random Forest (RF) for this workload.
 
 ### Convergence
 
-![Convergence Curves](../../images/showcase/convergence_curves.png)
+![Convergence Curves](../../images/blog/convergence_curves.png)
 
 The convergence plot shows how each method progresses over iterations. The shaded regions represent standard deviation across seeds. Bayesian methods start with 5 random points (the exploration phase), then use the surrogate model to guide the search. Both Bayesian variants converge faster and reach higher performance than random sampling.
 
@@ -80,7 +80,7 @@ This study has a fundamental limitation: with only 315 valid configurations, the
 
 More importantly, the `nodes` parameter dominates performance in this workload. Since it has only 3 values (1, 32, 64), random sampling has a 33% chance of selecting the optimal node count on each iteration. The figure below illustrates how each method selects node counts over iterations:
 
-![Node Selection Distribution](../../images/showcase/node_selection.png)
+![Node Selection Distribution](../../images/blog/node_selection.png)
 
 The y-axis shows the proportion of seeds (out of 25) that selected each node value at a given iteration. For example, if 20 out of 25 seeds selected `nodes=64` at iteration 15, the green bar would show 0.8 (80%) at that point.
 
