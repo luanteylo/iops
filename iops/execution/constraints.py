@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import logging
 import math
 import ast
+import os
 import re
 
 from iops.config.models import ConstraintConfig, ConfigValidationError
@@ -129,7 +130,9 @@ def evaluate_constraint(
 
     try:
         # Evaluate the rule expression with variables in context
-        result = eval(rule, {"__builtins__": {}}, {**allowed_funcs, **instance_vars})
+        # Include os_env for environment variable access in constraints
+        eval_context = {**allowed_funcs, **instance_vars, "os_env": dict(os.environ)}
+        result = eval(rule, {"__builtins__": {}}, eval_context)
 
         # Rule should evaluate to a boolean
         if not isinstance(result, bool):

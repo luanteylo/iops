@@ -351,6 +351,7 @@ class ExecutionInstance:
             "execution_dir": str(self.execution_dir),
             "execution_id": self.execution_id,
             "repetitions": self.repetitions,
+            "os_env": dict(os.environ),
         }
 
         # metadata (dynamic, including repetition, results, etc.)
