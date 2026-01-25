@@ -1241,7 +1241,7 @@ def watch_executions(
     search_error = ""        # Error message from last search
 
     try:
-        with Live(console=console, refresh_per_second=1, screen=True) as live:
+        with Live(console=console, refresh_per_second=4, screen=True) as live:
             while not interrupted:
                 # Track total items for scroll (updated after table build)
                 total_items_for_scroll = 0
