@@ -7,7 +7,9 @@ tags: ["bayesian-optimization", "caching", "benchmarking"]
 
 
 
-IOPS can use Bayesian Optimization when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's random search. The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it. So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. So we ran `iops generate` and started editing a YAML file to make IOPS run itself, like in the movie Inception. 
+IOPS can use Bayesian Optimization when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's random search. The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it. 
+
+So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. We ran `iops generate` and started editing a YAML file to make IOPS run itself, like in the movie Inception. 
 
 In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from cached results. Using the `--cache-only` flag, we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
 
@@ -92,7 +94,7 @@ Despite these limitations, the study shows that Bayesian optimization provides c
 
 ## Full Configuration
 
-Here's the complete YAML configuration we used:
+Here's the complete YAML configuration we used. One tricky part: since we're generating a nested IOPS config inside a script template, we need to handle two levels of Jinja2 rendering. The outer variables (like `{{ method }}` and `{{ seed }}`) get rendered by the parent IOPS run, while the inner config variables (like `{{ block_size_mb }}`) are written as literal strings to the generated YAML file—they only get rendered when the inner IOPS runs.
 
 ```yaml
 benchmark:
