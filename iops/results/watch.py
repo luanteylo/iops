@@ -67,7 +67,7 @@ def check_rich_available() -> None:
         )
 
 
-def _read_keypress_with_timeout(timeout: float = 0.02) -> Optional[str]:
+def _read_keypress_with_timeout(timeout: float = 0.01) -> Optional[str]:
     """
     Read a single keypress with timeout (Unix only).
 
@@ -1539,11 +1539,11 @@ def watch_executions(
                     break
 
                 # Wait for next refresh, checking for keyboard input
-                for _ in range(interval * 50):  # Check every ~20ms for fast response
+                for _ in range(interval * 100):  # Check every ~10ms for fast response
                     if interrupted:
                         break
 
-                    key = _read_keypress_with_timeout(0.02)
+                    key = _read_keypress_with_timeout(0.01)
                     if key:
                         # Handle search mode input
                         if search_mode:
