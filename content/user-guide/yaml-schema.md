@@ -739,7 +739,6 @@ output:
   sink:
     type: string              # Required: "csv" | "parquet" | "sqlite"
     path: string              # Optional: output file path (Jinja2), has sensible defaults
-    mode: string              # Optional: "append" | "overwrite" (default: append)
     exclude:                  # Optional: fields to exclude from output
       - "benchmark.description"
     table: string             # Optional: table name for SQLite (default: "results")
@@ -755,9 +754,6 @@ Output file path. Can use Jinja2 templates.
 - `csv` → `{{ workdir }}/results.csv`
 - `parquet` → `{{ workdir }}/results.parquet`
 - `sqlite` → `{{ workdir }}/results.db`
-
-#### `mode` (optional, default: "append")
-Write mode: `append` or `overwrite`.
 
 #### `exclude` (optional)
 Exclude specific fields from output using dot notation. Wildcards are supported.
@@ -792,7 +788,6 @@ output:
   sink:
     type: csv
     path: "{{ workdir }}/custom_results.csv"
-    mode: overwrite
 ```
 
 </details>

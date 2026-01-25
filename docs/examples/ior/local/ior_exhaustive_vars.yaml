@@ -109,7 +109,6 @@ output:
   sink:
     type: "csv"
     path: "{{ workdir }}/results_ost_impact.csv"
-    mode: "overwrite"
 
 # =============================================================================
 # HOW THIS WORKS

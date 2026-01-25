@@ -402,7 +402,6 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     sink = cfg.output.sink
     logger.debug(f"  Type : {sink.type}")
     logger.debug(f"  Path : {sink.path}")
-    logger.debug(f"  Mode : {sink.mode}")
 
     if sink.type == "sqlite":
         logger.debug(f"  Table: {sink.table}")

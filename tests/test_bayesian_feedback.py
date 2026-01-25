@@ -74,7 +74,6 @@ def bayesian_config_dict(tmp_path):
             "sink": {
                 "type": "csv",
                 "path": "{{ workdir }}/results.csv",
-                "mode": "append",
             }
         },
     }
@@ -242,7 +241,6 @@ def bayesian_exhaustive_config_dict(tmp_path):
             "sink": {
                 "type": "csv",
                 "path": "{{ workdir }}/results.csv",
-                "mode": "append",
             }
         },
     }

@@ -463,11 +463,6 @@ output:
     # Output path (supports Jinja2 templating)
     path: "{{ workdir }}/results.csv"
 
-    # Write mode:
-    #   - append: Add to existing file (creates if missing)
-    #   - overwrite: Replace existing file
-    mode: append
-
     # Optional: Exclude specific fields from output
     # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB
     # Wildcards supported: "vars.*", "labels.*", "metadata.*", "metrics.*"

@@ -76,7 +76,7 @@ ALLOWED_POST_KEYS = {"script"}
 ALLOWED_METRIC_KEYS = {"name", "type", "path"}
 
 ALLOWED_OUTPUT_KEYS = {"sink"}
-ALLOWED_OUTPUT_SINK_KEYS = {"type", "path", "mode", "exclude", "include", "table"}
+ALLOWED_OUTPUT_SINK_KEYS = {"type", "path", "exclude", "include", "table"}
 
 ALLOWED_RANDOM_CONFIG_KEYS = {"n_samples", "percentage", "fallback_to_exhaustive"}
 ALLOWED_BAYESIAN_CONFIG_KEYS = {
@@ -1022,7 +1022,6 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         sink=OutputSinkConfig(
             type=output_type,
             path=out.get("path", default_path),
-            mode=out.get("mode", "append"),
             exclude=out.get("exclude", []) or [],
             table=out.get("table", "results"),
         )
@@ -1662,9 +1661,6 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             "Install it with: pip install pyarrow\n"
             "Or install iops with parquet support: pip install iops-benchmark[parquet]"
         )
-
-    if sink.mode not in ("append", "overwrite"):
-        raise ConfigValidationError("output.sink.mode must be append or overwrite")
 
     # Validate that requested fields exist in config (static check)
     if sink.exclude:

@@ -73,8 +73,7 @@ def sample_config_dict(tmp_workdir):
         "output": {
             "sink": {
                 "type": "csv",
-                "path": "{{ workdir }}/results.csv",
-                "mode": "append"
+                "path": "{{ workdir }}/results.csv"
             }
         }
     }

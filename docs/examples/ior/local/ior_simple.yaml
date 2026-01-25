@@ -93,7 +93,6 @@ output:
   sink:
     type: csv          # parquet | csv | sqlite
     path: "{{ workdir }}/results.csv"
-    mode: append           # append | overwrite
     exclude: ["benchmark.name", "benchmark.description"]            # optional, exclude fields from output
     table: results         # only for sqlite
 

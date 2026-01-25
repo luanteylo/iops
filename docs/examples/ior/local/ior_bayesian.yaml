@@ -135,7 +135,6 @@ output:
   sink:
     type: "csv"
     path: "{{ workdir }}/results.csv"
-    mode: "append"
     exclude: ["benchmark.name", "benchmark.description"]
 
 # =============================================================================

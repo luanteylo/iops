@@ -239,7 +239,6 @@ output:
   sink:
     type: csv
     path: "{{ workdir }}/results.csv"
-    mode: append
 
 reporting:
   enabled: true
@@ -430,7 +429,6 @@ output:
   sink:
     type: csv
     path: "{{ workdir }}/results.csv"
-    mode: append
 
 reporting:
   enabled: true

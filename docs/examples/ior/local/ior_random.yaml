@@ -152,7 +152,6 @@ output:
   sink:
     type: "csv"
     path: "{{ workdir }}/results_random.csv"
-    mode: "append"
     # Exclude verbose fields from output
     exclude:
       - "benchmark.description"
