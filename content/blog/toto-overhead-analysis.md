@@ -5,7 +5,7 @@ tags: ["overhead-analysis", "resource-tracing", "slurm", "ld-preload"]
 draft: true
 ---
 
-When you intercept I/O system calls to analyze application behavior, how much overhead do you actually add? That's the question we needed to answer for TOTO (Transparent and Online Tool for I/O), a library that hooks into I/O calls via `LD_PRELOAD` to provide runtime analysis of parallel file system access patterns.
+When you intercept I/O system calls to analyze application behavior, how much overhead do you actually add? That's the question we needed to answer for [TOTO](https://gitlab.inria.fr/hpc_io/toto) (Transparent and Online Tool for I/O), a library that hooks into I/O calls via `LD_PRELOAD` to provide runtime analysis of parallel file system access patterns.
 
 Before deploying TOTO in production, we needed to quantify its overhead across different workloads. Sounds simple, but there were a few complications:
 
