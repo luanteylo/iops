@@ -1363,7 +1363,7 @@ def watch_executions(
                         end_row = min(scroll_offset + max_rows, total_display_items)
                         header_text.append(f"  Showing {scroll_offset + 1}-{end_row} of {total_display_items}", style="dim")
                     header_text.append("  ", style="")
-                    header_text.append("j/k:line  g/G:page  p:resume  q:quit", style="dim italic")
+                    header_text.append("j/k/↑↓:page  g/G:top/end  p:resume  q:quit", style="dim italic")
                 else:
                     header_text.append(" [LIVE]", style="green bold")
                     header_text.append("  ", style="")
@@ -1540,23 +1540,24 @@ def watch_executions(
                             if not pause_mode:
                                 scroll_offset = 0
                             break  # Refresh display immediately
-                        elif key in ('j', '\x1b[B'):  # j or down arrow
+                        elif key in ('j', '\x1b[B', '\x1b[6~'):  # j, down arrow, or Page Down
                             if pause_mode:
-                                scroll_offset += 1
+                                page_size = max_rows if max_rows else 20
+                                scroll_offset += page_size
                                 break
-                        elif key in ('k', '\x1b[A'):  # k or up arrow
-                            if pause_mode:
-                                scroll_offset = max(0, scroll_offset - 1)
-                                break
-                        elif key in ('g', '\x1b[5~'):  # g or Page Up
+                        elif key in ('k', '\x1b[A', '\x1b[5~'):  # k, up arrow, or Page Up
                             if pause_mode:
                                 page_size = max_rows if max_rows else 20
                                 scroll_offset = max(0, scroll_offset - page_size)
                                 break
-                        elif key in ('G', '\x1b[6~'):  # G or Page Down
+                        elif key == 'g':  # Go to top
                             if pause_mode:
-                                page_size = max_rows if max_rows else 20
-                                scroll_offset += page_size
+                                scroll_offset = 0
+                                break
+                        elif key == 'G':  # Go to bottom
+                            if pause_mode and total_items_for_scroll > 0:
+                                max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
+                                scroll_offset = max_scroll
                                 break
 
     finally:
