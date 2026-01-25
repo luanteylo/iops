@@ -13,7 +13,7 @@ So the study was: find the best parameter combination that maximizes I/O bandwid
 
 In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from cached results. Using the `--cache-only` flag, we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
 
-This was possible because of the cache feature implemented in IOPS (explained [here](/user-guide/caching/)). The cache was generated during another execution campaign that will be published here soon (when the paper gets accepted). It contains 1,049 execution results (304 unique configurations × 3 repetitions) from IOR benchmarks run on the IRENE supercomputer (TGCC, France), covering a 5-dimensional parameter space:
+This was possible because of the cache feature implemented in IOPS (explained [here]({{< ref "/user-guide/caching" >}})). The cache was generated during another execution campaign that will be published here soon (when the paper gets accepted). It contains 1,049 execution results (304 unique configurations × 3 repetitions) from IOR benchmarks run on the IRENE supercomputer (TGCC, France), covering a 5-dimensional parameter space:
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
