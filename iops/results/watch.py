@@ -1255,6 +1255,11 @@ def watch_executions(
     search_mode = False      # When True, collecting search input
     search_buffer = ""       # Accumulated search digits
     search_error = ""        # Error message from last search
+    needs_data_refresh = True  # Skip data reload for pure navigation actions
+
+    # Cached data for navigation without reload
+    cached_tests = []
+    cached_status_counts = {}
 
     try:
         with Live(console=console, refresh_per_second=10, screen=True) as live:
@@ -1262,18 +1267,25 @@ def watch_executions(
                 # Track total items for scroll (updated after table build)
                 total_items_for_scroll = 0
 
-                # Reload index to pick up new executions
-                try:
-                    benchmark_name, executions, total_expected, repetitions, folders_upfront, active_tests, skipped_tests = _load_index(index_file)
-                except WatchModeError:
-                    pass  # Keep using previous data if index read fails
+                # Only reload data when needed (not during pure navigation)
+                if needs_data_refresh:
+                    # Reload index to pick up new executions
+                    try:
+                        benchmark_name, executions, total_expected, repetitions, folders_upfront, active_tests, skipped_tests = _load_index(index_file)
+                    except WatchModeError:
+                        pass  # Keep using previous data if index read fails
 
-                # Collect current data (new format: one entry per test config)
-                tests, status_counts = _collect_execution_data(
-                    run_root, executions, filter_dict, status_filter, hide_columns,
-                    expected_repetitions=repetitions, folders_upfront=folders_upfront,
-                    cached_filter=cached_filter, metric_filters=metric_filter_dict
-                )
+                    # Collect current data (new format: one entry per test config)
+                    cached_tests, cached_status_counts = _collect_execution_data(
+                        run_root, executions, filter_dict, status_filter, hide_columns,
+                        expected_repetitions=repetitions, folders_upfront=folders_upfront,
+                        cached_filter=cached_filter, metric_filters=metric_filter_dict
+                    )
+                    needs_data_refresh = False  # Reset flag
+
+                # Use cached data
+                tests = cached_tests
+                status_counts = cached_status_counts.copy()  # Copy since we modify it
 
                 total_in_index = len(executions)
                 all_complete = _is_all_complete(status_counts, total_in_index, total_expected, repetitions)
@@ -1555,7 +1567,8 @@ def watch_executions(
                     break
 
                 # Wait for next refresh, checking for keyboard input
-                # Keep terminal in raw mode for entire interval to avoid echo/race conditions
+                # Keep terminal in cbreak mode for entire interval to avoid echo/race conditions
+                key_handled = False
                 with _KeyboardContext() as keyboard:
                     for _ in range(interval * 200):  # Check every ~5ms for faster response
                         if interrupted:
@@ -1563,6 +1576,7 @@ def watch_executions(
 
                         key = keyboard.read_key(0.005)
                         if key:
+                            key_handled = True
                             # Handle search mode input
                             if search_mode:
                                 if key == '\x1b':  # Escape - cancel search
@@ -1609,6 +1623,7 @@ def watch_executions(
                                 pause_mode = not pause_mode
                                 if not pause_mode:
                                     scroll_offset = 0
+                                    needs_data_refresh = True  # Refresh when resuming live mode
                                 search_error = ""
                                 break  # Refresh display immediately
                             elif key == '/' and pause_mode:  # Enter search mode
@@ -1640,6 +1655,10 @@ def watch_executions(
                                     scroll_offset = max_scroll
                                     search_error = ""
                                     break
+
+                # If interval expired without keypress, refresh data
+                if not key_handled and not interrupted:
+                    needs_data_refresh = True
 
     finally:
         signal.signal(signal.SIGINT, original_handler)
