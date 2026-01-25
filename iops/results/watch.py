@@ -15,7 +15,6 @@ import signal
 import sys
 import select
 import os
-import fcntl
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -68,78 +67,64 @@ def check_rich_available() -> None:
         )
 
 
-def _setup_nonblocking_stdin() -> Optional[tuple]:
+def _read_keypress_with_timeout(timeout: float = 0.1) -> Optional[str]:
     """
-    Set up stdin for non-blocking reads.
+    Read a single keypress with timeout (Unix only).
 
-    Returns tuple of (old_terminal_settings, old_flags) for restoration,
-    or None if setup fails.
-    """
-    if not UNIX_TERMINAL:
-        return None
-
-    try:
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-
-        # Set terminal to cbreak mode (no line buffering, no echo)
-        tty.setcbreak(fd)
-        # Set stdin to non-blocking
-        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
-
-        return (old_settings, old_flags)
-    except Exception:
-        return None
-
-
-def _restore_stdin(saved_state: Optional[tuple]) -> None:
-    """Restore stdin to original settings."""
-    if saved_state is None or not UNIX_TERMINAL:
-        return
-
-    old_settings, old_flags = saved_state
-    try:
-        fd = sys.stdin.fileno()
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
-    except Exception:
-        pass
-
-
-def _read_keypress_nonblocking() -> Optional[str]:
-    """
-    Read a single keypress without blocking (Unix only).
-
-    Requires stdin to be set up with _setup_nonblocking_stdin() first.
-    Returns the key pressed, or None if no key is available.
+    Briefly sets terminal to cbreak mode to read input, then restores.
+    Returns the key pressed, or None if no key available within timeout.
     Handles escape sequences for arrow keys.
     """
     if not UNIX_TERMINAL:
         return None
 
+    fd = sys.stdin.fileno()
+
     try:
-        char = sys.stdin.read(1)
+        # Save current terminal settings
+        old_settings = termios.tcgetattr(fd)
+    except termios.error:
+        return None
+
+    try:
+        # Set terminal to cbreak mode (no line buffering)
+        tty.setcbreak(fd)
+
+        # Check if input is available within timeout
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if not ready:
+            return None
+
+        # Read the character
+        char = os.read(fd, 1).decode('utf-8', errors='ignore')
         if not char:
             return None
 
         # Handle escape sequences (arrow keys)
         if char == '\x1b':
-            try:
-                char2 = sys.stdin.read(1)
+            # Check for more characters quickly
+            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if ready:
+                char2 = os.read(fd, 1).decode('utf-8', errors='ignore')
                 if char2:
                     char += char2
                     if char == '\x1b[':
-                        char3 = sys.stdin.read(1)
-                        if char3:
-                            char += char3
-            except (IOError, OSError):
-                pass
+                        ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+                        if ready:
+                            char3 = os.read(fd, 1).decode('utf-8', errors='ignore')
+                            if char3:
+                                char += char3
 
         return char
-    except (IOError, OSError, TypeError):
-        # No input available (EAGAIN/EWOULDBLOCK) or other error
+
+    except Exception:
         return None
+    finally:
+        # Always restore terminal settings
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
 
 
 # Status display configuration
@@ -1261,53 +1246,11 @@ def watch_executions(
     pause_mode = False       # When True, disable auto-reordering
     scroll_offset = 0        # First row index to display (in pause mode)
 
-    # Set up non-blocking stdin for keyboard input
-    stdin_state = _setup_nonblocking_stdin()
-
     try:
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while not interrupted:
-                # Handle keyboard input (non-blocking)
-                total_items_for_scroll = 0  # Will be updated after building table
-                key = _read_keypress_nonblocking()
-                if key:
-                    if key == 'q':
-                        # Quit
-                        interrupted = True
-                    elif key == 'p':
-                        # Toggle pause mode
-                        pause_mode = not pause_mode
-                        if not pause_mode:
-                            # Exiting pause mode - reset scroll
-                            scroll_offset = 0
-                    elif key in ('j', '\x1b[B'):  # j or down arrow
-                        # Scroll down (only in pause mode)
-                        if pause_mode:
-                            scroll_offset += 1
-                    elif key in ('k', '\x1b[A'):  # k or up arrow
-                        # Scroll up (only in pause mode)
-                        if pause_mode:
-                            scroll_offset = max(0, scroll_offset - 1)
-                    elif key == 'g':
-                        # Go to top (only in pause mode)
-                        if pause_mode:
-                            scroll_offset = 0
-                    elif key == 'G':
-                        # Go to bottom (only in pause mode)
-                        if pause_mode and total_items_for_scroll > 0:
-                            # Will be adjusted after we know total_display_items
-                            scroll_offset = max(0, total_items_for_scroll - 1)
-                    elif key == 'J':  # Page down
-                        # Scroll down by page (only in pause mode)
-                        if pause_mode:
-                            scroll_offset += 10
-                    elif key == 'K':  # Page up
-                        # Scroll up by page (only in pause mode)
-                        if pause_mode:
-                            scroll_offset = max(0, scroll_offset - 10)
-
-                if interrupted:
-                    break
+                # Track total items for scroll (updated after table build)
+                total_items_for_scroll = 0
 
                 # Reload index to pick up new executions
                 try:
@@ -1590,15 +1533,49 @@ def watch_executions(
                     time.sleep(1)
                     break
 
-                # Wait for next refresh
-                for _ in range(interval * 10):  # Check interrupted every 0.1s
+                # Wait for next refresh, checking for keyboard input
+                for _ in range(interval * 10):  # Check every 0.1s
                     if interrupted:
                         break
-                    time.sleep(0.1)
+
+                    # Check for keyboard input
+                    key = _read_keypress_with_timeout(0.1)
+                    if key:
+                        if key == 'q':
+                            interrupted = True
+                            break
+                        elif key == 'p':
+                            pause_mode = not pause_mode
+                            if not pause_mode:
+                                scroll_offset = 0
+                            break  # Refresh display immediately
+                        elif key in ('j', '\x1b[B'):  # j or down arrow
+                            if pause_mode:
+                                scroll_offset += 1
+                                break
+                        elif key in ('k', '\x1b[A'):  # k or up arrow
+                            if pause_mode:
+                                scroll_offset = max(0, scroll_offset - 1)
+                                break
+                        elif key == 'g':
+                            if pause_mode:
+                                scroll_offset = 0
+                                break
+                        elif key == 'G':
+                            if pause_mode and total_items_for_scroll > 0:
+                                max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
+                                scroll_offset = max_scroll
+                                break
+                        elif key == 'J':  # Page down
+                            if pause_mode:
+                                scroll_offset += 10
+                                break
+                        elif key == 'K':  # Page up
+                            if pause_mode:
+                                scroll_offset = max(0, scroll_offset - 10)
+                                break
 
     finally:
-        # Restore stdin to original settings
-        _restore_stdin(stdin_state)
         signal.signal(signal.SIGINT, original_handler)
 
     # Print exit message
