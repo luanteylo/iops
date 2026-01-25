@@ -7,11 +7,11 @@ tags: ["bayesian-optimization", "caching", "benchmarking"]
 
 
 
-IOPS can use Bayesian Optimization when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's random search. The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it. 
+IOPS can use [Bayesian Optimization]({{< ref "/user-guide/search-methods#bayesian-optimization" >}}) when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's [random search]({{< ref "/user-guide/search-methods#random-sampling" >}}). The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it.
 
-So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. We ran `iops generate` and started editing a YAML file to make IOPS run itself, like in the movie Inception. 
+So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. We ran [`iops generate`]({{< ref "/user-guide/cli#generate" >}}) and started editing a YAML file to make IOPS run itself, like in the movie Inception. 
 
-In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from cached results. Using the `--cache-only` flag, we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
+In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from cached results. Using the [`--cache-only`]({{< ref "/user-guide/cli#run" >}}) flag, we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
 
 This was possible because of the cache feature implemented in IOPS (explained [here]({{< ref "/user-guide/caching" >}})). The cache was generated during another execution campaign that will be published here soon (when the paper gets accepted). It contains 1,049 execution results (304 unique configurations × 3 repetitions) from IOR benchmarks run on the IRENE supercomputer (TGCC, France), covering a 5-dimensional parameter space:
 
@@ -23,7 +23,7 @@ This was possible because of the cache feature implemented in IOPS (explained [h
 | `transfer_size_kb` | 32, 1024, 8192, 32768, 65536 | I/O transfer size |
 | `volume_size_gb` | 128 | Fixed data volume |
 
-After constraint filtering, the parameter space contains 315 valid configurations. Each optimization run explores only 20 of them—that's just 6.3% of the space.
+After [constraint filtering]({{< ref "/user-guide/matrix-generation#constraints" >}}), the parameter space contains 315 valid configurations. Each optimization run explores only 20 of them -that's just 6.3% of the space.
 
 ---
 
@@ -44,7 +44,7 @@ command:
   template: "iops run {{ inner_config }} --use-cache --cache-only"
 ```
 
-The `--cache-only` flag ensures all results come from the pre-populated cache—no actual benchmarks are executed. This let us run 75 complete optimization studies (3 methods × 25 seeds) in under 5 minutes on a laptop. Pretty cool, right?
+The `--cache-only` flag ensures all results come from the pre-populated cache -no actual benchmarks are executed. This let us run 75 complete optimization studies (3 methods × 25 seeds) in under 5 minutes on a laptop. Pretty cool, right?
 
 ### How the Nested Execution Works
 
@@ -86,7 +86,7 @@ More importantly, the `nodes` parameter dominates performance in this workload. 
 
 The y-axis shows the proportion of seeds (out of 25) that selected each node value at a given iteration. For example, if 20 out of 25 seeds selected `nodes=64` at iteration 15, the green bar would show 0.8 (80%) at that point.
 
-The Bayesian methods quickly learn that higher node counts yield better performance and concentrate their search accordingly—by iteration 10, nearly all seeds are selecting `nodes=64`. Random sampling, by contrast, distributes selections uniformly across all node values throughout the run.
+The Bayesian methods quickly learn that higher node counts yield better performance and concentrate their search accordingly -by iteration 10, nearly all seeds are selecting `nodes=64`. Random sampling, by contrast, distributes selections uniformly across all node values throughout the run.
 
 Despite these limitations, the study shows that Bayesian optimization provides consistent improvements over random sampling, and that IOPS's cache-only mode enables rapid algorithmic experimentation without HPC resources. A follow-up study with a larger parameter space would likely show an even bigger gap between the methods.
 
@@ -94,7 +94,7 @@ Despite these limitations, the study shows that Bayesian optimization provides c
 
 ## Full Configuration
 
-Here's the complete YAML configuration we used. One tricky part: since we're generating a nested IOPS config inside a script template, we need to handle two levels of Jinja2 rendering. The outer variables (like `{{ method }}` and `{{ seed }}`) get rendered by the parent IOPS run, while the inner config variables (like `{{ block_size_mb }}`) are written as literal strings to the generated YAML file—they only get rendered when the inner IOPS runs.
+Here's the complete YAML configuration we used. One tricky part: since we're generating a nested IOPS config inside a [script template]({{< ref "/user-guide/templating-and-context" >}}), we need to handle two levels of Jinja2 rendering. The outer variables (like `{{ method }}` and `{{ seed }}`) get rendered by the parent IOPS run, while the inner config variables (like `{{ block_size_mb }}`) are written as literal strings to the generated YAML file -they only get rendered when the inner IOPS runs.
 
 ```yaml
 benchmark:
@@ -242,3 +242,13 @@ output:
     type: csv
     path: "./results.csv"
 ```
+
+---
+
+## Related Documentation
+
+- [Search Methods]({{< ref "/user-guide/search-methods" >}}) - Bayesian optimization, random sampling, and exhaustive search
+- [Caching]({{< ref "/user-guide/caching" >}}) - Skip redundant tests with `--use-cache` and `--cache-only`
+- [CLI Reference]({{< ref "/user-guide/cli" >}}) - All command-line options for `iops run`, `iops generate`, etc.
+- [Templating and Context]({{< ref "/user-guide/templating-and-context" >}}) - Jinja2 syntax in scripts and configurations
+- [Matrix Generation]({{< ref "/user-guide/matrix-generation" >}}) - How IOPS builds parameter combinations and applies constraints
