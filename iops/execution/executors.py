@@ -553,13 +553,14 @@ class LocalExecutor(BaseExecutor):
                         if name in metrics:
                             metrics[name] = value
                 except ParserError as e:
-                    self.logger.warning(f"  [LocalExec] Parser failed: {e}")
                     test.metadata["__executor_status"] = self.STATUS_FAILED
                     # Point to parser_stderr file if available, otherwise include error summary
                     stderr_path = test.metadata.get("__parser_stderr_path")
                     if stderr_path:
+                        self.logger.warning(f"  [LocalExec] Parser failed. See: {stderr_path}")
                         test.metadata["__error"] = f"Parser error. See: {stderr_path}"
                     else:
+                        self.logger.warning(f"  [LocalExec] Parser failed: {e}")
                         test.metadata["__error"] = f"Parser error: {e}"
 
         metric_count = len([v for v in metrics.values() if v is not None])
@@ -1009,8 +1010,10 @@ class SlurmExecutor(BaseExecutor):
             # Point to parser_stderr file if available, otherwise include error summary
             stderr_path = test.metadata.get("__parser_stderr_path")
             if stderr_path:
+                self.logger.warning(f"  [SlurmExec] Parser failed. See: {stderr_path}")
                 test.metadata["__error"] = f"Parser error. See: {stderr_path}"
             else:
+                self.logger.warning(f"  [SlurmExec] Parser failed: {e}")
                 test.metadata["__error"] = f"Parsing failed: {e}"
             return False
 

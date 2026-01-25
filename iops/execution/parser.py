@@ -142,16 +142,29 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
             metrics = parse_fn(parser.file)
 
     except Exception as e:
-        # Write captured output even on error (helps debugging)
-        _write_parser_output(
+        # Write captured output and error traceback to file (helps debugging)
+        error_details = f"parse() failed for file '{parser.file}': {e}\n{traceback.format_exc()}"
+        stderr_content = stderr_buffer.getvalue()
+        if stderr_content:
+            stderr_content += "\n\n--- Error Traceback ---\n" + error_details
+        else:
+            stderr_content = error_details
+
+        _, stderr_path = _write_parser_output(
             test.execution_dir,
             stdout_buffer.getvalue(),
-            stderr_buffer.getvalue(),
+            stderr_content,
         )
+
+        # Store path in metadata so executor can reference it
+        if stderr_path:
+            test.metadata["__parser_stderr_path"] = str(stderr_path)
+
         if isinstance(e, ParserError):
             raise
+        # Short message - full details are in parser_stderr file
         raise ParserScriptError(
-            f"parse() failed for file '{parser.file}': {e}\n{traceback.format_exc()}"
+            f"parse() failed for file '{parser.file}': {type(e).__name__}: {e}"
         ) from e
 
     # Write captured output to files
