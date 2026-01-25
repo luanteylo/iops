@@ -1237,6 +1237,9 @@ def watch_executions(
     # Keyboard navigation state
     pause_mode = False       # When True, disable auto-reordering
     scroll_offset = 0        # First row index to display (in pause mode)
+    search_mode = False      # When True, collecting search input
+    search_buffer = ""       # Accumulated search digits
+    search_error = ""        # Error message from last search
 
     try:
         with Live(console=console, refresh_per_second=1, screen=True) as live:
@@ -1360,13 +1363,21 @@ def watch_executions(
 
                 # Mode indicator (pause/live) and scroll position
                 header_text.append("\n")
-                if pause_mode:
+                if search_mode:
+                    header_text.append(" [SEARCH]", style="cyan bold")
+                    header_text.append(f"  Go to test: exec_", style="dim")
+                    header_text.append(search_buffer or "_", style="cyan bold")
+                    header_text.append("  ", style="")
+                    header_text.append("Enter:go  Esc:cancel", style="dim italic")
+                    if search_error:
+                        header_text.append(f"  {search_error}", style="red")
+                elif pause_mode:
                     header_text.append(" [PAUSED]", style="yellow bold")
                     if max_rows is not None and total_display_items > max_rows:
                         end_row = min(scroll_offset + max_rows, total_display_items)
                         header_text.append(f"  Showing {scroll_offset + 1}-{end_row} of {total_display_items}", style="dim")
                     header_text.append("  ", style="")
-                    header_text.append("j/k/↑↓:page  g/G:top/end  p:resume  q:quit", style="dim italic")
+                    header_text.append("j/k:page  g/G:top/end  /:search  p:resume  q:quit", style="dim italic")
                 else:
                     header_text.append(" [LIVE]", style="green bold")
                     header_text.append("  ", style="")
@@ -1535,6 +1546,45 @@ def watch_executions(
 
                     key = _read_keypress_with_timeout(0.05)
                     if key:
+                        # Handle search mode input
+                        if search_mode:
+                            if key == '\x1b':  # Escape - cancel search
+                                search_mode = False
+                                search_buffer = ""
+                                search_error = ""
+                                break
+                            elif key in ('\r', '\n'):  # Enter - execute search
+                                if search_buffer:
+                                    try:
+                                        target_id = int(search_buffer)
+                                        # Find the index of the test in the display list
+                                        found_idx = None
+                                        for idx in range(total_items_for_scroll):
+                                            # Test IDs are 1-based (exec_0001 = ID 1)
+                                            if idx + 1 == target_id:
+                                                found_idx = idx
+                                                break
+                                        if found_idx is not None and found_idx < total_items_for_scroll:
+                                            # Calculate scroll offset to show this test
+                                            page_size = max_rows if max_rows else 20
+                                            scroll_offset = (found_idx // page_size) * page_size
+                                            search_error = ""
+                                        else:
+                                            search_error = f"Not found"
+                                    except ValueError:
+                                        search_error = "Invalid number"
+                                search_mode = False
+                                search_buffer = ""
+                                break
+                            elif key == '\x7f' or key == '\b':  # Backspace
+                                search_buffer = search_buffer[:-1]
+                                break
+                            elif key.isdigit():  # Digit input
+                                search_buffer += key
+                                break
+                            continue  # Ignore other keys in search mode
+
+                        # Normal mode keys
                         if key == 'q':
                             interrupted = True
                             break
@@ -1542,26 +1592,36 @@ def watch_executions(
                             pause_mode = not pause_mode
                             if not pause_mode:
                                 scroll_offset = 0
+                            search_error = ""
                             break  # Refresh display immediately
+                        elif key == '/' and pause_mode:  # Enter search mode
+                            search_mode = True
+                            search_buffer = ""
+                            search_error = ""
+                            break
                         elif key in ('j', '\x1b[B', '\x1b[6~'):  # j, down arrow, or Page Down
                             if pause_mode:
                                 page_size = max_rows if max_rows else 20
                                 max_scroll = max(0, total_items_for_scroll - page_size)
                                 scroll_offset = min(scroll_offset + page_size, max_scroll)
+                                search_error = ""
                                 break
                         elif key in ('k', '\x1b[A', '\x1b[5~'):  # k, up arrow, or Page Up
                             if pause_mode:
                                 page_size = max_rows if max_rows else 20
                                 scroll_offset = max(0, scroll_offset - page_size)
+                                search_error = ""
                                 break
                         elif key == 'g':  # Go to top
                             if pause_mode:
                                 scroll_offset = 0
+                                search_error = ""
                                 break
                         elif key == 'G':  # Go to bottom
                             if pause_mode and total_items_for_scroll > 0:
                                 max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
                                 scroll_offset = max_scroll
+                                search_error = ""
                                 break
 
     finally:
