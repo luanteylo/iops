@@ -1284,9 +1284,12 @@ def watch_executions(
                     status_counts["PENDING"] = status_counts.get("PENDING", 0) + (queued_count * repetitions)
 
                 # Auto-enable show_only_active if many tests and some are complete
+                # But disable it when all tests are done so user can still browse results
                 num_tests = len(tests) + queued_count
                 num_complete = sum(1 for t in tests if _get_test_overall_status(t["rep_statuses"]) == "SUCCEEDED")
-                if num_tests > 20 and num_complete > 0:
+                if all_complete:
+                    show_only_active = False  # Show all tests when complete
+                elif num_tests > 20 and num_complete > 0:
                     show_only_active = True
 
                 # Initialize total_display_items (will be updated after table build)
