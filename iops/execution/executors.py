@@ -262,7 +262,7 @@ class BaseExecutor(ABC, HasLogger):
         """
         Read system information collected by the system probe.
 
-        The system probe (injected into scripts when collect_system_info=True)
+        The system probe (injected into scripts when probes.system_snapshot=True)
         writes a JSON file with information about the compute node:
         - hostname: Node hostname
         - cpu_model: CPU model string

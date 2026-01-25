@@ -204,35 +204,37 @@ benchmark:
   # Example: ["summary_file", "output_path"] - paths vary but don't affect results
   cache_exclude_vars: ["summary_file"]
 
-  # Optional: Collect system information from compute nodes (default: true)
-  # When enabled, IOPS automatically injects a system probe into generated scripts that collects:
-  #   - hostname, cpu_model, cpu_cores, memory_kb, kernel, os
-  #   - InfiniBand devices (ib_devices)
-  #   - Parallel filesystems (Lustre, GPFS, BeeGFS, etc.)
-  # System info is aggregated in __iops_run_metadata.json and displayed in HTML reports
-  # Set to false to disable if system probing causes issues or is unnecessary
-  collect_system_info: true
+  # Optional: Probe configuration for system monitoring and execution tracking
+  # Probes are features that collect additional information during execution.
+  # All probes are enabled by default except resource_sampling which requires opt-in.
+  probes:
+    # system_snapshot: Collect system info from compute nodes (default: true)
+    # When enabled, IOPS injects a probe that collects:
+    #   - hostname, cpu_model, cpu_cores, memory_kb, kernel, os
+    #   - InfiniBand devices (ib_devices)
+    #   - Parallel filesystems (Lustre, GPFS, BeeGFS, etc.)
+    # System info is aggregated in __iops_run_metadata.json and displayed in HTML reports
+    system_snapshot: true
 
-  # Optional: Write execution metadata files for 'iops find' command (default: true)
-  # When enabled, IOPS writes __iops_index.json, __iops_params.json, and __iops_status.json
-  # files that enable the 'iops find' command to list and filter executions.
-  # Set to false to disable if file I/O overhead is a concern (e.g., interference with benchmarks)
-  track_executions: true
+    # execution_index: Write metadata files for 'iops find' command (default: true)
+    # When enabled, IOPS writes __iops_index.json, __iops_params.json, and __iops_status.json
+    # files that enable the 'iops find' command to list and filter executions.
+    # Set to false if file I/O overhead is a concern (e.g., interference with benchmarks)
+    execution_index: true
 
-  # Optional: Enable resource tracing during execution (default: false)
-  # When enabled, IOPS samples CPU utilization (per-core) and memory usage during benchmark
-  # execution. A background sampler runs with low priority (nice) to minimize interference.
-  # Output files:
-  #   - Per-execution: __iops_trace_<hostname>.csv (one per node)
-  #   - Run-level: __iops_resource_summary.csv (aggregated metrics with all vars)
-  # The summary CSV enables heatmap analysis correlating parameters with resource footprint.
-  # Use case: Run once without tracing (baseline), then with tracing to measure footprint.
-  # trace_resources: true
+    # resource_sampling: Enable resource tracing during execution (default: false)
+    # When enabled, IOPS samples CPU utilization (per-core) and memory usage during benchmark
+    # execution. A background sampler runs with low priority (nice) to minimize interference.
+    # Output files:
+    #   - Per-execution: __iops_trace_<hostname>.csv (one per node)
+    #   - Run-level: __iops_resource_summary.csv (aggregated metrics with all vars)
+    # The summary CSV enables heatmap analysis correlating parameters with resource footprint.
+    # resource_sampling: true
 
-  # Optional: Sampling interval for resource tracing in seconds (default: 1.0)
-  # Lower values provide finer granularity but generate more data.
-  # Only used when trace_resources is enabled.
-  # trace_interval: 0.5
+    # sampling_interval: Sampling interval for resource tracing in seconds (default: 1.0)
+    # Lower values provide finer granularity but generate more data.
+    # Only used when resource_sampling is enabled.
+    # sampling_interval: 0.5
 
   # Optional: Create all execution folders upfront at run start (default: false)
   # When enabled, IOPS creates all exec_XXXX folders before execution begins, including

@@ -29,6 +29,12 @@ All notable changes to IOPS are documented here.
 
 ### Changed
 - Renamed `executor_options` to `slurm_options` (old name deprecated, remove in 3.7.0)
+- Refactored probe configuration to nested `probes:` section with clearer field names:
+  - `collect_system_info` → `probes.system_snapshot`
+  - `track_executions` → `probes.execution_index`
+  - `trace_resources` → `probes.resource_sampling`
+  - `trace_interval` → `probes.sampling_interval`
+  (old names deprecated, remove in 3.7.0)
 - Renamed `[pdf]` optional dependency to `[plots]` (supports pdf, png, svg, jpg, webp)
 - Removed `scripts[].submit` field
 - Removed `output.sink.include` option

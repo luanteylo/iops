@@ -221,9 +221,11 @@ def test_prepare_execution_artifacts_injects_probe_when_enabled(sample_config_fi
 
 
 def test_prepare_execution_artifacts_skips_probe_when_disabled(sample_config_file, tmp_path):
-    """Test that _prepare_execution_artifacts skips probe when collect_system_info=False."""
+    """Test that _prepare_execution_artifacts skips probe when system_snapshot=False."""
     config = load_config(sample_config_file)
-    config.benchmark.collect_system_info = False  # Explicitly disable
+    config.benchmark.collect_system_info = False  # Deprecated field
+    if config.benchmark.probes:
+        config.benchmark.probes.system_snapshot = False  # New field
 
     planner = ExhaustivePlanner(config)
     planner._build_execution_matrix()
@@ -846,7 +848,9 @@ def test_system_info_end_to_end_enabled(sample_config_file, tmp_path):
 def test_system_info_end_to_end_disabled(sample_config_file, tmp_path):
     """Test complete system info flow when disabled."""
     config = load_config(sample_config_file)
-    config.benchmark.collect_system_info = False
+    config.benchmark.collect_system_info = False  # Deprecated field
+    if config.benchmark.probes:
+        config.benchmark.probes.system_snapshot = False  # New field
 
     # 1. Planner generates script WITHOUT probe
     planner = ExhaustivePlanner(config)

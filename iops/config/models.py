@@ -193,6 +193,30 @@ class BayesianConfig:
 
 
 @dataclass
+class ProbesConfig:
+    """
+    Configuration for IOPS probes (system monitoring and execution tracking).
+
+    Probes are optional features that collect additional information during execution.
+    All probes are enabled by default except resource_sampling which requires explicit opt-in.
+
+    Attributes:
+        system_snapshot: Collect system info (hostname, CPU, memory, etc.) from compute nodes.
+            Corresponds to deprecated field: collect_system_info
+        execution_index: Write execution metadata files for 'iops find' command.
+            Corresponds to deprecated field: track_executions
+        resource_sampling: Enable resource tracing (CPU/memory sampling during execution).
+            Corresponds to deprecated field: trace_resources
+        sampling_interval: Sampling interval in seconds for resource tracing.
+            Corresponds to deprecated field: trace_interval
+    """
+    system_snapshot: bool = True      # Was: collect_system_info
+    execution_index: bool = True      # Was: track_executions
+    resource_sampling: bool = False   # Was: trace_resources
+    sampling_interval: float = 1.0    # Was: trace_interval
+
+
+@dataclass
 class BenchmarkConfig:
     name: str
     description: Optional[str]
@@ -211,11 +235,13 @@ class BenchmarkConfig:
     report_vars: Optional[List[str]] = None  # Variables to include in analysis reports (default: all numeric swept vars)
     bayesian_config: Optional[BayesianConfig] = None  # Bayesian optimization configuration
     random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
-    collect_system_info: bool = True  # Collect system info (hostname, CPU, memory, etc.) from compute nodes
-    track_executions: bool = True  # Write execution metadata files for 'iops find' command
+    probes: Optional[ProbesConfig] = None  # Probe configuration (new nested format)
+    # Deprecated fields (use probes.* instead) - will be removed in 3.7.0
+    collect_system_info: bool = True  # DEPRECATED: use probes.system_snapshot
+    track_executions: bool = True  # DEPRECATED: use probes.execution_index
     create_folders_upfront: bool = False  # Create all exec folders at start (enables SKIPPED status visibility)
-    trace_resources: bool = False  # Enable resource tracing (CPU/memory sampling during execution)
-    trace_interval: float = 1.0  # Sampling interval in seconds for resource tracing
+    trace_resources: bool = False  # DEPRECATED: use probes.resource_sampling
+    trace_interval: float = 1.0  # DEPRECATED: use probes.sampling_interval
 
 
 @dataclass

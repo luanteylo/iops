@@ -105,7 +105,8 @@ To disable `__iops_index.json`, `__iops_params.json`, `__iops_skipped`, and `__i
 
 ```yaml
 benchmark:
-  track_executions: false
+  probes:
+    execution_index: false
 ```
 
 **Impact:**
@@ -119,7 +120,8 @@ To disable `__iops_atexit_sysinfo.sh` and `__iops_sysinfo.json`:
 
 ```yaml
 benchmark:
-  collect_system_info: false
+  probes:
+    system_snapshot: false
 ```
 
 **Impact:**
@@ -133,8 +135,9 @@ For minimal I/O overhead (only results output):
 
 ```yaml
 benchmark:
-  track_executions: false
-  collect_system_info: false
+  probes:
+    execution_index: false
+    system_snapshot: false
 ```
 
 Note: `__iops_run_metadata.json` is always written as it's required for `iops report`.
@@ -236,7 +239,7 @@ Note: `__iops_run_metadata.json` is always written as it's required for `iops re
 
 All paths are relative to the run root, making workdirs portable across systems.
 
-**Controlled by:** `benchmark.track_executions`
+**Controlled by:** `benchmark.probes.execution_index`
 
 ---
 
@@ -257,7 +260,7 @@ All paths are relative to the run root, making workdirs portable across systems.
 }
 ```
 
-**Controlled by:** `benchmark.track_executions`
+**Controlled by:** `benchmark.probes.execution_index`
 
 ---
 
@@ -284,7 +287,7 @@ All paths are relative to the run root, making workdirs portable across systems.
 | `reason` | Why the test was skipped (constraint rule, planner decision, etc.) |
 | `message` | Optional detailed explanation |
 
-**Controlled by:** `benchmark.track_executions`
+**Controlled by:** `benchmark.probes.execution_index`
 
 ---
 
@@ -334,7 +337,7 @@ The `cached` field indicates whether the result was retrieved from cache (`true`
 
 The `duration_seconds` field contains the actual execution time in seconds from the probe script. This is available for both executed and cached results (the sysinfo is stored in the cache).
 
-**Controlled by:** `benchmark.track_executions`
+**Controlled by:** `benchmark.probes.execution_index`
 
 ---
 
@@ -376,7 +379,7 @@ This architecture avoids trap conflicts between multiple IOPS features.
 
 This approach ensures system info is collected even if the benchmark fails, and it runs on the actual compute node (important for SLURM jobs).
 
-**Controlled by:** `benchmark.collect_system_info`
+**Controlled by:** `benchmark.probes.system_snapshot`
 
 ---
 
@@ -419,7 +422,7 @@ This approach ensures system info is collected even if the benchmark fails, and 
 
 **Detected parallel filesystems:** Lustre, GPFS, BeeGFS, CephFS, PanFS, WekaFS, PVFS2, OrangeFS, GlusterFS
 
-**Controlled by:** `benchmark.collect_system_info`
+**Controlled by:** `benchmark.probes.system_snapshot`
 
 ---
 
@@ -440,7 +443,7 @@ This approach ensures system info is collected even if the benchmark fails, and 
 6. Each node writes to its own trace file (`__iops_trace_<hostname>.csv`)
 7. When the script exits, the exit handler removes the sentinel file, stopping all samplers
 
-**Controlled by:** `benchmark.trace_resources`
+**Controlled by:** `benchmark.probes.resource_sampling`
 
 ---
 
@@ -454,7 +457,7 @@ This approach ensures system info is collected even if the benchmark fails, and 
 
 **Purpose:** A sentinel file that signals resource samplers to keep running. When removed, all samplers (including those on remote nodes in multi-node SLURM jobs) terminate gracefully.
 
-**Controlled by:** `benchmark.trace_resources`
+**Controlled by:** `benchmark.probes.resource_sampling`
 
 ---
 
@@ -473,7 +476,7 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 1705123456.123,node01,1,42.1,4.8,53.1,128000000,64000000
 ```
 
-**Controlled by:** `benchmark.trace_resources`
+**Controlled by:** `benchmark.probes.resource_sampling`
 
 ---
 
@@ -574,8 +577,9 @@ Or disable metadata if you must use the same filesystem:
 benchmark:
   name: "Lustre I/O Benchmark"
   workdir: "/lustre/project/benchmark"
-  track_executions: false
-  collect_system_info: false
+  probes:
+    execution_index: false
+    system_snapshot: false
 ```
 
 ### For Production Runs

@@ -436,7 +436,9 @@ class IOPSRunner(HasLogger):
         Args:
             completed_tests: List of completed ExecutionInstance objects
         """
-        if not getattr(self.cfg.benchmark, 'trace_resources', False):
+        probes = self.cfg.benchmark.probes
+        resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
+        if not resource_sampling:
             return
 
         rows = []
@@ -1500,7 +1502,9 @@ class IOPSRunner(HasLogger):
                         f"[{test_count:3d}] {test.execution_id} (rep {test.repetition}/{test.repetitions}) "
                         f"-> SKIPPED (not in cache)"
                     )
-                    if getattr(self.cfg.benchmark, 'track_executions', True):
+                    probes = self.cfg.benchmark.probes
+                    execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+                    if execution_index:
                         self._write_status_file(test, status='SKIPPED')
                     # Still notify planner so it can aggregate available repetitions
                     self.planner.record_completed_test(test)
@@ -1509,7 +1513,9 @@ class IOPSRunner(HasLogger):
                 # Write initial status before execution starts
                 # Local executor: RUNNING (runs immediately)
                 # SLURM executor: PENDING (job goes to queue first)
-                if getattr(self.cfg.benchmark, 'track_executions', True):
+                probes = self.cfg.benchmark.probes
+                execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+                if execution_index:
                     self._write_status_file(test, status=self.executor.INITIAL_STATUS)
 
                 self.executor.submit(test)
@@ -1528,8 +1534,10 @@ class IOPSRunner(HasLogger):
                     )
 
             # Write status file for 'iops find' command (for both executed and cached results)
-            # Can be disabled with track_executions: false to reduce file I/O
-            if getattr(self.cfg.benchmark, 'track_executions', True):
+            # Can be disabled with probes.execution_index: false to reduce file I/O
+            probes = self.cfg.benchmark.probes
+            execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+            if execution_index:
                 self._write_status_file(test)
 
             # Log test summary (clean single-line output at INFO level)

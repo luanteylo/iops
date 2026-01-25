@@ -28,6 +28,7 @@ from iops.config.models import (
     AllocationConfig,
     RandomSamplingConfig,
     BayesianConfig,
+    ProbesConfig,
     VarConfig,
     SweepConfig,
     ConstraintConfig,
@@ -57,9 +58,13 @@ ALLOWED_BENCHMARK_KEYS = {
     "search_method", "executor", "slurm_options", "executor_options",  # executor_options is deprecated
     "random_seed", "cache_exclude_vars", "exhaustive_vars", "max_core_hours", "cores_expr",
     "estimated_time_seconds", "report_vars", "bayesian_config", "random_config",
+    "probes",  # New nested probe configuration
+    # Deprecated fields (use probes.* instead) - kept for backwards compatibility
     "collect_system_info", "track_executions", "create_folders_upfront",
     "trace_resources", "trace_interval",
 }
+
+ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "sampling_interval"}
 
 ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
@@ -600,15 +605,19 @@ def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> Non
     """
     Check if system probe is compatible with the configured scripts.
 
-    If any script uses a non-bash shell and collect_system_info is enabled,
+    If any script uses a non-bash shell and system_snapshot is enabled,
     disable it and warn the user.
 
     Args:
         cfg: The configuration object (may be modified)
         logger: Logger instance for warnings
     """
-    if not cfg.benchmark.collect_system_info:
+    # Check using probes config (preferred) or fall back to deprecated field
+    probes = cfg.benchmark.probes
+    if probes and not probes.system_snapshot:
         return  # Already disabled, nothing to check
+    elif not probes and not cfg.benchmark.collect_system_info:
+        return  # Already disabled (deprecated path), nothing to check
 
     incompatible_scripts = []
     for script in cfg.scripts:
@@ -616,11 +625,14 @@ def check_system_probe_compatibility(cfg: GenericBenchmarkConfig, logger) -> Non
             incompatible_scripts.append(script.name)
 
     if incompatible_scripts:
+        # Update both new and deprecated fields for backwards compatibility
+        if probes:
+            probes.system_snapshot = False
         cfg.benchmark.collect_system_info = False
         if logger:
             logger.warning(
                 f"System probe disabled: non-bash shell detected in script(s): {incompatible_scripts}. "
-                f"The probe requires bash features. Set collect_system_info: false to silence this warning."
+                f"The probe requires bash features. Set probes.system_snapshot: false to silence this warning."
             )
 
 
@@ -628,15 +640,19 @@ def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) ->
     """
     Check if resource sampler is compatible with the configured scripts.
 
-    If any script uses a non-bash shell and trace_resources is enabled,
+    If any script uses a non-bash shell and resource_sampling is enabled,
     disable it and warn the user.
 
     Args:
         cfg: The configuration object (may be modified)
         logger: Logger instance for warnings
     """
-    if not cfg.benchmark.trace_resources:
+    # Check using probes config (preferred) or fall back to deprecated field
+    probes = cfg.benchmark.probes
+    if probes and not probes.resource_sampling:
         return  # Already disabled, nothing to check
+    elif not probes and not cfg.benchmark.trace_resources:
+        return  # Already disabled (deprecated path), nothing to check
 
     incompatible_scripts = []
     for script in cfg.scripts:
@@ -644,11 +660,14 @@ def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) ->
             incompatible_scripts.append(script.name)
 
     if incompatible_scripts:
+        # Update both new and deprecated fields for backwards compatibility
+        if probes:
+            probes.resource_sampling = False
         cfg.benchmark.trace_resources = False
         if logger:
             logger.warning(
                 f"Resource sampler disabled: non-bash shell detected in script(s): {incompatible_scripts}. "
-                f"The sampler requires bash features. Set trace_resources: false to silence this warning."
+                f"The sampler requires bash features. Set probes.resource_sampling: false to silence this warning."
             )
 
 
@@ -828,6 +847,68 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             xi_boost_factor=float(bc.get("xi_boost_factor", 5.0)),
         )
 
+    # Parse probes config (new nested format) with backwards compatibility
+    probes_config = None
+    deprecated_probe_fields = ["collect_system_info", "track_executions", "trace_resources", "trace_interval"]
+    has_deprecated_fields = any(field in b and b[field] is not None for field in deprecated_probe_fields)
+
+    if "probes" in b and b["probes"] is not None:
+        # New probes: section exists - use it
+        probes_data = b["probes"]
+
+        # Validate probes keys
+        key_errors = _validate_allowed_keys(probes_data, ALLOWED_PROBES_KEYS, "benchmark.probes")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+
+        probes_config = ProbesConfig(
+            system_snapshot=probes_data.get("system_snapshot", True),
+            execution_index=probes_data.get("execution_index", True),
+            resource_sampling=probes_data.get("resource_sampling", False),
+            sampling_interval=probes_data.get("sampling_interval", 1.0),
+        )
+
+        # Warn if old fields are also present (new takes precedence)
+        if has_deprecated_fields:
+            import warnings
+            warnings.warn(
+                "Both 'probes:' section and deprecated fields (collect_system_info, track_executions, "
+                "trace_resources, trace_interval) are present. Using 'probes:' section values. "
+                "Remove deprecated fields to silence this warning. "
+                "See https://iops.dev/about/deprecations for migration guide.",
+                DeprecationWarning,
+                stacklevel=4
+            )
+    else:
+        # No probes: section - check for deprecated fields and emit warnings
+        if has_deprecated_fields:
+            import warnings
+            # Build list of deprecated fields that are set
+            used_deprecated = [f for f in deprecated_probe_fields if f in b]
+            deprecation_mapping = {
+                "collect_system_info": "probes.system_snapshot",
+                "track_executions": "probes.execution_index",
+                "trace_resources": "probes.resource_sampling",
+                "trace_interval": "probes.sampling_interval",
+            }
+            migration_hints = [f"  • {old} -> {deprecation_mapping[old]}" for old in used_deprecated]
+            warnings.warn(
+                f"Deprecated probe fields found: {used_deprecated}. "
+                f"Migrate to nested probes: section:\n"
+                + "\n".join(migration_hints) + "\n"
+                "See https://iops.dev/about/deprecations for migration guide.",
+                DeprecationWarning,
+                stacklevel=4
+            )
+
+        # Create ProbesConfig from old field values
+        probes_config = ProbesConfig(
+            system_snapshot=b.get("collect_system_info", True),
+            execution_index=b.get("track_executions", True),
+            resource_sampling=b.get("trace_resources", False),
+            sampling_interval=b.get("trace_interval", 1.0),
+        )
+
     benchmark = BenchmarkConfig(
         name=b["name"],
         description=b.get("description"),
@@ -846,11 +927,13 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         report_vars=b.get("report_vars"),
         bayesian_config=bayesian_config,
         random_config=random_config,
-        collect_system_info=b.get("collect_system_info", True),
-        track_executions=b.get("track_executions", True),
+        probes=probes_config,
+        # Keep old fields synced for backwards compatibility during transition
+        collect_system_info=probes_config.system_snapshot,
+        track_executions=probes_config.execution_index,
         create_folders_upfront=b.get("create_folders_upfront", False),
-        trace_resources=b.get("trace_resources", False),
-        trace_interval=b.get("trace_interval", 1.0),
+        trace_resources=probes_config.resource_sampling,
+        trace_interval=probes_config.sampling_interval,
     )
 
     # ---- vars ----
@@ -1432,7 +1515,13 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     "from adapting based on results. Use mode='per-test' for Bayesian optimization."
                 )
 
-    # trace_interval validation
+    # sampling_interval validation (probes config)
+    probes = cfg.benchmark.probes
+    if probes and probes.sampling_interval is not None and probes.sampling_interval <= 0:
+        raise ConfigValidationError(
+            f"benchmark.probes.sampling_interval must be a positive number (got '{probes.sampling_interval}')"
+        )
+    # Also validate deprecated field for backwards compatibility
     if cfg.benchmark.trace_interval is not None and cfg.benchmark.trace_interval <= 0:
         raise ConfigValidationError(
             f"benchmark.trace_interval must be a positive number (got '{cfg.benchmark.trace_interval}')"

@@ -229,7 +229,8 @@ The bash `$SECONDS` variable automatically tracks time since script start:
 
 ```yaml
 benchmark:
-  collect_system_info: false
+  probes:
+    system_snapshot: false
 ```
 
 When disabled:

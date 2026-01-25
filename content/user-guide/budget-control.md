@@ -84,11 +84,11 @@ IOPS uses two sources for duration, in order of preference:
 
 ### 1. System Probe (Preferred)
 
-When `collect_system_info: true` (default), IOPS injects a probe into your scripts that captures the actual execution time using bash's `$SECONDS` variable. This measures only the script runtime on the compute node.
+When `probes.system_snapshot: true` (default), IOPS injects a probe into your scripts that captures the actual execution time using bash's `$SECONDS` variable. This measures only the script runtime on the compute node.
 
 ### 2. Job Timestamps (Fallback)
 
-If the system probe is disabled (`collect_system_info: false`) or unavailable, IOPS falls back to job timestamps recorded during execution.
+If the system probe is disabled (`probes.system_snapshot: false`) or unavailable, IOPS falls back to job timestamps recorded during execution.
 
 IOPS tracks three timestamps:
 - **`__submission_time`**: When the job was submitted (sbatch called)
@@ -107,7 +107,7 @@ The fallback prioritizes `__job_start` over `__submission_time` to exclude queue
 
 For SLURM jobs, the queue wait time (`__job_start - __submission_time`) is excluded from core-hours calculations when using timestamp fallback. However, the system probe is still preferred as it captures the exact script execution time.
 
-**Recommendation:** Keep `collect_system_info: true` (default) for accurate budget tracking with SLURM.
+**Recommendation:** Keep `probes.system_snapshot: true` (default) for accurate budget tracking with SLURM.
 
 ---
 

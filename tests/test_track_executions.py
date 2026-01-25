@@ -118,9 +118,11 @@ class TestPlannerTrackExecutions:
     def test_prepare_execution_artifacts_skips_params_file_when_disabled(
         self, sample_config_file, tmp_path
     ):
-        """Test that params file is NOT written when track_executions=False."""
+        """Test that params file is NOT written when execution_index=False."""
         config = load_config(sample_config_file)
-        config.benchmark.track_executions = False  # Explicitly disable
+        config.benchmark.track_executions = False  # Deprecated field
+        if config.benchmark.probes:
+            config.benchmark.probes.execution_index = False  # New field
 
         planner = ExhaustivePlanner(config)
         planner._build_execution_matrix()
@@ -191,7 +193,9 @@ class TestPlannerTrackExecutions:
     ):
         """Test that params file is not written even on first repetition when disabled."""
         config = load_config(sample_config_file)
-        config.benchmark.track_executions = False
+        config.benchmark.track_executions = False  # Deprecated field
+        if config.benchmark.probes:
+            config.benchmark.probes.execution_index = False  # New field
 
         planner = ExhaustivePlanner(config)
         planner._build_execution_matrix()
@@ -521,7 +525,9 @@ class TestTrackExecutionsIntegration:
     ):
         """Test that neither params nor status files are created when disabled."""
         config = load_config(sample_config_file)
-        config.benchmark.track_executions = False
+        config.benchmark.track_executions = False  # Deprecated field
+        if config.benchmark.probes:
+            config.benchmark.probes.execution_index = False  # New field
 
         # 1. Planner skips params file
         planner = ExhaustivePlanner(config)

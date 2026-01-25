@@ -82,10 +82,13 @@ benchmark:
   random_seed: integer              # Optional: seed for randomization (default: 42)
   cache_file: path                  # Optional: cache file location
   cache_exclude_vars: list          # Optional: vars to exclude from cache hash
-  collect_system_info: boolean      # Optional: collect system info (default: true)
-  track_executions: boolean         # Optional: write metadata files (default: true)
-  trace_resources: boolean          # Optional: enable resource tracing (default: false)
-  trace_interval: float             # Optional: sampling interval in seconds (default: 1.0)
+
+  probes:                           # Optional: probe configuration
+    system_snapshot: boolean        #   Collect system info (default: true)
+    execution_index: boolean        #   Write metadata files (default: true)
+    resource_sampling: boolean      #   Enable resource tracing (default: false)
+    sampling_interval: float        #   Sampling interval in seconds (default: 1.0)
+
   create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
   exhaustive_vars: list             # Optional: vars to test exhaustively
   report_vars: list                 # Optional: vars to include in reports
@@ -223,17 +226,28 @@ Path to cache file. Required for `--use-cache` flag.
 #### `cache_exclude_vars` (optional)
 Variables to exclude from cache hash (e.g., path-based derived variables).
 
-#### `collect_system_info` (optional, default: true)
-Collect hardware/environment info from compute nodes.
+<details>
+<summary><strong>probes</strong> (optional)</summary>
 
-#### `track_executions` (optional, default: true)
-Write metadata files for `iops find` command.
+Configuration for IOPS probes (system monitoring and execution tracking):
 
-#### `trace_resources` (optional, default: false)
-Enable CPU and memory tracing during execution. See [Resource Tracing](../resource-tracing).
+```yaml
+benchmark:
+  probes:
+    system_snapshot: true      # Collect system info from compute nodes
+    execution_index: true      # Write metadata files for 'iops find'
+    resource_sampling: false   # Enable CPU/memory tracing
+    sampling_interval: 1.0     # Sampling interval in seconds
+```
 
-#### `trace_interval` (optional, default: 1.0)
-Sampling interval in seconds for resource tracing. Only used when `trace_resources: true`.
+| Field | Default | Description |
+|-------|---------|-------------|
+| `system_snapshot` | `true` | Collect hardware/environment info from compute nodes |
+| `execution_index` | `true` | Write metadata files for `iops find` command |
+| `resource_sampling` | `false` | Enable CPU and memory tracing during execution. See [Resource Tracing](../resource-tracing) |
+| `sampling_interval` | `1.0` | Sampling interval in seconds for resource tracing |
+
+</details>
 
 #### `create_folders_upfront` (optional, default: false)
 Create all execution folders at run start instead of lazily during execution.

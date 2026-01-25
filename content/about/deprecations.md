@@ -46,4 +46,43 @@ benchmark:
       submit: "sbatch"
 ```
 
+### Probe Configuration Fields → `benchmark.probes` Section
+
+The flat probe configuration fields have been consolidated into a nested `probes:` section for better organization.
+
+| Deprecated Field | New Field | Deprecated in | Remove after |
+|------------------|-----------|---------------|--------------|
+| `benchmark.collect_system_info` | `benchmark.probes.system_snapshot` | 3.5.0 | 3.7.0 |
+| `benchmark.track_executions` | `benchmark.probes.execution_index` | 3.5.0 | 3.7.0 |
+| `benchmark.trace_resources` | `benchmark.probes.resource_sampling` | 3.5.0 | 3.7.0 |
+| `benchmark.trace_interval` | `benchmark.probes.sampling_interval` | 3.5.0 | 3.7.0 |
+
+**Before:**
+```yaml
+benchmark:
+  name: "My Study"
+  workdir: "./results"
+  collect_system_info: true
+  track_executions: true
+  trace_resources: true
+  trace_interval: 0.5
+```
+
+**After:**
+```yaml
+benchmark:
+  name: "My Study"
+  workdir: "./results"
+  probes:
+    system_snapshot: true      # Collect system info from compute nodes
+    execution_index: true      # Write metadata files for 'iops find'
+    resource_sampling: true    # Enable CPU/memory tracing
+    sampling_interval: 0.5     # Sampling interval in seconds
+```
+
+**Benefits:**
+- Clearer organization: all probe-related settings in one place
+- More descriptive names: `system_snapshot` vs `collect_system_info`
+- Easier to enable/disable all probing with a single section
+
 

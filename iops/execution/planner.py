@@ -140,7 +140,7 @@ _iops_collect_sysinfo() {{
       echo "{{"
       echo "  \\"hostname\\": \\"$(hostname 2>/dev/null || echo 'unknown')\\","
       echo "  \\"cpu_model\\": \\"$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^[ \\t]*//' | sed 's/"/\\\\"/g' || echo 'unknown')\\","
-      echo "  \\"cpu_cores\\": $(nproc 2>/dev/null || echo 0),"
+      echo "  \\"cpu_cores\\": $(getconf _NPROCESSORS_CONF 2>/dev/null || nproc 2>/dev/null || echo 0),"
       echo "  \\"memory_kb\\": $(awk '/MemTotal/{{print $2}}' /proc/meminfo 2>/dev/null || echo 0),"
       echo "  \\"kernel\\": \\"$(uname -r 2>/dev/null || echo 'unknown')\\","
       echo "  \\"os\\": \\"$(grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\\"' || uname -s 2>/dev/null || echo 'unknown')\\","
@@ -371,7 +371,9 @@ class BasePlanner(ABC, HasLogger):
             self.logger.info("  bayesian_config: %s", bench.bayesian_config)
         if bench.random_config:
             self.logger.info("  random_config: %s", bench.random_config)
-        self.logger.info("  collect_system_info: %s", bench.collect_system_info)
+        if bench.probes:
+            self.logger.info("  probes: system_snapshot=%s, execution_index=%s, resource_sampling=%s",
+                           bench.probes.system_snapshot, bench.probes.execution_index, bench.probes.resource_sampling)
 
     @classmethod
     def register(cls, name):
@@ -773,7 +775,9 @@ class BasePlanner(ABC, HasLogger):
 
         # In single-allocation preparation mode, write PENDING status to repetition folder
         # This allows watch mode to properly count pending tests before execution starts
-        if getattr(self, '_kickoff_preparation', False) and getattr(self.cfg.benchmark, 'track_executions', True):
+        probes = self.cfg.benchmark.probes
+        execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+        if getattr(self, '_kickoff_preparation', False) and execution_index:
             rep_status_file = exec_dir / STATUS_FILENAME
             with open(rep_status_file, "w") as f:
                 json.dump({"status": "PENDING"}, f)
@@ -783,8 +787,8 @@ class BasePlanner(ABC, HasLogger):
         test.execution_dir = exec_dir
 
         # Write params/index files in exec folder (only on first repetition)
-        # Can be disabled with track_executions: false to reduce file I/O
-        if repetition == 1 and getattr(self.cfg.benchmark, 'track_executions', True):
+        # Can be disabled with probes.execution_index: false to reduce file I/O
+        if repetition == 1 and execution_index:
             # In dynamic mode: create params file for the first time
             # In upfront mode: update params file with resolved values (execution_dir now known)
             self._write_params_file(test, exec_parent_dir)
@@ -840,12 +844,13 @@ class BasePlanner(ABC, HasLogger):
         Returns:
             Script text with all IOPS sources injected after shebang/#SBATCH
         """
-        # Check which features are enabled
-        trace_resources = getattr(self.cfg.benchmark, 'trace_resources', False)
-        collect_system_info = getattr(self.cfg.benchmark, 'collect_system_info', True)
+        # Check which features are enabled (use probes config or fallback to deprecated fields)
+        probes = self.cfg.benchmark.probes
+        resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
+        system_snapshot = probes.system_snapshot if probes else self.cfg.benchmark.collect_system_info
 
         # If no features enabled, return script unchanged
-        if not trace_resources and not collect_system_info:
+        if not resource_sampling and not system_snapshot:
             return script_text
 
         # Build list of source lines to inject
@@ -861,28 +866,28 @@ class BasePlanner(ABC, HasLogger):
         source_lines.append(f'source "{handler_file}"')
 
         # 2. Runtime scripts (run during execution)
-        if trace_resources:
-            # To disable: set benchmark.trace_resources: false in config
-            trace_interval = getattr(self.cfg.benchmark, 'trace_interval', 1.0)
+        if resource_sampling:
+            # To disable: set probes.resource_sampling: false in config
+            sampling_interval = probes.sampling_interval if probes else self.cfg.benchmark.trace_interval
             sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
                 execution_dir=str(exec_dir),
                 trace_prefix=TRACE_FILENAME_PREFIX,
-                trace_interval=trace_interval,
+                trace_interval=sampling_interval,
                 sentinel_filename=SAMPLER_SENTINEL_FILENAME
             )
             sampler_file = exec_dir / RUNTIME_SAMPLER_FILENAME
             with open(sampler_file, "w") as f:
                 f.write(sampler_script)
-            source_lines.append(f'source "{sampler_file}"  # disable: trace_resources: false')
+            source_lines.append(f'source "{sampler_file}"  # disable: probes.resource_sampling: false')
 
         # 3. At-exit scripts (run on script exit via trap)
-        if collect_system_info:
-            # To disable: set benchmark.collect_system_info: false in config
+        if system_snapshot:
+            # To disable: set probes.system_snapshot: false in config
             probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
             probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
             with open(probe_file, "w") as f:
                 f.write(probe_script)
-            source_lines.append(f'source "{probe_file}"  # disable: collect_system_info: false')
+            source_lines.append(f'source "{probe_file}"  # disable: probes.system_snapshot: false')
 
         source_lines.append('# ===== IOPS INJECTION END =====')
 
@@ -1013,7 +1018,9 @@ class BasePlanner(ABC, HasLogger):
             reason: Skip reason: "constraint" or "planner"
             message: Additional message (e.g., constraint violation message)
         """
-        if not getattr(self.cfg.benchmark, 'track_executions', True):
+        probes = self.cfg.benchmark.probes
+        execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+        if not execution_index:
             return
 
         marker_file = exec_dir / SKIPPED_MARKER_FILENAME
@@ -1042,7 +1049,9 @@ class BasePlanner(ABC, HasLogger):
             active_instances: Tests that will be executed
             skipped_instances: Tests that were skipped (constraint or planner)
         """
-        if not getattr(self.cfg.benchmark, 'track_executions', True):
+        probes = self.cfg.benchmark.probes
+        execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+        if not execution_index:
             return
 
         run_root = Path(self.cfg.benchmark.workdir)
@@ -1137,7 +1146,9 @@ class BasePlanner(ABC, HasLogger):
             active_count: Number of active (non-skipped) tests
             skipped_count: Number of skipped tests
         """
-        if not getattr(self.cfg.benchmark, 'track_executions', True):
+        probes = self.cfg.benchmark.probes
+        execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+        if not execution_index:
             return
 
         run_root = Path(self.cfg.benchmark.workdir)

@@ -60,7 +60,7 @@ class TestResourceTracingConfig:
         assert config.benchmark.trace_interval == 0.5
 
     def test_trace_interval_validation_rejects_zero(self, sample_config_dict, tmp_path):
-        """Test that trace_interval must be positive."""
+        """Test that trace_interval/sampling_interval must be positive."""
         from iops.config.models import ConfigValidationError
 
         sample_config_dict["benchmark"]["trace_interval"] = 0
@@ -70,11 +70,12 @@ class TestResourceTracingConfig:
 
         with pytest.raises(ConfigValidationError) as exc_info:
             load_config(config_file)
-        assert "trace_interval" in str(exc_info.value)
+        # Accept either old or new field name in error message
+        assert "trace_interval" in str(exc_info.value) or "sampling_interval" in str(exc_info.value)
         assert "positive" in str(exc_info.value)
 
     def test_trace_interval_validation_rejects_negative(self, sample_config_dict, tmp_path):
-        """Test that negative trace_interval is rejected."""
+        """Test that negative trace_interval/sampling_interval is rejected."""
         from iops.config.models import ConfigValidationError
 
         sample_config_dict["benchmark"]["trace_interval"] = -1.0
@@ -84,7 +85,8 @@ class TestResourceTracingConfig:
 
         with pytest.raises(ConfigValidationError) as exc_info:
             load_config(config_file)
-        assert "trace_interval" in str(exc_info.value)
+        # Accept either old or new field name in error message
+        assert "trace_interval" in str(exc_info.value) or "sampling_interval" in str(exc_info.value)
 
 
 # ============================================================================ #

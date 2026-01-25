@@ -22,13 +22,14 @@ Enable resource tracing in your configuration:
 ```yaml
 benchmark:
   name: "My Benchmark"
-  trace_resources: true    # Enable tracing (default: false)
-  trace_interval: 1.0      # Sample every 1 second (default)
+  probes:
+    resource_sampling: true    # Enable tracing (default: false)
+    sampling_interval: 1.0     # Sample every 1 second (default)
 ```
 
 ## How It Works
 
-When `trace_resources: true`, IOPS injects a resource sampler (`__iops_runtime_sampler.sh`) into each benchmark script. The sampler:
+When `probes.resource_sampling: true`, IOPS injects a resource sampler (`__iops_runtime_sampler.sh`) into each benchmark script. The sampler:
 
 1. **Runs with low priority** (`renice -n 19`) to minimize interference
 2. **Samples at configurable intervals** from `/proc/stat` and `/proc/meminfo`
@@ -108,12 +109,13 @@ The following intermediate values are computed per sample:
 
 ```yaml
 benchmark:
-  # Enable resource tracing (default: false)
-  trace_resources: true
+  probes:
+    # Enable resource tracing (default: false)
+    resource_sampling: true
 
-  # Sampling interval in seconds (default: 1.0)
-  # Lower = finer granularity but more data
-  trace_interval: 0.5
+    # Sampling interval in seconds (default: 1.0)
+    # Lower = finer granularity but more data
+    sampling_interval: 0.5
 ```
 
 ## Multi-Node Support

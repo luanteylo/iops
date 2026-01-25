@@ -266,6 +266,7 @@ class TestLogExecutionContext:
         args.config_file = sample_config_file
         args.use_cache = False
         args.max_core_hours = None
+        args.meline = False
 
         logger = Mock()
 

@@ -448,7 +448,7 @@ The runner writes status files for monitoring:
 
 ```python
 def _write_status_file(self, test, status=None):
-    if not track_executions:
+    if not execution_index:  # From probes config
         return
 
     # Determine status
