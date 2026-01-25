@@ -734,16 +734,19 @@ def _build_table(
 
     # Find the most recently submitted test among PENDING tests (for showing active signal)
     # This handles cases where jobs complete so fast we never see RUNNING status
+    # Only use this fallback if NO test is currently RUNNING
+    has_running_test = any(status == "RUNNING" for _, _, is_queued, status in display_items if not is_queued)
     most_recent_pending_key = None
-    most_recent_submission = None
-    for _, test, is_queued, status in display_items:
-        if is_queued or test is None:
-            continue
-        if status == "PENDING" and test.get("folders_exist", False):
-            submission = test.get("latest_submission_time")
-            if submission and (most_recent_submission is None or submission > most_recent_submission):
-                most_recent_submission = submission
-                most_recent_pending_key = test.get("exec_key")
+    if not has_running_test:
+        most_recent_submission = None
+        for _, test, is_queued, status in display_items:
+            if is_queued or test is None:
+                continue
+            if status == "PENDING" and test.get("folders_exist", False):
+                submission = test.get("latest_submission_time")
+                if submission and (most_recent_submission is None or submission > most_recent_submission):
+                    most_recent_submission = submission
+                    most_recent_pending_key = test.get("exec_key")
 
     # Add rows
     for exec_id, test, is_queued, _ in display_items:
