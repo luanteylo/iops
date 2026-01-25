@@ -1,6 +1,8 @@
 ---
 title: "TOTO Overhead Analysis"
-weight: 10
+subtitle: "Measuring the runtime overhead of an I/O interception library"
+date: 2024-11-20
+tags: ["overhead-analysis", "resource-tracing", "slurm", "ld-preload"]
 ---
 
 When you intercept I/O system calls to analyze application behavior, how much overhead do you actually add? That's the question we needed to answer for TOTO (Transparent and Online Tool for I/O), a library that hooks into I/O calls via `LD_PRELOAD` to provide runtime analysis of parallel file system access patterns.

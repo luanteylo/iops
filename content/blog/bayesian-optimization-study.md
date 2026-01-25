@@ -1,11 +1,11 @@
 ---
 title: "Bayesian Optimization Benchmark"
-weight: 2
+subtitle: "Testing IOPS's BO search against random sampling using cached HPC results"
+date: 2025-01-15
+tags: ["bayesian-optimization", "caching", "benchmarking"]
 ---
 
 
-
-## Overview
 
 IOPS can use Bayesian Optimization when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's random search. The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it. So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. So we ran `iops generate` and started editing a YAML file to make IOPS run itself, like in the movie Inception. 
 
