@@ -167,7 +167,7 @@ class TestIOPSConfigWithSlurm:
                 "script_template": "#!/bin/bash\necho {{ x }}",
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 
@@ -212,7 +212,7 @@ module purge""",
                 "script_template": "#!/bin/bash\necho {{ x }}",
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 
@@ -253,7 +253,7 @@ module purge""",
                 "script_template": "#!/bin/bash\necho {{ x }}",
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 
@@ -333,7 +333,7 @@ def parse(file_path):
                 }
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 
@@ -406,7 +406,7 @@ def parse(file_path):
                 }
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 
@@ -475,7 +475,7 @@ def parse(file_path):
                 }
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 
@@ -544,7 +544,7 @@ exit 1
                 }
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 
@@ -614,7 +614,7 @@ def parse(file_path):
                 }
             }],
             "output": {
-                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv", "mode": "append"}
+                "sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}
             }
         }
 

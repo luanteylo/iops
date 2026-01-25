@@ -583,7 +583,7 @@ scripts:
 # OUTPUT CONFIGURATION
 # =============================================================================
 # Define how results should be stored
-# Supports schema evolution: new columns are added automatically in append mode
+# Results are always appended to the output file (schema evolution supported)
 # =============================================================================
 output:
   sink:
@@ -595,11 +595,6 @@ output:
     #           parquet -> {{ workdir }}/results.parquet
     #           sqlite -> {{ workdir }}/results.db
     # path: "{{ workdir }}/results.csv"
-
-    # Write mode:
-    #   - append: Add to existing file (creates if missing)
-    #   - overwrite: Replace existing file
-    mode: append
 
     # Optional: Exclude specific fields from output
     # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB

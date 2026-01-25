@@ -124,7 +124,6 @@ output:
   sink:
     type: csv
     path: "{{{{ workdir }}}}/results.csv"
-    mode: append
 """
 
 
@@ -751,7 +750,6 @@ output:
   sink:
     type: csv
     path: "{{{{ workdir }}}}/results.csv"
-    mode: append
 """
         config_file = tmp_path / "config.yaml"
         config_file.write_text(config_content)
@@ -837,7 +835,6 @@ output:
   sink:
     type: csv
     path: "{{{{ workdir }}}}/results.csv"
-    mode: append
 """
 
     def test_slurm_basic_run(self, mock_workdir, slurm_config, tmp_path):

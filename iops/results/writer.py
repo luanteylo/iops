@@ -167,18 +167,18 @@ def build_output_row(test) -> Dict[str, Any]:
 # Sink writers
 # -------------------------
 
-def _write_csv(path: Path, df: pd.DataFrame, mode: str) -> None:
+def _write_csv(path: Path, df: pd.DataFrame) -> None:
     """
-    CSV writer with schema stabilization.
+    CSV writer with schema stabilization (always appends).
 
-    - overwrite OR file missing: write df with its columns
-    - append AND file exists:
+    - file missing: write df with its columns
+    - file exists:
         * align incoming df to existing header columns
         * if new columns appear, rewrite entire file with extended header
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if mode == "overwrite" or not path.exists():
+    if not path.exists():
         df.to_csv(path, index=False)
         return
 
@@ -201,17 +201,17 @@ def _write_csv(path: Path, df: pd.DataFrame, mode: str) -> None:
     df.to_csv(path, index=False, mode="a", header=False)
 
 
-def _write_parquet(path: Path, df: pd.DataFrame, mode: str) -> None:
+def _write_parquet(path: Path, df: pd.DataFrame) -> None:
     """
-    Parquet schema stabilization similar to CSV.
+    Parquet writer with schema stabilization (always appends).
 
-    - overwrite OR missing: write
-    - append: read+concat+rewrite, unioning columns
+    - missing: write
+    - exists: read+concat+rewrite, unioning columns
     """
     _check_pyarrow()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if mode == "overwrite" or not path.exists():
+    if not path.exists():
         df.to_parquet(path, index=False)
         return
 
@@ -230,15 +230,15 @@ def _write_parquet(path: Path, df: pd.DataFrame, mode: str) -> None:
     new.to_parquet(path, index=False)
 
 
-def _write_sqlite(db_path: Path, table: str, df: pd.DataFrame, mode: str) -> None:
+def _write_sqlite(db_path: Path, table: str, df: pd.DataFrame) -> None:
     """
-    SQLite: appends rows. Note: schema evolution (new columns) is not handled here.
+    SQLite writer (always appends).
+
+    Note: schema evolution (new columns) is not handled here.
     If you want schema evolution for sqlite, you need ALTER TABLE logic.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as con:
-        if mode == "overwrite":
-            con.execute(f'DROP TABLE IF EXISTS "{table}"')
         df.to_sql(table, con, if_exists="append", index=False)
 
 
@@ -257,19 +257,18 @@ def save_test_execution(test) -> Path:
     df = pd.DataFrame([row])
 
     typ = str(getattr(test, "output_type", "")).lower().strip()
-    mode = str(getattr(test, "output_mode", "append")).lower().strip()
 
     if typ == "csv":
-        _write_csv(Path(out_path), df, mode)
+        _write_csv(Path(out_path), df)
         return Path(out_path)
 
     if typ == "parquet":
-        _write_parquet(Path(out_path), df, mode)
+        _write_parquet(Path(out_path), df)
         return Path(out_path)
 
     if typ == "sqlite":
         table = getattr(test, "output_table", None) or "results"
-        _write_sqlite(Path(out_path), table, df, mode)
+        _write_sqlite(Path(out_path), table, df)
         return Path(out_path)
 
     raise ValueError(f"Unsupported output type: {getattr(test, 'output_type', None)}")

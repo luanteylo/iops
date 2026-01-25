@@ -326,7 +326,6 @@ class ExecutionInstance:
     # Output configuration (template + selection)
     output_path_template: str | None = None
     output_type: str = "parquet"   # csv | parquet | sqlite
-    output_mode: str = "append"    # append | overwrite
     output_table: str = "results"  # sqlite only
 
     output_exclude: List[str] = field(default_factory=list)
@@ -630,7 +629,7 @@ class ExecutionInstance:
         if self.output_path:
             extra = f", table={self.output_table}" if self.output_type == "sqlite" else ""
             lines.append(
-                f"Output: type={self.output_type}, mode={self.output_mode}, path={self.output_path}{extra}"
+                f"Output: type={self.output_type}, path={self.output_path}{extra}"
             )
             if self.output_exclude:
                 lines.append(f"Output fields (exclude): {', '.join(self.output_exclude)}")
@@ -697,7 +696,6 @@ class ExecutionInstance:
             lines.extend([
                 sep,
                 f"Output type : {self.output_type}",
-                f"Output mode : {self.output_mode}",
                 f"Output path : {self.output_path}",
             ])
             if self.output_type == "sqlite":
@@ -802,7 +800,6 @@ def _create_execution_instance(
     # Output sink templates
     output_path_template = cfg.output.sink.path
     output_type = cfg.output.sink.type
-    output_mode = cfg.output.sink.mode
     output_table = cfg.output.sink.table
     output_exclude = list(cfg.output.sink.exclude)
 
@@ -849,7 +846,6 @@ def _create_execution_instance(
         parser_template=parser_template,
         output_path_template=output_path_template,
         output_type=output_type,
-        output_mode=output_mode,
         output_table=output_table,
         output_exclude=output_exclude,
     )

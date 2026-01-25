@@ -65,8 +65,7 @@ def simple_integration_config(tmp_path):
         "output": {
             "sink": {
                 "type": "csv",
-                "path": str(workdir / "results.csv"),
-                "mode": "append"
+                "path": str(workdir / "results.csv")
             }
         }
     }
@@ -197,8 +196,7 @@ def test_integration_with_post_script(tmp_path):
         "output": {
             "sink": {
                 "type": "csv",
-                "path": str(workdir / "results.csv"),
-                "mode": "overwrite"
+                "path": str(workdir / "results.csv")
             }
         }
     }

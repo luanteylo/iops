@@ -97,7 +97,6 @@ def test_config_output_settings(sample_config_file):
     config = load_config(sample_config_file)
 
     assert config.output.sink.type == "csv"
-    assert config.output.sink.mode == "append"
     assert "workdir" in config.output.sink.path
 
 
