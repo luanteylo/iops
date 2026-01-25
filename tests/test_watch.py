@@ -271,7 +271,7 @@ class TestBuildTable:
             mock_run_dir, executions, {}, None, set()
         )
 
-        table, shown, total, _, _ = _build_table(tests, show_command=False,
+        table, shown, total, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
@@ -288,7 +288,7 @@ class TestBuildTable:
             mock_run_dir, executions, {}, None, set()
         )
 
-        table, shown, total, _, _ = _build_table(tests, show_command=True,
+        table, shown, total, _, _, _ = _build_table(tests, show_command=True,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
@@ -306,7 +306,7 @@ class TestBuildTable:
             mock_run_dir, executions, {}, None, set()
         )
 
-        table, _, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns={"path"},
                             total_repetitions=repetitions)
 
@@ -324,7 +324,7 @@ class TestBuildTable:
         )
 
         # Build table - vars should always be shown
-        table, _, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
         columns = [col.header for col in table.columns]
@@ -351,7 +351,7 @@ class TestBuildTable:
         )
 
         # Limit to 2 rows (there are 3 tests)
-        table, shown, total, _, hidden_by_status = _build_table(
+        table, shown, total, _, hidden_by_status, _ = _build_table(
             tests, show_command=False, show_full=False, hide_columns=set(),
             total_repetitions=repetitions, max_rows=2
         )
@@ -375,7 +375,7 @@ class TestBuildTable:
         )
 
         # Limit to 1 row - should keep the one with RUNNING status
-        table, shown, total, _, hidden_by_status = _build_table(
+        table, shown, total, _, hidden_by_status, _ = _build_table(
             tests, show_command=False, show_full=False, hide_columns=set(),
             total_repetitions=repetitions, max_rows=1
         )
@@ -426,7 +426,7 @@ class TestMultipleRepetitions:
             expected_repetitions=repetitions
         )
 
-        table, _, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
@@ -448,7 +448,7 @@ class TestMultipleRepetitions:
             expected_repetitions=repetitions
         )
 
-        table, _, _, _, _ = _build_table(tests, show_command=False,
+        table, _, _, _, _, _ = _build_table(tests, show_command=False,
                             show_full=False, hide_columns=set(),
                             total_repetitions=repetitions)
 
@@ -641,3 +641,118 @@ class TestWatchModeErrorWithoutRich:
         assert "rich" in str(error)
         assert "pip install" in str(error)
         assert "iops-benchmark[watch]" in str(error)
+
+
+class TestKeyboardNavigation:
+    """Test keyboard navigation functionality in watch mode."""
+
+    def test_keyboard_function_import(self):
+        """Test that keyboard function can be imported."""
+        from iops.results.watch import _read_keypress_with_timeout, UNIX_TERMINAL
+        assert _read_keypress_with_timeout is not None
+        # UNIX_TERMINAL should be True on Linux
+        assert isinstance(UNIX_TERMINAL, bool)
+
+    def test_build_table_skip_priority_reordering(self, mock_run_dir):
+        """Test that skip_priority_reordering maintains exec ID order."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        tests, _ = _collect_execution_data(
+            mock_run_dir, executions, {}, None, set()
+        )
+
+        # Build table with priority reordering (normal mode)
+        table_normal, _, _, _, _, total_normal = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions, max_rows=2,
+            skip_priority_reordering=False
+        )
+
+        # Build table without priority reordering (pause mode)
+        table_paused, _, _, _, _, total_paused = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions, max_rows=2,
+            skip_priority_reordering=True
+        )
+
+        # Both should have the same total items
+        assert total_normal == total_paused
+        # Both should be limited to max_rows
+        assert table_normal.row_count <= 2
+        assert table_paused.row_count <= 2
+
+    def test_build_table_scroll_offset(self, mock_run_dir):
+        """Test that scroll_offset skips items from the top."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        tests, _ = _collect_execution_data(
+            mock_run_dir, executions, {}, None, set()
+        )
+
+        # Build table with no scroll offset
+        table_no_scroll, shown_no_scroll, _, _, hidden_no_scroll, total = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions, max_rows=2,
+            skip_priority_reordering=True, scroll_offset=0
+        )
+
+        # Build table with scroll offset of 1
+        table_scroll, shown_scroll, _, _, hidden_scroll, _ = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions, max_rows=2,
+            skip_priority_reordering=True, scroll_offset=1
+        )
+
+        # With 3 tests, max_rows=2, offset=0: shows 2, hides 1
+        assert table_no_scroll.row_count == 2
+        assert shown_no_scroll == 2
+
+        # With 3 tests, max_rows=2, offset=1: shows 2, hides 1
+        assert table_scroll.row_count == 2
+        assert shown_scroll == 2
+
+        # Both should report the same total
+        assert total == 3
+
+    def test_build_table_scroll_offset_beyond_end(self, mock_run_dir):
+        """Test that scroll_offset beyond end results in empty or partial table."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        tests, _ = _collect_execution_data(
+            mock_run_dir, executions, {}, None, set()
+        )
+
+        # Build table with scroll offset beyond the number of tests
+        table, shown, _, _, _, total = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions, max_rows=10,
+            skip_priority_reordering=True, scroll_offset=10  # Beyond the 3 tests
+        )
+
+        # Should show 0 items (scrolled past all)
+        assert table.row_count == 0
+        assert shown == 0
+        # Total should still be correct
+        assert total == 3
+
+    def test_build_table_returns_total_display_items(self, mock_run_dir):
+        """Test that _build_table returns total_display_items for scroll calculation."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        tests, _ = _collect_execution_data(
+            mock_run_dir, executions, {}, None, set()
+        )
+
+        # Build table
+        _, _, _, _, _, total_display_items = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=repetitions,
+            skip_priority_reordering=True
+        )
+
+        # total_display_items should match number of tests
+        assert total_display_items == 3

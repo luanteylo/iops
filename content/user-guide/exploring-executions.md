@@ -237,6 +237,7 @@ The watch mode display includes:
 - **Live table** with execution parameters and status
 - **Repetition tracking** showing status of each repetition (e.g., `SSS` for 3 succeeded)
 - **Auto-refresh** at configurable intervals
+- **Keyboard navigation** for browsing large test suites (pause, scroll, search)
 
 ![Watch Mode Interface](../../images/watch_feature.png)
 
@@ -315,9 +316,41 @@ In watch mode, status is displayed using compact symbols:
 
 For multiple repetitions, status is shown as a sequence (e.g., `SRW` means repetition 1 succeeded, repetition 2 is running, repetition 3 is pending).
 
+### Keyboard Navigation
+
+Watch mode supports keyboard shortcuts for navigating large test suites. The current mode is shown in the header as `[LIVE]` or `[PAUSED]`.
+
+**Mode Controls:**
+
+| Key | Action |
+|-----|--------|
+| `p` | Toggle pause mode (freeze row order while status updates continue) |
+| `q` | Quit watch mode |
+
+**Navigation (available in pause mode):**
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Page down |
+| `k` / `↑` | Page up |
+| `g` | Go to first page |
+| `G` | Go to last page |
+| `/` | Search by test ID |
+
+**Live Mode vs Pause Mode:**
+
+- **Live mode** (`[LIVE]`): Rows are automatically reordered by priority (RUNNING > FAILED > PENDING > SUCCEEDED). This keeps active and problematic tests visible at the top.
+- **Pause mode** (`[PAUSED]`): Row order is frozen, allowing you to scroll through all tests. Status updates continue in the background.
+
+When in pause mode with many tests, the header shows your current position (e.g., "Showing 21-40 of 120").
+
+**Search by Test ID:**
+
+Press `/` in pause mode to search for a specific test. Type the test number (e.g., `42` for `exec_0042`) and press Enter to jump to the page containing that test. Press Escape to cancel the search.
+
 ### Exiting Watch Mode
 
-Press `Ctrl+C` to exit watch mode and return to the terminal.
+Press `q` or `Ctrl+C` to exit watch mode and return to the terminal.
 
 ## IOPS Metadata Files
 
