@@ -102,7 +102,8 @@ benchmark:
   executor: "local"
   search_method: "exhaustive"
   repetitions: 1
-  track_executions: true
+  probes:
+    execution_index: true
 
 vars:
   method:
@@ -170,7 +171,7 @@ scripts:
               "executor": "local",
               "random_seed": {{ seed }},
               "cache_exclude_vars": ["summary_file"],
-              "track_executions": True,
+              "probes": {"execution_index": True},
           },
           "vars": {
               "nodes": {"type": "int", "sweep": {"mode": "list", "values": [1, 32, 64]}},
