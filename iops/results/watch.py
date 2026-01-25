@@ -67,13 +67,16 @@ def check_rich_available() -> None:
         )
 
 
-def _read_keypress_with_timeout(timeout: float = 0.1) -> Optional[str]:
+def _read_keypress_with_timeout(timeout: float = 0.05) -> Optional[str]:
     """
     Read a single keypress with timeout (Unix only).
 
     Briefly sets terminal to cbreak mode to read input, then restores.
     Returns the key pressed, or None if no key available within timeout.
     Handles escape sequences for arrow keys.
+
+    Args:
+        timeout: How long to wait for input (default 0.05s for responsiveness)
     """
     if not UNIX_TERMINAL:
         return None
@@ -1534,12 +1537,13 @@ def watch_executions(
                     break
 
                 # Wait for next refresh, checking for keyboard input
-                for _ in range(interval * 10):  # Check every 0.1s
+                # Use 50ms intervals for responsive keyboard handling
+                for _ in range(interval * 20):  # Check every 0.05s
                     if interrupted:
                         break
 
-                    # Check for keyboard input
-                    key = _read_keypress_with_timeout(0.1)
+                    # Check for keyboard input (short timeout for responsiveness)
+                    key = _read_keypress_with_timeout(0.05)
                     if key:
                         if key == 'q':
                             interrupted = True
