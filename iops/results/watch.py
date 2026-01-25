@@ -14,6 +14,8 @@ import time
 import signal
 import sys
 import select
+import os
+import fcntl
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -66,39 +68,77 @@ def check_rich_available() -> None:
         )
 
 
+def _setup_nonblocking_stdin() -> Optional[tuple]:
+    """
+    Set up stdin for non-blocking reads.
+
+    Returns tuple of (old_terminal_settings, old_flags) for restoration,
+    or None if setup fails.
+    """
+    if not UNIX_TERMINAL:
+        return None
+
+    try:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+
+        # Set terminal to cbreak mode (no line buffering, no echo)
+        tty.setcbreak(fd)
+        # Set stdin to non-blocking
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+
+        return (old_settings, old_flags)
+    except Exception:
+        return None
+
+
+def _restore_stdin(saved_state: Optional[tuple]) -> None:
+    """Restore stdin to original settings."""
+    if saved_state is None or not UNIX_TERMINAL:
+        return
+
+    old_settings, old_flags = saved_state
+    try:
+        fd = sys.stdin.fileno()
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
+    except Exception:
+        pass
+
+
 def _read_keypress_nonblocking() -> Optional[str]:
     """
     Read a single keypress without blocking (Unix only).
 
+    Requires stdin to be set up with _setup_nonblocking_stdin() first.
     Returns the key pressed, or None if no key is available.
     Handles escape sequences for arrow keys.
     """
     if not UNIX_TERMINAL:
         return None
 
-    # Check if input is available without blocking
-    if not select.select([sys.stdin], [], [], 0)[0]:
-        return None
-
     try:
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)  # Use cbreak instead of raw - less invasive
-            char = sys.stdin.read(1)
+        char = sys.stdin.read(1)
+        if not char:
+            return None
 
-            # Handle escape sequences (arrow keys)
-            if char == '\x1b':
-                # Check for more characters in the escape sequence
-                if select.select([sys.stdin], [], [], 0.05)[0]:
-                    char += sys.stdin.read(1)
-                    if char == '\x1b[' and select.select([sys.stdin], [], [], 0.05)[0]:
-                        char += sys.stdin.read(1)
+        # Handle escape sequences (arrow keys)
+        if char == '\x1b':
+            try:
+                char2 = sys.stdin.read(1)
+                if char2:
+                    char += char2
+                    if char == '\x1b[':
+                        char3 = sys.stdin.read(1)
+                        if char3:
+                            char += char3
+            except (IOError, OSError):
+                pass
 
-            return char
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    except Exception:
+        return char
+    except (IOError, OSError, TypeError):
+        # No input available (EAGAIN/EWOULDBLOCK) or other error
         return None
 
 
@@ -1221,6 +1261,9 @@ def watch_executions(
     pause_mode = False       # When True, disable auto-reordering
     scroll_offset = 0        # First row index to display (in pause mode)
 
+    # Set up non-blocking stdin for keyboard input
+    stdin_state = _setup_nonblocking_stdin()
+
     try:
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while not interrupted:
@@ -1554,6 +1597,8 @@ def watch_executions(
                     time.sleep(0.1)
 
     finally:
+        # Restore stdin to original settings
+        _restore_stdin(stdin_state)
         signal.signal(signal.SIGINT, original_handler)
 
     # Print exit message
