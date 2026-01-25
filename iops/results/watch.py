@@ -82,8 +82,9 @@ class _KeyboardContext:
         try:
             self.fd = sys.stdin.fileno()
             self.old_settings = termios.tcgetattr(self.fd)
-            # Set raw mode (no echo, no line buffering, no signal handling)
-            tty.setraw(self.fd)
+            # Use cbreak mode (no echo, no line buffering) instead of raw mode
+            # cbreak leaves output processing intact so Rich can render properly
+            tty.setcbreak(self.fd)
         except Exception:
             self.fd = None
         return self
@@ -1256,7 +1257,7 @@ def watch_executions(
     search_error = ""        # Error message from last search
 
     try:
-        with Live(console=console, refresh_per_second=4, screen=True) as live:
+        with Live(console=console, refresh_per_second=10, screen=True) as live:
             while not interrupted:
                 # Track total items for scroll (updated after table build)
                 total_items_for_scroll = 0
@@ -1556,11 +1557,11 @@ def watch_executions(
                 # Wait for next refresh, checking for keyboard input
                 # Keep terminal in raw mode for entire interval to avoid echo/race conditions
                 with _KeyboardContext() as keyboard:
-                    for _ in range(interval * 100):  # Check every ~10ms for fast response
+                    for _ in range(interval * 200):  # Check every ~5ms for faster response
                         if interrupted:
                             break
 
-                        key = keyboard.read_key(0.01)
+                        key = keyboard.read_key(0.005)
                         if key:
                             # Handle search mode input
                             if search_mode:
