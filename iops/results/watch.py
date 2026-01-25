@@ -263,6 +263,7 @@ def _collect_execution_data(
         rep_cached_flags = []
         rep_durations = []  # Duration in seconds for successful reps
         rep_wait_times = []  # Queue wait times in seconds (job_start - submission_time)
+        latest_submission_time = None  # Track most recent submission for this test
         all_metrics: Dict[str, list] = {}  # Collect metrics for averaging
 
         # Scan for repetition subdirectories
@@ -303,17 +304,21 @@ def _collect_execution_data(
                 # (not just completed - allows early ETA estimation)
                 submission_time = status_info.get("submission_time")
                 job_start = status_info.get("job_start")
-                if submission_time and job_start:
-                    try:
-                        from datetime import datetime
-                        fmt = "%Y-%m-%d %H:%M:%S"
-                        submit_dt = datetime.strptime(submission_time, fmt)
-                        start_dt = datetime.strptime(job_start, fmt)
-                        wait_seconds = (start_dt - submit_dt).total_seconds()
-                        if wait_seconds >= 0:
-                            rep_wait_times.append(wait_seconds)
-                    except (ValueError, TypeError):
-                        pass
+                if submission_time:
+                    # Track the latest submission time for this test
+                    if latest_submission_time is None or submission_time > latest_submission_time:
+                        latest_submission_time = submission_time
+
+                    if job_start:
+                        try:
+                            fmt = "%Y-%m-%d %H:%M:%S"
+                            submit_dt = datetime.strptime(submission_time, fmt)
+                            start_dt = datetime.strptime(job_start, fmt)
+                            wait_seconds = (start_dt - submit_dt).total_seconds()
+                            if wait_seconds >= 0:
+                                rep_wait_times.append(wait_seconds)
+                        except (ValueError, TypeError):
+                            pass
 
                 # Collect metrics from successful repetitions for averaging
                 rep_metrics = status_info.get("metrics")
@@ -428,6 +433,7 @@ def _collect_execution_data(
             "cached": cached,
             "metrics": avg_metrics,
             "folders_exist": len(rep_dirs) > 0,  # True if submitted (rep folders created)
+            "latest_submission_time": latest_submission_time,  # For identifying active test
         })
 
     # Sort tests numerically by execution ID
@@ -726,6 +732,19 @@ def _build_table(
         # Re-sort visible items by exec_id to maintain order in display
         display_items = sorted(visible_items, key=lambda x: x[0])
 
+    # Find the most recently submitted test among PENDING tests (for showing active signal)
+    # This handles cases where jobs complete so fast we never see RUNNING status
+    most_recent_pending_key = None
+    most_recent_submission = None
+    for _, test, is_queued, status in display_items:
+        if is_queued or test is None:
+            continue
+        if status == "PENDING" and test.get("folders_exist", False):
+            submission = test.get("latest_submission_time")
+            if submission and (most_recent_submission is None or submission > most_recent_submission):
+                most_recent_submission = submission
+                most_recent_pending_key = test.get("exec_key")
+
     # Add rows
     for exec_id, test, is_queued, _ in display_items:
         row = []
@@ -772,8 +791,13 @@ def _build_table(
 
             if "path" not in hide_columns:
                 path_display = Path(rel_path).name if rel_path else rel_path
-                # Show signal only for tests that are actively RUNNING
-                if overall_status == "RUNNING":
+                # Show signal for:
+                # - Tests that are actively RUNNING
+                # - The most recently submitted PENDING test (handles fast jobs)
+                exec_key = test.get("exec_key")
+                is_active = (overall_status == "RUNNING" or
+                            (overall_status == "PENDING" and exec_key == most_recent_pending_key))
+                if is_active:
                     path_text = Text()
                     path_text.append("▶ ", style="yellow bold")
                     path_text.append(display_val(path_display), style="cyan")
