@@ -120,6 +120,8 @@ Examples:
                             help="Only use cached results; skip tests not in cache (requires cache_file)")
     run_parser.add_argument('--fail-fast', action='store_true',
                             help="Stop execution on first test failure")
+    run_parser.add_argument('--meline', action='store_true',
+                            help=argparse.SUPPRESS)  # Easter egg: hide banner
     _add_common_args(run_parser)
 
     # ---- find command ----
@@ -298,16 +300,18 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
 
     sep = "=" * 80
 
-    logger.info("")
-    for line in banner.strip("\n").splitlines():
-        logger.info(line)
+    # Easter egg: --meline hides the banner
+    if not getattr(args, 'meline', False):
+        logger.info("")
+        for line in banner.strip("\n").splitlines():
+            logger.info(line)
 
-    logger.info("")
-    logger.info("  IOPS")
-    logger.info(f"  Version: {IOPS_VERSION}")
-    logger.info(f"  Config File: {args.config_file}")    
-    logger.info("")
-    logger.info(sep)
+        logger.info("")
+        logger.info("  IOPS")
+        logger.info(f"  Version: {IOPS_VERSION}")
+        logger.info(f"  Config File: {args.config_file}")
+        logger.info("")
+        logger.info(sep)
     logger.debug("Execution Context")
     logger.debug(sep)
 
