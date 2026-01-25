@@ -22,13 +22,13 @@ This was possible because of the [cache feature]({{< ref "/user-guide/caching" >
 | `transfer_size_kb` | 32, 1024, 8192, 32768, 65536 | I/O transfer size |
 | `volume_size_gb` | 128 | Fixed data volume |
 
-After [constraint filtering]({{< ref "/user-guide/matrix-generation#constraints" >}}), the parameter space contains 315 valid configurations. Each optimization run explores only 20 of them -that's just 6.3% of the space.
+After [constraint filtering]({{< ref "/user-guide/matrix-generation#constraints" >}}), the parameter space contains 315 valid configurations. Each optimization run explores only 20 of them, just 6.3% of the space.
 
 ---
 
 ## Study Design
 
-We compared three search methods across 25 random seeds:
+We compared three search methods across 25 random seeds. The idea was to study the variability of each method, since both random sampling and Bayesian optimization have stochastic components:
 
 | Method | Search Strategy | Configuration |
 |--------|-----------------|---------------|
@@ -43,7 +43,7 @@ command:
   template: "iops run {{ inner_config }} --use-cache --cache-only"
 ```
 
-The `--cache-only` flag ensures all results come from the pre-populated cache -no actual benchmarks are executed. This let us run 75 complete optimization studies (3 methods × 25 seeds) in under 5 minutes on a laptop. Pretty cool, right?
+The `--cache-only` flag ensures all results come from the pre-populated cache, so no actual benchmarks are executed. This let us run 75 complete optimization studies (3 methods × 25 seeds) in under 5 minutes on a laptop. Pretty cool, right?
 
 ### How the Nested Execution Works
 
@@ -85,7 +85,7 @@ More importantly, the `nodes` parameter dominates performance in this workload. 
 
 The y-axis shows the proportion of seeds (out of 25) that selected each node value at a given iteration. For example, if 20 out of 25 seeds selected `nodes=64` at iteration 15, the green bar would show 0.8 (80%) at that point.
 
-The Bayesian methods quickly learn that higher node counts yield better performance and concentrate their search accordingly -by iteration 10, nearly all seeds are selecting `nodes=64`. Random sampling, by contrast, distributes selections uniformly across all node values throughout the run.
+The Bayesian methods quickly learn that higher node counts yield better performance and concentrate their search accordingly. By iteration 10, nearly all seeds are selecting `nodes=64`. Random sampling, by contrast, distributes selections uniformly across all node values throughout the run.
 
 Despite these limitations, the study shows that Bayesian optimization provides consistent improvements over random sampling, and that IOPS's cache-only mode enables rapid algorithmic experimentation without HPC resources. A follow-up study with a larger parameter space would likely show an even bigger gap between the methods.
 
@@ -93,7 +93,7 @@ Despite these limitations, the study shows that Bayesian optimization provides c
 
 ## Full Configuration
 
-Here's the complete YAML configuration we used. One tricky part: since we're generating a nested IOPS config inside a [script template]({{< ref "/user-guide/templating-and-context" >}}), we need to handle two levels of Jinja2 rendering. The outer variables (like `{{ method }}` and `{{ seed }}`) get rendered by the parent IOPS run, while the inner config variables (like `{{ block_size_mb }}`) are written as literal strings to the generated YAML file -they only get rendered when the inner IOPS runs.
+Here's the complete YAML configuration we used. One tricky part: since we're generating a nested IOPS config inside a [script template]({{< ref "/user-guide/templating-and-context" >}}), we need to handle two levels of Jinja2 rendering. The outer variables (like `{{ method }}` and `{{ seed }}`) get rendered by the parent IOPS run, while the inner config variables (like `{{ block_size_mb }}`) are written as literal strings to the generated YAML file and only get rendered when the inner IOPS runs.
 
 ```yaml
 benchmark:
