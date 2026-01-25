@@ -30,6 +30,13 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis
 - **Flexible Output**: Export results to CSV, Parquet, or SQLite
 
+## From the Blog
+
+Real studies and interesting ways to use IOPS:
+
+- [Bayesian Optimization Benchmark](/blog/bayesian-optimization-study/) - Testing BO search against random sampling using cached HPC results
+- [TOTO Overhead Analysis](/blog/toto-overhead-analysis/) - Measuring runtime overhead of an I/O interception library
+
 ## Links
 
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)
