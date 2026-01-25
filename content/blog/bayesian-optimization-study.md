@@ -1,6 +1,5 @@
 ---
-title: "Bayesian Optimization Benchmark"
-subtitle: "Testing IOPS's BO search against random sampling using cached HPC results"
+title: "Testing IOPS's BO search against random sampling using cached HPC results"
 date: 2025-01-15
 tags: ["bayesian-optimization", "caching", "benchmarking"]
 ---
