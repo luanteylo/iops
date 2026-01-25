@@ -646,10 +646,10 @@ class TestWatchModeErrorWithoutRich:
 class TestKeyboardNavigation:
     """Test keyboard navigation functionality in watch mode."""
 
-    def test_keyboard_input_thread_import(self):
-        """Test that KeyboardInputThread can be imported."""
-        from iops.results.watch import KeyboardInputThread, UNIX_TERMINAL
-        assert KeyboardInputThread is not None
+    def test_keyboard_function_import(self):
+        """Test that keyboard function can be imported."""
+        from iops.results.watch import _read_keypress_nonblocking, UNIX_TERMINAL
+        assert _read_keypress_nonblocking is not None
         # UNIX_TERMINAL should be True on Linux
         assert isinstance(UNIX_TERMINAL, bool)
 

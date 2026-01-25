@@ -13,8 +13,6 @@ import json
 import time
 import signal
 import sys
-import threading
-import queue
 import select
 from datetime import datetime
 from pathlib import Path
@@ -68,56 +66,40 @@ def check_rich_available() -> None:
         )
 
 
-class KeyboardInputThread(threading.Thread):
+def _read_keypress_nonblocking() -> Optional[str]:
     """
-    Background thread that reads keyboard input without blocking.
+    Read a single keypress without blocking (Unix only).
 
-    Uses Unix terminal raw mode to capture single keypresses.
-    On non-Unix systems, this thread does nothing (keyboard nav disabled).
+    Returns the key pressed, or None if no key is available.
+    Handles escape sequences for arrow keys.
     """
+    if not UNIX_TERMINAL:
+        return None
 
-    def __init__(self, input_queue: queue.Queue, stop_event: threading.Event):
-        super().__init__(daemon=True)
-        self.input_queue = input_queue
-        self.stop_event = stop_event
-        self._old_settings = None
+    # Check if input is available without blocking
+    if not select.select([sys.stdin], [], [], 0)[0]:
+        return None
 
-    def run(self):
-        """Read keypresses and put them in the queue."""
-        if not UNIX_TERMINAL:
-            return
-
+    try:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
         try:
-            fd = sys.stdin.fileno()
-            self._old_settings = termios.tcgetattr(fd)
-            tty.setraw(fd)
+            tty.setcbreak(fd)  # Use cbreak instead of raw - less invasive
+            char = sys.stdin.read(1)
 
-            while not self.stop_event.is_set():
-                # Use select to check if input is available (non-blocking)
-                if select.select([sys.stdin], [], [], 0.1)[0]:
-                    char = sys.stdin.read(1)
-                    if char:
-                        # Handle escape sequences (arrow keys)
-                        if char == '\x1b':
-                            # Read potential escape sequence
-                            if select.select([sys.stdin], [], [], 0.05)[0]:
-                                char += sys.stdin.read(1)
-                                if char == '\x1b[' and select.select([sys.stdin], [], [], 0.05)[0]:
-                                    char += sys.stdin.read(1)
-                        self.input_queue.put(char)
-        except Exception:
-            pass
+            # Handle escape sequences (arrow keys)
+            if char == '\x1b':
+                # Check for more characters in the escape sequence
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    char += sys.stdin.read(1)
+                    if char == '\x1b[' and select.select([sys.stdin], [], [], 0.05)[0]:
+                        char += sys.stdin.read(1)
+
+            return char
         finally:
-            self._restore_terminal()
-
-    def _restore_terminal(self):
-        """Restore terminal to original settings."""
-        if self._old_settings is not None and UNIX_TERMINAL:
-            try:
-                fd = sys.stdin.fileno()
-                termios.tcsetattr(fd, termios.TCSADRAIN, self._old_settings)
-            except Exception:
-                pass
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    except Exception:
+        return None
 
 
 # Status display configuration
@@ -1238,62 +1220,48 @@ def watch_executions(
     # Keyboard navigation state
     pause_mode = False       # When True, disable auto-reordering
     scroll_offset = 0        # First row index to display (in pause mode)
-    input_queue: queue.Queue = queue.Queue()
-    stop_keyboard_event = threading.Event()
-    keyboard_thread: Optional[KeyboardInputThread] = None
-
-    # Start keyboard input thread (Unix only)
-    if UNIX_TERMINAL:
-        keyboard_thread = KeyboardInputThread(input_queue, stop_keyboard_event)
-        keyboard_thread.start()
 
     try:
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while not interrupted:
                 # Handle keyboard input (non-blocking)
                 total_items_for_scroll = 0  # Will be updated after building table
-                while True:
-                    try:
-                        key = input_queue.get_nowait()
-
-                        if key == 'q':
-                            # Quit
-                            interrupted = True
-                            break
-                        elif key == 'p':
-                            # Toggle pause mode
-                            pause_mode = not pause_mode
-                            if not pause_mode:
-                                # Exiting pause mode - reset scroll
-                                scroll_offset = 0
-                        elif key in ('j', '\x1b[B'):  # j or down arrow
-                            # Scroll down (only in pause mode)
-                            if pause_mode:
-                                scroll_offset += 1
-                        elif key in ('k', '\x1b[A'):  # k or up arrow
-                            # Scroll up (only in pause mode)
-                            if pause_mode:
-                                scroll_offset = max(0, scroll_offset - 1)
-                        elif key == 'g':
-                            # Go to top (only in pause mode)
-                            if pause_mode:
-                                scroll_offset = 0
-                        elif key == 'G':
-                            # Go to bottom (only in pause mode)
-                            if pause_mode and total_items_for_scroll > 0:
-                                # Will be adjusted after we know total_display_items
-                                scroll_offset = max(0, total_items_for_scroll - 1)
-                        elif key == 'J':  # Page down
-                            # Scroll down by page (only in pause mode)
-                            if pause_mode:
-                                scroll_offset += 10
-                        elif key == 'K':  # Page up
-                            # Scroll up by page (only in pause mode)
-                            if pause_mode:
-                                scroll_offset = max(0, scroll_offset - 10)
-
-                    except queue.Empty:
-                        break
+                key = _read_keypress_nonblocking()
+                if key:
+                    if key == 'q':
+                        # Quit
+                        interrupted = True
+                    elif key == 'p':
+                        # Toggle pause mode
+                        pause_mode = not pause_mode
+                        if not pause_mode:
+                            # Exiting pause mode - reset scroll
+                            scroll_offset = 0
+                    elif key in ('j', '\x1b[B'):  # j or down arrow
+                        # Scroll down (only in pause mode)
+                        if pause_mode:
+                            scroll_offset += 1
+                    elif key in ('k', '\x1b[A'):  # k or up arrow
+                        # Scroll up (only in pause mode)
+                        if pause_mode:
+                            scroll_offset = max(0, scroll_offset - 1)
+                    elif key == 'g':
+                        # Go to top (only in pause mode)
+                        if pause_mode:
+                            scroll_offset = 0
+                    elif key == 'G':
+                        # Go to bottom (only in pause mode)
+                        if pause_mode and total_items_for_scroll > 0:
+                            # Will be adjusted after we know total_display_items
+                            scroll_offset = max(0, total_items_for_scroll - 1)
+                    elif key == 'J':  # Page down
+                        # Scroll down by page (only in pause mode)
+                        if pause_mode:
+                            scroll_offset += 10
+                    elif key == 'K':  # Page up
+                        # Scroll up by page (only in pause mode)
+                        if pause_mode:
+                            scroll_offset = max(0, scroll_offset - 10)
 
                 if interrupted:
                     break
@@ -1586,12 +1554,6 @@ def watch_executions(
                     time.sleep(0.1)
 
     finally:
-        # Stop keyboard thread
-        if keyboard_thread is not None:
-            stop_keyboard_event.set()
-            keyboard_thread._restore_terminal()
-            keyboard_thread.join(timeout=1.0)
-
         signal.signal(signal.SIGINT, original_handler)
 
     # Print exit message
