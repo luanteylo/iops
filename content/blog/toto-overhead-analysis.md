@@ -1,6 +1,5 @@
 ---
-title: "TOTO Overhead Analysis"
-subtitle: "Measuring the runtime overhead of an I/O interception library"
+title: "Measuring the runtime overhead of an I/O interception library"
 date: 2024-11-20
 tags: ["overhead-analysis", "resource-tracing", "slurm", "ld-preload"]
 draft: true
