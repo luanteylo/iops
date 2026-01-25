@@ -25,6 +25,7 @@ All notable changes to IOPS are documented here.
 - `convergence_patience` option to control early stopping sensitivity (default: 3)
 - `xi_boost_factor` option to dynamically increase exploration when stuck (default: 5.0)
 - `--cache-only` CLI option for cache-only execution (skip tests not in cache)
+- Keyboard navigation for watch mode (pause, page scroll, search by test ID)
 
 ### Changed
 - Renamed `executor_options` to `slurm_options` (old name deprecated, remove in 3.7.0)
