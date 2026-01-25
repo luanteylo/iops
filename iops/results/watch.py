@@ -13,9 +13,20 @@ import json
 import time
 import signal
 import sys
+import threading
+import queue
+import select
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+
+# Platform-specific keyboard input handling
+try:
+    import tty
+    import termios
+    UNIX_TERMINAL = True
+except ImportError:
+    UNIX_TERMINAL = False
 
 # Check for rich availability
 try:
@@ -55,6 +66,58 @@ def check_rich_available() -> None:
             "Watch mode requires the 'rich' library.\n"
             "Install with: pip install iops-benchmark[watch]"
         )
+
+
+class KeyboardInputThread(threading.Thread):
+    """
+    Background thread that reads keyboard input without blocking.
+
+    Uses Unix terminal raw mode to capture single keypresses.
+    On non-Unix systems, this thread does nothing (keyboard nav disabled).
+    """
+
+    def __init__(self, input_queue: queue.Queue, stop_event: threading.Event):
+        super().__init__(daemon=True)
+        self.input_queue = input_queue
+        self.stop_event = stop_event
+        self._old_settings = None
+
+    def run(self):
+        """Read keypresses and put them in the queue."""
+        if not UNIX_TERMINAL:
+            return
+
+        try:
+            fd = sys.stdin.fileno()
+            self._old_settings = termios.tcgetattr(fd)
+            tty.setraw(fd)
+
+            while not self.stop_event.is_set():
+                # Use select to check if input is available (non-blocking)
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    char = sys.stdin.read(1)
+                    if char:
+                        # Handle escape sequences (arrow keys)
+                        if char == '\x1b':
+                            # Read potential escape sequence
+                            if select.select([sys.stdin], [], [], 0.05)[0]:
+                                char += sys.stdin.read(1)
+                                if char == '\x1b[' and select.select([sys.stdin], [], [], 0.05)[0]:
+                                    char += sys.stdin.read(1)
+                        self.input_queue.put(char)
+        except Exception:
+            pass
+        finally:
+            self._restore_terminal()
+
+    def _restore_terminal(self):
+        """Restore terminal to original settings."""
+        if self._old_settings is not None and UNIX_TERMINAL:
+            try:
+                fd = sys.stdin.fileno()
+                termios.tcsetattr(fd, termios.TCSADRAIN, self._old_settings)
+            except Exception:
+                pass
 
 
 # Status display configuration
@@ -551,8 +614,10 @@ def _build_table(
     total_expected_configs: int = 0,
     terminal_width: int = 80,
     max_rows: Optional[int] = None,
-    show_metrics: bool = False
-) -> Tuple[Table, int, int, int, Dict[str, int]]:
+    show_metrics: bool = False,
+    skip_priority_reordering: bool = False,
+    scroll_offset: int = 0
+) -> Tuple[Table, int, int, int, Dict[str, int], int]:
     """
     Build a rich Table from test data.
 
@@ -567,10 +632,13 @@ def _build_table(
         terminal_width: Terminal width for auto-fitting variable columns
         max_rows: Maximum number of rows to display (None for unlimited)
         show_metrics: If True, display metric columns
+        skip_priority_reordering: If True, maintain execution ID order (pause mode)
+        scroll_offset: Number of rows to skip from the top of the display list
 
     Returns:
-        Tuple of (table, shown_count, total_count, hidden_vars_count, hidden_by_status)
+        Tuple of (table, shown_count, total_count, hidden_vars_count, hidden_by_status, total_display_items)
         hidden_by_status is a dict of status -> count of rows hidden due to row limit
+        total_display_items is the total number of items before pagination (for scroll info)
     """
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
 
@@ -698,11 +766,29 @@ def _build_table(
             if not show_only_active:
                 display_items.append((exec_id, None, True, "QUEUED"))
 
-    # Apply row limiting with priority ordering
+    # Apply row limiting with priority ordering (or simple pagination in pause mode)
     # Priority: RUNNING > FAILED/ERROR > PENDING > SUCCEEDED > SKIPPED > QUEUED
     hidden_by_status: Dict[str, int] = {}
+    total_display_items = len(display_items)  # Track total before filtering
 
-    if max_rows is not None and len(display_items) > max_rows:
+    if skip_priority_reordering:
+        # Pause mode: maintain execution ID order, apply simple scroll pagination
+        # No priority reordering - just paginate the ordered list
+        if max_rows is not None:
+            # Apply scroll offset and max_rows limit
+            end_offset = scroll_offset + max_rows
+            visible_items = display_items[scroll_offset:end_offset]
+
+            # Count hidden items by status (items outside visible window)
+            hidden_before = display_items[:scroll_offset]
+            hidden_after = display_items[end_offset:] if end_offset < len(display_items) else []
+
+            for _, _, _, status in hidden_before + hidden_after:
+                hidden_by_status[status] = hidden_by_status.get(status, 0) + 1
+
+            display_items = visible_items
+    elif max_rows is not None and len(display_items) > max_rows:
+        # Live mode: apply priority-based sorting and limiting
         # Define priority order (lower = higher priority)
         status_priority = {
             "RUNNING": 0,
@@ -885,7 +971,7 @@ def _build_table(
         table.add_row(*row)
 
     total_count = total_expected_configs if total_expected_configs > 0 else len(tests)
-    return table, len(display_items), total_count, hidden_vars_count, hidden_by_status
+    return table, len(display_items), total_count, hidden_vars_count, hidden_by_status, total_display_items
 
 
 def _build_progress_bar(
@@ -1149,9 +1235,69 @@ def watch_executions(
     # Determine if we should show only active tests (when many tests)
     show_only_active = False
 
+    # Keyboard navigation state
+    pause_mode = False       # When True, disable auto-reordering
+    scroll_offset = 0        # First row index to display (in pause mode)
+    input_queue: queue.Queue = queue.Queue()
+    stop_keyboard_event = threading.Event()
+    keyboard_thread: Optional[KeyboardInputThread] = None
+
+    # Start keyboard input thread (Unix only)
+    if UNIX_TERMINAL:
+        keyboard_thread = KeyboardInputThread(input_queue, stop_keyboard_event)
+        keyboard_thread.start()
+
     try:
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while not interrupted:
+                # Handle keyboard input (non-blocking)
+                total_items_for_scroll = 0  # Will be updated after building table
+                while True:
+                    try:
+                        key = input_queue.get_nowait()
+
+                        if key == 'q':
+                            # Quit
+                            interrupted = True
+                            break
+                        elif key == 'p':
+                            # Toggle pause mode
+                            pause_mode = not pause_mode
+                            if not pause_mode:
+                                # Exiting pause mode - reset scroll
+                                scroll_offset = 0
+                        elif key in ('j', '\x1b[B'):  # j or down arrow
+                            # Scroll down (only in pause mode)
+                            if pause_mode:
+                                scroll_offset += 1
+                        elif key in ('k', '\x1b[A'):  # k or up arrow
+                            # Scroll up (only in pause mode)
+                            if pause_mode:
+                                scroll_offset = max(0, scroll_offset - 1)
+                        elif key == 'g':
+                            # Go to top (only in pause mode)
+                            if pause_mode:
+                                scroll_offset = 0
+                        elif key == 'G':
+                            # Go to bottom (only in pause mode)
+                            if pause_mode and total_items_for_scroll > 0:
+                                # Will be adjusted after we know total_display_items
+                                scroll_offset = max(0, total_items_for_scroll - 1)
+                        elif key == 'J':  # Page down
+                            # Scroll down by page (only in pause mode)
+                            if pause_mode:
+                                scroll_offset += 10
+                        elif key == 'K':  # Page up
+                            # Scroll up by page (only in pause mode)
+                            if pause_mode:
+                                scroll_offset = max(0, scroll_offset - 10)
+
+                    except queue.Empty:
+                        break
+
+                if interrupted:
+                    break
+
                 # Reload index to pick up new executions
                 try:
                     benchmark_name, executions, total_expected, repetitions, folders_upfront, active_tests, skipped_tests = _load_index(index_file)
@@ -1196,6 +1342,10 @@ def watch_executions(
                 num_complete = sum(1 for t in tests if _get_test_overall_status(t["rep_statuses"]) == "SUCCEEDED")
                 if num_tests > 20 and num_complete > 0:
                     show_only_active = True
+
+                # Initialize total_display_items (will be updated after table build)
+                # This is an estimate used for the header before the table is built
+                total_display_items = num_tests
 
                 # Build header panel with clean organization
                 header_text = Text()
@@ -1259,6 +1409,20 @@ def watch_executions(
                         filter_parts.append(f"cached={'yes' if cached_filter else 'no'}")
                     header_text.append(f"{', '.join(filter_parts)}", style="italic")
 
+                # Mode indicator (pause/live) and scroll position
+                header_text.append("\n")
+                if pause_mode:
+                    header_text.append(" [PAUSED]", style="yellow bold")
+                    if max_rows is not None and total_display_items > max_rows:
+                        end_row = min(scroll_offset + max_rows, total_display_items)
+                        header_text.append(f"  Showing {scroll_offset + 1}-{end_row} of {total_display_items}", style="dim")
+                    header_text.append("  ", style="")
+                    header_text.append("j/k:scroll  g/G:top/bottom  p:resume  q:quit", style="dim italic")
+                else:
+                    header_text.append(" [LIVE]", style="green bold")
+                    header_text.append("  ", style="")
+                    header_text.append("p:pause  q:quit", style="dim italic")
+
                 header = Panel(header_text, border_style="blue", padding=(0, 1))
 
                 # Build table
@@ -1266,9 +1430,10 @@ def watch_executions(
                 terminal_height = console.size.height
 
                 # Calculate max rows based on terminal height
-                # Reserve space for: header panel (~6 lines), progress bar (~5 lines),
+                # Reserve space for: header panel (~7 lines), progress bar (~5 lines),
                 # table header (1 line), notes (1 line), and some padding (3 lines)
-                header_lines = 6 if (filter_dict or status_filter or cached_filter is not None) else 5
+                # Note: header now includes mode indicator line (+1)
+                header_lines = 7 if (filter_dict or status_filter or cached_filter is not None) else 6
                 footer_lines = 7  # progress bar + status counts + completion msg + padding
                 table_header_lines = 2  # header + divider
                 notes_lines = 1
@@ -1276,15 +1441,28 @@ def watch_executions(
                 max_rows = max(5, terminal_height - reserved_lines)
 
                 if tests or total_expected_configs > 0:
-                    table, shown_count, total_count, hidden_vars, hidden_by_status = _build_table(
+                    # Clamp scroll offset before building table
+                    # (We'll adjust after we know total_display_items)
+                    table, shown_count, total_count, hidden_vars, hidden_by_status, total_display_items = _build_table(
                         tests, show_command, show_full, hide_columns,
                         total_repetitions=repetitions,
                         show_only_active=show_only_active,
                         total_expected_configs=total_expected_configs,
                         terminal_width=terminal_width,
                         max_rows=max_rows,
-                        show_metrics=show_metrics
+                        show_metrics=show_metrics,
+                        skip_priority_reordering=pause_mode,
+                        scroll_offset=scroll_offset
                     )
+
+                    # Update total items for 'G' (go to bottom) command
+                    total_items_for_scroll = total_display_items
+
+                    # Clamp scroll_offset to valid range
+                    if pause_mode and max_rows is not None:
+                        max_scroll = max(0, total_display_items - max_rows)
+                        if scroll_offset > max_scroll:
+                            scroll_offset = max_scroll
 
                     # Build note for hidden items
                     notes = []
@@ -1321,6 +1499,8 @@ def watch_executions(
                 else:
                     table = Text("No executions match the current filters.", style="dim italic")
                     table_note = None
+                    total_display_items = 0
+                    total_items_for_scroll = 0
 
                 # Build footer with progress bar and legend
                 footer_text = Text()
@@ -1380,8 +1560,10 @@ def watch_executions(
                     # Terminal bell to alert user
                     footer_text.append("\a", style="")
                 else:
-                    footer_text.append("\n ")
-                    footer_text.append("Press Ctrl+C to exit", style="dim italic")
+                    # Show hint only if keyboard nav not available
+                    if not UNIX_TERMINAL:
+                        footer_text.append("\n ")
+                        footer_text.append("Press Ctrl+C to exit", style="dim italic")
 
                 # Combine and display
                 from rich.console import Group
@@ -1404,6 +1586,12 @@ def watch_executions(
                     time.sleep(0.1)
 
     finally:
+        # Stop keyboard thread
+        if keyboard_thread is not None:
+            stop_keyboard_event.set()
+            keyboard_thread._restore_terminal()
+            keyboard_thread.join(timeout=1.0)
+
         signal.signal(signal.SIGINT, original_handler)
 
     # Print exit message
