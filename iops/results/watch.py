@@ -67,71 +67,56 @@ def check_rich_available() -> None:
         )
 
 
-class _KeyboardReader:
-    """Context manager for responsive keyboard reading."""
+def _read_keypress_with_timeout(timeout: float = 0.03) -> Optional[str]:
+    """
+    Read a single keypress with timeout (Unix only).
 
-    def __init__(self):
-        self.fd = None
-        self.old_settings = None
+    Briefly sets terminal to cbreak mode, checks for input, then restores.
+    Returns the key pressed, or None if no key available within timeout.
+    """
+    if not UNIX_TERMINAL:
+        return None
 
-    def __enter__(self):
-        if not UNIX_TERMINAL:
-            return self
+    fd = sys.stdin.fileno()
 
-        try:
-            self.fd = sys.stdin.fileno()
-            self.old_settings = termios.tcgetattr(self.fd)
-            tty.setcbreak(self.fd)
-        except Exception:
-            self.fd = None
-            self.old_settings = None
+    try:
+        old_settings = termios.tcgetattr(fd)
+    except termios.error:
+        return None
 
-        return self
+    try:
+        tty.setcbreak(fd)
 
-    def __exit__(self, *args):
-        if self.old_settings is not None:
-            try:
-                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
-            except Exception:
-                pass
-
-    def read_key(self, timeout: float = 0.02) -> Optional[str]:
-        """Read a keypress with short timeout. Call repeatedly for responsiveness."""
-        if self.fd is None:
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if not ready:
             return None
 
-        try:
-            ready, _, _ = select.select([sys.stdin], [], [], timeout)
-            if not ready:
-                return None
-
-            char = os.read(self.fd, 1).decode('utf-8', errors='ignore')
-            if not char:
-                return None
-
-            # Handle escape sequences (arrow keys)
-            if char == '\x1b':
-                ready, _, _ = select.select([sys.stdin], [], [], 0.02)
-                if ready:
-                    char2 = os.read(self.fd, 1).decode('utf-8', errors='ignore')
-                    if char2:
-                        char += char2
-                        if char == '\x1b[':
-                            ready, _, _ = select.select([sys.stdin], [], [], 0.02)
-                            if ready:
-                                char3 = os.read(self.fd, 1).decode('utf-8', errors='ignore')
-                                if char3:
-                                    char += char3
-
-            return char
-        except Exception:
+        char = os.read(fd, 1).decode('utf-8', errors='ignore')
+        if not char:
             return None
 
+        # Handle escape sequences (arrow keys)
+        if char == '\x1b':
+            ready, _, _ = select.select([sys.stdin], [], [], 0.02)
+            if ready:
+                char2 = os.read(fd, 1).decode('utf-8', errors='ignore')
+                if char2:
+                    char += char2
+                    if char == '\x1b[':
+                        ready, _, _ = select.select([sys.stdin], [], [], 0.02)
+                        if ready:
+                            char3 = os.read(fd, 1).decode('utf-8', errors='ignore')
+                            if char3:
+                                char += char3
 
-def _read_keypress_with_timeout(timeout: float = 0.05) -> Optional[str]:
-    """Legacy function - use _KeyboardReader for better performance."""
-    with _KeyboardReader() as reader:
-        return reader.read_key(timeout)
+        return char
+    except Exception:
+        return None
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
 
 
 # Status display configuration
@@ -1378,7 +1363,7 @@ def watch_executions(
                         end_row = min(scroll_offset + max_rows, total_display_items)
                         header_text.append(f"  Showing {scroll_offset + 1}-{end_row} of {total_display_items}", style="dim")
                     header_text.append("  ", style="")
-                    header_text.append("j/k:scroll  g/G:top/bottom  p:resume  q:quit", style="dim italic")
+                    header_text.append("j/k:line  g/G:page  p:resume  q:quit", style="dim italic")
                 else:
                     header_text.append(" [LIVE]", style="green bold")
                     header_text.append("  ", style="")
@@ -1541,47 +1526,38 @@ def watch_executions(
                     break
 
                 # Wait for next refresh, checking for keyboard input
-                # Set cbreak mode once for the entire interval for fluid input
-                with _KeyboardReader() as keyboard:
-                    for _ in range(interval * 50):  # Check every 0.02s (50 times per second)
-                        if interrupted:
-                            break
+                for _ in range(interval * 20):  # Check every ~50ms
+                    if interrupted:
+                        break
 
-                        key = keyboard.read_key(0.02)
-                        if key:
-                            if key == 'q':
-                                interrupted = True
+                    key = _read_keypress_with_timeout(0.05)
+                    if key:
+                        if key == 'q':
+                            interrupted = True
+                            break
+                        elif key == 'p':
+                            pause_mode = not pause_mode
+                            if not pause_mode:
+                                scroll_offset = 0
+                            break  # Refresh display immediately
+                        elif key in ('j', '\x1b[B'):  # j or down arrow
+                            if pause_mode:
+                                scroll_offset += 1
                                 break
-                            elif key == 'p':
-                                pause_mode = not pause_mode
-                                if not pause_mode:
-                                    scroll_offset = 0
-                                break  # Refresh display immediately
-                            elif key in ('j', '\x1b[B'):  # j or down arrow
-                                if pause_mode:
-                                    scroll_offset += 1
-                                    break
-                            elif key in ('k', '\x1b[A'):  # k or up arrow
-                                if pause_mode:
-                                    scroll_offset = max(0, scroll_offset - 1)
-                                    break
-                            elif key == 'g':
-                                if pause_mode:
-                                    scroll_offset = 0
-                                    break
-                            elif key == 'G':
-                                if pause_mode and total_items_for_scroll > 0:
-                                    max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
-                                    scroll_offset = max_scroll
-                                    break
-                            elif key == 'J':  # Page down
-                                if pause_mode:
-                                    scroll_offset += 10
-                                    break
-                            elif key == 'K':  # Page up
-                                if pause_mode:
-                                    scroll_offset = max(0, scroll_offset - 10)
-                                    break
+                        elif key in ('k', '\x1b[A'):  # k or up arrow
+                            if pause_mode:
+                                scroll_offset = max(0, scroll_offset - 1)
+                                break
+                        elif key in ('g', '\x1b[5~'):  # g or Page Up
+                            if pause_mode:
+                                page_size = max_rows if max_rows else 20
+                                scroll_offset = max(0, scroll_offset - page_size)
+                                break
+                        elif key in ('G', '\x1b[6~'):  # G or Page Down
+                            if pause_mode:
+                                page_size = max_rows if max_rows else 20
+                                scroll_offset += page_size
+                                break
 
     finally:
         signal.signal(signal.SIGINT, original_handler)
