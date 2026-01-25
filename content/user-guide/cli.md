@@ -49,6 +49,7 @@ Runs the benchmark defined in the configuration file.
 - `--dry-run, -n` - Preview execution plan without running
 - `--use-cache` - Skip tests with cached results
 - `--cache-only` - Only use cached results; skip tests not in cache (requires `cache_file`)
+- `--fail-fast` - Stop execution on first test failure
 - `--max-core-hours N` - Set core-hours budget limit (SLURM only)
 - `--time-estimate SEC` - Estimated test duration in seconds
 - `--log-file PATH` - Write logs to file

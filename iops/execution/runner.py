@@ -1546,6 +1546,18 @@ class IOPSRunner(HasLogger):
                     f"→ {status} {cache_marker}{metrics_str}"
                 )
 
+            # Check for fail-fast mode
+            if getattr(self.args, 'fail_fast', False) and status in ("FAILED", "ERROR"):
+                self.logger.error("=" * 70)
+                self.logger.error(f"Test failed and --fail-fast is enabled. Stopping execution.")
+                self.logger.error("=" * 70)
+                # Still save this test before breaking
+                save_test_execution(test)
+                self._track_system_info(test)
+                self.planner.record_completed_test(test)
+                self.completed_tests.append(test)
+                break
+
             # Add test to output file
             save_test_execution(test)
 

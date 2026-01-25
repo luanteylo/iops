@@ -500,7 +500,10 @@ Unique identifier for this constraint.
 #### `rule` (required)
 Python expression evaluating to `True` (valid) or `False` (invalid).
 
-Available: all variables, math functions (`min`, `max`, `abs`, `round`, `floor`, `ceil`)
+Available context:
+- All variables defined in `vars`
+- `os_env`: System environment variables (dict) - e.g., `os_env.get('MY_VAR', '')`
+- Math functions: `min`, `max`, `abs`, `round`, `floor`, `ceil`, `int`, `float`
 
 #### `violation_policy` (optional, default: "skip")
 - `skip`: Filter out invalid combinations
@@ -530,6 +533,18 @@ constraints:
   - name: "transfer_size_limit"
     rule: "transfer_size <= block_size"
     violation_policy: "skip"
+
+  # Environment variable requirement
+  - name: "require_scratch_dir"
+    rule: "os_env.get('SCRATCH', '') != ''"
+    violation_policy: "error"
+    description: "SCRATCH environment variable must be set"
+
+  # Conditional based on cluster
+  - name: "large_jobs_on_hpc"
+    rule: "nodes <= 4 or os_env.get('CLUSTER_NAME', '') == 'hpc_large'"
+    violation_policy: "skip"
+    description: "Jobs with >4 nodes only allowed on hpc_large cluster"
 ```
 
 </details>

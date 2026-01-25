@@ -118,6 +118,8 @@ Examples:
                             help="Estimated time per test (e.g., '120' or '60,120,300')")
     run_parser.add_argument('--cache-only', action='store_true',
                             help="Only use cached results; skip tests not in cache (requires cache_file)")
+    run_parser.add_argument('--fail-fast', action='store_true',
+                            help="Stop execution on first test failure")
     _add_common_args(run_parser)
 
     # ---- find command ----

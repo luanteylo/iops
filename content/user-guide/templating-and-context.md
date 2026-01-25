@@ -698,6 +698,26 @@ vars:
     expr: "{% if nodes > 4 %}large{% else %}small{% endif %}"
 ```
 
+#### Using environment variables
+
+Access system environment variables via `os_env`:
+
+```yaml
+vars:
+  scratch_path:
+    type: str
+    expr: "{{ os_env.SCRATCH | default('/tmp') }}/iops_{{ execution_id }}"
+
+  home_bin:
+    type: str
+    expr: "{{ os_env.HOME }}/bin"
+
+  # Conditional based on cluster environment
+  queue:
+    type: str
+    expr: "{% if os_env.CLUSTER_NAME == 'hpc1' %}batch{% else %}default{% endif %}"
+```
+
 ---
 
 ### `output.sink.path`
