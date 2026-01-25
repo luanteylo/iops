@@ -62,6 +62,21 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 |------|---------|
 | `__iops_status.json` | Repetition execution status |
 
+### Script Output Files
+
+Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
+
+| File | Purpose |
+|------|---------|
+| `stdout` | Script standard output |
+| `stderr` | Script standard error |
+| `post_stdout` | Post-script standard output (if post-script defined) |
+| `post_stderr` | Post-script standard error (if post-script defined) |
+| `parser_stdout` | Parser script print() output (if any) |
+| `parser_stderr` | Parser script errors/warnings (if any) |
+
+These files capture all output from script execution and parsing, useful for debugging failed tests. Parser output files are only created if the parser produces output.
+
 ### System Info Files
 
 Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
