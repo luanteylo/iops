@@ -765,6 +765,21 @@ def _build_table(
             if not show_only_active:
                 display_items.append((exec_id, None, True, "QUEUED"))
 
+    # Find the active test BEFORE pagination (so it's correct across all pages)
+    # This handles cases where jobs complete so fast we never see RUNNING status
+    has_running_test = any(status == "RUNNING" for _, _, is_queued, status in display_items if not is_queued)
+    most_recent_pending_key = None
+    if not has_running_test:
+        most_recent_submission = None
+        for _, test, is_queued, status in display_items:
+            if is_queued or test is None:
+                continue
+            if status == "PENDING" and test.get("folders_exist", False):
+                submission = test.get("latest_submission_time")
+                if submission and (most_recent_submission is None or submission > most_recent_submission):
+                    most_recent_submission = submission
+                    most_recent_pending_key = test.get("exec_key")
+
     # Apply row limiting with priority ordering (or simple pagination in pause mode)
     # Priority: RUNNING > FAILED/ERROR > PENDING > SUCCEEDED > SKIPPED > QUEUED
     hidden_by_status: Dict[str, int] = {}
@@ -816,22 +831,6 @@ def _build_table(
 
         # Re-sort visible items by exec_id to maintain order in display
         display_items = sorted(visible_items, key=lambda x: x[0])
-
-    # Find the most recently submitted test among PENDING tests (for showing active signal)
-    # This handles cases where jobs complete so fast we never see RUNNING status
-    # Only use this fallback if NO test is currently RUNNING
-    has_running_test = any(status == "RUNNING" for _, _, is_queued, status in display_items if not is_queued)
-    most_recent_pending_key = None
-    if not has_running_test:
-        most_recent_submission = None
-        for _, test, is_queued, status in display_items:
-            if is_queued or test is None:
-                continue
-            if status == "PENDING" and test.get("folders_exist", False):
-                submission = test.get("latest_submission_time")
-                if submission and (most_recent_submission is None or submission > most_recent_submission):
-                    most_recent_submission = submission
-                    most_recent_pending_key = test.get("exec_key")
 
     # Add rows
     for exec_id, test, is_queued, _ in display_items:
