@@ -3,15 +3,15 @@ title: "Bayesian Optimization Benchmark"
 weight: 2
 ---
 
-A meta-study using IOPS to benchmark its own Bayesian Optimization search method against random sampling, powered by cached results from real HPC experiments.
+IOPS can use Bayesian Optimization when the objective is to find the parameter combination that yields the maximum (or minimum) metric value in a search space. In this article, we decided to test the efficiency of IOPS's BO search by comparing it against IOPS's random search. The idea is simple: given a search space, run both IOPS BO and Random, then compare the results to see which one reaches the optimal first. And of course, it should not be a surprise at this point that we used an I/O benchmark to do it. So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. So we ran `iops generate` and started editing a YAML file to make IOPS run itself, like in the movie Inception. Below you can see the results, which show the efficiency of BO for this problem.
 
 ---
 
 ## Overview
 
-This study demonstrates a powerful IOPS capability: running benchmarks entirely from cached results. Using the `--cache-only` flag, we replay thousands of HPC experiments offline, enabling rapid algorithm comparison without consuming compute resources.
+In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from cached results. Using the `--cache-only` flag, we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
 
-The cache contains 1,049 execution results (304 unique configurations × 3 repetitions) from IOR benchmarks run on the IRENE supercomputer (CEA, France), covering a 5-dimensional parameter space:
+This was possible because of the cache feature implemented in IOPS (explained [here](/user-guide/caching)). The cache was generated during another execution campaign that will be published here soon (when the paper gets accepted). It contains 1,049 execution results (304 unique configurations × 3 repetitions) from IOR benchmarks run on the IRENE supercomputer (CEA, France), covering a 5-dimensional parameter space:
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
@@ -21,13 +21,13 @@ The cache contains 1,049 execution results (304 unique configurations × 3 repet
 | `transfer_size_kb` | 32, 1024, 8192, 32768, 65536 | I/O transfer size |
 | `volume_size_gb` | 128 | Fixed data volume |
 
-After constraint filtering, the parameter space contains 315 valid configurations. Each optimization run explores only 20 of them (6.3% of the space).
+After constraint filtering, the parameter space contains 315 valid configurations. Each optimization run explores only 20 of them—that's just 6.3% of the space.
 
 ---
 
 ## Study Design
 
-The study compares three search methods across 25 random seeds:
+We compared three search methods across 25 random seeds:
 
 | Method | Search Strategy | Configuration |
 |--------|-----------------|---------------|
@@ -42,11 +42,11 @@ command:
   template: "iops run {{ inner_config }} --use-cache --cache-only"
 ```
 
-The `--cache-only` flag ensures all results come from the pre-populated cache—no actual benchmarks are executed. This allows running 75 complete optimization studies (3 methods × 25 seeds) in under 5 minutes on a laptop.
+The `--cache-only` flag ensures all results come from the pre-populated cache—no actual benchmarks are executed. This let us run 75 complete optimization studies (3 methods × 25 seeds) in under 5 minutes on a laptop. Pretty cool, right?
 
-### Nested IOPS Execution
+### How the Nested Execution Works
 
-The script template generates YAML configurations dynamically using embedded Python, then invokes IOPS with the generated configuration. The parser analyzes each run's CSV output to extract the best bandwidth found, number of iterations, and unique configurations explored.
+The script template generates YAML configurations dynamically using embedded Python, then invokes IOPS with that configuration. The parser analyzes each run's CSV output to extract the best bandwidth found, number of iterations, and unique configurations explored.
 
 ---
 
@@ -58,19 +58,19 @@ The boxplot below shows the best bandwidth found by each method across 25 seeds:
 
 ![Performance Boxplot](../../images/showcase/performance_boxplot.png)
 
-The optimal configuration achieves 72.4 GB/s. Bayesian optimization finds configurations within 10% of optimal in most runs, while random sampling shows higher variance and lower average performance.
+The optimal configuration achieves 72.4 GB/s. Bayesian optimization finds configurations within 10% of optimal in most runs, while random sampling shows higher variance and generally lower performance.
 
 ### Search Effectiveness
 
 ![Percentage of Optimal](../../images/showcase/percentage_optimal.png)
 
-Bayesian optimization achieves a 10 percentage point improvement over random sampling when exploring only 6% of the parameter space. The Extra Trees (ET) estimator provides a slight edge over Random Forest (RF) for this workload.
+Bayesian optimization achieves a 10 percentage point improvement over random sampling while exploring only 6% of the parameter space. The Extra Trees (ET) estimator provides a slight edge over Random Forest (RF) for this workload.
 
 ### Convergence
 
 ![Convergence Curves](../../images/showcase/convergence_curves.png)
 
-The convergence plot shows how each method progresses over iterations. Shaded regions represent standard deviation across seeds. Bayesian methods start with 5 random points (exploration phase), then use the surrogate model to guide the search. Both Bayesian variants converge faster and reach higher performance than random sampling.
+The convergence plot shows how each method progresses over iterations. The shaded regions represent standard deviation across seeds. Bayesian methods start with 5 random points (the exploration phase), then use the surrogate model to guide the search. Both Bayesian variants converge faster and reach higher performance than random sampling.
 
 ---
 
@@ -82,17 +82,17 @@ More importantly, the `nodes` parameter dominates performance in this workload. 
 
 ![Node Selection Distribution](../../images/showcase/node_selection.png)
 
-The y-axis shows the proportion of seeds (out of 25) that selected each node value at each iteration. For example, if 20 out of 25 seeds selected `nodes=64` at iteration 15, the green bar would show 0.8 (80%) at that point.
+The y-axis shows the proportion of seeds (out of 25) that selected each node value at a given iteration. For example, if 20 out of 25 seeds selected `nodes=64` at iteration 15, the green bar would show 0.8 (80%) at that point.
 
-The Bayesian methods quickly learn that higher node counts yield better performance and concentrate their search accordingly—by iteration 10, nearly all seeds are selecting `nodes=64`. Random sampling, by contrast, distributes selections uniformly across all node values throughout the run, maintaining roughly equal proportions for each value.
+The Bayesian methods quickly learn that higher node counts yield better performance and concentrate their search accordingly—by iteration 10, nearly all seeds are selecting `nodes=64`. Random sampling, by contrast, distributes selections uniformly across all node values throughout the run.
 
-Despite these limitations, the study demonstrates that Bayesian optimization provides consistent improvements over random sampling, and that IOPS's cache-only mode enables rapid algorithmic experimentation without HPC resources. A follow-up study with a larger parameter space would likely show a bigger performance gap between methods.
+Despite these limitations, the study shows that Bayesian optimization provides consistent improvements over random sampling, and that IOPS's cache-only mode enables rapid algorithmic experimentation without HPC resources. A follow-up study with a larger parameter space would likely show an even bigger gap between the methods.
 
 ---
 
 ## Full Configuration
 
-The complete YAML configuration used in this study:
+Here's the complete YAML configuration we used:
 
 ```yaml
 benchmark:
