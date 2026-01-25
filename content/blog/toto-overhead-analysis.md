@@ -12,9 +12,9 @@ Before deploying TOTO in production, we needed to quantify its overhead across d
 
 1. **Baseline comparison**: Every test must run both *with* and *without* TOTO
 2. **Multi-dimensional space**: Overhead varies with process count, I/O size, access pattern, and TOTO's analysis frequency
-3. **Conditional parameters**: TOTO-specific settings only make sense when TOTO is enabled
+3. **[Conditional parameters]({{< ref "/user-guide/matrix-generation#conditional-variables" >}})**: TOTO-specific settings only make sense when TOTO is enabled
 4. **LD_PRELOAD headaches**: Setting `LD_PRELOAD` in scripts can break SLURM commands
-5. **Resource monitoring**: We need CPU and memory data, not just execution time
+5. **[Resource monitoring]({{< ref "/user-guide/resource-tracing" >}})**: We need CPU and memory data, not just execution time
 
 This turned out to be a perfect use case for IOPS. Here's how we tackled it.
 
@@ -24,7 +24,7 @@ This turned out to be a perfect use case for IOPS. Here's how we tackled it.
 
 ### Conditional Variables
 
-TOTO has an `analysis_period` parameter that controls how often it gathers I/O statistics. But this parameter is meaningless when TOTO is disabled—we'd just be creating redundant test combinations.
+TOTO has an `analysis_period` parameter that controls how often it gathers I/O statistics. But this parameter is meaningless when TOTO is disabled, so we'd just be creating redundant test combinations.
 
 IOPS has a `when` clause for exactly this situation:
 
@@ -49,7 +49,7 @@ Without `when`, we'd have 2 × 5 = 10 combinations. With `when`, we get 5 (with 
 
 ### Resource Tracing
 
-Execution time alone doesn't tell the whole story. We wanted CPU and memory utilization data to understand *where* the overhead comes from. IOPS can sample these during execution:
+Execution time alone doesn't tell the whole story. We wanted CPU and memory utilization data to understand *where* the overhead comes from. IOPS can [sample these during execution]({{< ref "/user-guide/resource-tracing" >}}):
 
 ```yaml
 benchmark:
@@ -61,9 +61,9 @@ This generates per-node trace files with timestamped samples, plus a summary CSV
 
 ### The LD_PRELOAD Problem
 
-Here's something that bit us: when you `export LD_PRELOAD=...` in a SLURM job script, it affects everything that runs after—including `scontrol`, `squeue`, and `module load`. Those commands break spectacularly.
+Here's something that bit us: when you `export LD_PRELOAD=...` in a SLURM job script, it affects everything that runs after, including `scontrol`, `squeue`, and `module load`. Those commands break spectacularly.
 
-The solution is IOPS's single-allocation mode with `pass_env`. Instead of exporting variables in the script, we pass them directly to mpirun via `-x` flags:
+The solution is IOPS's [single-allocation mode]({{< ref "/user-guide/single-allocation-mode" >}}) with `pass_env`. Instead of exporting variables in the script, we pass them directly to mpirun via `-x` flags:
 
 ```yaml
 scripts:
@@ -483,7 +483,7 @@ A few things that made this study work well:
 
 1. **Conditional variables** saved us from running redundant tests where TOTO-specific parameters varied but TOTO wasn't even enabled
 
-2. **Resource tracing** gave us the CPU and memory data we needed—execution time alone wouldn't have told the full story
+2. **Resource tracing** gave us the CPU and memory data we needed. Execution time alone wouldn't have told the full story
 
 3. **Single-allocation mode with `pass_env`** was the cleanest way to handle `LD_PRELOAD` without breaking SLURM commands
 
@@ -495,7 +495,8 @@ A few things that made this study work well:
 
 ## Related Documentation
 
-- [Single-Allocation Mode](/user-guide/single-allocation-mode) - MPI configuration details
-- [Resource Tracing](/user-guide/resource-tracing) - CPU and memory monitoring
-- [Conditional Variables](/user-guide/matrix-generation#conditional-variables) - How `when` clauses work
-- [YAML Schema Reference](/user-guide/yaml-schema) - Complete configuration reference
+- [Single-Allocation Mode]({{< ref "/user-guide/single-allocation-mode" >}}) - MPI configuration details
+- [Resource Tracing]({{< ref "/user-guide/resource-tracing" >}}) - CPU and memory monitoring
+- [Conditional Variables]({{< ref "/user-guide/matrix-generation#conditional-variables" >}}) - How `when` clauses work
+- [YAML Schema Reference]({{< ref "/user-guide/yaml-schema" >}}) - Complete configuration reference
+- [Execution Backends]({{< ref "/user-guide/execution-backends" >}}) - SLURM and local execution
