@@ -520,6 +520,24 @@ class IOPSRunner(HasLogger):
         self.logger.info("INTERRUPT RECEIVED (Ctrl+C)")
         self.logger.info("=" * 70)
 
+        # Show progress summary
+        progress = self.planner.get_progress()
+        self.logger.info(f"Progress: {progress['completed']}/{progress['total']} tests ({progress['percentage']:.1f}%)")
+
+        if self.accumulated_core_hours > 0 or self.saved_core_hours > 0:
+            self.logger.info(f"Core-hours used: {self.accumulated_core_hours:.2f}")
+            if self.saved_core_hours > 0:
+                self.logger.info(f"Core-hours saved by cache: {self.saved_core_hours:.2f}")
+            if self.max_core_hours:
+                remaining = self.max_core_hours - self.accumulated_core_hours
+                self.logger.info(f"Budget remaining: {remaining:.2f}/{self.max_core_hours:.2f} core-hours")
+
+        if hasattr(self, 'benchmark_start_time') and self.benchmark_start_time:
+            elapsed = datetime.now() - self.benchmark_start_time
+            self.logger.info(f"Elapsed time: {elapsed}")
+
+        self.logger.info("-" * 70)
+
         if not self.submitted_job_ids:
             self.logger.info("No SLURM jobs to cancel")
             self.logger.info("Exiting...")
@@ -1401,12 +1419,12 @@ class IOPSRunner(HasLogger):
         self.logger.info("=" * 70)
 
     def run(self):
-        # Record benchmark start time
-        benchmark_start_time = datetime.now()
+        # Record benchmark start time (class attribute for signal handler access)
+        self.benchmark_start_time = datetime.now()
 
         self.logger.info("=" * 70)
         self.logger.info(f"Starting IOPS Runner: {self.cfg.benchmark.name}")
-        self.logger.info(f"Benchmark start time: {benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"Benchmark start time: {self.benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info("=" * 70)
 
         test_count = 0
@@ -1658,7 +1676,7 @@ class IOPSRunner(HasLogger):
 
         # Record benchmark end time and calculate timing metrics
         benchmark_end_time = datetime.now()
-        total_runtime = (benchmark_end_time - benchmark_start_time).total_seconds()
+        total_runtime = (benchmark_end_time - self.benchmark_start_time).total_seconds()
 
         # Format runtime for display
         if total_runtime < 60:
@@ -1672,7 +1690,7 @@ class IOPSRunner(HasLogger):
         self.logger.info("=" * 70)
         self.logger.info("BENCHMARK TIMING SUMMARY")
         self.logger.info("=" * 70)
-        self.logger.info(f"Start time:    {benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"Start time:    {self.benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info(f"End time:      {benchmark_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info(f"Total runtime: {runtime_str}")
         self.logger.info("=" * 70)
@@ -1680,7 +1698,7 @@ class IOPSRunner(HasLogger):
         # Save runtime metadata for report generation
         self._save_run_metadata(
             test_count=test_count,
-            benchmark_start_time=benchmark_start_time,
+            benchmark_start_time=self.benchmark_start_time,
             benchmark_end_time=benchmark_end_time,
             planner_stats=self._get_planner_stats()
         )
