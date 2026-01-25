@@ -10,9 +10,9 @@ IOPS can use [Bayesian Optimization]({{< ref "/user-guide/search-methods#bayesia
 
 So the study was: find the best parameter combination that maximizes I/O bandwidth performance. We started writing a script to run these tests, but at some point we realized that this was just another PARAMETER EXPLORATION. We ran [`iops generate`]({{< ref "/user-guide/cli#generate" >}}) and started editing a YAML file to make IOPS run itself, like in the movie Inception. 
 
-In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from cached results. Using the [`--cache-only`]({{< ref "/user-guide/cli#run" >}}) flag, we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
+In this inception-style study, we demonstrate the effectiveness of BO when running I/O benchmarks, but also showcase a bunch of interesting IOPS features. First, we use IOPS's capability of running benchmarks entirely from [cached results]({{< ref "/user-guide/caching" >}}). Using the [`--cache-only` flag]({{< ref "/user-guide/cli#run" >}}), we replay thousands of HPC experiments offline, enabling rapid comparison without consuming compute resources.
 
-This was possible because of the cache feature implemented in IOPS (explained [here]({{< ref "/user-guide/caching" >}})). The cache was generated during another execution campaign that will be published here soon (when the paper gets accepted). It contains 1,049 execution results (304 unique configurations × 3 repetitions) from IOR benchmarks run on the IRENE supercomputer (TGCC, France), covering a 5-dimensional parameter space:
+This was possible because of the [cache feature]({{< ref "/user-guide/caching" >}}) implemented in IOPS. The cache was generated during another execution campaign that will be published here soon (when the paper gets accepted). It contains 1,049 execution results (304 unique configurations × 3 repetitions) from IOR benchmarks run on the IRENE supercomputer (TGCC, France), covering a 5-dimensional parameter space:
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
