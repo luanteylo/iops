@@ -3,7 +3,16 @@ title: "IOPS"
 weight: 1
 ---
 
-# IOPS 
+> **Development Documentation**
+>
+> You are viewing the documentation for **IOPS 3.5** (in development). This version includes new features that are not yet released. For the stable version, see the [official documentation](https://lgouveia.gitlabpages.inria.fr/iops/).
+>
+> To install the development version:
+> ```bash
+> pip install git+https://gitlab.inria.fr/lgouveia/iops.git@dev-3.5
+> ```
+
+# IOPS
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
 
@@ -41,4 +50,3 @@ Check out our [blog]({{< ref "/blog" >}}) for tutorials and use cases:
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)
 - **Issues**: [Issue Tracker](https://gitlab.inria.fr/lgouveia/iops/-/issues)
 - **PyPI**: [iops-benchmark](https://pypi.org/project/iops-benchmark/)
-- **Dev Documentation**: [Preview upcoming features](/iops/dev/)
