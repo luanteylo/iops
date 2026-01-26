@@ -81,7 +81,7 @@ ALLOWED_POST_KEYS = {"script"}
 ALLOWED_METRIC_KEYS = {"name", "type", "path"}
 
 ALLOWED_OUTPUT_KEYS = {"sink"}
-ALLOWED_OUTPUT_SINK_KEYS = {"type", "path", "exclude", "include", "table"}
+ALLOWED_OUTPUT_SINK_KEYS = {"type", "path", "exclude", "include", "table", "mode"}
 
 ALLOWED_RANDOM_CONFIG_KEYS = {"n_samples", "percentage", "fallback_to_exhaustive"}
 ALLOWED_BAYESIAN_CONFIG_KEYS = {
@@ -1085,6 +1085,17 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         raise ConfigValidationError("\n".join(key_errors))
 
     out = output_data["sink"]
+
+    # Handle deprecated output.sink.mode field
+    if "mode" in out and out["mode"] is not None:
+        import warnings
+        warnings.warn(
+            "output.sink.mode is deprecated and will be removed in version 3.7. "
+            "IOPS now always appends results to the output file. "
+            "See https://iops.dev/about/deprecations for details.",
+            DeprecationWarning,
+            stacklevel=4
+        )
 
     # Validate output.sink keys
     key_errors = _validate_allowed_keys(out, ALLOWED_OUTPUT_SINK_KEYS, "output.sink")
