@@ -3,6 +3,9 @@ title: "Measuring the runtime overhead of an I/O interception library"
 date: 2024-11-20
 tags: ["overhead-analysis", "resource-tracing", "slurm", "ld-preload"]
 draft: true
+hidden: false
+date: 2026-01-25
+author: "Luan Teylo, INRIA"
 ---
 
 When you intercept I/O system calls to analyze application behavior, how much overhead do you actually add? That's the question we needed to answer for [TOTO](https://gitlab.inria.fr/hpc_io/toto) (Transparent and Online Tool for I/O), a library that hooks into I/O calls via `LD_PRELOAD` to provide runtime analysis of parallel file system access patterns.

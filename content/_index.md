@@ -30,6 +30,12 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis
 - **Flexible Output**: Export results to CSV, Parquet, or SQLite
 
+## Blog
+
+Check out our [blog]({{< ref "/blog" >}}) for tutorials and use cases:
+
+- [Using IOPS on Grid'5000]({{< ref "/blog/grid500" >}}) - Run IOPS with OAR scheduler on Grid'5000
+
 ## Links
 
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)
