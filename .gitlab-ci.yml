@@ -39,14 +39,19 @@ test:
 # Build documentation with Hugo
 pages:
   stage: deploy
+  variables:
+    GIT_DEPTH: 0  # Full clone to access other branches
   script:
     # Build main docs
     - hugo --minify
     # Fetch and build dev docs to /dev/ subdirectory
     - git fetch origin dev-3.5
     - git worktree add dev-branch origin/dev-3.5
-    - cd dev-branch && hugo --minify --baseURL "${CI_PAGES_URL}/dev/" -d ../public/dev
-    - cd .. && rm -rf dev-branch
+    - cd dev-branch
+    - git submodule update --init --recursive
+    - hugo --minify --baseURL "${CI_PAGES_URL}/dev/" -d ../public/dev
+    - cd ..
+    - rm -rf dev-branch
   artifacts:
     paths:
       - public
