@@ -30,6 +30,15 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis
 - **Flexible Output**: Export results to CSV, Parquet, or SQLite
 
+## Coming Soon: Version 3.5
+
+We're actively developing **IOPS 3.5** with new features and improvements. Preview the upcoming release:
+
+- **[Documentation Preview](/iops/dev/)** - Browse the dev documentation
+- **[dev-3.5 branch](https://gitlab.inria.fr/lgouveia/iops/-/tree/dev-3.5)** - Follow development on GitLab
+
+New in 3.5: enhanced probes configuration, blog with tutorials and use cases, and more. Stay tuned for the official release!
+
 ## Links
 
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)
