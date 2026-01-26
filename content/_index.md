@@ -37,7 +37,7 @@ We're actively developing **IOPS 3.5** with new features and improvements. Previ
 - **[Documentation Preview](/iops/dev/)** - Browse the dev documentation
 - **[dev-3.5 branch](https://gitlab.inria.fr/lgouveia/iops/-/tree/dev-3.5)** - Follow development on GitLab
 
-New in 3.5: enhanced probes configuration, blog with tutorials and use cases, and more. Stay tuned for the official release!
+
 
 ## Links
 
