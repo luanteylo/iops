@@ -96,7 +96,9 @@ Despite these limitations, the study shows that Bayesian optimization provides c
 
 ## Full Configuration
 
-Here's the complete YAML configuration we used. One tricky part: since we're generating a nested IOPS config inside a [script template]({{< ref "/user-guide/templating-and-context" >}}), we need to handle two levels of Jinja2 rendering. The outer variables (like `{{ method }}` and `{{ seed }}`) get rendered by the parent IOPS run, while the inner config variables (like `{{ block_size_mb }}`) are written as literal strings to the generated YAML file and only get rendered when the inner IOPS runs.
+
+Here's the complete YAML configuration we used. One tricky part: since we're generating a nested IOPS config inside a [script template]({{< ref "/user-guide/templating-and-context" >}}), we need to handle two levels of Jinja2 rendering. The outer variables (like `{{ method }}` and `{{ seed }}`) get rendered by the parent IOPS run, while the inner config variables (like `{{ block_size_mb }}`) are written as literal strings to the generated YAML file and only get rendered when the inner IOPS runs. Luckily, Jinja2 already has easy ways to do this by using `{% raw %}...{% endraw %}`, which prevents the outer level from handling the templates.
+
 
 ```yaml
 benchmark:
@@ -105,8 +107,7 @@ benchmark:
   executor: "local"
   search_method: "exhaustive"
   repetitions: 1
-  probes:
-    execution_index: true
+  track_executions: true
 
 vars:
   method:
@@ -120,8 +121,8 @@ vars:
     sweep:
       mode: list
       values: [1992, 2023, 42, 123, 456, 789, 1000, 2000, 3000, 4000,
-               5000, 6000, 7000, 8000, 9000, 10000, 11111, 22222, 33333, 44444,
-               55555, 66666, 77777, 88888, 99999]
+                5000, 6000, 7000, 8000, 9000, 10000, 11111, 22222, 33333, 44444,
+                55555, 66666, 77777, 88888, 99999]
 
   actual_search_method:
     type: str
@@ -138,17 +139,22 @@ vars:
   inner_config:
     type: str
     expr: "{{ execution_dir }}/inner_config.yaml"
+  
 
-constraints:
-  - name: "require_cache_env"
-    rule: "os_env.get('IOPS_CACHE', '') != ''"
-    violation_policy: "error"
-    description: "IOPS_CACHE environment variable must be set"
+
+constraints: 
+  - name: "require_cache_env"                                                                                                          
+    rule: "os_env.get('IOPS_CACHE', '') != ''"                                                                                         
+    violation_policy: "error"                                                                                                          
+    description: "IOPS_CACHE environment variable must be set" 
+
 
 command:
-  template: "iops run {{ inner_config }} --use-cache --cache-only --log-level WARNING"
+  template: "~/.venvs/iops_env/bin/iops run {{ inner_config }} --use-cache --cache-only --log-level WARNING"
+
   labels:
     study_type: "optimization_comparison"
+
 
 scripts:
   - name: "run_inner_iops"
@@ -157,7 +163,9 @@ scripts:
       #!/bin/bash
       set -e
 
-      python3 << 'PYTHON_EOF'
+  
+      # Usings {% raw %}...{% endraw %} to prevent outer Jinja2 from evaluating inner templates
+      ~/.venvs/iops_env/bin/python3 << 'PYTHON_EOF'
       import yaml
       import os
       from pathlib import Path
@@ -174,37 +182,91 @@ scripts:
               "executor": "local",
               "random_seed": {{ seed }},
               "cache_exclude_vars": ["summary_file"],
-              "probes": {"execution_index": True},
+              "track_executions": True,
           },
           "vars": {
-              "nodes": {"type": "int", "sweep": {"mode": "list", "values": [1, 32, 64]}},
-              "processes_per_node": {"type": "int", "sweep": {"mode": "list", "values": [1, 64, 128]}},
-              "volume_size_gb": {"type": "int", "sweep": {"mode": "list", "values": [128]}},
-              "ost_count": {"type": "int", "sweep": {"mode": "list", "values": [1, 4, 8, 16, 24, 32, 40]}},
-              "transfer_size_kb": {"type": "int", "sweep": {"mode": "list", "values": [32, 1024, 8192, 32768, 65536]}},
+              "nodes": {
+                  "type": "int",
+                  "sweep": {"mode": "list", "values": [1, 32, 64]}
+              },
+              "processes_per_node": {
+                  "type": "int",
+                  "sweep": {"mode": "list", "values": [1, 64, 128]}
+              },
+              "volume_size_gb": {
+                  "type": "int",
+                  "sweep": {"mode": "list", "values": [128]}
+              },
+              "ost_count": {
+                  "type": "int",
+                  "sweep": {"mode": "list", "values": [1, 4, 8, 16, 24, 32, 40]}
+              },
+              "transfer_size_kb": {
+                  "type": "int",
+                  "sweep": {"mode": "list", "values": [32, 1024, 8192, 32768, 65536]}
+              },
+              "ost_path": {
+                  "type": "str",
+                  "expr": {% raw %}"/ccc/scratch/cont003/gen15872/gouveial/ost_{{ ost_count }}"{% endraw %}
+              },
+              "ntasks": {
+                  "type": "int",
+                  "expr": {% raw %}"{{ nodes * processes_per_node }}"{% endraw %}
+              },
+              "block_size_mb": {
+                  "type": "int",
+                  "expr": "(volume_size_gb * 1024) // ntasks"
+              },
+              "cores_per_tasks": {
+                  "type": "int",
+                  "expr": {% raw %}"{{ 128 // processes_per_node }}"{% endraw %}
+              },
+              "summary_file": {
+                  "type": "str",
+                  "expr": {% raw %}"{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"{% endraw %}
+              },
           },
           "constraints": [
-              {"name": "block_transfer_alignment", "rule": "(block_size_mb * 1024) % transfer_size_kb == 0", "violation_policy": "skip"},
-              {"name": "transfer_size_limit", "rule": "transfer_size_kb <= (block_size_mb * 1024)", "violation_policy": "skip"}
+              {
+                  "name": "block_transfer_alignment",
+                  "rule": "(block_size_mb * 1024) % transfer_size_kb == 0",
+                  "violation_policy": "skip",
+                  "description": "Block size must be a multiple of transfer size"
+              },
+              {
+                  "name": "transfer_size_limit",
+                  "rule": "transfer_size_kb <= (block_size_mb * 1024)",
+                  "violation_policy": "skip"
+              }
           ],
           "command": {
-              "template": "ior -w -b {{ block_size_mb }}mb -t {{ transfer_size_kb }}kb -O summaryFile={{ summary_file }} -O summaryFormat=JSON -o {{ ost_path }}/output.ior",
-              "metadata": {"operation": "write", "filestrategy": "shared-file", "spatiality": "contig"}
-          },
-          "scripts": [{
-              "name": "ior",
-              "submit": "bash",
-              "script_template": "#!/bin/bash\necho \"Placeholder - using cached results\"",
-              "parser": {
-                  "file": "{{ summary_file }}",
-                  "metrics": [{"name": "bwMiB"}],
-                  "parser_script": "def parse(file_path):\n    return {\"bwMiB\": 0}"
+              "template": {% raw %}"ior -w -b {{ block_size_mb }}mb -t {{ transfer_size_kb }}kb -O summaryFile={{ summary_file }} -O summaryFormat=JSON -o {{ ost_path }}/output.ior"{% endraw %},
+              "metadata": {
+                  "operation": "write",
+                  "filestrategy": "shared-file",
+                  "spatiality": "contig"
               }
-          }],
-          "output": {"sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}}
+          },
+          "scripts": [
+              {
+                  "name": "ior",
+                  "submit": "bash",
+                  "script_template": "#!/bin/bash\necho \"Placeholder - using cached results\"",
+                  "parser": {
+                      "file": {% raw %}"{{ summary_file }}"{% endraw %},
+                      "metrics": [{"name": "bwMiB"}],
+                      "parser_script": "def parse(file_path):\n    return {\"bwMiB\": 0}"
+                  }
+              }
+          ],
+          "output": {
+              "sink": {
+                  "type": "csv",
+                  "path": {% raw %}"{{ workdir }}/results.csv"{% endraw %},
+              }
+          }
       }
 
-      # Add method-specific configuration
       if "{{ actual_search_method }}" == "bayesian":
           config["benchmark"]["bayesian_config"] = {
               "objective_metric": "bwMiB",
@@ -213,15 +275,38 @@ scripts:
               "n_iterations": 20,
               "acquisition_func": "EI",
               "base_estimator": "{{ base_estimator }}",
+              "xi": 0.01,
+              "fallback_to_exhaustive": False,
+              "early_stop_on_convergence": False,
+              "convergence_patience": 5,
+              "xi_boost_factor": 5.0,
           }
       else:
-          config["benchmark"]["random_config"] = {"n_samples": 20}
+          config["benchmark"]["random_config"] = {
+              "n_samples": 20
+          }
 
-      with open("{{ inner_config }}", "w") as f:
-          yaml.dump(config, f)
+      config_path = Path("{{ inner_config }}")
+      config_path.parent.mkdir(parents=True, exist_ok=True)
+      with open(config_path, "w") as f:
+          yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+      print(f"Generated config: {config_path}")
       PYTHON_EOF
 
-      {{ command.template }}
+      mkdir -p "{{ inner_workdir }}"
+
+      echo "Running: {{ command.template }}"
+      {{ command.template }} 2>&1 | tee "{{ execution_dir }}/inner_iops.log"
+      inner_exit_code=${PIPESTATUS[0]}
+
+      if [ $inner_exit_code -ne 0 ]; then
+          echo "ERROR: Inner IOPS failed with exit code $inner_exit_code"
+          echo "See {{ execution_dir }}/inner_iops.log for details"
+          exit 1
+      fi
+
+      echo "Inner IOPS completed successfully"
 
     parser:
       file: "{{ inner_workdir }}/run_001/results.csv"
@@ -232,18 +317,35 @@ scripts:
         - name: final_bw
       parser_script: |
         import pandas as pd
+        from pathlib import Path
 
         def parse(file_path):
             df = pd.read_csv(file_path)
+
             best_bw = df['metrics.bwMiB'].max()
+
             param_cols = ['vars.nodes', 'vars.processes_per_node', 'vars.ost_count', 'vars.transfer_size_kb']
             unique_configs = len(df.groupby(param_cols))
-            return {"best_bw": best_bw, "iterations": unique_configs, "unique_configs": unique_configs}
+
+            config_groups = df.groupby(param_cols, sort=False)
+            last_config = list(config_groups.groups.keys())[-1]
+            final_bw = config_groups.get_group(last_config)['metrics.bwMiB'].max()
+
+            iterations = unique_configs
+
+            return {
+                "best_bw": best_bw,
+                "iterations": iterations,
+                "unique_configs": unique_configs,
+                "final_bw": final_bw
+            }
+
 
 output:
   sink:
     type: csv
     path: "./results.csv"
+
 ```
 
 ---
