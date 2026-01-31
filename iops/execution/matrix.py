@@ -286,6 +286,7 @@ class ExecutionInstance:
     benchmark_name: str = ""
     benchmark_description: Optional[str] = None
     workdir: Optional[Path] = None
+    log_dir: Optional[Path] = None
 
     # Variables:
     #   - base_vars: swept and fixed scalar vars (no expr).
@@ -347,6 +348,7 @@ class ExecutionInstance:
                 "execution_dir": str(self.execution_dir)
             },
             "workdir": str(self.workdir),
+            "log_dir": str(self.log_dir) if self.log_dir else None,
             "execution_dir": str(self.execution_dir),
             "execution_id": self.execution_id,
             "repetitions": self.repetitions,
@@ -393,7 +395,9 @@ class ExecutionInstance:
         This context includes:
         - benchmark.* information
         - workdir
+        - log_dir
         - execution_id
+        - execution_dir
         - repetitions
         - flattened vars ({{ my_var }})
         - vars mapping ({{ vars.my_var }})
@@ -831,6 +835,7 @@ def _create_execution_instance(
         benchmark_name=cfg.benchmark.name,
         benchmark_description=cfg.benchmark.description,
         workdir=cfg.benchmark.workdir,
+        log_dir=cfg.benchmark.workdir / "logs" if cfg.benchmark.workdir else None,
         cache_file=getattr(cfg.benchmark, "cache_file", None),
         base_vars=base_vars,
         derived_var_cfgs=derived_var_cfgs,

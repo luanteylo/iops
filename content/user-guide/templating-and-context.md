@@ -53,6 +53,7 @@ These variables are available in all Jinja2 templates:
 | `repetition` | int | Current repetition number (1, 2, 3, ...) |
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
+| `log_dir` | str | Logs directory path (`workdir/logs`) |
 | `execution_dir` | str | Per-execution directory path |
 | `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
 | All user `vars` | varies | All swept and derived variables by name |
@@ -507,7 +508,11 @@ The parser script does NOT support Jinja2 templating, but has access to executio
 | `env` | dict | Rendered `command.env` variables |
 | `os_env` | dict | System environment variables (e.g., `os_env["PATH"]`) |
 | `execution_id` | str | The execution ID |
+| `execution_dir` | str | The execution directory path |
+| `workdir` | str | The root working directory path |
+| `log_dir` | str | The logs directory path |
 | `repetition` | int | Current repetition number |
+| `repetitions` | int | Total number of repetitions |
 
 #### Inline Content
 
@@ -625,7 +630,7 @@ The external file (`./parsers/my_parser.py`):
 import json
 
 def parse(file_path):
-    # Context globals available: vars, env, os_env, execution_id, repetition
+    # Context globals available: vars, env, os_env, execution_id, execution_dir, workdir, log_dir, repetition, repetitions
     with open(file_path) as f:
         data = json.load(f)
     return {"throughput": data["bandwidth"] / vars["nodes"]}
@@ -838,7 +843,7 @@ scripts:
         - name: read_bw
         - name: efficiency
 
-      # No Jinja2, but has access to vars, env, os_env, execution_id, repetition
+      # No Jinja2, but has access to vars, env, os_env, execution_id, execution_dir, workdir, log_dir, repetition, repetitions
       parser_script: |
         import json
 

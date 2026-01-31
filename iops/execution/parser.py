@@ -100,6 +100,7 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
         - execution_id: The execution ID string
         - execution_dir: The execution directory path (as string)
         - workdir: The root working directory path (as string)
+        - log_dir: The logs directory path (as string)
         - repetition: The current repetition number
         - repetitions: Total number of repetitions
     """
@@ -121,6 +122,7 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
         "execution_id": test.execution_id,
         "execution_dir": str(test.execution_dir) if test.execution_dir else None,
         "workdir": str(test.workdir) if test.workdir else None,
+        "log_dir": str(test.log_dir) if test.log_dir else None,
         "repetition": test.repetition,
         "repetitions": test.repetitions,
     }
