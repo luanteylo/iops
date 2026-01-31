@@ -146,11 +146,7 @@ class BenchmarkWizard:
             return False
 
     def _print_header(self, executor: str, benchmark: str, full_template: bool):
-        """Print wizard header."""
-        print("\n" + "=" * 70)
-        print("           IOPS Benchmark Configuration Generator")
-        print("=" * 70)
-
+        
         if full_template:
             print("\nGenerating FULL template with all options documented.")
         else:

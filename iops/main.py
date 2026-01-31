@@ -446,12 +446,7 @@ def main():
                 full_template=args.full,
                 copy_examples=args.examples
             )
-
-            if output_file:
-                logger.info(f"Configuration template generated successfully: {output_file}")
-            else:
-                logger.info("Template generation cancelled")
-
+            
         except KeyboardInterrupt:
             logger.info("\n\nTemplate generation cancelled by user")
         except Exception as e:
