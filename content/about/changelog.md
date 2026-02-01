@@ -45,6 +45,7 @@ All notable changes to IOPS are documented here.
 - Bayesian optimization now uses MAX/MIN aggregation for repetitions (matching objective) instead of MEAN
 
 ### Fixed
+- `sections.parallel_coordinates` and `sections.variable_impact` settings being ignored in reports
 - Dry-run cache lookup using wrong repetition values
 - Constraint evaluation order (swept vars before derived expressions)
 - Refactored BayesianPlanner to use pre-built execution matrix (consistent with other planners)
