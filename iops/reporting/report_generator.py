@@ -2352,42 +2352,51 @@ class ReportGenerator:
         1. Parallel coordinates plot for multidimensional patterns
         2. Variable importance/contribution analysis
         """
+        show_parallel = self.report_config.sections.parallel_coordinates
+        show_impact = self.report_config.sections.variable_impact
+
+        # Skip entire section if both are disabled
+        if not show_parallel and not show_impact:
+            return ""
+
         html = '<div class="metric-section">\n'
         html += "<h2>Variable Analysis & Relationships</h2>\n"
         html += "<p>Analysis of how variables relate to performance metrics.</p>\n"
 
         # 1. Parallel coordinates plot
-        html += "<h3>Parallel Coordinates Plot</h3>\n"
-        html += "<p>Visualizes all variables simultaneously. Each line represents one configuration, "
-        html += "colored by performance. Patterns and clusters reveal optimal parameter combinations.</p>\n"
+        if show_parallel:
+            html += "<h3>Parallel Coordinates Plot</h3>\n"
+            html += "<p>Visualizes all variables simultaneously. Each line represents one configuration, "
+            html += "colored by performance. Patterns and clusters reveal optimal parameter combinations.</p>\n"
 
-        for metric in metrics:
-            fig_parallel = self._create_parallel_coordinates(metric, report_vars)
-            if fig_parallel is not None:
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig_parallel, plot_name=f'parallel_coordinates_{metric}')
-                html += '</div>\n'
+            for metric in metrics:
+                fig_parallel = self._create_parallel_coordinates(metric, report_vars)
+                if fig_parallel is not None:
+                    html += '<div class="plot-container">\n'
+                    html += self._fig_to_html(fig_parallel, plot_name=f'parallel_coordinates_{metric}')
+                    html += '</div>\n'
 
         # 2. Variable impact analysis
-        html += "<h3>Variable Impact on Performance</h3>\n"
-        html += "<div class='info-box'>\n"
-        html += "<p><strong>Statistical Method:</strong> Variance decomposition analysis</p>\n"
-        html += "<p>The impact score quantifies the proportion of total variance in the performance metric that is explained by each variable. "
-        html += "For each variable, the metric values are grouped by the variable's levels, and the between-group variance is computed. "
-        html += "The impact score is calculated as:</p>\n"
-        html += "<p style='text-align: center; font-family: monospace; background-color: #f8f8f8; padding: 10px; margin: 10px 0;'>"
-        html += "Impact = σ²_between / σ²_total</p>\n"
-        html += "<p>where σ²_between is the variance of group means (weighted by group size) and σ²_total is the overall variance of the metric. "
-        html += "This measure is analogous to the R² coefficient in regression or the eta-squared (η²) effect size in ANOVA. "
-        html += "Values range from 0 (no effect) to 1 (variable fully determines the metric).</p>\n"
-        html += "</div>\n"
+        if show_impact:
+            html += "<h3>Variable Impact on Performance</h3>\n"
+            html += "<div class='info-box'>\n"
+            html += "<p><strong>Statistical Method:</strong> Variance decomposition analysis</p>\n"
+            html += "<p>The impact score quantifies the proportion of total variance in the performance metric that is explained by each variable. "
+            html += "For each variable, the metric values are grouped by the variable's levels, and the between-group variance is computed. "
+            html += "The impact score is calculated as:</p>\n"
+            html += "<p style='text-align: center; font-family: monospace; background-color: #f8f8f8; padding: 10px; margin: 10px 0;'>"
+            html += "Impact = σ²_between / σ²_total</p>\n"
+            html += "<p>where σ²_between is the variance of group means (weighted by group size) and σ²_total is the overall variance of the metric. "
+            html += "This measure is analogous to the R² coefficient in regression or the eta-squared (η²) effect size in ANOVA. "
+            html += "Values range from 0 (no effect) to 1 (variable fully determines the metric).</p>\n"
+            html += "</div>\n"
 
-        for metric in metrics:
-            fig_impact = self._create_variable_impact_plot(metric, report_vars)
-            if fig_impact is not None:
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig_impact, plot_name=f'variable_impact_{metric}')
-                html += '</div>\n'
+            for metric in metrics:
+                fig_impact = self._create_variable_impact_plot(metric, report_vars)
+                if fig_impact is not None:
+                    html += '<div class="plot-container">\n'
+                    html += self._fig_to_html(fig_impact, plot_name=f'variable_impact_{metric}')
+                    html += '</div>\n'
 
         html += '</div>\n'
         return html
