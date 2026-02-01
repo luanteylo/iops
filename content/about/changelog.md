@@ -4,7 +4,7 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
-## [3.5.0] - Unreleased
+## [3.5.0] - 2026-02-01
 
 ### Added
 - Resource tracing for CPU and memory monitoring (`trace_resources`, `trace_interval`)

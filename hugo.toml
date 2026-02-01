@@ -1,6 +1,6 @@
 baseURL = 'https://lgouveia.gitlabpages.inria.fr/iops/'
 languageCode = 'en-us'
-title = 'IOPS/DEV'
+title = 'IOPS'
 theme = 'beautifulhugo'
 
 # Enable Git info

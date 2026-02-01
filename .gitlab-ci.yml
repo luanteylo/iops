@@ -40,13 +40,7 @@ test:
 pages:
   stage: deploy
   script:
-    # Build main docs
     - hugo --minify
-    # Fetch and build dev docs to /dev/ subdirectory
-    - git fetch origin dev-3.5
-    - git worktree add dev-branch origin/dev-3.5
-    - cd dev-branch && hugo --minify --baseURL "${CI_PAGES_URL}/dev/" -d ../public/dev
-    - cd .. && rm -rf dev-branch
   artifacts:
     paths:
       - public
