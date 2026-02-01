@@ -99,7 +99,7 @@ command:
     -O summaryFile={{summary_file}} -O summaryFormat=JSON
     -o /home/luan/filesystem/output.ior
 
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
@@ -107,7 +107,6 @@ command:
 # Execution scripts
 scripts:
   - name: "ior"
-    submit: "bash"
 
     script_template: |
       #!/bin/bash
@@ -153,15 +152,10 @@ output:
   sink:
     type: "csv"
     path: "{{ workdir }}/results_random.csv"
-    mode: "append"
-
-  # Include specific fields in output
-  include:
-    - "benchmark.name"
-    - "execution.*"
-    - "vars.*"
-    - "metrics.*"
-    - "metadata.operation"
+    # Exclude verbose fields from output
+    exclude:
+      - "benchmark.description"
+      - "round.*"
 
 ---
 # Alternative Configuration: Multi-Round Random Sampling

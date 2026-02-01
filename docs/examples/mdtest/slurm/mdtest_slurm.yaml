@@ -90,7 +90,7 @@ benchmark:
   #
   # Uncomment to customize SLURM commands:
   # ---------------------------------------------------------------------------
-  # executor_options:
+  # slurm_options:
   #   commands:
   #     # Default submit command (default: "sbatch")
   #     # Can be overridden per-script via scripts[].submit
@@ -148,7 +148,7 @@ benchmark:
   # estimated_time_seconds: 300
 
   # Optional: Variables to include in analysis reports
-  # When using --analyze, only these variables will be used in plots and Pareto frontier
+  # When using --analyze, only these variables will be used in plots
   # Useful when you have string variables that shouldn't be plotted
   # If omitted, all numeric swept variables are included
   report_vars: ["nodes", "processes_per_node", "files_per_task", "tree_depth", "branch_factor", "file_size_bytes"]
@@ -276,9 +276,10 @@ command:
     -z {{ tree_depth }} -b {{ branch_factor }}
     -w {{ file_size_bytes }} -F -C -T -r
 
-  # Optional: Additional metadata to attach to results
-  # This appears in output as metadata.* columns
-  metadata:
+  # Optional: User-defined labels to attach to results
+  # These appear in output as labels.* columns
+  # (metadata.* is reserved for IOPS internal fields)
+  labels:
     benchmark_type: "metadata"
     operations: "create,stat,remove"
 
@@ -301,7 +302,6 @@ scripts:
 
     # submission method for this script (required for local and slurm executors)
     #submit: "bash"        # for local executor
-    submit: "sbatch"
 
     # ---------------------------------------------------------------------------
     # SCRIPT OPTIONS:
@@ -463,16 +463,9 @@ output:
     # Output path (supports Jinja2 templating)
     path: "{{ workdir }}/results.csv"
 
-    # Write mode:
-    #   - append: Add to existing file (creates if missing)
-    #   - overwrite: Replace existing file
-    mode: append
-
-    # Optional: Include only specific fields (mutually exclusive with 'exclude')
+    # Optional: Exclude specific fields from output
     # Dot notation for nested fields: benchmark.name, vars.nodes, metrics.bwMiB
-    # include: ["execution.execution_id", "vars.*", "metrics.*"]
-
-    # Optional: Exclude specific fields (mutually exclusive with 'include')
+    # Wildcards supported: "vars.*", "labels.*", "metadata.*", "metrics.*"
     # Useful for removing verbose fields like descriptions
     exclude: ["benchmark.description"]
 
@@ -517,7 +510,6 @@ reporting:
     best_results: true           # Top configurations per metric
     variable_impact: true        # Variable importance analysis
     parallel_coordinates: true   # Multi-dimensional visualization
-    pareto_frontier: true        # Multi-objective optimization
     custom_plots: true           # User-defined plots
 
   # -------------------- Best Results Configuration --------------------
@@ -624,7 +616,7 @@ reporting:
 #   - {{ round_name }}            - Round name (if using rounds)
 #   - {{ round_index }}           - Round index (if using rounds)
 #   - {{ vars.variable_name }}    - Any variable from 'vars' section
-#   - {{ metadata.key }}          - Any metadata from 'command.metadata'
+#   - {{ labels.key }}            - Any label from 'command.labels'
 #   - {{ command.template }}      - The rendered command
 #   - {{ benchmark.name }}        - Benchmark name
 #

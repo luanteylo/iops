@@ -73,7 +73,6 @@ command:
 
 scripts:
   - name: "mdtest"
-    submit: "sbatch"
     script_template: |
       #!/bin/bash
 
@@ -175,4 +174,3 @@ output:
   sink:
     type: csv
     path: "{{ workdir }}/results.csv"
-    mode: append

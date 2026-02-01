@@ -38,7 +38,7 @@ vars:
       values: [4, 8, 16]
 
   # Data volume size in GB
-  volume_gb:
+  volume_size_gb:
     type: int
     sweep:
       mode: list
@@ -67,7 +67,6 @@ command:
 
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       #!/bin/bash
 
@@ -129,4 +128,3 @@ output:
   sink:
     type: csv
     path: "{{ workdir }}/results.csv"
-    mode: append

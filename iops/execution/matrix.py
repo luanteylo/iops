@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,7 +19,11 @@ from iops.config.models import (
     MetricConfig,
     ConfigValidationError,
 )
-from iops.execution.constraints import filter_execution_matrix
+from iops.execution.constraints import (
+    filter_execution_matrix,
+    classify_constraints,
+    check_constraints_for_vars,
+)
 
 
 # ----------------- Jinja helpers ----------------- #
@@ -281,6 +286,7 @@ class ExecutionInstance:
     benchmark_name: str = ""
     benchmark_description: Optional[str] = None
     workdir: Optional[Path] = None
+    log_dir: Optional[Path] = None
 
     # Variables:
     #   - base_vars: swept and fixed scalar vars (no expr).
@@ -301,14 +307,14 @@ class ExecutionInstance:
 
     # ---------- Template fields (stored from cfg, rendered lazily) ---------- #
 
-    # Command template and metadata templates
+    # Command template and env/labels templates
     command_template: str = ""
-    metadata_templates: Dict[str, Any] = field(default_factory=dict)
+    env_templates: Dict[str, Any] = field(default_factory=dict)
+    labels_templates: Dict[str, Any] = field(default_factory=dict)
 
     # Script metadata
     script_name: str = ""
     script_template: str = ""
-    submit_cmd_template: str = ""
     script_file : Optional[Path] = None
 
     # Optional post-processing script template
@@ -321,10 +327,8 @@ class ExecutionInstance:
     # Output configuration (template + selection)
     output_path_template: str | None = None
     output_type: str = "parquet"   # csv | parquet | sqlite
-    output_mode: str = "append"    # append | overwrite
     output_table: str = "results"  # sqlite only
 
-    output_include: List[str] = field(default_factory=list)
     output_exclude: List[str] = field(default_factory=list)
 
    
@@ -344,9 +348,11 @@ class ExecutionInstance:
                 "execution_dir": str(self.execution_dir)
             },
             "workdir": str(self.workdir),
+            "log_dir": str(self.log_dir) if self.log_dir else None,
             "execution_dir": str(self.execution_dir),
             "execution_id": self.execution_id,
             "repetitions": self.repetitions,
+            "os_env": dict(os.environ),
         }
 
         # metadata (dynamic, including repetition, results, etc.)
@@ -389,12 +395,15 @@ class ExecutionInstance:
         This context includes:
         - benchmark.* information
         - workdir
+        - log_dir
         - execution_id
+        - execution_dir
         - repetitions
         - flattened vars ({{ my_var }})
         - vars mapping ({{ vars.my_var }})
         - metadata
         - repetition (from metadata or instance field)
+        - os_env: system environment variables ({{ os_env.PATH }}, etc.)
         """
         ctx0 = self._base_context_for_vars()
         all_vars = self._compute_all_vars()
@@ -404,6 +413,7 @@ class ExecutionInstance:
             **all_vars,
         }
         ctx["vars"] = all_vars
+        ctx["os_env"] = dict(os.environ)
 
         return ctx
 
@@ -443,20 +453,32 @@ class ExecutionInstance:
         return _render_template(self.command_template, ctx)
 
     @property
-    def command_metadata(self) -> Dict[str, Any]:
+    def env(self) -> Dict[str, str]:
         """
-        Render metadata from metadata_templates and merge with runtime metadata.
-        Runtime metadata overwrites template-based keys.
+        Render the environment variables from env_templates and the current context.
+        """
+        ctx = self._render_context()
+        rendered: Dict[str, str] = {}
+        for k, v in self.env_templates.items():
+            if isinstance(v, str):
+                rendered[k] = _render_template(v, ctx)
+            else:
+                rendered[k] = str(v)
+        return rendered
+
+    @property
+    def command_labels(self) -> Dict[str, Any]:
+        """
+        Render user-defined labels from labels_templates.
+        These go into the 'labels.*' namespace in output.
         """
         ctx = self._render_context()
         rendered: Dict[str, Any] = {}
-        for k, v in self.metadata_templates.items():
+        for k, v in self.labels_templates.items():
             if isinstance(v, str):
                 rendered[k] = _render_template(v, ctx)
             else:
                 rendered[k] = v
-        # runtime metadata has priority
-        rendered.update(self.metadata)
         return rendered
 
     @property
@@ -473,22 +495,13 @@ class ExecutionInstance:
 
 
     @property
-    def submit_cmd(self) -> str:
-        """
-        Render the submit command (e.g., sbatch ...) if templated.
-        """
-        if not self.submit_cmd_template:
-            return ""
-        ctx = self._render_context()
-        return _render_template(self.submit_cmd_template, ctx)
-
-    @property
     def script_text(self) -> str:
         """
         Render the main script text from script_template, using:
         - {{ vars.* }}
         - {{ command }}
-        - {{ command_metadata }}
+        - {{ command_env }}
+        - {{ command_labels }}
         - plus the standard context.
         """
         if not self.script_template:
@@ -504,7 +517,8 @@ class ExecutionInstance:
             **base_ctx,
             "vars": self.vars,
             "command": command_obj,
-            "command_metadata": self.command_metadata,
+            "command_env": self.env,
+            "command_labels": self.command_labels,
         }
 
         return _render_template(self.script_template, script_ctx)
@@ -526,7 +540,8 @@ class ExecutionInstance:
             **base_ctx,
             "vars": self.vars,
             "command": command_obj,
-            "command_metadata": self.command_metadata,
+            "command_env": self.env,
+            "command_labels": self.command_labels,
         }
 
         return _render_template(self.post_script_template, script_ctx)
@@ -598,7 +613,6 @@ class ExecutionInstance:
         # Script info
         lines.append(
             f"Script   : {self.script_name} "
-            f"(submit={self.submit_cmd})"
             f"(file={self.script_file})"
         )
         # post script
@@ -609,24 +623,22 @@ class ExecutionInstance:
         # Repetitions
         lines.append(f"Repeats: {self.repetitions}")
 
-        # Metadata (rendered)
-        effective_metadata = self.command_metadata
-        if effective_metadata:
-            meta_items = ", ".join(f"{k}={v!r}" for k, v in effective_metadata.items())
-            lines.append(f"Metadata: {meta_items}")
+        # Labels (rendered)
+        effective_labels = self.command_labels
+        if effective_labels:
+            label_items = ", ".join(f"{k}={v!r}" for k, v in effective_labels.items())
+            lines.append(f"Labels: {label_items}")
 
         # Output
         if self.output_path:
             extra = f", table={self.output_table}" if self.output_type == "sqlite" else ""
             lines.append(
-                f"Output: type={self.output_type}, mode={self.output_mode}, path={self.output_path}{extra}"
+                f"Output: type={self.output_type}, path={self.output_path}{extra}"
             )
-            if self.output_include:
-                lines.append(f"Output fields (include): {', '.join(self.output_include)}")
-            elif self.output_exclude:
+            if self.output_exclude:
                 lines.append(f"Output fields (exclude): {', '.join(self.output_exclude)}")
             else:
-                lines.append("Output fields: default (everything)")
+                lines.append("Output fields: default (all)")
 
 
         # Parser
@@ -644,8 +656,8 @@ class ExecutionInstance:
 
     def describe(self) -> str:
         """
-        Verbose, multi-section representation for DEBUG logs.
-        Everything rendered lazily with current state.
+        Concise representation for DEBUG logs.
+        Shows metadata only - no script/command content (check execution_dir for files).
         """
         sep_start = sep_end = "#" * 80
         sep = "-" * 80
@@ -654,8 +666,8 @@ class ExecutionInstance:
             f"Execution #{self.execution_id}",
             f"Benchmark : {self.benchmark_name}",
             f"Workdir   : {self.workdir}",
-            f"Exeucution Dir: {self.execution_dir}",
-            f"Repetitions: {self.repetition}/{self.repetitions}",            
+            f"Execution Dir: {self.execution_dir}",
+            f"Repetitions: {self.repetition}/{self.repetitions}",
             f"Cache File: {self.cache_file}",
             sep,
             "Variables:",
@@ -665,40 +677,38 @@ class ExecutionInstance:
         for k in sorted(vars_map):
             lines.append(f"  {k} = {vars_map[k]!r}")
 
+        # Show script summary only (check execution_dir for actual content)
+        script_lines = self.script_text.strip().split('\n') if self.script_text else []
         lines.extend([
             sep,
-            "Command:",
-            self.command,
-            sep,
-            f"Script ({self.script_name}):",
-            self.script_text,
+            f"Script ({self.script_name}): {len(script_lines)} lines",
         ])
 
         if self.post_script:
-            lines.extend([sep, "Post-script:", self.post_script])
+            post_lines = self.post_script.strip().split('\n')
+            lines.append(f"Post-script: {len(post_lines)} lines")
 
-        effective_metadata = self.command_metadata
-        if effective_metadata:
-            lines.extend([sep, "Metadata:"])
-            for k, v in effective_metadata.items():
-                lines.append(f"  {k}: {v}")
+        env_rendered = self.env
+        if env_rendered:
+            lines.append(f"Environment: {len(env_rendered)} variables")
+
+        effective_labels = self.command_labels
+        if effective_labels:
+            lines.append(f"Labels: {len(effective_labels)} defined")
 
         if self.output_path:
             lines.extend([
                 sep,
                 f"Output type : {self.output_type}",
-                f"Output mode : {self.output_mode}",
                 f"Output path : {self.output_path}",
             ])
             if self.output_type == "sqlite":
                 lines.append(f"Output table: {self.output_table}")
 
-            if self.output_include:
-                lines.append(f"Fields (include): {', '.join(self.output_include)}")
-            elif self.output_exclude:
+            if self.output_exclude:
                 lines.append(f"Fields (exclude): {', '.join(self.output_exclude)}")
             else:
-                lines.append("Fields: default (everything)")
+                lines.append("Fields: default (all)")
 
 
         parser_obj = self.parser
@@ -712,7 +722,8 @@ class ExecutionInstance:
             for m in parser_obj.metrics:
                 lines.append(f"    - {m.name} @ {m.path}")
             if parser_obj.parser_script:
-                lines.append(f"  parser_script: {parser_obj.parser_script}")
+                parser_lines = parser_obj.parser_script.strip().split('\n')
+                lines.append(f"  parser_script: {len(parser_lines)} lines")
 
         lines.append(sep_end)
 
@@ -721,21 +732,25 @@ class ExecutionInstance:
 
 # ----------------- Single instance creator ----------------- #
 
-def create_execution_instance(
+def _create_execution_instance(
     cfg: GenericBenchmarkConfig,
     base_vars: Dict[str, Any],
     execution_id: int,
     script_index: int = 0,
     search_var_names: Optional[List[str]] = None,
     exhaustive_var_names: Optional[List[str]] = None,
-) -> ExecutionInstance:
+) -> Tuple[ExecutionInstance, bool, List[Tuple[Any, str]]]:
     """
-    Create a single ExecutionInstance from explicit variable values.
+    Create a single ExecutionInstance from explicit variable values and validate constraints.
 
     This is useful for:
     - Bayesian optimization (create instance for optimizer-suggested parameters)
     - Testing specific parameter combinations
     - Any case where you want to create an instance without building the full matrix
+
+    The function creates the instance and validates it against constraints in one step,
+    ensuring all variable processing (including derived vars) is done before constraint
+    checking.
 
     Args:
         cfg: The benchmark configuration
@@ -746,7 +761,10 @@ def create_execution_instance(
         exhaustive_var_names: Names of exhaustive variables. If None, empty list.
 
     Returns:
-        ExecutionInstance with all templates set up for lazy rendering
+        Tuple of (instance, is_valid, violations):
+        - instance: ExecutionInstance with all templates set up for lazy rendering
+        - is_valid: True if all constraints pass (or only have "warn" policy)
+        - violations: List of (constraint, message) tuples for any violations
 
     Raises:
         IndexError: If script_index is out of range
@@ -760,6 +778,17 @@ def create_execution_instance(
     script_cfg = cfg.scripts[script_index]
     repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
 
+    # Apply 'when' clause logic: if a variable has a 'when' condition that evaluates
+    # to False, override its value with the default. This ensures conditional variables
+    # are handled correctly even when the planner suggests invalid combinations.
+    adjusted_vars = dict(base_vars)
+    for name, vcfg in cfg.vars.items():
+        if vcfg.when and name in adjusted_vars:
+            if not _evaluate_when_condition(vcfg.when, adjusted_vars):
+                # Condition is false, use default value
+                adjusted_vars[name] = _cast_value(vcfg.type, vcfg.default)
+    base_vars = adjusted_vars
+
     # Build derived var configs from cfg.vars
     # Note: expr validation is handled by loader.py's validate_generic_config()
     derived_var_cfgs: Dict[str, Tuple[str, str]] = {}
@@ -767,21 +796,19 @@ def create_execution_instance(
         if vcfg.sweep is None and vcfg.expr is not None:
             derived_var_cfgs[name] = (vcfg.expr, vcfg.type)
 
-    # Command/metadata templates from cfg
+    # Command/env/labels templates from cfg
     command_template = cfg.command.template
-    metadata_templates = dict(cfg.command.metadata) if cfg.command.metadata else {}
+    env_templates = dict(cfg.command.env) if cfg.command.env else {}
+    labels_templates = dict(cfg.command.labels) if cfg.command.labels else {}
 
     # Output sink templates
     output_path_template = cfg.output.sink.path
     output_type = cfg.output.sink.type
-    output_mode = cfg.output.sink.mode
     output_table = cfg.output.sink.table
-    output_include = list(cfg.output.sink.include)
     output_exclude = list(cfg.output.sink.exclude)
 
-    # Script templates
+    # Script template
     script_template = script_cfg.script_template
-    submit_cmd_template = script_cfg.submit
 
     # Optional post script template
     post_script_template = None
@@ -801,13 +828,14 @@ def create_execution_instance(
             parser_script=script_cfg.parser.parser_script,
         )
 
-    return ExecutionInstance(
+    instance = ExecutionInstance(
         execution_id=execution_id,
         repetition=0,  # planner will set metadata["repetition"] per run
         repetitions=repetitions,
         benchmark_name=cfg.benchmark.name,
         benchmark_description=cfg.benchmark.description,
         workdir=cfg.benchmark.workdir,
+        log_dir=cfg.benchmark.workdir / "logs" if cfg.benchmark.workdir else None,
         cache_file=getattr(cfg.benchmark, "cache_file", None),
         base_vars=base_vars,
         derived_var_cfgs=derived_var_cfgs,
@@ -815,19 +843,24 @@ def create_execution_instance(
         search_var_names=search_var_names or list(base_vars.keys()),
         metadata={},
         command_template=command_template,
-        metadata_templates=metadata_templates,
+        env_templates=env_templates,
+        labels_templates=labels_templates,
         script_name=script_cfg.name,
         script_template=script_template,
-        submit_cmd_template=submit_cmd_template,
         post_script_template=post_script_template,
         parser_template=parser_template,
         output_path_template=output_path_template,
         output_type=output_type,
-        output_mode=output_mode,
         output_table=output_table,
-        output_include=output_include,
         output_exclude=output_exclude,
     )
+
+    # Validate constraints using computed vars (base + derived)
+    if not cfg.constraints:
+        return instance, True, []
+
+    is_valid, violations = check_constraints_for_vars(instance.vars, cfg.constraints)
+    return instance, is_valid, violations
 
 
 # ----------------- Main builder ----------------- #
@@ -1004,6 +1037,52 @@ def build_execution_matrix(
                 exhaustive_assignment = dict(zip(exhaustive_names, exhaustive_combo)) if exhaustive_names else {}
                 combinations.append({**search_assignment, **exhaustive_assignment})
 
+    # ----------------- classify constraints for early/late evaluation ----------------- #
+
+    # Get names of swept and derived variables
+    swept_var_names_set = {name for name, _ in swept_vars}
+    derived_var_names_set = {name for name, _ in derived_vars}
+
+    # Classify constraints:
+    # - early_constraints: only reference swept variables (can filter before derived eval)
+    # - late_constraints: reference derived variables (must filter after derived eval)
+    early_constraints: List = []
+    late_constraints: List = []
+
+    if cfg.constraints:
+        early_constraints, late_constraints = classify_constraints(
+            cfg.constraints,
+            swept_var_names_set,
+            derived_var_names_set,
+        )
+
+    # ----------------- apply early constraints to filter combinations ----------------- #
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    early_skipped_count = 0
+    if early_constraints:
+        valid_combinations = []
+        for combo in combinations:
+            is_valid, violations = check_constraints_for_vars(combo, early_constraints)
+            if is_valid:
+                valid_combinations.append(combo)
+            else:
+                early_skipped_count += 1
+                # Log at debug level (can be many)
+                logger.debug(
+                    f"Early constraint filter: skipping combination {combo}"
+                )
+
+        combinations = valid_combinations
+
+        if early_skipped_count > 0:
+            logger.info(
+                f"Early constraint filtering: {early_skipped_count} combinations skipped "
+                f"before evaluating derived expressions"
+            )
+
     # ----------------- build ExecutionInstance objects ----------------- #
 
     executions: List[ExecutionInstance] = []
@@ -1014,7 +1093,7 @@ def build_execution_matrix(
         for script_idx in range(len(cfg.scripts)):
             exec_id += 1
 
-            exec_instance = create_execution_instance(
+            exec_instance, _, _ = _create_execution_instance(
                 cfg=cfg,
                 base_vars=base_vars,
                 execution_id=exec_id,
@@ -1022,27 +1101,28 @@ def build_execution_matrix(
                 search_var_names=search_names,
                 exhaustive_var_names=exhaustive_names,
             )
+            # Note: constraint validation is ignored here because build_execution_matrix
+            # handles early constraints before instance creation and late constraints
+            # after all instances are built via filter_execution_matrix
 
             executions.append(exec_instance)
 
-    # Apply constraints if defined
-    skipped_instances: List[ExecutionInstance] = []
-    if cfg.constraints:
-        import logging
-        logger = logging.getLogger(__name__)
+    # ----------------- apply late constraints (may use derived vars) ----------------- #
 
+    skipped_instances: List[ExecutionInstance] = []
+    if late_constraints:
         executions, skipped_instances, violations = filter_execution_matrix(
             executions,
-            cfg.constraints,
+            late_constraints,
             logger
         )
 
-        # Log summary of constraint filtering
+        # Log summary of late constraint filtering
         if violations:
             skipped_count = sum(1 for v in violations if v.violation_policy == "skip")
             warned_count = sum(1 for v in violations if v.violation_policy == "warn")
             logger.info(
-                f"Constraint filtering complete: {len(executions)} instances remaining after filtering. "
+                f"Late constraint filtering complete: {len(executions)} instances remaining. "
                 f"({skipped_count} skipped, {warned_count} warned)"
             )
 

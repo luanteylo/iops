@@ -118,9 +118,11 @@ class TestPlannerTrackExecutions:
     def test_prepare_execution_artifacts_skips_params_file_when_disabled(
         self, sample_config_file, tmp_path
     ):
-        """Test that params file is NOT written when track_executions=False."""
+        """Test that params file is NOT written when execution_index=False."""
         config = load_config(sample_config_file)
-        config.benchmark.track_executions = False  # Explicitly disable
+        config.benchmark.track_executions = False  # Deprecated field
+        if config.benchmark.probes:
+            config.benchmark.probes.execution_index = False  # New field
 
         planner = ExhaustivePlanner(config)
         planner._build_execution_matrix()
@@ -191,7 +193,9 @@ class TestPlannerTrackExecutions:
     ):
         """Test that params file is not written even on first repetition when disabled."""
         config = load_config(sample_config_file)
-        config.benchmark.track_executions = False
+        config.benchmark.track_executions = False  # Deprecated field
+        if config.benchmark.probes:
+            config.benchmark.probes.execution_index = False  # New field
 
         planner = ExhaustivePlanner(config)
         planner._build_execution_matrix()
@@ -521,7 +525,9 @@ class TestTrackExecutionsIntegration:
     ):
         """Test that neither params nor status files are created when disabled."""
         config = load_config(sample_config_file)
-        config.benchmark.track_executions = False
+        config.benchmark.track_executions = False  # Deprecated field
+        if config.benchmark.probes:
+            config.benchmark.probes.execution_index = False  # New field
 
         # 1. Planner skips params file
         planner = ExhaustivePlanner(config)
@@ -640,14 +646,16 @@ class TestTrackExecutionsEdgeCases:
         with open(status_file, 'r') as f:
             status_data = json.load(f)
 
-        # Should have exactly these six fields
+        # Should have exactly these eight fields
         assert "status" in status_data
         assert "error" in status_data
         assert "end_time" in status_data
         assert "cached" in status_data
         assert "duration_seconds" in status_data
         assert "metrics" in status_data
-        assert len(status_data) == 6
+        assert "submission_time" in status_data
+        assert "job_start" in status_data
+        assert len(status_data) == 8
 
         # Status should be a string
         assert isinstance(status_data["status"], str)
@@ -661,6 +669,10 @@ class TestTrackExecutionsEdgeCases:
         assert status_data["duration_seconds"] is None or isinstance(status_data["duration_seconds"], (int, float))
         # metrics can be None or dict
         assert status_data["metrics"] is None or isinstance(status_data["metrics"], dict)
+        # submission_time can be None or string
+        assert status_data["submission_time"] is None or isinstance(status_data["submission_time"], str)
+        # job_start can be None or string
+        assert status_data["job_start"] is None or isinstance(status_data["job_start"], str)
 
     def test_track_executions_with_cache(self, sample_config_file, tmp_path):
         """Test that track_executions works correctly with cached executions."""

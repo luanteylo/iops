@@ -93,7 +93,7 @@ command:
     -O summaryFile={{summary_file}} -O summaryFormat=JSON
     -o /home/luan/filesystem/output.ior
 
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
@@ -104,7 +104,6 @@ command:
 
 scripts:
   - name: "ior"
-    submit: "bash"  # Use "sbatch" for SLURM clusters
 
     script_template: |
       #!/bin/bash
@@ -136,7 +135,6 @@ output:
   sink:
     type: "csv"
     path: "{{ workdir }}/results.csv"
-    mode: "append"
     exclude: ["benchmark.name", "benchmark.description"]
 
 # =============================================================================

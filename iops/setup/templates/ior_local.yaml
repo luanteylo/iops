@@ -54,7 +54,6 @@ command:
 
 scripts:
   - name: "ior"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       set -euo pipefail
@@ -95,4 +94,3 @@ output:
   sink:
     type: csv
     path: "{{ workdir }}/results.csv"
-    mode: append

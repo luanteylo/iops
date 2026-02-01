@@ -2,6 +2,7 @@
 IOPS Report Generator - Creates HTML reports with interactive plots.
 """
 
+import base64
 import json
 import numpy as np
 import pandas as pd
@@ -19,6 +20,13 @@ try:
     PYARROW_AVAILABLE = True
 except ImportError:
     PYARROW_AVAILABLE = False
+
+# Optional kaleido for PDF export
+try:
+    import kaleido
+    KALEIDO_AVAILABLE = True
+except ImportError:
+    KALEIDO_AVAILABLE = False
 
 from iops.config.models import (
     ReportingConfig,
@@ -38,6 +46,19 @@ def _get_iops_version() -> str:
         with version_file.open() as f:
             return f.read().strip()
     return "unknown"
+
+
+def _get_logo_base64() -> Optional[str]:
+    """Load the IOPS logo as a base64-encoded data URI."""
+    logo_file = Path(__file__).parent.parent.parent / "logo.png"
+    if logo_file.exists():
+        try:
+            with logo_file.open("rb") as f:
+                logo_data = base64.b64encode(f.read()).decode("utf-8")
+            return f"data:image/png;base64,{logo_data}"
+        except Exception:
+            return None
+    return None
 
 
 class ReportGenerator:
@@ -163,13 +184,21 @@ class ReportGenerator:
             return self.report_config.theme.colors
         return None
 
-    def __init__(self, workdir: Path, report_config: Optional[ReportingConfig] = None):
+    def __init__(
+        self,
+        workdir: Path,
+        report_config: Optional[ReportingConfig] = None,
+        export_plots: bool = False,
+        plot_format: str = 'pdf'
+    ):
         """
         Initialize report generator.
 
         Args:
             workdir: Path to the benchmark working directory (e.g., /path/to/run_001)
             report_config: Optional reporting configuration (overrides metadata config)
+            export_plots: Whether to export plots as image files
+            plot_format: Image format for exported plots (pdf, png, svg, jpg, webp)
         """
         self.workdir = Path(workdir)
         # Try new filename first, fall back to legacy for backward compatibility
@@ -181,6 +210,10 @@ class ReportGenerator:
         self.metadata: Optional[Dict[str, Any]] = None
         self.df: Optional[pd.DataFrame] = None
         self.report_config: Optional[ReportingConfig] = report_config
+        self.export_plots: bool = export_plots
+        self.plot_format: str = plot_format
+        self.plots_dir: Optional[Path] = None
+        self._plot_counter: int = 0
 
     def load_metadata(self):
         """Load runtime metadata and reporting configuration."""
@@ -347,7 +380,7 @@ class ReportGenerator:
 
         Priority:
         1. Use report_vars from benchmark config if specified
-        2. Otherwise, use all swept variables that are numeric (int/float)
+        2. Otherwise, use all swept variables that are numeric (int/float/bool)
         3. Exclude string variables by default (they don't plot well)
         """
         # Check if report_vars is explicitly specified
@@ -357,13 +390,13 @@ class ReportGenerator:
             # Use explicitly specified variables
             return report_vars
 
-        # Default: use numeric swept variables only
+        # Default: use numeric swept variables only (bool treated as 0/1)
         swept_vars = self._get_swept_vars()
         numeric_vars = []
 
         for var_name in swept_vars:
             var_type = self.metadata['variables'][var_name].get('type', '')
-            if var_type in ['int', 'float']:
+            if var_type in ['int', 'float', 'bool']:
                 numeric_vars.append(var_name)
 
         return numeric_vars
@@ -412,17 +445,36 @@ class ReportGenerator:
             return converted
         return result
 
-    def _fig_to_html(self, fig: go.Figure, div_id: str = None) -> str:
+    def _fig_to_html(self, fig: go.Figure, div_id: str = None, plot_name: str = None) -> str:
         """
         Convert a Plotly figure to HTML with standard config for interactivity.
+        Also saves the figure as an image file if plots_dir is set.
 
         Args:
             fig: Plotly figure to convert
             div_id: Optional div ID for the plot
+            plot_name: Optional name for the image file (without extension)
 
         Returns:
             HTML string with the plot
         """
+        # Save as image if plots directory is configured and kaleido is available
+        if self.plots_dir is not None and KALEIDO_AVAILABLE:
+            self._plot_counter += 1
+            if plot_name:
+                # Sanitize plot name for filename
+                safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in plot_name)
+                image_filename = f"{self._plot_counter:03d}_{safe_name}.{self.plot_format}"
+            else:
+                image_filename = f"{self._plot_counter:03d}_plot.{self.plot_format}"
+
+            image_path = self.plots_dir / image_filename
+            try:
+                fig.write_image(image_path, format=self.plot_format, width=1200, height=800)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).debug(f"Could not save {self.plot_format.upper()} plot: {e}")
+
         kwargs = {
             'full_html': False,
             'include_plotlyjs': False,
@@ -492,8 +544,8 @@ class ReportGenerator:
             best_results=data.get('sections', {}).get('best_results', True),
             variable_impact=data.get('sections', {}).get('variable_impact', True),
             parallel_coordinates=data.get('sections', {}).get('parallel_coordinates', True),
-            pareto_frontier=data.get('sections', {}).get('pareto_frontier', True),
             bayesian_evolution=data.get('sections', {}).get('bayesian_evolution', True),
+            bayesian_parameter_evolution=data.get('sections', {}).get('bayesian_parameter_evolution', False),
             custom_plots=data.get('sections', {}).get('custom_plots', True),
         )
 
@@ -541,8 +593,8 @@ class ReportGenerator:
                 best_results=True,
                 variable_impact=True,
                 parallel_coordinates=True,
-                pareto_frontier=True,
                 bayesian_evolution=True,
+                bayesian_parameter_evolution=False,  # Disabled by default
                 custom_plots=True,  # Will use legacy plots
             ),
             metrics={},  # Empty triggers legacy plot generation
@@ -570,7 +622,9 @@ class ReportGenerator:
             if len(df_executed) == 0:
                 return None, None
 
-            start_times = pd.to_datetime(df_executed['metadata.__start'], errors='coerce')
+            # Use submission_time for wall-clock calculation (earliest submission to latest completion)
+            submission_col = 'metadata.__submission_time'
+            start_times = pd.to_datetime(df_executed.get(submission_col, pd.Series()), errors='coerce')
             end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
 
             if start_times.isna().all() or end_times.isna().all():
@@ -603,7 +657,8 @@ class ReportGenerator:
         Calculate total core-hours consumed by all tests.
 
         Prefers duration_seconds from sysinfo (actual script execution time) over
-        __start/__end timestamps (which include queue wait time for SLURM jobs).
+        __job_start/__end timestamps. Falls back to __submission_time if __job_start
+        is not available.
 
         Returns:
             Total core-hours or None if cannot be calculated
@@ -618,7 +673,17 @@ class ReportGenerator:
             has_sysinfo_duration = sysinfo_duration_col in self.df.columns
 
             # Parse timestamps as fallback
-            start_times = pd.to_datetime(self.df['metadata.__start'], errors='coerce')
+            # Prefer __job_start (actual job start) over __submission_time (includes queue wait)
+            job_start_col = 'metadata.__job_start'
+            submission_col = 'metadata.__submission_time'
+            if job_start_col in self.df.columns:
+                start_times = pd.to_datetime(self.df[job_start_col], errors='coerce')
+                # Fall back to submission_time where job_start is missing
+                if submission_col in self.df.columns:
+                    submission_times = pd.to_datetime(self.df[submission_col], errors='coerce')
+                    start_times = start_times.fillna(submission_times)
+            else:
+                start_times = pd.to_datetime(self.df.get(submission_col, pd.Series()), errors='coerce')
             end_times = pd.to_datetime(self.df['metadata.__end'], errors='coerce')
 
             # Calculate duration for each test in hours
@@ -702,74 +767,6 @@ class ReportGenerator:
         except Exception as e:
             return None
 
-    def _compute_pareto_frontier(self, metrics: List[str], objectives: Dict[str, str], report_vars: List[str]) -> pd.DataFrame:
-        """
-        Compute Pareto frontier for multiple metrics.
-
-        Args:
-            metrics: List of metric names to consider
-            objectives: Dict mapping metric name to objective ('maximize' or 'minimize')
-            report_vars: List of variables to group by
-
-        Returns:
-            DataFrame with Pareto-optimal configurations
-        """
-        if self.df is None:
-            return pd.DataFrame()
-
-        var_cols = [self._get_var_column(v) for v in report_vars]
-        metric_cols = [self._get_metric_column(m) for m in metrics]
-
-        # Filter out rows with NaN values in any of the metrics
-        df_clean = self.df.copy()
-        for metric_col in metric_cols:
-            df_clean = df_clean[df_clean[metric_col].notna()]
-
-        if len(df_clean) == 0:
-            return pd.DataFrame()
-
-        # Group by parameter combination and get mean of metrics
-        df_grouped = df_clean.groupby(var_cols)[metric_cols].mean().reset_index()
-
-        # Normalize metrics based on objectives
-        df_normalized = df_grouped.copy()
-        for metric in metrics:
-            col = self._get_metric_column(metric)
-            if objectives.get(metric, 'maximize') == 'minimize':
-                # For minimization, negate the values
-                df_normalized[col] = -df_normalized[col]
-
-        # Find Pareto frontier
-        is_pareto = pd.Series([True] * len(df_normalized))
-
-        for i in range(len(df_normalized)):
-            if not is_pareto[i]:
-                continue
-
-            for j in range(len(df_normalized)):
-                if i == j or not is_pareto[j]:
-                    continue
-
-                # Check if j dominates i
-                dominates = True
-                strictly_better = False
-
-                for col in metric_cols:
-                    val_i = df_normalized.iloc[i][col]
-                    val_j = df_normalized.iloc[j][col]
-
-                    if val_j < val_i:
-                        dominates = False
-                        break
-                    elif val_j > val_i:
-                        strictly_better = True
-
-                if dominates and strictly_better:
-                    is_pareto[i] = False
-                    break
-
-        return df_grouped[is_pareto].reset_index(drop=True)
-
     def generate_report(self, output_path: Optional[Path] = None) -> Path:
         """
         Generate complete HTML report with all plots.
@@ -785,6 +782,19 @@ class ReportGenerator:
 
         if output_path is None:
             output_path = self.workdir / "analysis_report.html"
+
+        # Create plots directory for image exports (only if explicitly requested and kaleido is available)
+        if self.export_plots:
+            if KALEIDO_AVAILABLE:
+                self.plots_dir = self.workdir / "__iops_plots"
+                self.plots_dir.mkdir(exist_ok=True)
+                self._plot_counter = 0
+            else:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Plot export requested but kaleido is not installed. "
+                    "Install with: pip install iops-benchmark[plots]"
+                )
 
         # Get report variables and metrics
         report_vars = self._get_report_vars()
@@ -810,21 +820,21 @@ class ReportGenerator:
         # Best configurations immediately after summary
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
-        # Add Pareto frontier section if we have multiple metrics
-        if len(metrics) >= 2:
-            html_parts.append(self._generate_pareto_section(metrics, report_vars))
-
-        # Add Bayesian optimization section if applicable (before plots)
+        # Add search evolution section
         search_method = self.metadata['benchmark'].get('search_method', '').lower()
         if search_method == 'bayesian':
             html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
+        elif search_method == 'random':
+            html_parts.append(self._generate_random_search_section(metrics, report_vars))
+        else:
+            # Exhaustive or other search methods
+            html_parts.append(self._generate_exhaustive_search_section(metrics, report_vars))
 
         # Add comprehensive variable analysis section
         html_parts.append(self._generate_variable_analysis_section(metrics, report_vars))
 
-        # All detailed plots at the end
-        for metric in metrics:
-            html_parts.append(self._generate_metric_section(metric, report_vars))
+        # Custom plots defined by user in reporting config
+        html_parts.append(self._generate_custom_plots_section(metrics, report_vars))
 
         html_parts.append(self._generate_footer())
 
@@ -839,6 +849,12 @@ class ReportGenerator:
         """Generate HTML header."""
         benchmark_name = self.metadata['benchmark']['name']
         timestamp = self.metadata['benchmark']['timestamp']
+        logo_data_uri = _get_logo_base64()
+
+        # Build logo HTML if available
+        logo_html = ""
+        if logo_data_uri:
+            logo_html = f'<img src="{logo_data_uri}" alt="IOPS Logo" class="report-logo">'
 
         return f"""<!DOCTYPE html>
 <html>
@@ -861,10 +877,22 @@ class ReportGenerator:
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             border-radius: 8px;
         }}
+        .report-header {{
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }}
+        .report-logo {{
+            height: 64px;
+            width: auto;
+        }}
         h1 {{
             color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
+            margin: 0;
+            flex-grow: 1;
         }}
         h2 {{
             color: #34495e;
@@ -904,6 +932,54 @@ class ReportGenerator:
         }}
         tr:hover {{
             background-color: #f5f5f5;
+        }}
+        .section-header td {{
+            background-color: transparent;
+            border-bottom: 2px solid #3498db;
+            padding: 8px 0 0 0;
+            height: 0;
+            line-height: 0;
+        }}
+        details {{
+            margin: 15px 0;
+        }}
+        details summary {{
+            cursor: pointer;
+            padding: 10px 15px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-weight: 500;
+            color: #34495e;
+        }}
+        details summary:hover {{
+            background-color: #ecf0f1;
+        }}
+        details[open] summary {{
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            border-bottom: none;
+        }}
+        details .details-content {{
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            padding: 0;
+        }}
+        details .details-content table {{
+            margin: 0;
+            border: none;
+        }}
+        details .details-content table td,
+        details .details-content table th {{
+            border-left: none;
+            border-right: none;
+        }}
+        details .details-content table tr:first-child td {{
+            border-top: none;
+        }}
+        details .details-content table tr:last-child td {{
+            border-bottom: none;
         }}
         .plot-container {{
             margin: 30px 0;
@@ -990,12 +1066,15 @@ class ReportGenerator:
 </head>
 <body>
 <div class="container">
-    <h1>{benchmark_name} - Analysis Report</h1>
+    <div class="report-header">
+        {logo_html}
+        <h1>{benchmark_name} - Analysis Report</h1>
+    </div>
     <div class="info-box">
         <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         <p><strong>Benchmark Run:</strong> {timestamp}</p>
         <p><strong>Description:</strong> {self.metadata['benchmark'].get('description', 'N/A')}</p>
-        <p><strong>Total Tests:</strong> {len(self.df)}</p>
+        <p><strong>Total Executions:</strong> {len(self.df)}</p>
     </div>
 """
 
@@ -1003,202 +1082,71 @@ class ReportGenerator:
         """Generate summary statistics section."""
         html = "<h2>Summary Statistics</h2>\n"
 
-        # Execution Overview
-        html += "<h3>Execution Overview</h3>\n<table>\n"
-        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-
-        # Benchmark metadata
+        # Gather all data needed for the overview
         benchmark_meta = self.metadata['benchmark']
-        html += f"<tr><td><strong>Benchmark Name</strong></td><td>{benchmark_meta.get('name', 'N/A')}</td></tr>\n"
-
-        # IOPS version (show run version, and note if report version differs)
-        run_ver = getattr(self, 'run_version', 'unknown')
-        report_ver = getattr(self, 'report_version', _get_iops_version())
-        if run_ver != 'unknown':
-            if run_ver != report_ver:
-                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver} <em>(report generated with v{report_ver})</em></td></tr>\n"
-            else:
-                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver}</td></tr>\n"
-
-        # Hostname (if available)
-        hostname = benchmark_meta.get('hostname')
-        if hostname:
-            html += f"<tr><td><strong>Hostname</strong></td><td>{hostname}</td></tr>\n"
-
-        # Executor type
         executor = benchmark_meta.get('executor', 'local')
-        html += f"<tr><td><strong>Executor</strong></td><td>{executor}</td></tr>\n"
-
-        # Search method
         search_method = benchmark_meta.get('search_method', 'exhaustive')
-        html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
+        repetitions = benchmark_meta.get('repetitions', 1)
+        total_rows = len(self.df)
 
-        # Benchmark timing (if available, prefer detailed timing over legacy timestamp)
-        if 'benchmark_start_time' in benchmark_meta and 'benchmark_end_time' in benchmark_meta:
-            start_time = benchmark_meta['benchmark_start_time']
-            end_time = benchmark_meta['benchmark_end_time']
-            html += f"<tr><td><strong>Benchmark Start Time</strong></td><td>{start_time}</td></tr>\n"
-            html += f"<tr><td><strong>Benchmark End Time</strong></td><td>{end_time}</td></tr>\n"
+        # Get planner stats and calculate combinations
+        planner_stats = benchmark_meta.get('planner_stats') or {}
+        total_search_space = planner_stats.get('total_space_size', 0)
 
-            if 'total_runtime_seconds' in benchmark_meta:
-                total_runtime = benchmark_meta['total_runtime_seconds']
-                if total_runtime < 60:
-                    runtime_str = f"{total_runtime:.1f}s"
-                elif total_runtime < 3600:
-                    runtime_str = f"{total_runtime/60:.1f}m ({total_runtime:.1f}s)"
-                else:
-                    runtime_str = f"{total_runtime/3600:.2f}h ({total_runtime/60:.1f}m)"
-                html += f"<tr><td><strong>Total Benchmark Runtime</strong></td><td>{runtime_str}</td></tr>\n"
-        elif 'timestamp' in benchmark_meta:
-            # Fallback to legacy timestamp if detailed timing not available
-            html += f"<tr><td><strong>Benchmark Started</strong></td><td>{benchmark_meta['timestamp']}</td></tr>\n"
-
-        # Report generation timestamp
-        report_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        html += f"<tr><td><strong>Report Generated</strong></td><td>{report_timestamp}</td></tr>\n"
-
-        html += "</table>\n"
-
-        # Test Execution Statistics
-        html += "<h3>Test Execution Statistics</h3>\n<table>\n"
-        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-
-        # Total tests
-        total_tests = len(self.df)
-        html += f"<tr><td><strong>Total Parameter Combinations</strong></td><td>{total_tests}</td></tr>\n"
-
-        # Success rate (if status column exists)
-        if 'metadata.__executor_status' in self.df.columns:
-            status_counts = self.df['metadata.__executor_status'].value_counts()
-            succeeded = status_counts.get('SUCCEEDED', 0)
-            failed = status_counts.get('FAILED', 0)
-            cancelled = status_counts.get('CANCELLED', 0)
-
-            success_rate = (succeeded / total_tests * 100) if total_tests > 0 else 0
-            html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_tests} ({success_rate:.1f}%)</td></tr>\n"
-
-            if failed > 0:
-                html += f"<tr><td><strong>Failed Tests</strong></td><td>{failed}</td></tr>\n"
-            if cancelled > 0:
-                html += f"<tr><td><strong>Cancelled Tests</strong></td><td>{cancelled}</td></tr>\n"
+        if 'execution.execution_id' in self.df.columns:
+            combinations_tested = self.df['execution.execution_id'].nunique()
+        else:
+            combinations_tested = total_rows // repetitions if repetitions > 0 else total_rows
 
         # Check for cached results
         cached_count = 0
         if 'metadata.__cached' in self.df.columns:
             cached_count = (self.df['metadata.__cached'] == True).sum()
-            if cached_count > 0:
-                executed_count = total_tests - cached_count
-                cache_rate = (cached_count / total_tests * 100) if total_tests > 0 else 0
-                html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({cache_rate:.1f}%)</td></tr>\n"
-                html += f"<tr><td><strong>Executed Tests</strong></td><td>{executed_count}</td></tr>\n"
 
-        # Execution time
-        if 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
-            execution_time, formatted_time = self._calculate_total_execution_time()
-            if execution_time is not None:
-                exec_time_label = "Total Execution Time" + (" (executed tests only)" if cached_count > 0 else "")
-                html += f"<tr><td><strong>{exec_time_label}</strong></td><td>{formatted_time}</td></tr>\n"
+        # ========== EXECUTION OVERVIEW (always visible) ==========
+        html += "<h3>Execution Overview</h3>\n<table>\n"
+        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
 
-                # Average test duration
-                executed_count = total_tests - cached_count if cached_count > 0 else total_tests
-                if executed_count > 0:
-                    avg_duration = execution_time / executed_count
-                    if avg_duration < 60:
-                        avg_duration_str = f"{avg_duration:.1f}s"
-                    elif avg_duration < 3600:
-                        avg_duration_str = f"{avg_duration / 60:.1f}m"
-                    else:
-                        avg_duration_str = f"{avg_duration / 3600:.1f}h"
-                    html += f"<tr><td><strong>Average Test Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
+        # Benchmark Name
+        html += f"<tr><td><strong>Benchmark Name</strong></td><td>{benchmark_meta.get('name', 'N/A')}</td></tr>\n"
 
-        # SLURM-specific timing: Wait time and walltime
-        if executor == 'slurm' and '__job_start' in self.df.columns and 'metadata.__start' in self.df.columns and 'metadata.__end' in self.df.columns:
-            # Calculate wait time (submit to job start) and walltime (submit to completion)
-            df_executed = self.df[self.df['metadata.__cached'] != True] if 'metadata.__cached' in self.df.columns else self.df
+        # Search Method (with seed if applicable)
+        random_seed = benchmark_meta.get('random_seed')
+        if search_method in ('bayesian', 'random') and random_seed is not None:
+            html += f"<tr><td><strong>Search Method</strong></td><td>{search_method} (seed: {random_seed})</td></tr>\n"
+        else:
+            html += f"<tr><td><strong>Search Method</strong></td><td>{search_method}</td></tr>\n"
 
-            if len(df_executed) > 0:
-                submit_times = pd.to_datetime(df_executed['metadata.__start'], errors='coerce')
-                job_start_times = pd.to_datetime(df_executed['__job_start'], errors='coerce')
-                end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
+        if total_search_space > 0:
+            html += f"<tr><td><strong>Total Space</strong></td><td>{total_search_space:,} parameter combinations</td></tr>\n"
 
-                # Calculate wait times and walltimes
-                wait_times = (job_start_times - submit_times).dt.total_seconds()
-                walltimes = (end_times - submit_times).dt.total_seconds()
+        html += f"<tr><td><strong>Total Executions</strong></td><td>{combinations_tested} × {repetitions} = {total_rows}</td></tr>\n"
 
-                # Calculate runtimes - prefer sysinfo duration_seconds (most accurate)
-                sysinfo_duration_col = 'metadata.__sysinfo.duration_seconds'
-                if sysinfo_duration_col in df_executed.columns:
-                    sysinfo_runtimes = pd.to_numeric(df_executed[sysinfo_duration_col], errors='coerce')
-                    fallback_runtimes = (end_times - job_start_times).dt.total_seconds()
-                    runtimes = sysinfo_runtimes.fillna(fallback_runtimes)
-                else:
-                    runtimes = (end_times - job_start_times).dt.total_seconds()
+        # Runtime (essential)
+        runtime_str = None
+        if 'total_runtime_seconds' in benchmark_meta:
+            total_runtime = benchmark_meta['total_runtime_seconds']
+            if total_runtime < 60:
+                runtime_str = f"{total_runtime:.1f}s"
+            elif total_runtime < 3600:
+                runtime_str = f"{total_runtime/60:.1f}m"
+            else:
+                runtime_str = f"{total_runtime/3600:.2f}h"
+            html += f"<tr><td><strong>Total Runtime</strong></td><td>{runtime_str}</td></tr>\n"
 
-                # Filter out NaN values
-                valid_wait = wait_times[~wait_times.isna()]
-                valid_wall = walltimes[~walltimes.isna()]
-                valid_run = runtimes[~runtimes.isna()]
+        # Success rate (essential if there are failures)
+        if 'metadata.__executor_status' in self.df.columns:
+            status_counts = self.df['metadata.__executor_status'].value_counts()
+            succeeded = status_counts.get('SUCCEEDED', 0)
+            failed = status_counts.get('FAILED', 0)
 
-                if len(valid_wait) > 0:
-                    avg_wait = valid_wait.mean()
-                    total_wait = valid_wait.sum()
-                    if avg_wait < 60:
-                        wait_str = f"{avg_wait:.1f}s"
-                    elif avg_wait < 3600:
-                        wait_str = f"{avg_wait/60:.1f}m"
-                    else:
-                        wait_str = f"{avg_wait/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Queue Wait Time</strong></td><td>{wait_str}</td></tr>\n"
-
-                if len(valid_wall) > 0:
-                    avg_wall = valid_wall.mean()
-                    if avg_wall < 60:
-                        wall_str = f"{avg_wall:.1f}s"
-                    elif avg_wall < 3600:
-                        wall_str = f"{avg_wall/60:.1f}m"
-                    else:
-                        wall_str = f"{avg_wall/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Walltime (per test)</strong></td><td>{wall_str}</td></tr>\n"
-
-                if len(valid_run) > 0:
-                    avg_run = valid_run.mean()
-                    if avg_run < 60:
-                        run_str = f"{avg_run:.1f}s"
-                    elif avg_run < 3600:
-                        run_str = f"{avg_run/60:.1f}m"
-                    else:
-                        run_str = f"{avg_run/3600:.2f}h"
-                    html += f"<tr><td><strong>Average Execution Time (per test)</strong></td><td>{run_str}</td></tr>\n"
-
-        # Core-hours (if cores_expr is defined)
-        cores_expr = self.metadata['benchmark'].get('cores_expr')
-        if cores_expr:
-            total_core_hours = self._calculate_total_core_hours()
-            if total_core_hours is not None:
-                html += f"<tr><td><strong>Total Core-Hours</strong></td><td>{total_core_hours:.2f}</td></tr>\n"
-
-                # Average cores per test
-                avg_cores = self._calculate_average_cores()
-                if avg_cores is not None:
-                    html += f"<tr><td><strong>Average Cores per Test</strong></td><td>{avg_cores:.1f}</td></tr>\n"
+            if failed > 0 or succeeded != total_rows:
+                success_rate = (succeeded / total_rows * 100) if total_rows > 0 else 0
+                html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_rows} ({success_rate:.1f}%)</td></tr>\n"
 
         html += "</table>\n"
 
-        # Variable ranges
-        html += "<h3>Report Variables</h3>\n<table>\n"
-        html += "<tr><th>Variable</th><th>Type</th><th>Values</th></tr>\n"
-
-        for var in report_vars:
-            col = self._get_var_column(var)
-            var_info = self.metadata['variables'][var]
-            var_type = var_info['type']
-            unique_values = sorted(self.df[col].unique())
-            values_str = ", ".join(str(v) for v in unique_values)
-            html += f"<tr><td><strong>{var}</strong></td><td>{var_type}</td><td>{values_str}</td></tr>\n"
-
-        html += "</table>\n"
-
-        # Metric statistics
+        # ========== METRICS OVERVIEW (always visible) ==========
         html += "<h3>Metrics Overview</h3>\n<table>\n"
         html += "<tr><th>Metric</th><th>Min</th><th>Max</th><th>Mean</th><th>Std Dev</th></tr>\n"
 
@@ -1213,6 +1161,125 @@ class ReportGenerator:
                 html += f"<td>{stats['std']:.4f}</td></tr>\n"
 
         html += "</table>\n"
+
+        # ========== COLLAPSIBLE DETAILS ==========
+        html += "<details>\n<summary>Execution Details</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
+        html += "<tr><th>Metric</th><th>Value</th></tr>\n"
+
+        # Environment details
+        run_ver = getattr(self, 'run_version', 'unknown')
+        report_ver = getattr(self, 'report_version', _get_iops_version())
+        if run_ver != 'unknown':
+            if run_ver != report_ver:
+                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver} <em>(report: v{report_ver})</em></td></tr>\n"
+            else:
+                html += f"<tr><td><strong>IOPS Version</strong></td><td>{run_ver}</td></tr>\n"
+
+        hostname = benchmark_meta.get('hostname')
+        if hostname:
+            html += f"<tr><td><strong>Hostname</strong></td><td>{hostname}</td></tr>\n"
+
+        html += f"<tr><td><strong>Executor</strong></td><td>{executor}</td></tr>\n"
+
+        # Detailed timing
+        if 'benchmark_start_time' in benchmark_meta:
+            start_time = benchmark_meta['benchmark_start_time']
+            # Format ISO timestamp more readably
+            if 'T' in str(start_time):
+                start_time = str(start_time).replace('T', ' ').split('.')[0]
+            html += f"<tr><td><strong>Start Time</strong></td><td>{start_time}</td></tr>\n"
+
+        if 'benchmark_end_time' in benchmark_meta:
+            end_time = benchmark_meta['benchmark_end_time']
+            if 'T' in str(end_time):
+                end_time = str(end_time).replace('T', ' ').split('.')[0]
+            html += f"<tr><td><strong>End Time</strong></td><td>{end_time}</td></tr>\n"
+
+        # Cached results
+        if cached_count > 0:
+            executed_count = total_rows - cached_count
+            cache_rate = (cached_count / total_rows * 100) if total_rows > 0 else 0
+            html += f"<tr><td><strong>Cached Results</strong></td><td>{cached_count} ({cache_rate:.1f}%)</td></tr>\n"
+            html += f"<tr><td><strong>Actually Executed</strong></td><td>{executed_count}</td></tr>\n"
+
+        # Average execution duration
+        has_timing = 'metadata.__submission_time' in self.df.columns and 'metadata.__end' in self.df.columns
+        if has_timing:
+            execution_time, formatted_time = self._calculate_total_execution_time()
+            if execution_time is not None:
+                actual_executed = total_rows - cached_count if cached_count > 0 else total_rows
+                if actual_executed > 0:
+                    avg_duration = execution_time / actual_executed
+                    if avg_duration < 60:
+                        avg_duration_str = f"{avg_duration:.1f}s"
+                    elif avg_duration < 3600:
+                        avg_duration_str = f"{avg_duration / 60:.1f}m"
+                    else:
+                        avg_duration_str = f"{avg_duration / 3600:.1f}h"
+                    html += f"<tr><td><strong>Avg Execution Duration</strong></td><td>{avg_duration_str}</td></tr>\n"
+
+        # SLURM-specific timing
+        has_slurm_timing = ('metadata.__job_start' in self.df.columns and
+                           'metadata.__submission_time' in self.df.columns and
+                           'metadata.__end' in self.df.columns)
+        if executor == 'slurm' and has_slurm_timing:
+            df_executed = self.df[self.df['metadata.__cached'] != True] if 'metadata.__cached' in self.df.columns else self.df
+
+            if len(df_executed) > 0:
+                submit_times = pd.to_datetime(df_executed['metadata.__submission_time'], errors='coerce')
+                job_start_times = pd.to_datetime(df_executed['metadata.__job_start'], errors='coerce')
+                end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
+
+                wait_times = (job_start_times - submit_times).dt.total_seconds()
+                valid_wait = wait_times[~wait_times.isna()]
+
+                if len(valid_wait) > 0:
+                    avg_wait = valid_wait.mean()
+                    if avg_wait < 60:
+                        wait_str = f"{avg_wait:.1f}s"
+                    elif avg_wait < 3600:
+                        wait_str = f"{avg_wait/60:.1f}m"
+                    else:
+                        wait_str = f"{avg_wait/3600:.2f}h"
+                    html += f"<tr><td><strong>Avg Queue Wait</strong></td><td>{wait_str}</td></tr>\n"
+
+        # Core-hours
+        cores_expr = self.metadata['benchmark'].get('cores_expr')
+        if cores_expr:
+            total_core_hours = self._calculate_total_core_hours()
+            if total_core_hours is not None:
+                html += f"<tr><td><strong>Total Core-Hours</strong></td><td>{total_core_hours:.2f}</td></tr>\n"
+
+            avg_cores = self._calculate_average_cores()
+            if avg_cores is not None:
+                html += f"<tr><td><strong>Avg Cores per Execution</strong></td><td>{avg_cores:.1f}</td></tr>\n"
+
+        html += "</table>\n</div>\n</details>\n"
+
+        # Search Space (collapsible) - show ALL swept variables including strings
+        html += "<details>\n<summary>Search Space</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
+        html += "<tr><th>Variable</th><th>Type</th><th>Values</th></tr>\n"
+
+        all_swept_vars = self._get_swept_vars()
+        for var in all_swept_vars:
+            col = self._get_var_column(var)
+            var_info = self.metadata['variables'].get(var, {})
+            var_type = var_info.get('type', 'unknown')
+            if col in self.df.columns:
+                unique_values = self.df[col].unique()
+                # Sort if possible (strings and numbers)
+                try:
+                    unique_values = sorted(unique_values)
+                except TypeError:
+                    pass  # Mixed types, keep original order
+                values_str = ", ".join(str(v) for v in unique_values)
+            else:
+                values_str = "N/A"
+            html += f"<tr><td><strong>{var}</strong></td><td>{var_type}</td><td>{values_str}</td></tr>\n"
+
+        html += "</table>\n</div>\n</details>\n"
 
         return html
 
@@ -1238,8 +1305,9 @@ class ReportGenerator:
         html = "<h2>System Environment</h2>\n"
         html += "<p>Information collected from compute nodes during benchmark execution:</p>\n"
 
-        # Summary table
-        html += "<h3>Hardware Summary</h3>\n<table>\n"
+        # Summary table (collapsible)
+        html += "<details>\n<summary>Hardware Summary</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Property</th><th>Value</th></tr>\n"
 
         # Node count
@@ -1249,7 +1317,11 @@ class ReportGenerator:
             if node_count <= 5:
                 nodes_str = ', '.join(nodes)
             else:
-                nodes_str = f"{nodes[0]}, {nodes[1]}, ... ({node_count} total)"
+                # Use expandable details element for long node lists
+                nodes_str = (
+                    f"<details><summary>{node_count} nodes (click to expand)</summary>"
+                    f"<div style='margin-top: 5px;'>{', '.join(nodes)}</div></details>"
+                )
             html += f"<tr><td><strong>Compute Nodes</strong></td><td>{nodes_str}</td></tr>\n"
 
         # CPU info
@@ -1281,18 +1353,19 @@ class ReportGenerator:
                 kernel = ', '.join(kernel)
             html += f"<tr><td><strong>Kernel</strong></td><td>{kernel}</td></tr>\n"
 
-        html += "</table>\n"
+        html += "</table>\n</div>\n</details>\n"
 
-        # Parallel Filesystems
+        # Parallel Filesystems (collapsible)
         filesystems = sys_env.get('filesystems', [])
         if filesystems:
-            html += "<h3>Parallel Filesystems</h3>\n<table>\n"
+            html += "<details>\n<summary>Parallel Filesystems</summary>\n"
+            html += '<div class="details-content">\n<table>\n'
             html += "<tr><th>Type</th><th>Mount Point</th></tr>\n"
             for fs in filesystems:
                 if ':' in fs:
                     fs_type, mount = fs.split(':', 1)
                     html += f"<tr><td>{fs_type}</td><td>{mount}</td></tr>\n"
-            html += "</table>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         # Interconnect
         interconnect = sys_env.get('interconnect', [])
@@ -1320,8 +1393,6 @@ class ReportGenerator:
             if metric_col not in self.df.columns:
                 continue
 
-            html += f"<h3>Best for {metric}</h3>\n"
-
             # Group by parameter combination and get mean
             group_cols = var_cols
             df_grouped = self.df.groupby(group_cols)[metric_col].agg(['mean', 'std', 'count']).reset_index()
@@ -1331,14 +1402,16 @@ class ReportGenerator:
             df_filtered = df_grouped[df_grouped['count'] >= min_samples]
 
             if len(df_filtered) == 0:
-                html += f"<p><em>No configurations with at least {min_samples} samples found.</em></p>\n"
+                html += f"<details>\n<summary>Best for {metric}</summary>\n"
+                html += f'<div class="details-content"><p><em>No configurations with at least {min_samples} samples found.</em></p></div>\n</details>\n'
                 continue
 
             # Sort by mean (descending for most metrics, ascending for latency/time)
             ascending = 'latency' in metric.lower() or 'time' in metric.lower()
             df_top = df_filtered.sort_values('mean', ascending=ascending).head(top_n)
 
-            html += "<table>\n<tr><th>Rank</th>"
+            html += f"<details>\n<summary>Best for {metric}</summary>\n"
+            html += '<div class="details-content">\n<table>\n<tr><th>Rank</th>'
             for var in report_vars:
                 html += f"<th>{var}</th>"
             html += f"<th>{metric} (mean)</th><th>Std Dev</th><th>Samples</th></tr>\n"
@@ -1372,7 +1445,7 @@ class ReportGenerator:
                 html += f"<tr><td colspan='{len(report_vars) + 3}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
                 html += f"<strong>Command:</strong> {rendered_command}</td></tr>\n"
 
-            html += "</table>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         return html
 
@@ -1406,11 +1479,12 @@ class ReportGenerator:
         planner_stats = self.metadata['benchmark'].get('planner_stats') or {}
         total_space_size = planner_stats.get('total_space_size', 0)
 
-        # Display Bayesian optimization configuration
-        html += "<h3>Optimization Configuration</h3>\n<table>\n"
+        # Display Bayesian optimization configuration (collapsible)
+        html += "<details>\n<summary>Optimization Configuration</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Parameter</th><th>Value</th></tr>\n"
         html += f"<tr><td><strong>Objective Metric</strong></td><td>{target_metric} ({objective})</td></tr>\n"
-        html += f"<tr><td><strong>Total Iterations</strong></td><td>{n_iterations}</td></tr>\n"
+        html += f"<tr><td><strong>Max Iterations</strong></td><td>{n_iterations}</td></tr>\n"
         html += f"<tr><td><strong>Initial Random Points</strong></td><td>{n_initial_points}</td></tr>\n"
         html += f"<tr><td><strong>Acquisition Function</strong></td><td>{acquisition_func}</td></tr>\n"
         html += f"<tr><td><strong>Surrogate Model</strong></td><td>{base_estimator}</td></tr>\n"
@@ -1418,20 +1492,24 @@ class ReportGenerator:
             html += f"<tr><td><strong>Xi (exploration)</strong></td><td>{xi}</td></tr>\n"
         if acquisition_func == 'LCB':
             html += f"<tr><td><strong>Kappa (exploration)</strong></td><td>{kappa}</td></tr>\n"
-        html += "</table>\n"
+        html += "</table>\n</div>\n</details>\n"
 
-        # Display search space statistics if available
+        # Display search space statistics if available (collapsible)
         if total_space_size > 0:
-            coverage_pct = (n_iterations / total_space_size) * 100
+            # Use actual number of combinations tested from dataframe, not configured n_iterations
+            # (may differ due to early stopping, convergence, etc.)
+            actual_combinations_tested = self.df['execution.execution_id'].nunique()
+            coverage_pct = (actual_combinations_tested / total_space_size) * 100
             savings_pct = 100 - coverage_pct
-            tests_saved = total_space_size - n_iterations
+            combinations_saved = total_space_size - actual_combinations_tested
 
-            html += "<h3>Search Space Efficiency</h3>\n<table>\n"
+            html += "<details>\n<summary>Search Space Efficiency</summary>\n"
+            html += '<div class="details-content">\n<table>\n'
             html += "<tr><th>Metric</th><th>Value</th></tr>\n"
-            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} configurations</td></tr>\n"
-            html += f"<tr><td><strong>Bayesian Iterations</strong></td><td>{n_iterations:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
-            html += f"<tr><td><strong>Tests Saved</strong></td><td>{tests_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
-            html += "</table>\n"
+            html += f"<tr><td><strong>Total Search Space</strong></td><td>{total_space_size:,} parameter combinations</td></tr>\n"
+            html += f"<tr><td><strong>Combinations Tested</strong></td><td>{actual_combinations_tested:,} ({coverage_pct:.1f}% of space)</td></tr>\n"
+            html += f"<tr><td><strong>Combinations Saved</strong></td><td>{combinations_saved:,} ({savings_pct:.1f}% reduction vs exhaustive)</td></tr>\n"
+            html += "</table>\n</div>\n</details>\n"
 
         # Create plots
         # 1. Metric evolution over iterations
@@ -1441,262 +1519,344 @@ class ReportGenerator:
         fig_metric_evolution = self._create_bayesian_metric_evolution_plot(
             target_metric, objective, n_initial_points, report_vars
         )
-        html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution')}</div>\n"
+        html += f"<div>{self._fig_to_html(fig_metric_evolution, div_id='bayesian_metric_evolution', plot_name=f'bayesian_{target_metric}_evolution')}</div>\n"
 
-        # 2. Parameter evolution over iterations
-        html += "<h3>Parameter Evolution</h3>\n"
-        html += "<p>Shows which parameter values were explored at each iteration. "
-        html += "Colors indicate the metric value achieved.</p>\n"
-        fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
-            report_vars, target_metric, objective, n_initial_points
-        )
-        html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution')}</div>\n"
-
-        return html
-
-    def _generate_pareto_section(self, metrics: List[str], report_vars: List[str]) -> str:
-        """Generate Pareto frontier analysis section."""
-        html = "<h2>Pareto Frontier Analysis</h2>\n"
-        html += "<p>The Pareto frontier shows configurations where you cannot improve one metric without degrading another. "
-        html += "These are the optimal trade-off points when optimizing multiple objectives.</p>\n"
-
-        # Determine objectives automatically
-        objectives = {}
-        for metric in metrics:
-            # Common patterns for metrics to minimize
-            if any(keyword in metric.lower() for keyword in ['latency', 'time', 'duration', 'delay', 'overhead']):
-                objectives[metric] = 'minimize'
-            else:
-                objectives[metric] = 'maximize'
-
-        html += "<h3>Objectives</h3>\n<ul>\n"
-        for metric in metrics:
-            obj = objectives[metric]
-            icon = "↓" if obj == "minimize" else "↑"
-            html += f"<li><strong>{metric}</strong>: {obj} {icon}</li>\n"
-        html += "</ul>\n"
-
-        # Compute Pareto frontier
-        pareto_df = self._compute_pareto_frontier(metrics, objectives, report_vars)
-
-        if len(pareto_df) == 0:
-            html += "<p>No Pareto-optimal configurations found.</p>\n"
-            return html
-
-        html += f"<h3>Pareto-Optimal Configurations ({len(pareto_df)} found)</h3>\n"
-
-        # Table of Pareto-optimal configs
-        var_cols = [self._get_var_column(v) for v in report_vars]
-        metric_cols = [self._get_metric_column(m) for m in metrics]
-
-        html += "<table>\n<tr><th>Rank</th>"
-        for var in report_vars:
-            html += f"<th>{var}</th>"
-        for metric in metrics:
-            html += f"<th>{metric}</th>"
-        html += "</tr>\n"
-
-        for idx, (i, row) in enumerate(pareto_df.iterrows(), 1):
-            # Get all variable values for command rendering
-            var_values = {}
-            for var_name in self.metadata['variables'].keys():
-                var_col = self._get_var_column(var_name)
-                if var_col in self.df.columns:
-                    # Find matching row
-                    mask = True
-                    for report_var in report_vars:
-                        col = self._get_var_column(report_var)
-                        mask = mask & (self.df[col] == row[col])
-                    matching_rows = self.df[mask]
-                    if len(matching_rows) > 0:
-                        var_values[var_name] = matching_rows.iloc[0][var_col]
-
-            rendered_command = self._render_command(var_values)
-
-            html += f"<tr><td rowspan='2'>{idx}</td>"
-            for var_col in var_cols:
-                html += f"<td>{row[var_col]}</td>"
-            for metric_col in metric_cols:
-                html += f"<td><strong>{row[metric_col]:.4f}</strong></td>"
-            html += "</tr>\n"
-
-            # Add command row
-            num_cols = len(report_vars) + len(metrics)
-            html += f"<tr><td colspan='{num_cols}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
-            html += f"<strong>Command:</strong> {rendered_command}</td></tr>\n"
-
-        html += "</table>\n"
-
-        # Generate Pareto plots (2D scatter plots for pairs of metrics)
-        if len(metrics) >= 2:
-            html += "<h3>Pareto Frontier Visualization</h3>\n"
-
-            # Create plots for first two metrics (most common case)
-            fig = self._create_pareto_plot(metrics[0], metrics[1], objectives, report_vars)
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-
-            # If we have 3+ metrics, create additional pairwise plots
-            if len(metrics) >= 3:
-                fig2 = self._create_pareto_plot(metrics[0], metrics[2], objectives, report_vars)
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig2)
-                html += '</div>\n'
+        # 2. Parameter evolution over iterations (optional, disabled by default)
+        if self.report_config.sections.bayesian_parameter_evolution:
+            html += "<h3>Parameter Evolution</h3>\n"
+            html += "<p>Shows which parameter values were explored at each iteration. "
+            html += "Colors indicate the metric value achieved.</p>\n"
+            fig_param_evolution = self._create_bayesian_parameter_evolution_plot(
+                report_vars, target_metric, objective, n_initial_points
+            )
+            html += f"<div>{self._fig_to_html(fig_param_evolution, div_id='bayesian_param_evolution', plot_name='bayesian_parameter_evolution')}</div>\n"
 
         return html
 
-    def _generate_metric_section(self, metric: str, swept_vars: List[str]) -> str:
-        """Generate plots section for a specific metric."""
-        html = f'<div class="metric-section">\n'
-        html += f"<h2>Analysis: {metric}</h2>\n"
+    def _generate_random_search_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate random search exploration section."""
+        html = "<h2>Random Search Exploration</h2>\n"
+        html += "<p>This section shows the exploration behavior of the random search. "
+        html += "Since random sampling has no optimization objective, both running maximum and minimum "
+        html += "are displayed. Compare with Bayesian optimization to assess exploration efficiency.</p>\n"
 
+        # Generate evolution plot for each metric
+        for metric in metrics:
+            html += f"<h3>{metric} Evolution</h3>\n"
+            html += "<p>Shows metric values in execution order. Running max and min lines help visualize "
+            html += "the range of values discovered over time.</p>\n"
+
+            try:
+                fig = self._create_random_metric_evolution_plot(metric, report_vars)
+                html += f"<div>{self._fig_to_html(fig, div_id=f'random_evolution_{metric}', plot_name=f'random_{metric}_evolution')}</div>\n"
+            except Exception as e:
+                html += f'<p class="error">Error generating evolution plot for {metric}: {str(e)}</p>\n'
+
+        return html
+
+    def _create_random_metric_evolution_plot(self, metric: str, report_vars: List[str]) -> go.Figure:
+        """
+        Create plot showing metric evolution over random search iterations.
+
+        Shows:
+        - Observed metric values at each iteration
+        - Running maximum (cumulative max)
+        - Running minimum (cumulative min)
+        - Variable values on hover
+
+        This allows comparison with Bayesian optimization to assess exploration behavior.
+        """
         metric_col = self._get_metric_column(metric)
-        if metric_col not in self.df.columns:
-            html += f"<p>Metric '{metric}' not found in results.</p>\n"
-            html += "</div>\n"
-            return html
 
-        # Check if custom plots are defined for this metric
-        has_custom_plots = metric in self.report_config.metrics and len(self.report_config.metrics[metric].plots) > 0
-        has_default_plots = len(self.report_config.default_plots) > 0
+        # Get variable columns
+        var_cols = []
+        for var in report_vars:
+            col = self._get_var_column(var)
+            if col in self.df.columns:
+                var_cols.append((var, col))
 
-        if has_custom_plots:
-            # Use custom plots from config
-            html += self._generate_custom_plots(metric, self.report_config.metrics[metric].plots, swept_vars)
-        elif has_default_plots:
-            # Use default plots from config
-            html += self._generate_custom_plots(metric, self.report_config.default_plots, swept_vars)
-        else:
-            # Fall back to legacy plot generation
-            html += self._generate_legacy_plots(metric, swept_vars)
+        # Build aggregation dict - metric mean and first value for each variable
+        agg_dict = {metric_col: 'mean'}
+        for var_name, col in var_cols:
+            agg_dict[col] = 'first'  # Variables are same for all reps of same execution
 
-        html += '</div>\n'
+        # Group by execution_id and compute mean across repetitions
+        df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
+        df_grouped = df_grouped.sort_values('execution.execution_id')
+
+        # Use normalized iteration numbers (1, 2, 3, ...) since execution IDs may have gaps
+        execution_ids = self._to_python_list(df_grouped['execution.execution_id'].values)
+        iterations = list(range(1, len(df_grouped) + 1))
+        metric_values = self._to_python_list(df_grouped[metric_col].values)
+
+        # Build hover text with variable values (include actual execution ID)
+        hover_texts = []
+        for i, (idx, row) in enumerate(df_grouped.iterrows()):
+            hover_parts = [f"Iteration: {iterations[i]} (exec_id: {int(row['execution.execution_id'])})"]
+            hover_parts.append(f"{metric}: {row[metric_col]:.4f}")
+            hover_parts.append("")  # Empty line separator
+            for var_name, col in var_cols:
+                hover_parts.append(f"{var_name}: {row[col]}")
+            hover_texts.append("<br>".join(hover_parts))
+
+        # Compute running max and min
+        running_max = self._to_python_list(pd.Series(metric_values).cummax().values)
+        running_min = self._to_python_list(pd.Series(metric_values).cummin().values)
+
+        # Create figure
+        fig = go.Figure()
+
+        # Observed values
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=metric_values,
+            mode='markers+lines',
+            name='Observed',
+            marker=dict(size=10, color='#3498db', line=dict(width=1, color='white')),
+            line=dict(color='lightgray', width=1),
+            hovertemplate='%{text}<extra></extra>',
+            text=hover_texts
+        ))
+
+        # Running maximum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_max,
+            mode='lines',
+            name='Max so far',
+            line=dict(color='#e74c3c', width=2, dash='dash'),
+            hovertemplate='Iteration %{x}<br>Max: %{y:.4f}<extra></extra>'
+        ))
+
+        # Running minimum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_min,
+            mode='lines',
+            name='Min so far',
+            line=dict(color='#2ecc71', width=2, dash='dash'),
+            hovertemplate='Iteration %{x}<br>Min: %{y:.4f}<extra></extra>'
+        ))
+
+        fig.update_layout(
+            title=f'{metric} Evolution Over Random Iterations',
+            xaxis_title='Iteration',
+            yaxis_title=metric,
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
+        )
+
+        return fig
+
+    def _generate_exhaustive_search_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate exhaustive search exploration section."""
+        html = "<h2>Exhaustive Search Exploration</h2>\n"
+        html += "<p>This section shows the exploration behavior of the exhaustive search. "
+        html += "All parameter combinations are tested systematically. Running maximum and minimum "
+        html += "lines show the range of values discovered over execution order.</p>\n"
+
+        # Generate evolution plot for each metric
+        for metric in metrics:
+            html += f"<h3>{metric} Evolution</h3>\n"
+            html += "<p>Shows metric values in execution order. Running max and min lines help visualize "
+            html += "the range of values discovered over time.</p>\n"
+
+            try:
+                fig = self._create_exhaustive_metric_evolution_plot(metric, report_vars)
+                html += f"<div>{self._fig_to_html(fig, div_id=f'exhaustive_evolution_{metric}', plot_name=f'exhaustive_{metric}_evolution')}</div>\n"
+            except Exception as e:
+                html += f'<p class="error">Error generating evolution plot for {metric}: {str(e)}</p>\n'
+
         return html
 
-    def _generate_custom_plots(self, metric: str, plot_configs: List[PlotConfig], swept_vars: List[str]) -> str:
-        """Generate plots using the plot factory from plot configs."""
+    def _create_exhaustive_metric_evolution_plot(self, metric: str, report_vars: List[str]) -> go.Figure:
+        """
+        Create plot showing metric evolution over exhaustive search iterations.
+
+        Shows:
+        - Observed metric values at each iteration
+        - Running maximum (cumulative max)
+        - Running minimum (cumulative min)
+        - Variable values on hover
+
+        This allows comparison with other search methods.
+        """
+        metric_col = self._get_metric_column(metric)
+
+        # Get variable columns
+        var_cols = []
+        for var in report_vars:
+            col = self._get_var_column(var)
+            if col in self.df.columns:
+                var_cols.append((var, col))
+
+        # Build aggregation dict - metric mean and first value for each variable
+        agg_dict = {metric_col: 'mean'}
+        for var_name, col in var_cols:
+            agg_dict[col] = 'first'  # Variables are same for all reps of same execution
+
+        # Group by execution_id and compute mean across repetitions
+        df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
+        df_grouped = df_grouped.sort_values('execution.execution_id')
+
+        # Use normalized execution numbers (1, 2, 3, ...) for consistent x-axis
+        execution_ids = self._to_python_list(df_grouped['execution.execution_id'].values)
+        iterations = list(range(1, len(df_grouped) + 1))
+        metric_values = self._to_python_list(df_grouped[metric_col].values)
+
+        # Build hover text with variable values (include actual execution ID)
+        hover_texts = []
+        for i, (idx, row) in enumerate(df_grouped.iterrows()):
+            hover_parts = [f"Execution: {iterations[i]} (exec_id: {int(row['execution.execution_id'])})"]
+            hover_parts.append(f"{metric}: {row[metric_col]:.4f}")
+            hover_parts.append("")  # Empty line separator
+            for var_name, col in var_cols:
+                hover_parts.append(f"{var_name}: {row[col]}")
+            hover_texts.append("<br>".join(hover_parts))
+
+        # Compute running max and min
+        running_max = self._to_python_list(pd.Series(metric_values).cummax().values)
+        running_min = self._to_python_list(pd.Series(metric_values).cummin().values)
+
+        # Create figure
+        fig = go.Figure()
+
+        # Observed values
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=metric_values,
+            mode='markers+lines',
+            name='Observed',
+            marker=dict(size=10, color='#9b59b6', line=dict(width=1, color='white')),
+            line=dict(color='lightgray', width=1),
+            hovertemplate='%{text}<extra></extra>',
+            text=hover_texts
+        ))
+
+        # Running maximum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_max,
+            mode='lines',
+            name='Max so far',
+            line=dict(color='#e74c3c', width=2, dash='dash'),
+            hovertemplate='Execution %{x}<br>Max: %{y:.4f}<extra></extra>'
+        ))
+
+        # Running minimum
+        fig.add_trace(go.Scatter(
+            x=iterations,
+            y=running_min,
+            mode='lines',
+            name='Min so far',
+            line=dict(color='#2ecc71', width=2, dash='dash'),
+            hovertemplate='Execution %{x}<br>Min: %{y:.4f}<extra></extra>'
+        ))
+
+        fig.update_layout(
+            title=f'{metric} Evolution Over Exhaustive Search',
+            xaxis_title='Execution',
+            yaxis_title=metric,
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
+        )
+
+        return fig
+
+    def _generate_custom_plots_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate custom plots section based on user-defined reporting config."""
         from iops.reporting.plots import create_plot
 
-        html = ""
+        # Check if any custom plots are defined
+        has_any_plots = False
+        for metric in metrics:
+            if metric in self.report_config.metrics and len(self.report_config.metrics[metric].plots) > 0:
+                has_any_plots = True
+                break
 
-        for plot_config in plot_configs:
-            # Handle per_variable plots (generate one plot per swept variable)
-            if plot_config.per_variable:
-                for var in swept_vars:
-                    # Create a modified config for this specific variable
-                    var_config = PlotConfig(
-                        type=plot_config.type,
-                        x_var=var,
-                        y_var=plot_config.y_var,
-                        z_metric=plot_config.z_metric,
-                        group_by=plot_config.group_by,
-                        color_by=plot_config.color_by,
-                        title=plot_config.title or f"{metric} vs {var}",
-                        xaxis_label=plot_config.xaxis_label,
-                        yaxis_label=plot_config.yaxis_label,
-                        colorscale=plot_config.colorscale,
-                        show_error_bars=plot_config.show_error_bars,
-                        show_outliers=plot_config.show_outliers,
-                        height=plot_config.height,
-                        width=plot_config.width,
-                        per_variable=False,
-                    )
+        if not has_any_plots:
+            return ""  # No custom plots defined, return empty
 
+        html = '<div class="metric-section">\n'
+        html += "<h2>Custom Metric Plots</h2>\n"
+        html += "<p>User-defined plots from the reporting configuration.</p>\n"
+
+        for metric in metrics:
+            if metric not in self.report_config.metrics:
+                continue
+
+            metric_plots = self.report_config.metrics[metric].plots
+            if not metric_plots:
+                continue
+
+            metric_col = self._get_metric_column(metric)
+            if metric_col not in self.df.columns:
+                html += f"<p>Metric '{metric}' not found in results.</p>\n"
+                continue
+
+            html += f"<h3>{metric}</h3>\n"
+
+            for plot_config in metric_plots:
+                # Handle per_variable plots
+                if plot_config.per_variable:
+                    for var in report_vars:
+                        var_config = PlotConfig(
+                            type=plot_config.type,
+                            x_var=var,
+                            y_var=plot_config.y_var,
+                            z_metric=plot_config.z_metric,
+                            group_by=plot_config.group_by,
+                            color_by=plot_config.color_by,
+                            title=plot_config.title or f"{metric} vs {var}",
+                            xaxis_label=plot_config.xaxis_label,
+                            yaxis_label=plot_config.yaxis_label,
+                            colorscale=plot_config.colorscale,
+                            show_error_bars=plot_config.show_error_bars,
+                            show_outliers=plot_config.show_outliers,
+                            height=plot_config.height,
+                            width=plot_config.width,
+                            per_variable=False,
+                        )
+                        try:
+                            plot = create_plot(
+                                plot_type=var_config.type,
+                                df=self.df,
+                                metric=metric,
+                                plot_config=var_config,
+                                theme=self.report_config.theme,
+                                var_column_fn=self._get_var_column,
+                                metric_column_fn=self._get_metric_column,
+                            )
+                            fig = plot.generate()
+                            html += '<div class="plot-container">\n'
+                            html += self._fig_to_html(fig, plot_name=f'{metric}_{var_config.type}_{var}')
+                            html += '</div>\n'
+                        except Exception as e:
+                            html += f'<p class="error">Error generating {var_config.type} plot for {var}: {str(e)}</p>\n'
+                else:
+                    # Single plot
                     try:
                         plot = create_plot(
-                            plot_type=var_config.type,
+                            plot_type=plot_config.type,
                             df=self.df,
                             metric=metric,
-                            plot_config=var_config,
+                            plot_config=plot_config,
                             theme=self.report_config.theme,
                             var_column_fn=self._get_var_column,
                             metric_column_fn=self._get_metric_column,
                         )
                         fig = plot.generate()
                         html += '<div class="plot-container">\n'
-                        html += self._fig_to_html(fig)
+                        html += self._fig_to_html(fig, plot_name=f'{metric}_{plot_config.type}')
                         html += '</div>\n'
                     except Exception as e:
-                        html += f'<p class="error">Error generating {var_config.type} plot for {var}: {str(e)}</p>\n'
-            else:
-                # Single plot
-                try:
-                    plot = create_plot(
-                        plot_type=plot_config.type,
-                        df=self.df,
-                        metric=metric,
-                        plot_config=plot_config,
-                        theme=self.report_config.theme,
-                        var_column_fn=self._get_var_column,
-                        metric_column_fn=self._get_metric_column,
-                    )
-                    fig = plot.generate()
-                    html += '<div class="plot-container">\n'
-                    html += self._fig_to_html(fig)
-                    html += '</div>\n'
-                except Exception as e:
-                    html += f'<p class="error">Error generating {plot_config.type} plot: {str(e)}</p>\n'
+                        html += f'<p class="error">Error generating {plot_config.type} plot: {str(e)}</p>\n'
 
-        return html
-
-    def _generate_legacy_plots(self, metric: str, swept_vars: List[str]) -> str:
-        """Generate plots using legacy hardcoded logic (for backward compatibility)."""
-        from iops.reporting.plots import create_plot
-
-        html = ""
-
-        # 0. Execution scatter plot - shows each execution with all vars on hover
-        html += "<h3>All Executions</h3>\n"
-        html += "<p>Each point represents one execution. Hover to see all parameter values.</p>\n"
-        try:
-            exec_scatter_config = PlotConfig(
-                type="execution_scatter",
-                title=f"{metric} per Execution",
-            )
-            plot = create_plot(
-                plot_type="execution_scatter",
-                df=self.df,
-                metric=metric,
-                plot_config=exec_scatter_config,
-                theme=self.report_config.theme,
-                var_column_fn=self._get_var_column,
-                metric_column_fn=self._get_metric_column,
-            )
-            fig = plot.generate()
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-        except Exception as e:
-            html += f'<p class="error">Error generating execution scatter plot: {str(e)}</p>\n'
-
-        # 1. Bar plots - one for each variable
-        html += "<h3>Bar Plots by Variable</h3>\n"
-        for var in swept_vars:
-            fig = self._create_bar_plot(metric, var)
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-
-        # 2. Line plots - one for each variable, grouped by others
-        if len(swept_vars) >= 2:
-            html += "<h3>Line Plots with Grouping</h3>\n"
-            for i, var in enumerate(swept_vars):
-                # For each variable, create line plot grouped by the next variable (cyclically)
-                group_var = swept_vars[(i + 1) % len(swept_vars)]
-                fig = self._create_line_plot(metric, var, group_var)
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig)
-                html += '</div>\n'
-
-        # 3. Heatmap if we have exactly 2 swept variables
-        if len(swept_vars) == 2:
-            html += "<h3>Heatmap</h3>\n"
-            fig = self._create_heatmap(metric, swept_vars[0], swept_vars[1])
-            html += '<div class="plot-container">\n'
-            html += self._fig_to_html(fig)
-            html += '</div>\n'
-
+        html += '</div>\n'
         return html
 
     def _create_bayesian_metric_evolution_plot(
@@ -1729,13 +1889,15 @@ class ReportGenerator:
         df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
-        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        # Use normalized iteration numbers (1, 2, 3, ...) for consistent x-axis
+        execution_ids = self._to_python_list(df_grouped['execution.execution_id'].values)
+        iterations = list(range(1, len(df_grouped) + 1))
         metric_values = self._to_python_list(df_grouped[metric_col].values)
 
-        # Build hover text with variable values
+        # Build hover text with variable values (include actual execution ID)
         hover_texts = []
-        for idx, row in df_grouped.iterrows():
-            hover_parts = [f"Iteration: {int(row['execution.execution_id'])}"]
+        for i, (idx, row) in enumerate(df_grouped.iterrows()):
+            hover_parts = [f"Iteration: {iterations[i]} (exec_id: {int(row['execution.execution_id'])})"]
             hover_parts.append(f"{target_metric}: {row[metric_col]:.4f}")
             hover_parts.append("")  # Empty line separator
             for var_name, col in var_cols:
@@ -1751,7 +1913,7 @@ class ReportGenerator:
         # Create figure with two traces
         fig = go.Figure()
 
-        # Observed values with phase coloring
+        # Observed values with phase coloring (blue for exploration, green for exploitation)
         colors = ['#3498db' if i < n_initial_points else '#2ecc71' for i in range(len(iterations))]
 
         fig.add_trace(go.Scatter(
@@ -1816,7 +1978,8 @@ class ReportGenerator:
         df_grouped = self.df.groupby('execution.execution_id').agg(agg_dict).reset_index()
         df_grouped = df_grouped.sort_values('execution.execution_id')
 
-        iterations = self._to_python_list(df_grouped['execution.execution_id'].values)
+        # Use normalized iteration numbers (1, 2, 3, ...) for consistent x-axis
+        iterations = list(range(1, len(df_grouped) + 1))
         metric_values = self._to_python_list(df_grouped[metric_col].values)
 
         # Create subplots - one per parameter
@@ -2181,94 +2344,6 @@ class ReportGenerator:
 
         return fig
 
-    def _create_pareto_plot(self, metric1: str, metric2: str, objectives: Dict[str, str], report_vars: List[str]) -> go.Figure:
-        """Create 2D Pareto frontier plot."""
-        metric1_col = self._get_metric_column(metric1)
-        metric2_col = self._get_metric_column(metric2)
-
-        var_cols = [self._get_var_column(v) for v in report_vars]
-
-        # Filter out rows with NaN values in either metric
-        df_clean = self.df[
-            self.df[metric1_col].notna() & self.df[metric2_col].notna()
-        ].copy()
-
-        # Get all configurations grouped by parameters
-        df_grouped = df_clean.groupby(var_cols)[[metric1_col, metric2_col]].mean().reset_index()
-
-        # Compute Pareto frontier
-        pareto_df = self._compute_pareto_frontier([metric1, metric2], objectives, report_vars)
-
-        # Merge to identify which points are on frontier
-        merge_cols = var_cols
-        df_with_pareto = df_grouped.merge(
-            pareto_df[merge_cols].assign(_is_pareto=True),
-            on=merge_cols,
-            how='left'
-        )
-        df_with_pareto['_is_pareto'] = df_with_pareto['_is_pareto'].notna()
-
-        # Create hover text with parameter values
-        hover_text = []
-        for _, row in df_with_pareto.iterrows():
-            text_parts = [f"{var}: {row[self._get_var_column(var)]}" for var in report_vars]
-            text_parts.append(f"{metric1}: {row[metric1_col]:.4f}")
-            text_parts.append(f"{metric2}: {row[metric2_col]:.4f}")
-            hover_text.append("<br>".join(text_parts))
-
-        fig = go.Figure()
-
-        # Non-Pareto points
-        df_non_pareto = df_with_pareto[~df_with_pareto['_is_pareto']]
-        if len(df_non_pareto) > 0:
-            fig.add_trace(go.Scatter(
-                x=df_non_pareto[metric1_col],
-                y=df_non_pareto[metric2_col],
-                mode='markers',
-                name='Non-optimal',
-                marker=dict(size=10, color='lightgray', opacity=0.6),
-                text=[hover_text[i] for i in df_non_pareto.index],
-                hovertemplate='%{text}<extra></extra>'
-            ))
-
-        # Pareto points
-        df_pareto_plot = df_with_pareto[df_with_pareto['_is_pareto']]
-        if len(df_pareto_plot) > 0:
-            # Sort for line connection
-            if objectives.get(metric1, 'maximize') == 'maximize':
-                df_pareto_plot = df_pareto_plot.sort_values(metric1_col)
-            else:
-                df_pareto_plot = df_pareto_plot.sort_values(metric1_col, ascending=False)
-
-            fig.add_trace(go.Scatter(
-                x=df_pareto_plot[metric1_col],
-                y=df_pareto_plot[metric2_col],
-                mode='markers+lines',
-                name='Pareto Frontier',
-                marker=dict(size=14, color='red', symbol='star'),
-                line=dict(color='red', width=2, dash='dash'),
-                text=[hover_text[i] for i in df_pareto_plot.index],
-                hovertemplate='%{text}<extra></extra>'
-            ))
-
-        # Add axis labels with objectives
-        obj1 = objectives.get(metric1, 'maximize')
-        obj2 = objectives.get(metric2, 'maximize')
-        icon1 = "↑" if obj1 == "maximize" else "↓"
-        icon2 = "↑" if obj2 == "maximize" else "↓"
-
-        fig.update_layout(
-            title=f"Pareto Frontier: {metric1} vs {metric2}",
-            xaxis_title=f"{metric1} ({obj1} {icon1})",
-            yaxis_title=f"{metric2} ({obj2} {icon2})",
-            template='plotly_white',
-            height=600,
-            hovermode='closest',
-            showlegend=True
-        )
-
-        return fig
-
     def _generate_variable_analysis_section(self, metrics: List[str], report_vars: List[str]) -> str:
         """
         Generate variable analysis section with key visualizations.
@@ -2277,42 +2352,51 @@ class ReportGenerator:
         1. Parallel coordinates plot for multidimensional patterns
         2. Variable importance/contribution analysis
         """
+        show_parallel = self.report_config.sections.parallel_coordinates
+        show_impact = self.report_config.sections.variable_impact
+
+        # Skip entire section if both are disabled
+        if not show_parallel and not show_impact:
+            return ""
+
         html = '<div class="metric-section">\n'
         html += "<h2>Variable Analysis & Relationships</h2>\n"
         html += "<p>Analysis of how variables relate to performance metrics.</p>\n"
 
         # 1. Parallel coordinates plot
-        html += "<h3>Parallel Coordinates Plot</h3>\n"
-        html += "<p>Visualizes all variables simultaneously. Each line represents one configuration, "
-        html += "colored by performance. Patterns and clusters reveal optimal parameter combinations.</p>\n"
+        if show_parallel:
+            html += "<h3>Parallel Coordinates Plot</h3>\n"
+            html += "<p>Visualizes all variables simultaneously. Each line represents one configuration, "
+            html += "colored by performance. Patterns and clusters reveal optimal parameter combinations.</p>\n"
 
-        for metric in metrics:
-            fig_parallel = self._create_parallel_coordinates(metric, report_vars)
-            if fig_parallel is not None:
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig_parallel)
-                html += '</div>\n'
+            for metric in metrics:
+                fig_parallel = self._create_parallel_coordinates(metric, report_vars)
+                if fig_parallel is not None:
+                    html += '<div class="plot-container">\n'
+                    html += self._fig_to_html(fig_parallel, plot_name=f'parallel_coordinates_{metric}')
+                    html += '</div>\n'
 
         # 2. Variable impact analysis
-        html += "<h3>Variable Impact on Performance</h3>\n"
-        html += "<div class='info-box'>\n"
-        html += "<p><strong>Statistical Method:</strong> Variance decomposition analysis</p>\n"
-        html += "<p>The impact score quantifies the proportion of total variance in the performance metric that is explained by each variable. "
-        html += "For each variable, the metric values are grouped by the variable's levels, and the between-group variance is computed. "
-        html += "The impact score is calculated as:</p>\n"
-        html += "<p style='text-align: center; font-family: monospace; background-color: #f8f8f8; padding: 10px; margin: 10px 0;'>"
-        html += "Impact = σ²_between / σ²_total</p>\n"
-        html += "<p>where σ²_between is the variance of group means (weighted by group size) and σ²_total is the overall variance of the metric. "
-        html += "This measure is analogous to the R² coefficient in regression or the eta-squared (η²) effect size in ANOVA. "
-        html += "Values range from 0 (no effect) to 1 (variable fully determines the metric).</p>\n"
-        html += "</div>\n"
+        if show_impact:
+            html += "<h3>Variable Impact on Performance</h3>\n"
+            html += "<div class='info-box'>\n"
+            html += "<p><strong>Statistical Method:</strong> Variance decomposition analysis</p>\n"
+            html += "<p>The impact score quantifies the proportion of total variance in the performance metric that is explained by each variable. "
+            html += "For each variable, the metric values are grouped by the variable's levels, and the between-group variance is computed. "
+            html += "The impact score is calculated as:</p>\n"
+            html += "<p style='text-align: center; font-family: monospace; background-color: #f8f8f8; padding: 10px; margin: 10px 0;'>"
+            html += "Impact = σ²_between / σ²_total</p>\n"
+            html += "<p>where σ²_between is the variance of group means (weighted by group size) and σ²_total is the overall variance of the metric. "
+            html += "This measure is analogous to the R² coefficient in regression or the eta-squared (η²) effect size in ANOVA. "
+            html += "Values range from 0 (no effect) to 1 (variable fully determines the metric).</p>\n"
+            html += "</div>\n"
 
-        for metric in metrics:
-            fig_impact = self._create_variable_impact_plot(metric, report_vars)
-            if fig_impact is not None:
-                html += '<div class="plot-container">\n'
-                html += self._fig_to_html(fig_impact)
-                html += '</div>\n'
+            for metric in metrics:
+                fig_impact = self._create_variable_impact_plot(metric, report_vars)
+                if fig_impact is not None:
+                    html += '<div class="plot-container">\n'
+                    html += self._fig_to_html(fig_impact, plot_name=f'variable_impact_{metric}')
+                    html += '</div>\n'
 
         html += '</div>\n'
         return html
@@ -2689,7 +2773,9 @@ document.addEventListener('keydown', function(e) {{
 def generate_report_from_workdir(
     workdir: Path,
     output_path: Optional[Path] = None,
-    report_config: Optional[ReportingConfig] = None
+    report_config: Optional[ReportingConfig] = None,
+    export_plots: bool = False,
+    plot_format: str = 'pdf'
 ) -> Path:
     """
     Convenience function to generate report from a workdir.
@@ -2698,11 +2784,18 @@ def generate_report_from_workdir(
         workdir: Path to benchmark working directory
         output_path: Optional custom output path
         report_config: Optional reporting configuration (overrides metadata config)
+        export_plots: Whether to export plots as image files
+        plot_format: Image format for exported plots (pdf, png, svg, jpg, webp)
 
     Returns:
         Path to generated HTML report
     """
-    generator = ReportGenerator(workdir, report_config=report_config)
+    generator = ReportGenerator(
+        workdir,
+        report_config=report_config,
+        export_plots=export_plots,
+        plot_format=plot_format
+    )
     generator.load_metadata()
     generator.load_results()
     return generator.generate_report(output_path)

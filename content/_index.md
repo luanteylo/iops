@@ -3,7 +3,7 @@ title: "IOPS"
 weight: 1
 ---
 
-# IOPS 
+# IOPS
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
 
@@ -30,14 +30,11 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis
 - **Flexible Output**: Export results to CSV, Parquet, or SQLite
 
-## Coming Soon: Version 3.5
+## Blog
 
-We're actively developing **IOPS 3.5** with new features and improvements. Preview the upcoming release:
+Check out our [blog]({{< ref "/blog" >}}) for tutorials and use cases:
 
-- **[Documentation Preview](/iops/dev/)** - Browse the dev documentation
-- **[dev-3.5 branch](https://gitlab.inria.fr/lgouveia/iops/-/tree/dev-3.5)** - Follow development on GitLab
-
-
+- [Using IOPS on Grid'5000]({{< ref "/blog/grid500" >}}) - Run IOPS with OAR scheduler on Grid'5000
 
 ## Links
 

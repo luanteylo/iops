@@ -266,6 +266,7 @@ class TestLogExecutionContext:
         args.config_file = sample_config_file
         args.use_cache = False
         args.max_core_hours = None
+        args.meline = False
 
         logger = Mock()
 
@@ -312,7 +313,7 @@ class TestGenerate:
             # Verify custom path was passed with default options
             mock_wizard.run.assert_called_once_with(
                 output_path='custom.yaml',
-                executor='local',
+                executor='slurm',
                 benchmark='ior',
                 full_template=False,
                 copy_examples=False
@@ -443,7 +444,9 @@ class TestReport:
 
         mock_generate.assert_called_once_with(
             Path('/path/to/workdir'),
-            report_config=None
+            report_config=None,
+            export_plots=False,
+            plot_format='pdf'
         )
 
     @patch('iops.reporting.report_generator.generate_report_from_workdir')
@@ -463,7 +466,9 @@ class TestReport:
         mock_load_config.assert_called_once_with(Path('report.yaml'))
         mock_generate.assert_called_once_with(
             Path('/path/to/workdir'),
-            report_config=mock_report_config
+            report_config=mock_report_config,
+            export_plots=False,
+            plot_format='pdf'
         )
 
     @patch('iops.config.loader.load_report_config')

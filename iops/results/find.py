@@ -15,7 +15,8 @@ from typing import Dict, Any, List, Optional
 # IOPS file constants
 INDEX_FILENAME = "__iops_index.json"
 PARAMS_FILENAME = "__iops_params.json"
-STATUS_FILENAME = "__iops_status.json"
+STATUS_FILENAME = "__iops_status.json"  # Repetition-level status
+SKIPPED_MARKER_FILENAME = "__iops_skipped"  # Test-level skipped marker
 METADATA_FILENAME = "__iops_run_metadata.json"
 
 # Default truncation width for parameter values
@@ -36,7 +37,7 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
     """
     Read execution status from status files.
 
-    First checks for test-level status (SKIPPED) in exec_XXXX folder.
+    First checks for skipped marker file in exec_XXXX folder.
     Then checks repetition folders for execution status.
 
     Args:
@@ -49,17 +50,24 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         Includes 'metrics' field: Dict of metric_name -> average value across
         successful repetitions, or None if no metrics available.
     """
-    # First check for test-level status (SKIPPED, PENDING, COMPLETE)
-    test_status_file = exec_path / STATUS_FILENAME
-    if test_status_file.exists():
+    # First check for skipped marker file
+    skipped_marker = exec_path / SKIPPED_MARKER_FILENAME
+    if skipped_marker.exists():
         try:
-            with open(test_status_file, 'r') as f:
-                test_status = json.load(f)
-                # If test is SKIPPED, return that directly
-                if test_status.get("status") == "SKIPPED":
-                    return test_status
+            with open(skipped_marker, 'r') as f:
+                marker_data = json.load(f)
+                return {
+                    "status": "SKIPPED",
+                    "reason": marker_data.get("reason"),
+                    "message": marker_data.get("message"),
+                    "error": None,
+                    "end_time": None,
+                    "cached": False,
+                    "metrics": None,
+                }
         except (json.JSONDecodeError, OSError):
-            pass
+            # Marker exists but couldn't be read - still skipped
+            return {"status": "SKIPPED", "error": None, "end_time": None, "cached": False, "metrics": None}
 
     # Check repetition folders for execution status
     rep_dirs = sorted(exec_path.glob("repetition_*"))
@@ -142,14 +150,7 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
             "metrics": avg_metrics,
         }
 
-    # No repetition folders yet - check test-level status or default to PENDING
-    if test_status_file.exists():
-        try:
-            with open(test_status_file, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-
+    # No repetition folders yet - default to PENDING
     return {"status": "PENDING", "error": None, "end_time": None, "cached": False, "metrics": None}
 
 

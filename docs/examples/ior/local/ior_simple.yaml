@@ -6,7 +6,7 @@
 # - Budget tracking: max_core_hours and cores_expr for resource management
 # - Cache exclusion: cache_exclude_vars to exclude path-based variables from cache keys
 # - Metadata saving: Automatic run_metadata.json for report generation
-# - Analysis reports: Use --analyze to generate HTML reports with plots and Pareto frontier
+# - Analysis reports: Use --analyze to generate HTML reports with plots
 #
 # Usage:
 #   Normal run:  python -m iops.main example_simple.yaml
@@ -60,14 +60,13 @@ command:
     -O summaryFile={{summary_file}} -O summaryFormat=JSON
     -o /home/luan/filesystem/output.ior 
 
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
 
 scripts:
   - name: "ior" 
-    submit: "bash"
     script_template: |
       #!/bin/bash     
       
@@ -94,8 +93,6 @@ output:
   sink:
     type: csv          # parquet | csv | sqlite
     path: "{{ workdir }}/results.csv"
-    mode: append           # append | overwrite
-    include: []            # optional, mutually exclusive with exclude
-    exclude: ["benchmark.name", "benchmark.description"]            # optional, mutually exclusive with include
+    exclude: ["benchmark.name", "benchmark.description"]            # optional, exclude fields from output
     table: results         # only for sqlite
 

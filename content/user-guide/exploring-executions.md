@@ -2,8 +2,21 @@
 title: "Exploring Executions"
 ---
 
-
 IOPS provides tools to explore, search, and inspect execution folders after running benchmarks. This is especially useful for large parameter sweeps where you need to find specific configurations or investigate failures.
+
+---
+
+## Table of Contents
+
+1. [Finding Executions](#finding-executions)
+2. [Filtering Executions](#filtering-executions)
+3. [Advanced Options](#advanced-options)
+4. [Watch Mode](#watch-mode)
+5. [IOPS Metadata Files](#iops-metadata-files)
+6. [Inspecting Archives](#inspecting-archives)
+7. [Archiving Workdirs](#archiving-workdirs)
+
+---
 
 ## Finding Executions
 
@@ -224,6 +237,7 @@ The watch mode display includes:
 - **Live table** with execution parameters and status
 - **Repetition tracking** showing status of each repetition (e.g., `SSS` for 3 succeeded)
 - **Auto-refresh** at configurable intervals
+- **Keyboard navigation** for browsing large test suites (pause, scroll, search)
 
 ![Watch Mode Interface](../../images/watch_feature.png)
 
@@ -302,9 +316,41 @@ In watch mode, status is displayed using compact symbols:
 
 For multiple repetitions, status is shown as a sequence (e.g., `SRW` means repetition 1 succeeded, repetition 2 is running, repetition 3 is pending).
 
+### Keyboard Navigation
+
+Watch mode supports keyboard shortcuts for navigating large test suites. The current mode is shown in the header as `[LIVE]` or `[PAUSED]`.
+
+**Mode Controls:**
+
+| Key | Action |
+|-----|--------|
+| `p` | Toggle pause mode (freeze row order while status updates continue) |
+| `q` | Quit watch mode |
+
+**Navigation (available in pause mode):**
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Page down |
+| `k` / `↑` | Page up |
+| `g` | Go to first page |
+| `G` | Go to last page |
+| `/` | Search by test ID |
+
+**Live Mode vs Pause Mode:**
+
+- **Live mode** (`[LIVE]`): Rows are automatically reordered by priority (RUNNING > FAILED > PENDING > SUCCEEDED). This keeps active and problematic tests visible at the top.
+- **Pause mode** (`[PAUSED]`): Row order is frozen, allowing you to scroll through all tests. Status updates continue in the background.
+
+When in pause mode with many tests, the header shows your current position (e.g., "Showing 21-40 of 120").
+
+**Search by Test ID:**
+
+Press `/` in pause mode to search for a specific test. Type the test number (e.g., `42` for `exec_0042`) and press Enter to jump to the page containing that test. Press Escape to cancel the search.
+
 ### Exiting Watch Mode
 
-Press `Ctrl+C` to exit watch mode and return to the terminal.
+Press `q` or `Ctrl+C` to exit watch mode and return to the terminal.
 
 ## IOPS Metadata Files
 
@@ -490,6 +536,73 @@ Archives include:
   - Run information (names, execution counts)
   - SHA256 checksums for integrity verification
 
+### Partial Archives (Live Extraction)
+
+When running large benchmark campaigns, you may want to extract and analyze completed tests before the entire run finishes. Use `--partial` to create an archive containing only filtered executions:
+
+```bash
+# Archive only completed (successful) tests from a running campaign
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED -o snapshot.tar.gz
+```
+
+This is useful for:
+- **Analyzing partial results** while a long benchmark is still running
+- **Extracting specific configurations** from a large parameter sweep
+- **Creating focused archives** with only relevant test cases
+
+**Filtering options:**
+
+```bash
+# By status - archive only successful tests
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED
+
+# By parameters - archive specific configurations
+iops archive create ./workdir/run_001 --partial nodes=4 ppn=8
+
+# By cache status - archive only freshly executed (non-cached) results
+iops archive create ./workdir/run_001 --partial --cached no
+
+# By minimum completed repetitions - include tests with at least N finished reps
+iops archive create ./workdir/run_001 --min-reps 1
+
+# Combine filters
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED nodes=4 -o subset.tar.gz
+
+# Combine min-reps with parameter filters
+iops archive create ./workdir/run_001 --min-reps 2 nodes=4 -o subset.tar.gz
+```
+
+**Repetition-level filtering with `--min-reps`:**
+
+The `--min-reps N` option is particularly useful when running benchmarks with multiple repetitions. It includes any execution that has at least N completed repetitions, regardless of whether all repetitions have finished:
+
+```bash
+# Include executions with at least 1 completed repetition
+iops archive create ./workdir/run_001 --min-reps 1
+
+# Include executions with at least 2 completed repetitions
+iops archive create ./workdir/run_001 --min-reps 2
+```
+
+When using `--min-reps`:
+- The result files (CSV/Parquet/SQLite) are filtered to include only rows from completed repetitions
+- An execution is included if it has at least N repetitions with SUCCEEDED or FAILED status
+- The `--min-reps` flag implies `--partial`, so you don't need to specify both
+
+**What partial archives contain:**
+
+- Only execution directories matching the filters
+- Filtered result files (CSV/Parquet/SQLite) with rows for included executions only
+- Filtered `__iops_index.json` reflecting only included executions
+- Manifest metadata indicating it's a partial archive with filters applied
+
+**Non-interference guarantee:**
+
+Partial archive creation is completely read-only and safe to use while benchmarks are running:
+- Only reads from execution directories that have completed
+- Copies and filters result files (never modifies originals)
+- Creates filtered versions of metadata files in a temporary location
+
 ### Use Cases
 
 **Sharing results with collaborators:**
@@ -519,5 +632,22 @@ iops archive create ./scratch/benchmark_results -o results.tar.gz
 
 # Extract on cluster B
 iops archive extract results.tar.gz -o ./gpfs/restored_results
+```
+
+**Extracting partial results from running campaigns:**
+```bash
+# While benchmark is still running, extract completed tests
+iops archive create ./workdir/run_001 --partial --status SUCCEEDED -o progress_snapshot.tar.gz
+
+# Transfer and analyze on another machine
+scp progress_snapshot.tar.gz analysis-node:/data/
+ssh analysis-node "iops report /data/progress_snapshot.tar.gz"
+```
+
+**Creating focused archives for specific analyses:**
+```bash
+# Extract only large-scale configurations for scaling analysis
+iops archive create ./workdir/run_001 --partial nodes=8 -o large_scale.tar.gz
+iops archive create ./workdir/run_001 --partial nodes=16 -o larger_scale.tar.gz
 ```
 

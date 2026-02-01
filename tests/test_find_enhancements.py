@@ -25,6 +25,7 @@ from iops.results.find import (
     INDEX_FILENAME,
     PARAMS_FILENAME,
     STATUS_FILENAME,
+    SKIPPED_MARKER_FILENAME,
     DEFAULT_TRUNCATE_WIDTH,
 )
 
@@ -111,9 +112,11 @@ class TestReadStatus:
     """Test the _read_status() utility function."""
 
     def test_read_status_with_valid_file(self, tmp_path):
-        """Test reading status from valid JSON file."""
+        """Test reading status from valid JSON file in repetition directory."""
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir()
 
         status_data = {
             "status": "SUCCEEDED",
@@ -121,7 +124,7 @@ class TestReadStatus:
             "end_time": "2024-01-01T12:00:00"
         }
 
-        status_file = exec_dir / STATUS_FILENAME
+        status_file = rep_dir / STATUS_FILENAME
         with open(status_file, 'w') as f:
             json.dump(status_data, f)
 
@@ -129,12 +132,13 @@ class TestReadStatus:
 
         assert result["status"] == "SUCCEEDED"
         assert result["error"] is None
-        assert result["end_time"] == "2024-01-01T12:00:00"
 
     def test_read_status_with_failed_execution(self, tmp_path):
         """Test reading status from failed execution."""
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir()
 
         status_data = {
             "status": "FAILED",
@@ -142,7 +146,7 @@ class TestReadStatus:
             "end_time": "2024-01-01T12:00:00"
         }
 
-        status_file = exec_dir / STATUS_FILENAME
+        status_file = rep_dir / STATUS_FILENAME
         with open(status_file, 'w') as f:
             json.dump(status_data, f)
 
@@ -155,7 +159,7 @@ class TestReadStatus:
         """Test that missing status file returns PENDING status."""
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
-        # Don't create status file
+        # Don't create status file or repetition directory
 
         result = _read_status(exec_dir)
 
@@ -164,35 +168,42 @@ class TestReadStatus:
         assert result["end_time"] is None
 
     def test_read_status_malformed_json_returns_pending(self, tmp_path):
-        """Test that malformed JSON returns PENDING status."""
+        """Test that malformed JSON in repetition returns PENDING for that rep."""
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir()
 
-        status_file = exec_dir / STATUS_FILENAME
+        status_file = rep_dir / STATUS_FILENAME
         with open(status_file, 'w') as f:
             f.write("{ invalid json content [")
 
         result = _read_status(exec_dir)
 
-        assert result["status"] == "PENDING"
-        assert result["error"] is None
+        # With malformed JSON, status falls back to UNKNOWN
+        assert result["status"] == "UNKNOWN"
 
-    def test_read_status_empty_file_returns_pending(self, tmp_path):
-        """Test that empty file returns PENDING status."""
+    def test_read_status_empty_file_returns_unknown(self, tmp_path):
+        """Test that empty file in repetition returns UNKNOWN status."""
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir()
 
-        status_file = exec_dir / STATUS_FILENAME
+        status_file = rep_dir / STATUS_FILENAME
         status_file.touch()  # Create empty file
 
         result = _read_status(exec_dir)
 
-        assert result["status"] == "PENDING"
+        # Empty file in rep dir results in UNKNOWN status
+        assert result["status"] == "UNKNOWN"
 
     def test_read_status_with_error_status(self, tmp_path):
         """Test reading ERROR status."""
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir()
 
         status_data = {
             "status": "ERROR",
@@ -200,14 +211,34 @@ class TestReadStatus:
             "end_time": "2024-01-01T12:00:00"
         }
 
-        status_file = exec_dir / STATUS_FILENAME
+        status_file = rep_dir / STATUS_FILENAME
         with open(status_file, 'w') as f:
             json.dump(status_data, f)
 
         result = _read_status(exec_dir)
 
-        assert result["status"] == "ERROR"
+        assert result["status"] == "FAILED"  # ERROR maps to FAILED in aggregation
         assert "Job submission failed" in result["error"]
+
+    def test_read_status_skipped_marker(self, tmp_path):
+        """Test reading SKIPPED status from marker file."""
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir()
+
+        marker_data = {
+            "reason": "constraint",
+            "message": "nodes > 4"
+        }
+
+        marker_file = exec_dir / SKIPPED_MARKER_FILENAME
+        with open(marker_file, 'w') as f:
+            json.dump(marker_data, f)
+
+        result = _read_status(exec_dir)
+
+        assert result["status"] == "SKIPPED"
+        assert result["reason"] == "constraint"
+        assert result["message"] == "nodes > 4"
 
     def test_read_status_handles_os_error(self, tmp_path):
         """Test that OS errors are handled gracefully."""
@@ -218,8 +249,10 @@ class TestReadStatus:
 
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir()
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir()
 
-        status_file = exec_dir / STATUS_FILENAME
+        status_file = rep_dir / STATUS_FILENAME
         with open(status_file, 'w') as f:
             json.dump({"status": "SUCCEEDED"}, f)
 
@@ -228,8 +261,8 @@ class TestReadStatus:
 
         try:
             result = _read_status(exec_dir)
-            # Should return default PENDING status
-            assert result["status"] == "PENDING"
+            # OS error during read results in UNKNOWN status for that rep
+            assert result["status"] == "UNKNOWN"
         finally:
             # Restore permissions for cleanup
             status_file.chmod(0o644)
@@ -571,6 +604,14 @@ class TestFindCommandHide:
 class TestFindCommandStatus:
     """Test find command with --status flag."""
 
+    def _create_rep_status(self, exec_dir, status, error=None):
+        """Helper to create repetition directory with status file."""
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        status_file = rep_dir / STATUS_FILENAME
+        with open(status_file, 'w') as f:
+            json.dump({"status": status, "error": error, "end_time": None}, f)
+
     def test_find_filter_by_succeeded_status(self, tmp_path):
         """Test filtering by SUCCEEDED status."""
         index = {
@@ -585,7 +626,7 @@ class TestFindCommandStatus:
         with open(index_file, 'w') as f:
             json.dump(index, f)
 
-        # Create status files
+        # Create status files in repetition directories
         for exec_name, status in [
             ("exec_0001", "SUCCEEDED"),
             ("exec_0002", "FAILED"),
@@ -593,9 +634,7 @@ class TestFindCommandStatus:
         ]:
             exec_dir = tmp_path / "runs" / exec_name
             exec_dir.mkdir(parents=True)
-            status_file = exec_dir / STATUS_FILENAME
-            with open(status_file, 'w') as f:
-                json.dump({"status": status, "error": None, "end_time": None}, f)
+            self._create_rep_status(exec_dir, status)
 
         with patch('builtins.print') as mock_print:
             find_executions(tmp_path, status_filter='SUCCEEDED')
@@ -619,16 +658,14 @@ class TestFindCommandStatus:
         with open(index_file, 'w') as f:
             json.dump(index, f)
 
-        # Create status files
+        # Create status files in repetition directories
         for exec_name, status in [
             ("exec_0001", "SUCCEEDED"),
             ("exec_0002", "FAILED")
         ]:
             exec_dir = tmp_path / "runs" / exec_name
             exec_dir.mkdir(parents=True)
-            status_file = exec_dir / STATUS_FILENAME
-            with open(status_file, 'w') as f:
-                json.dump({"status": status, "error": None, "end_time": None}, f)
+            self._create_rep_status(exec_dir, status)
 
         with patch('builtins.print') as mock_print:
             find_executions(tmp_path, status_filter='FAILED')
@@ -639,7 +676,7 @@ class TestFindCommandStatus:
             assert 'exec_0002' in output
 
     def test_find_filter_by_error_status(self, tmp_path):
-        """Test filtering by ERROR status."""
+        """Test filtering by ERROR status (maps to FAILED in aggregation)."""
         index = {
             "benchmark": "Test Benchmark",
             "executions": {
@@ -651,27 +688,26 @@ class TestFindCommandStatus:
         with open(index_file, 'w') as f:
             json.dump(index, f)
 
-        # Create status files
+        # Create status files in repetition directories
         for exec_name, status in [
             ("exec_0001", "SUCCEEDED"),
             ("exec_0002", "ERROR")
         ]:
             exec_dir = tmp_path / "runs" / exec_name
             exec_dir.mkdir(parents=True)
-            status_file = exec_dir / STATUS_FILENAME
-            with open(status_file, 'w') as f:
-                json.dump({"status": status, "error": None, "end_time": None}, f)
+            self._create_rep_status(exec_dir, status)
 
         with patch('builtins.print') as mock_print:
-            find_executions(tmp_path, status_filter='ERROR')
+            # ERROR maps to FAILED in status aggregation
+            find_executions(tmp_path, status_filter='FAILED')
             output = '\n'.join(str(call) for call in mock_print.call_args_list)
 
-            # Should show only ERROR executions
+            # Should show exec_0002 (ERROR maps to FAILED)
             assert 'exec_0001' not in output
             assert 'exec_0002' in output
 
     def test_find_filter_by_pending_status(self, tmp_path):
-        """Test filtering by PENDING status (no status file)."""
+        """Test filtering by PENDING status (no repetition directory)."""
         index = {
             "benchmark": "Test Benchmark",
             "executions": {
@@ -683,14 +719,12 @@ class TestFindCommandStatus:
         with open(index_file, 'w') as f:
             json.dump(index, f)
 
-        # Create status file for exec_0001 only
+        # Create status file for exec_0001 only (in repetition dir)
         exec_dir1 = tmp_path / "runs" / "exec_0001"
         exec_dir1.mkdir(parents=True)
-        status_file1 = exec_dir1 / STATUS_FILENAME
-        with open(status_file1, 'w') as f:
-            json.dump({"status": "SUCCEEDED", "error": None, "end_time": None}, f)
+        self._create_rep_status(exec_dir1, "SUCCEEDED")
 
-        # exec_0002 has no status file (PENDING)
+        # exec_0002 has no repetition directory (PENDING)
         exec_dir2 = tmp_path / "runs" / "exec_0002"
         exec_dir2.mkdir(parents=True)
 
@@ -716,9 +750,7 @@ class TestFindCommandStatus:
 
         exec_dir = tmp_path / "runs" / "exec_0001"
         exec_dir.mkdir(parents=True)
-        status_file = exec_dir / STATUS_FILENAME
-        with open(status_file, 'w') as f:
-            json.dump({"status": "SUCCEEDED", "error": None, "end_time": None}, f)
+        self._create_rep_status(exec_dir, "SUCCEEDED")
 
         # Test lowercase filter
         with patch('builtins.print') as mock_print:
@@ -740,9 +772,7 @@ class TestFindCommandStatus:
 
         exec_dir = tmp_path / "runs" / "exec_0001"
         exec_dir.mkdir(parents=True)
-        status_file = exec_dir / STATUS_FILENAME
-        with open(status_file, 'w') as f:
-            json.dump({"status": "SUCCEEDED", "error": None, "end_time": None}, f)
+        self._create_rep_status(exec_dir, "SUCCEEDED")
 
         with patch('builtins.print') as mock_print:
             find_executions(tmp_path, status_filter='FAILED')
@@ -765,7 +795,7 @@ class TestFindCommandStatus:
         with open(index_file, 'w') as f:
             json.dump(index, f)
 
-        # Create status files
+        # Create status files in repetition directories
         for exec_name, status in [
             ("exec_0001", "SUCCEEDED"),
             ("exec_0002", "SUCCEEDED"),
@@ -773,9 +803,7 @@ class TestFindCommandStatus:
         ]:
             exec_dir = tmp_path / "runs" / exec_name
             exec_dir.mkdir(parents=True)
-            status_file = exec_dir / STATUS_FILENAME
-            with open(status_file, 'w') as f:
-                json.dump({"status": status, "error": None, "end_time": None}, f)
+            self._create_rep_status(exec_dir, status)
 
         with patch('builtins.print') as mock_print:
             # Filter by nodes=2 AND status=SUCCEEDED
@@ -794,6 +822,14 @@ class TestFindCommandStatus:
 
 class TestFindCommandIntegration:
     """Test find command with multiple new features combined."""
+
+    def _create_rep_status(self, exec_dir, status, error=None):
+        """Helper to create repetition directory with status file."""
+        rep_dir = exec_dir / "repetition_001"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        status_file = rep_dir / STATUS_FILENAME
+        with open(status_file, 'w') as f:
+            json.dump({"status": status, "error": error, "end_time": None}, f)
 
     def test_find_all_features_combined(self, tmp_path):
         """Test combining --full, --hide, and --status filters."""
@@ -817,16 +853,14 @@ class TestFindCommandIntegration:
         with open(index_file, 'w') as f:
             json.dump(index, f)
 
-        # Create status files
+        # Create status files in repetition directories
         for exec_name, status in [
             ("exec_0001", "SUCCEEDED"),
             ("exec_0002", "FAILED")
         ]:
             exec_dir = tmp_path / "runs" / exec_name
             exec_dir.mkdir(parents=True)
-            status_file = exec_dir / STATUS_FILENAME
-            with open(status_file, 'w') as f:
-                json.dump({"status": status, "error": None, "end_time": None}, f)
+            self._create_rep_status(exec_dir, status)
 
         with patch('builtins.print') as mock_print:
             # Use all features: full values, hide path, filter by SUCCEEDED

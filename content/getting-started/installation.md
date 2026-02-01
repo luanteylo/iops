@@ -2,6 +2,18 @@
 title: "Installation"
 ---
 
+---
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Quick Installation (from PyPI)](#quick-installation-from-pypi)
+3. [Installation with Spack (for HPC environments)](#installation-with-spack-for-hpc-environments)
+4. [Offline Installation (Wheelhouse)](#offline-installation-wheelhouse)
+5. [Installation from Source](#installation-from-source)
+6. [Verifying Your Installation](#verifying-your-installation)
+
+---
 
 ## Prerequisites
 
@@ -55,6 +67,44 @@ spack load iops-benchmark
 # Verify installation
 iops --version
 ```
+
+## Offline Installation (Wheelhouse)
+
+For clusters without internet access, you can create a wheelhouse (a directory of pre-downloaded wheel files) on a machine with internet, then transfer it to the cluster.
+
+### Step 1: Create the Wheelhouse (on a machine with internet)
+
+```bash
+# Create a directory for the wheels
+mkdir iops-wheelhouse
+
+# Download IOPS and all dependencies as wheels
+pip download iops-benchmark -d iops-wheelhouse
+```
+
+### Step 2: Transfer to the Cluster
+
+Copy the wheelhouse directory to the cluster using your preferred method:
+
+```bash
+# Example using scp
+scp -r iops-wheelhouse user@cluster:/path/to/destination/
+
+# Example using rsync
+rsync -av iops-wheelhouse user@cluster:/path/to/destination/
+```
+
+### Step 3: Install on the Cluster
+
+```bash
+# Install from the wheelhouse (no internet required)
+pip install --no-index --find-links=/path/to/iops-wheelhouse iops-benchmark
+```
+
+### Notes
+
+- Ensure the machine creating the wheelhouse has the same OS and Python version as the cluster
+- For different architectures (e.g., x86_64 vs ARM), create the wheelhouse on a matching system or use `--platform` flag with `pip download`
 
 ## Installation from Source
 

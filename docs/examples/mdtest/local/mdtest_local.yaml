@@ -128,8 +128,8 @@ command:
     -z {{ tree_depth }} -b {{ branch_factor }}
     -w {{ file_size_bytes }} -F -C -T -r
 
-  # Optional: Additional metadata to attach to results
-  metadata:
+  # Optional: User-defined labels to attach to results
+  labels:
     benchmark_type: "metadata"
     operations: "create,stat,remove"
     execution_mode: "local"
@@ -143,7 +143,6 @@ scripts:
   - name: "mdtest"
 
     # Submission method for local executor
-    submit: "bash"
 
     # Script template for local execution
     script_template: |
@@ -205,11 +204,6 @@ output:
     # Output path (supports Jinja2 templating)
     path: "{{ workdir }}/results.csv"
 
-    # Write mode:
-    #   - append: Add to existing file (creates if missing)
-    #   - overwrite: Replace existing file
-    mode: append
-
     # Optional: Exclude specific fields (mutually exclusive with 'include')
     exclude: ["benchmark.description"]
 
@@ -248,7 +242,6 @@ reporting:
     best_results: true           # Top configurations per metric
     variable_impact: true        # Variable importance analysis
     parallel_coordinates: true   # Multi-dimensional visualization
-    pareto_frontier: true        # Multi-objective optimization
     custom_plots: true           # User-defined plots
 
   # -------------------- Best Results Configuration --------------------

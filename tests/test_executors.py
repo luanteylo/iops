@@ -152,10 +152,10 @@ def test_local_executor_wait_and_collect(mock_test_instance):
 def test_slurm_executor_submit_success(mock_test_instance):
     """Test SlurmExecutor successful submission."""
     config = Mock()
+    config.benchmark = Mock()
+    config.benchmark.slurm_options = None
     config.execution = Mock()
     config.execution.status_check_delay = 1
-
-    mock_test_instance.submit_cmd = "sbatch test.sh"
 
     executor = SlurmExecutor(config)
 
@@ -201,7 +201,8 @@ def test_executor_init_metadata(mock_test_instance):
 
     assert "__jobid" in mock_test_instance.metadata
     assert "__executor_status" in mock_test_instance.metadata
-    assert "__start" in mock_test_instance.metadata
+    assert "__submission_time" in mock_test_instance.metadata
+    assert "__job_start" in mock_test_instance.metadata
     assert "__end" in mock_test_instance.metadata
     assert "__error" in mock_test_instance.metadata
 
@@ -225,10 +226,10 @@ def test_executor_truncate_output():
 
 
 def test_slurm_executor_default_commands():
-    """Test SlurmExecutor uses default command templates when executor_options not provided."""
+    """Test SlurmExecutor uses default command templates when slurm_options not provided."""
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = None
+    config.benchmark.slurm_options = None
     config.execution = Mock()
 
     executor = SlurmExecutor(config)
@@ -240,12 +241,12 @@ def test_slurm_executor_default_commands():
 
 
 def test_slurm_executor_custom_commands():
-    """Test SlurmExecutor uses custom command templates from executor_options."""
-    from iops.config.models import ExecutorOptionsConfig
+    """Test SlurmExecutor uses custom command templates from slurm_options."""
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={
             "submit": "lrms-wrapper sbatch",
             "status": "lrms-wrapper -r {job_id} --custom-format",
@@ -265,11 +266,11 @@ def test_slurm_executor_custom_commands():
 
 def test_slurm_executor_partial_custom_commands():
     """Test SlurmExecutor uses default templates for unspecified commands."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={
             "status": "custom-squeue -j {job_id}"
         }
@@ -285,11 +286,11 @@ def test_slurm_executor_partial_custom_commands():
 
 def test_slurm_executor_squeue_uses_custom_command(mock_test_instance):
     """Test that _squeue_state uses custom status template and formats it correctly."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={"status": "wrapper -r {job_id} --custom"}
     )
     config.execution = Mock()
@@ -312,11 +313,11 @@ def test_slurm_executor_squeue_uses_custom_command(mock_test_instance):
 
 def test_slurm_executor_scontrol_uses_custom_command(mock_test_instance):
     """Test that _scontrol_info uses custom info command template and formats it correctly."""
-    from iops.config.models import ExecutorOptionsConfig
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
+    config.benchmark.slurm_options = SlurmOptionsConfig(
         commands={"info": "wrapper info {job_id}"}
     )
     config.execution = Mock()
@@ -337,66 +338,33 @@ def test_slurm_executor_scontrol_uses_custom_command(mock_test_instance):
         assert call_args == ["wrapper", "info", "12345"]
 
 
-def test_slurm_executor_uses_default_submit_when_not_specified(mock_test_instance):
-    """Test that executor uses default submit command when test.submit_cmd is empty."""
-    from iops.config.models import ExecutorOptionsConfig
+def test_slurm_executor_uses_custom_submit_from_options(mock_test_instance):
+    """Test that executor uses submit command from slurm_options.commands."""
+    from iops.config.models import SlurmOptionsConfig
 
     config = Mock()
     config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
-        commands={"submit": "custom-sbatch"}
+    config.benchmark.slurm_options = SlurmOptionsConfig(
+        commands={"submit": "custom-sbatch --parsable"}
     )
     config.execution = Mock()
-
-    # Test instance with empty submit_cmd
-    mock_test_instance.submit_cmd = ""
 
     executor = SlurmExecutor(config)
 
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = Mock(
             returncode=0,
-            stdout="Submitted batch job 12345",
+            stdout="12345",
             stderr=""
         )
 
         executor.submit(mock_test_instance)
 
-        # Check that the default submit command was used
+        # Check that the custom submit command was used
         call_args = mock_run.call_args[0][0]
         assert call_args[0] == "custom-sbatch"
-        assert str(mock_test_instance.script_file) in call_args
-
-
-def test_slurm_executor_script_submit_overrides_default(mock_test_instance):
-    """Test that script-specific submit command overrides executor default."""
-    from iops.config.models import ExecutorOptionsConfig
-
-    config = Mock()
-    config.benchmark = Mock()
-    config.benchmark.executor_options = ExecutorOptionsConfig(
-        commands={"submit": "default-sbatch"}
-    )
-    config.execution = Mock()
-
-    # Test instance with specific submit_cmd
-    mock_test_instance.submit_cmd = "script-specific-sbatch --parsable"
-
-    executor = SlurmExecutor(config)
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="12345;cluster",
-            stderr=""
-        )
-
-        executor.submit(mock_test_instance)
-
-        # Check that the script-specific submit command was used (not the default)
-        call_args = mock_run.call_args[0][0]
-        assert call_args[0] == "script-specific-sbatch"
         assert "--parsable" in call_args
+        assert str(mock_test_instance.script_file) in call_args
 
 
 def test_local_executor_permission_denied_on_script_file(mock_test_instance):
@@ -457,7 +425,7 @@ def test_slurm_executor_permission_denied_on_post_script(mock_test_instance, tmp
     config.execution = Mock()
     config.execution.status_check_delay = 1
     config.benchmark = Mock()
-    config.benchmark.executor_options = None
+    config.benchmark.slurm_options = None
 
     executor = SlurmExecutor(config)
 

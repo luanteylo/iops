@@ -67,12 +67,11 @@ command:
   template: |
     echo "Running with nodes={{ nodes }}, ppn={{ processes_per_node }}, ost_num={{ ost_num }}"
     echo "Total processes: {{ total_processes }}"
-  metadata:
+  labels:
     operation: "ost_impact_test"
 
 scripts:
   - name: "ost_benchmark"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       # Simulated benchmark - replace with actual benchmark command
@@ -110,7 +109,6 @@ output:
   sink:
     type: "csv"
     path: "{{ workdir }}/results_ost_impact.csv"
-    mode: "overwrite"
 
 # =============================================================================
 # HOW THIS WORKS

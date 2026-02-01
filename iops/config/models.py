@@ -17,16 +17,66 @@ class ConfigValidationError(Exception):
 # ----------------- Core blocks ----------------- #
 
 @dataclass
-class ExecutorOptionsConfig:
+class AllocationConfig:
     """
-    Executor-specific configuration options.
+    Configuration for SLURM single-allocation mode.
 
-    For SLURM executor, you can override the commands used for job management.
+    In single-allocation mode, all tests run within ONE SLURM allocation instead of
+    submitting individual jobs per test. This reduces job submission overhead and is
+    useful for HPC systems with job limits or queue wait times.
+
+    The user provides SBATCH directives and setup code in `allocation_script`. IOPS will:
+    - Add shebang if not provided
+    - Add job-name, output, and error directives
+    - Generate an execution script that runs all tests sequentially
+
+    Allocation Modes:
+        - "per-test" (default): Each test is submitted as a separate SLURM job
+        - "single": Pre-generates an execution script that runs all tests sequentially
+          within a single allocation, reducing per-test overhead from ~5-30s to ~100ms
+
+    Attributes:
+        mode: Allocation mode - "single" or "per-test" (default)
+        allocation_script: SBATCH directives + setup code (required when mode="single")
+        test_timeout: Per-test timeout in seconds for single-allocation mode (default: 3600)
+
+    Example (single-allocation mode):
+        slurm_options:
+          allocation:
+            mode: "single"
+            test_timeout: 300  # 5 minutes per test
+            allocation_script: |
+              #SBATCH --nodes=8
+              #SBATCH --time=02:00:00
+              #SBATCH --partition=compute
+              #SBATCH --exclusive
+
+              module purge
+              module load mpi/openmpi/4.0.1
+
+              # Any setup that runs once before all tests
+
+    In single-allocation mode:
+    - allocation_script contains SBATCH directives AND setup (modules, env vars)
+    - script_template contains the srun command with Jinja2 variables
+    - User controls srun directly in script_template (no automatic MPI wrapping)
+    """
+    mode: str = "per-test"  # "single" or "per-test"
+    allocation_script: Optional[str] = None
+    test_timeout: int = 3600  # Per-test timeout in seconds for single-allocation mode
+
+
+@dataclass
+class SlurmOptionsConfig:
+    """
+    SLURM executor configuration options.
+
+    Override commands used for job management, configure polling, or enable single-allocation mode.
     Commands are templates that support {job_id} placeholder for dynamic substitution.
     This is useful when running on systems with command wrappers or custom SLURM installations.
 
     Example with default SLURM commands:
-        executor_options:
+        slurm_options:
           commands:
             submit: "sbatch"                                      # Default submit (per-script override)
             status: "squeue -j {job_id} --noheader --format=%T"  # Job status query
@@ -35,13 +85,27 @@ class ExecutorOptionsConfig:
           poll_interval: 30                                       # Status check interval (seconds)
 
     Example with wrapper and custom flags:
-        executor_options:
+        slurm_options:
           commands:
             submit: "lrms-wrapper sbatch"
             status: "lrms-wrapper -r {job_id} --custom-format"   # Custom flags
             info: "lrms-wrapper info {job_id}"
             cancel: "lrms-wrapper kill {job_id}"
           poll_interval: 10                                       # Check status every 10 seconds
+
+    Example with single-allocation mode:
+        slurm_options:
+          allocation:
+            mode: "single"
+            test_timeout: 300
+            allocation_script: |
+              #SBATCH --nodes=8
+              #SBATCH --time=02:00:00
+              #SBATCH --partition=batch
+              #SBATCH --account=myaccount
+
+              module purge
+              module load mpi/openmpi/4.0.1
 
     Placeholders:
         {job_id} - Replaced with the SLURM job ID at runtime
@@ -51,6 +115,7 @@ class ExecutorOptionsConfig:
     """
     commands: Optional[Dict[str, str]] = None
     poll_interval: Optional[int] = None  # Polling interval in seconds for SLURM job status checks
+    allocation: Optional[AllocationConfig] = None  # Single-allocation mode configuration
 
 
 @dataclass
@@ -78,25 +143,40 @@ class BayesianConfig:
     Bayesian optimization uses a surrogate model to guide the search toward
     optimal parameter configurations based on previous results.
 
+    Default values are based on empirical testing across multiple seeds and
+    iteration counts. With 20 iterations (~7% of search space), Bayesian
+    optimization achieves ~90% of optimal vs ~79% for random search.
+
     Attributes:
-        n_initial_points: Number of random initial samples before optimization starts (default: 5)
-        n_iterations: Total number of parameter configurations to evaluate (default: 20)
+        n_initial_points: Number of random initial samples before optimization starts.
+            Default: 5 (provides enough initial exploration before guided search)
+        n_iterations: Total number of parameter configurations to evaluate.
+            Default: 20 (sufficient for most search spaces)
         acquisition_func: Acquisition function to select next point:
             - "EI": Expected Improvement (default) - balanced exploration/exploitation
             - "PI": Probability of Improvement - more exploitative
             - "LCB": Lower Confidence Bound - configurable via kappa
         base_estimator: Surrogate model type:
-            - "RF": Random Forest (default) - robust, handles categorical well
+            - "RF": Random Forest (default) - most consistent results, lower variance
             - "GP": Gaussian Process - best for continuous, struggles with categorical
-            - "ET": Extra Trees - similar to RF, more randomness
+            - "ET": Extra Trees - similar to RF, slightly higher variance
             - "GBRT": Gradient Boosted Regression Trees
-        xi: Exploration-exploitation trade-off for EI/PI (default: 0.01)
-            Higher values favor exploration over exploitation
+        xi: Exploration-exploitation trade-off for EI/PI.
+            Default: 0.01 (good balance, not too greedy)
         kappa: Exploration parameter for LCB (default: 1.96)
             Higher values favor exploration
         objective: Optimization direction - "minimize" or "maximize" (default: "minimize")
         objective_metric: Metric name to optimize (required)
-        fallback_to_exhaustive: If True and n_iterations >= total space, use exhaustive search
+        fallback_to_exhaustive: If True and n_iterations >= total space, use exhaustive search.
+            Default: True
+        early_stop_on_convergence: If True, stop when optimizer converges instead of
+            falling back to random sampling. Default: False (better final results without
+            early stopping; use convergence_patience and xi_boost_factor if enabled)
+        convergence_patience: Number of consecutive convergence events before early stopping.
+            When convergence is detected, xi is boosted to encourage exploration.
+            Default: 3 (only used when early_stop_on_convergence is True)
+        xi_boost_factor: Multiplier for xi when convergence is detected.
+            Default: 5.0 (helps escape local optima when stuck)
     """
     n_initial_points: int = 5
     n_iterations: int = 20
@@ -107,6 +187,33 @@ class BayesianConfig:
     objective: Literal["minimize", "maximize"] = "minimize"
     objective_metric: Optional[str] = None
     fallback_to_exhaustive: bool = True
+    early_stop_on_convergence: bool = False
+    convergence_patience: int = 3
+    xi_boost_factor: float = 5.0
+
+
+@dataclass
+class ProbesConfig:
+    """
+    Configuration for IOPS probes (system monitoring and execution tracking).
+
+    Probes are optional features that collect additional information during execution.
+    All probes are enabled by default except resource_sampling which requires explicit opt-in.
+
+    Attributes:
+        system_snapshot: Collect system info (hostname, CPU, memory, etc.) from compute nodes.
+            Corresponds to deprecated field: collect_system_info
+        execution_index: Write execution metadata files for 'iops find' command.
+            Corresponds to deprecated field: track_executions
+        resource_sampling: Enable resource tracing (CPU/memory sampling during execution).
+            Corresponds to deprecated field: trace_resources
+        sampling_interval: Sampling interval in seconds for resource tracing.
+            Corresponds to deprecated field: trace_interval
+    """
+    system_snapshot: bool = True      # Was: collect_system_info
+    execution_index: bool = True      # Was: track_executions
+    resource_sampling: bool = False   # Was: trace_resources
+    sampling_interval: float = 1.0    # Was: trace_interval
 
 
 @dataclass
@@ -118,7 +225,7 @@ class BenchmarkConfig:
     cache_file: Optional[Path] = None
     search_method: Optional[str] = None  # e.g., "greedy", "exhaustive", etc.
     executor: Optional[str] = "slurm"  # e.g., "local", "slurm", etc.
-    executor_options: Optional[ExecutorOptionsConfig] = None  # executor-specific configuration
+    slurm_options: Optional[SlurmOptionsConfig] = None  # SLURM-specific configuration (commands, polling, allocation)
     random_seed: Optional[int] = None  # seed for any random operations
     cache_exclude_vars: Optional[List[str]] = None  # variables to exclude from cache hash
     exhaustive_vars: Optional[List[str]] = None  # variables to exhaustively test for each search point
@@ -128,9 +235,13 @@ class BenchmarkConfig:
     report_vars: Optional[List[str]] = None  # Variables to include in analysis reports (default: all numeric swept vars)
     bayesian_config: Optional[BayesianConfig] = None  # Bayesian optimization configuration
     random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
-    collect_system_info: bool = True  # Collect system info (hostname, CPU, memory, etc.) from compute nodes
-    track_executions: bool = True  # Write execution metadata files for 'iops find' command
+    probes: Optional[ProbesConfig] = None  # Probe configuration (new nested format)
+    # Deprecated fields (use probes.* instead) - will be removed in 3.7.0
+    collect_system_info: bool = True  # DEPRECATED: use probes.system_snapshot
+    track_executions: bool = True  # DEPRECATED: use probes.execution_index
     create_folders_upfront: bool = False  # Create all exec folders at start (enables SKIPPED status visibility)
+    trace_resources: bool = False  # DEPRECATED: use probes.resource_sampling
+    trace_interval: float = 1.0  # DEPRECATED: use probes.sampling_interval
 
 
 @dataclass
@@ -165,7 +276,8 @@ class ConstraintConfig:
 @dataclass
 class CommandConfig:
     template: str
-    metadata: Dict[str, Any]
+    labels: Dict[str, Any]
+    env: Dict[str, str]
 
 
 @dataclass
@@ -192,7 +304,6 @@ class ParserConfig:
 @dataclass
 class ScriptConfig:
     name: str
-    submit: str
     script_template: str
     post: Optional[PostConfig] = None      # optional
     parser: Optional[ParserConfig] = None  # optional
@@ -202,8 +313,6 @@ class ScriptConfig:
 class OutputSinkConfig:
     type: Literal["csv", "parquet", "sqlite"]
     path: str
-    mode: Literal["append", "overwrite"] = "append"
-    include: List[str] = field(default_factory=list)
     exclude: List[str] = field(default_factory=list)
     table: str = "results"  # sqlite only
 
@@ -281,8 +390,8 @@ class SectionConfig:
     best_results: bool = True
     variable_impact: bool = True
     parallel_coordinates: bool = True
-    pareto_frontier: bool = True
     bayesian_evolution: bool = True
+    bayesian_parameter_evolution: bool = False  # Disabled by default (verbose with many params)
     custom_plots: bool = True
 
 

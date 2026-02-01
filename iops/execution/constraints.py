@@ -1,9 +1,12 @@
 """Constraint evaluation for IOPS parameter combinations."""
 
-from typing import Dict, Any, List, Tuple, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Tuple, Optional, Set, TYPE_CHECKING
 from dataclasses import dataclass
 import logging
 import math
+import ast
+import os
+import re
 
 from iops.config.models import ConstraintConfig, ConfigValidationError
 
@@ -20,6 +23,78 @@ class ConstraintViolation:
     vars: Dict[str, Any]
     violation_policy: str
     message: str
+
+
+def extract_constraint_variables(rule: str) -> Set[str]:
+    """
+    Extract variable names referenced in a constraint rule.
+
+    Args:
+        rule: The constraint rule expression (Python-style)
+
+    Returns:
+        Set of variable names referenced in the rule
+    """
+    refs: Set[str] = set()
+
+    # Parse as Python expression for direct variable references
+    try:
+        tree = ast.parse(rule, mode='eval')
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                refs.add(node.id)
+    except SyntaxError:
+        # If not valid Python, try regex fallback
+        # Match word characters that look like variable names
+        refs.update(re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', rule))
+
+    # Filter out known functions/builtins
+    builtins = {
+        'min', 'max', 'abs', 'round', 'floor', 'ceil',
+        'int', 'float', 'str', 'bool',
+        'True', 'False', 'true', 'false', 'None',
+        'and', 'or', 'not', 'in',
+    }
+    return refs - builtins
+
+
+def classify_constraints(
+    constraints: List[ConstraintConfig],
+    swept_var_names: Set[str],
+    derived_var_names: Set[str],
+) -> Tuple[List[ConstraintConfig], List[ConstraintConfig]]:
+    """
+    Classify constraints into early (swept-only) and late (may use derived vars).
+
+    Early constraints can be evaluated before derived expressions are computed,
+    which prevents errors like division by zero in derived expressions when
+    the swept variable combination is invalid.
+
+    Args:
+        constraints: List of all constraints
+        swept_var_names: Names of swept variables
+        derived_var_names: Names of derived variables (have expr, no sweep)
+
+    Returns:
+        (early_constraints, late_constraints):
+            - early_constraints: Constraints that only reference swept variables
+            - late_constraints: Constraints that reference at least one derived variable
+    """
+    early_constraints = []
+    late_constraints = []
+
+    for constraint in constraints:
+        rule_vars = extract_constraint_variables(constraint.rule)
+
+        # Check if any referenced variable is derived
+        uses_derived = bool(rule_vars & derived_var_names)
+
+        if uses_derived:
+            late_constraints.append(constraint)
+        else:
+            early_constraints.append(constraint)
+
+    return early_constraints, late_constraints
 
 
 def evaluate_constraint(
@@ -55,7 +130,9 @@ def evaluate_constraint(
 
     try:
         # Evaluate the rule expression with variables in context
-        result = eval(rule, {"__builtins__": {}}, {**allowed_funcs, **instance_vars})
+        # Include os_env for environment variable access in constraints
+        eval_context = {**allowed_funcs, **instance_vars, "os_env": dict(os.environ)}
+        result = eval(rule, {"__builtins__": {}}, eval_context)
 
         # Rule should evaluate to a boolean
         if not isinstance(result, bool):

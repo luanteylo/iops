@@ -124,7 +124,6 @@ output:
   sink:
     type: csv
     path: "{{{{ workdir }}}}/results.csv"
-    mode: append
 """
 
 
@@ -260,12 +259,17 @@ class TestExhaustivePlannerWorkflow:
 
     def test_exhaustive_with_upfront_folders(self, mock_workdir, mock_config_file):
         """Test exhaustive run with create_folders_upfront enabled."""
+        # Use a constraint that references a derived variable (computed)
+        # so it's classified as a "late" constraint and creates skipped instances.
+        # Early constraints (using only swept vars) filter before instance creation.
         config_content = create_mock_config(
             workdir=str(mock_workdir),
             search_method="exhaustive",
             repetitions=1,
             create_folders_upfront=True,
-            constraints=[{"name": "limit_a", "rule": "param_a < 3", "policy": "skip"}],
+            # computed = param_a * param_b
+            # computed < 25 filters: (2,20)->40, (3,10)->30, (3,20)->60 = 3 skipped
+            constraints=[{"name": "limit_computed", "rule": "computed < 25", "policy": "skip"}],
         )
         config_file = mock_config_file(config_content)
         cfg = load_generic_config(config_file, logging.getLogger("test"))
@@ -284,23 +288,24 @@ class TestExhaustivePlannerWorkflow:
             index = json.load(f)
 
         assert index.get("folders_upfront") is True
-        assert index.get("active_tests") == 4  # param_a in [1, 2] * param_b in [10, 20]
-        assert index.get("skipped_tests") == 2  # param_a = 3 * param_b in [10, 20]
+        # Active: (1,10)->10, (1,20)->20, (2,10)->20 = 3
+        assert index.get("active_tests") == 3
+        # Skipped: (2,20)->40, (3,10)->30, (3,20)->60 = 3
+        assert index.get("skipped_tests") == 3
 
-        # Check SKIPPED status files exist
+        # Check SKIPPED marker files exist (uses __iops_skipped instead of status file)
         skipped_count = 0
         for exec_key, exec_data in index.get("executions", {}).items():
-            if exec_data.get("status") == "SKIPPED":
+            if exec_data.get("skipped") is True:
                 skipped_count += 1
                 exec_path = run_dirs[0] / exec_data["path"]
-                status_file = exec_path / "__iops_status.json"
-                assert status_file.exists()
-                with open(status_file) as f:
-                    status = json.load(f)
-                assert status["status"] == "SKIPPED"
-                assert status.get("reason") == "constraint"
+                marker_file = exec_path / "__iops_skipped"
+                assert marker_file.exists()
+                with open(marker_file) as f:
+                    marker = json.load(f)
+                assert marker.get("reason") == "constraint"
 
-        assert skipped_count == 2
+        assert skipped_count == 3
 
 
 # =============================================================================
@@ -745,7 +750,6 @@ output:
   sink:
     type: csv
     path: "{{{{ workdir }}}}/results.csv"
-    mode: append
 """
         config_file = tmp_path / "config.yaml"
         config_file.write_text(config_content)
@@ -831,7 +835,6 @@ output:
   sink:
     type: csv
     path: "{{{{ workdir }}}}/results.csv"
-    mode: append
 """
 
     def test_slurm_basic_run(self, mock_workdir, slurm_config, tmp_path):

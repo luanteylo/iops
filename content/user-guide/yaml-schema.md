@@ -17,7 +17,7 @@ title: "IOPS YAML Format Reference"
 7. [`output`](#output)
 8. [`reporting` (optional)](#reporting-optional)
 
-See also: [Jinja2 Templating](jinja2-templating.md) for dynamic values, conditionals, and expressions.
+See also: [Templating and Context Reference](../templating-and-context) for Jinja2 syntax, dynamic values, conditionals, and context variables.
 
 ---
 
@@ -27,7 +27,7 @@ See also: [Jinja2 Templating](jinja2-templating.md) for dynamic values, conditio
 benchmark:       # Global configuration (name, workdir, executor, search method)
 vars:            # Variable definitions (swept and derived)
 constraints:     # (Optional) Parameter validation rules
-command:         # Command template and metadata
+command:         # Command template and labels
 scripts:         # Execution scripts and parsers
 output:          # Output configuration (CSV, Parquet, SQLite)
 reporting:       # (Optional) Report generation settings
@@ -62,21 +62,33 @@ benchmark:
     base_estimator: string          #   "RF" | "GP" | "ET" | "GBRT" (default: "RF")
     xi: float                       #   Exploration trade-off for EI/PI (default: 0.01)
     kappa: float                    #   Exploration parameter for LCB (default: 1.96)
+    early_stop_on_convergence: bool #   Stop when optimizer converges (default: false)
+    convergence_patience: integer   #   Convergences before early stop (default: 3)
+    xi_boost_factor: float          #   xi multiplier when stuck (default: 5.0)
 
   executor: string                  # Optional: "local" | "slurm" (default: "slurm")
-  executor_options:                 # Optional: executor-specific configuration
+  slurm_options:                 # Optional: SLURM-specific configuration
     commands:                       #   SLURM command templates
       submit: string                #     Submit command (default: "sbatch")
       status: string                #     Status template (default: "squeue -j {job_id} ...")
       info: string                  #     Info template (default: "scontrol show job {job_id}")
       cancel: string                #     Cancel template (default: "scancel {job_id}")
     poll_interval: integer          #   Status polling interval in seconds (default: 30)
+    allocation:                     #   Single-allocation mode (SLURM only)
+      mode: string                  #     "single" | "per-test" (default: "per-test")
+      allocation_script: string     #     SBATCH directives for allocation (required if mode: "single")
+      test_timeout: integer         #     Per-test timeout in seconds (default: 3600)
 
   random_seed: integer              # Optional: seed for randomization (default: 42)
   cache_file: path                  # Optional: cache file location
   cache_exclude_vars: list          # Optional: vars to exclude from cache hash
-  collect_system_info: boolean      # Optional: collect system info (default: true)
-  track_executions: boolean         # Optional: write metadata files (default: true)
+
+  probes:                           # Optional: probe configuration
+    system_snapshot: boolean        #   Collect system info (default: true)
+    execution_index: boolean        #   Write metadata files (default: true)
+    resource_sampling: boolean      #   Enable resource tracing (default: false)
+    sampling_interval: float        #   Sampling interval in seconds (default: 1.0)
+
   create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
   exhaustive_vars: list             # Optional: vars to test exhaustively
   report_vars: list                 # Optional: vars to include in reports
@@ -123,7 +135,7 @@ benchmark:
 <details>
 <summary><strong>bayesian_config</strong> (required if search_method: "bayesian")</summary>
 
-Configuration for Bayesian optimization:
+Configuration for Bayesian optimization. Default values are empirically tuned: with 20 iterations (~7% of search space), Bayesian optimization achieves ~90% of optimal vs ~79% for random search.
 
 ```yaml
 benchmark:
@@ -138,15 +150,21 @@ benchmark:
     xi: 0.01                         # Exploration trade-off for EI/PI
     kappa: 1.96                      # Exploration parameter for LCB
     fallback_to_exhaustive: true     # Use exhaustive if n_iterations >= total space
+    early_stop_on_convergence: false # Stop when optimizer converges
+    convergence_patience: 3          # Convergences before early stop
+    xi_boost_factor: 5.0             # xi multiplier when stuck
 ```
 
 **Options:**
 - `fallback_to_exhaustive` (default: true): When `n_iterations >= total_space_size`, automatically switches to exhaustive search to avoid Bayesian optimization overhead for small parameter spaces.
+- `early_stop_on_convergence` (default: false): When the optimizer converges (keeps suggesting already-visited configurations), stop after `convergence_patience` consecutive convergences. When convergence is detected, `xi` is boosted by `xi_boost_factor` to encourage exploration before stopping.
+- `convergence_patience` (default: 3): Number of consecutive convergence events before early stopping. Only used when `early_stop_on_convergence: true`.
+- `xi_boost_factor` (default: 5.0): Multiplier for `xi` when convergence is detected. Helps escape local optima by encouraging more exploration.
 
 **Surrogate models:**
-- `RF`: Random Forest (default) - Best for categorical/mixed spaces
-- `GP`: Gaussian Process - Best for continuous spaces
-- `ET`: Extra Trees
+- `RF`: Random Forest (default) - Most consistent results, handles categorical/mixed spaces well
+- `ET`: Extra Trees - Similar to RF, slightly higher variance
+- `GP`: Gaussian Process - Best for continuous spaces, struggles with categoricals
 - `GBRT`: Gradient Boosted Regression Trees
 
 </details>
@@ -155,16 +173,16 @@ benchmark:
 Execution backend: `local` or `slurm`.
 
 <details>
-<summary><strong>executor_options</strong> (optional, SLURM only)</summary>
+<summary><strong>slurm_options</strong> (optional, SLURM only)</summary>
 
 Customize SLURM commands and polling behavior:
 
 ```yaml
 benchmark:
   executor: "slurm"
-  executor_options:
+  slurm_options:
     commands:
-      submit: "sbatch"
+      submit: "sbatch"                                     # Default submit command
       status: "squeue -j {job_id} --noheader --format=%T"
       info: "scontrol show job {job_id}"
       cancel: "scancel {job_id}"
@@ -173,6 +191,29 @@ benchmark:
 
 - `{job_id}` placeholder is replaced at runtime
 - Useful for systems with command wrappers or custom SLURM installations
+
+**Single-Allocation Mode:**
+
+Run all tests within ONE SLURM allocation instead of submitting individual jobs per test:
+
+```yaml
+benchmark:
+  executor: "slurm"
+  slurm_options:
+    allocation:
+      mode: "single"
+      test_timeout: 300  # 5 minutes per test (default: 3600)
+      allocation_script: |
+        #SBATCH --nodes=8
+        #SBATCH --time=02:00:00
+        #SBATCH --partition=batch
+        #SBATCH --account=myaccount
+        #SBATCH --exclusive
+```
+
+**When to use:** HPC systems with job limits, long queue wait times, or many small tests.
+
+See [Single-Allocation Mode](../single-allocation-mode) for details.
 
 </details>
 
@@ -185,11 +226,28 @@ Path to cache file. Required for `--use-cache` flag.
 #### `cache_exclude_vars` (optional)
 Variables to exclude from cache hash (e.g., path-based derived variables).
 
-#### `collect_system_info` (optional, default: true)
-Collect hardware/environment info from compute nodes.
+<details>
+<summary><strong>probes</strong> (optional)</summary>
 
-#### `track_executions` (optional, default: true)
-Write metadata files for `iops find` command.
+Configuration for IOPS probes (system monitoring and execution tracking):
+
+```yaml
+benchmark:
+  probes:
+    system_snapshot: true      # Collect system info from compute nodes
+    execution_index: true      # Write metadata files for 'iops find'
+    resource_sampling: false   # Enable CPU/memory tracing
+    sampling_interval: 1.0     # Sampling interval in seconds
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `system_snapshot` | `true` | Collect hardware/environment info from compute nodes |
+| `execution_index` | `true` | Write metadata files for `iops find` command |
+| `resource_sampling` | `false` | Enable CPU and memory tracing during execution. See [Resource Tracing](../resource-tracing) |
+| `sampling_interval` | `1.0` | Sampling interval in seconds for resource tracing |
+
+</details>
 
 #### `create_folders_upfront` (optional, default: false)
 Create all execution folders at run start instead of lazily during execution.
@@ -350,6 +408,7 @@ Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, 
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory |
+| `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
 
 </details>
 
@@ -455,7 +514,10 @@ Unique identifier for this constraint.
 #### `rule` (required)
 Python expression evaluating to `True` (valid) or `False` (invalid).
 
-Available: all variables, math functions (`min`, `max`, `abs`, `round`, `floor`, `ceil`)
+Available context:
+- All variables defined in `vars`
+- `os_env`: System environment variables (dict) - e.g., `os_env.get('MY_VAR', '')`
+- Math functions: `min`, `max`, `abs`, `round`, `floor`, `ceil`, `int`, `float`
 
 #### `violation_policy` (optional, default: "skip")
 - `skip`: Filter out invalid combinations
@@ -485,6 +547,18 @@ constraints:
   - name: "transfer_size_limit"
     rule: "transfer_size <= block_size"
     violation_policy: "skip"
+
+  # Environment variable requirement
+  - name: "require_scratch_dir"
+    rule: "os_env.get('SCRATCH', '') != ''"
+    violation_policy: "error"
+    description: "SCRATCH environment variable must be set"
+
+  # Conditional based on cluster
+  - name: "large_jobs_on_hpc"
+    rule: "nodes <= 4 or os_env.get('CLUSTER_NAME', '') == 'hpc_large'"
+    violation_policy: "skip"
+    description: "Jobs with >4 nodes only allowed on hpc_large cluster"
 ```
 
 </details>
@@ -493,12 +567,12 @@ constraints:
 
 ## `command`
 
-Defines the benchmark command template and metadata.
+Defines the benchmark command template and labels.
 
 ```yaml
 command:
   template: string              # Required: command template (Jinja2)
-  metadata:                     # Optional: arbitrary metadata
+  labels:                       # Optional: user-defined labels
     key: value
 ```
 
@@ -513,12 +587,14 @@ command:
     -o {{ output_path }}/data.ior
 ```
 
-#### `metadata` (optional)
-Key-value metadata stored with results. Appears as `metadata.*` columns.
+#### `labels` (optional)
+User-defined key-value labels stored with results. Appears as `labels.*` columns in output.
+
+Note: `metadata.*` is reserved for IOPS internal fields (executor status, timing, errors).
 
 ```yaml
 command:
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
@@ -533,7 +609,6 @@ Defines execution scripts, submission commands, and result parsers.
 ```yaml
 scripts:
   - name: string                    # Required: script identifier
-    submit: string                  # Required: "bash" | "sbatch"
     script_template: |              # Required: script content (Jinja2)
       #!/bin/bash
       ...
@@ -557,10 +632,6 @@ scripts:
 #### `name` (required)
 Script identifier. Used for file naming.
 
-#### `submit` (required)
-- **Local executor**: `bash` or `sh`
-- **SLURM executor**: `sbatch`
-
 #### `script_template` (required)
 Script content as Jinja2 template. Use `{{ command.template }}` to include the command.
 
@@ -570,7 +641,6 @@ Script content as Jinja2 template. Use `{{ command.template }}` to include the c
 ```yaml
 scripts:
   - name: "ior"
-    submit: "bash"
     script_template: |
       #!/bin/bash
       set -euo pipefail
@@ -587,7 +657,6 @@ scripts:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       #!/bin/bash
       #SBATCH --job-name=iops_{{ execution_id }}
@@ -610,7 +679,6 @@ Post-processing script executed after main script completes:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       ...
 
@@ -632,7 +700,6 @@ Defines how to extract metrics from benchmark output:
 ```yaml
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: |
       ...
 
@@ -673,13 +740,8 @@ Defines where and how to store execution results.
 output:
   sink:
     type: string              # Required: "csv" | "parquet" | "sqlite"
-    path: string              # Required: output file path (Jinja2)
-    mode: string              # Optional: "append" | "overwrite" (default: append)
-    include:                  # Optional: fields to include (mutually exclusive with exclude)
-      - "execution.*"
-      - "vars.*"
-      - "metrics.*"
-    exclude:                  # Optional: fields to exclude (mutually exclusive with include)
+    path: string              # Optional: output file path (Jinja2), has sensible defaults
+    exclude:                  # Optional: fields to exclude from output
       - "benchmark.description"
     table: string             # Optional: table name for SQLite (default: "results")
 ```
@@ -687,22 +749,27 @@ output:
 #### `type` (required)
 Output format: `csv`, `parquet`, or `sqlite`.
 
-#### `path` (required)
-Output file path. Can use templates.
+#### `path` (optional)
+Output file path. Can use Jinja2 templates.
 
-#### `mode` (optional, default: "append")
-Write mode: `append` or `overwrite`.
+**Defaults by type:**
+- `csv` → `{{ workdir }}/results.csv`
+- `parquet` → `{{ workdir }}/results.parquet`
+- `sqlite` → `{{ workdir }}/results.db`
 
-#### `include` / `exclude` (optional)
-Field filtering using dot notation. Mutually exclusive.
+#### `exclude` (optional)
+Exclude specific fields from output using dot notation. Wildcards are supported.
 
 | Prefix | Fields |
 |--------|--------|
-| `benchmark.*` | `name`, `description`, `workdir` |
-| `execution.*` | `execution_id`, `repetition`, `execution_dir` |
+| `benchmark.*` | `name`, `description` |
+| `execution.*` | `repetitions`, `workdir`, `execution_dir` (note: `execution_id` and `repetition` are protected) |
 | `vars.*` | All variable names |
-| `metadata.*` | All command metadata keys |
+| `labels.*` | All user-defined labels from `command.labels` |
+| `metadata.*` | IOPS internal fields (executor_status, start, end, error, jobid) |
 | `metrics.*` | All parser metric names |
+
+**Protected fields:** `execution.execution_id` and `execution.repetition` cannot be excluded as they are required for identifying results.
 
 #### `table` (optional, SQLite only)
 Table name (default: "results").
@@ -711,14 +778,18 @@ Table name (default: "results").
 <summary><strong>Examples</strong></summary>
 
 ```yaml
-# CSV with exclusions
+# CSV with default path ({{ workdir }}/results.csv)
 output:
   sink:
     type: csv
-    path: "{{ workdir }}/results.csv"
-    mode: append
     exclude:
       - "benchmark.description"
+
+# CSV with custom path
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/custom_results.csv"
 ```
 
 </details>
@@ -740,14 +811,14 @@ reporting:
     colors: list                #   Custom color palette (hex codes)
     font_family: string         #   Font family
 
-  sections:                     # Optional: section visibility (all true by default)
-    test_summary: boolean
-    best_results: boolean
-    variable_impact: boolean
-    parallel_coordinates: boolean
-    pareto_frontier: boolean
-    bayesian_evolution: boolean
-    custom_plots: boolean
+  sections:                     # Optional: section visibility
+    test_summary: boolean       #   (default: true)
+    best_results: boolean       #   (default: true)
+    variable_impact: boolean    #   (default: true)
+    parallel_coordinates: boolean #   (default: true)
+    bayesian_evolution: boolean #   (default: true)
+    bayesian_parameter_evolution: boolean #   (default: false)
+    custom_plots: boolean       #   (default: true)
 
   best_results:                 # Optional: best results configuration
     top_n: integer              #   Number of top configs (default: 5)
@@ -810,8 +881,8 @@ reporting:
     best_results: true         # Top N configurations
     variable_impact: true      # Variance-based importance
     parallel_coordinates: true # Multi-dimensional visualization
-    pareto_frontier: true      # Multi-objective analysis
-    bayesian_evolution: false  # Optimization progress (Bayesian only)
+    bayesian_evolution: true   # Optimization progress (Bayesian only)
+    bayesian_parameter_evolution: false  # Parameter exploration (default: false)
     custom_plots: true         # User-defined plots
 ```
 

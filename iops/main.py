@@ -4,7 +4,7 @@ from pathlib import Path
 
 from iops.logger import setup_logger
 from iops.execution.runner import IOPSRunner
-from iops.config.loader import load_generic_config, validate_generic_config, check_system_probe_compatibility
+from iops.config.loader import load_generic_config, validate_generic_config, check_system_probe_compatibility, check_resource_sampler_compatibility
 from iops.config.models import ConfigValidationError, GenericBenchmarkConfig
 from iops.execution.matrix import build_execution_matrix
 from iops.results.find import find_executions
@@ -50,7 +50,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -77,6 +77,10 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser):
                         raise ValueError
                 except ValueError:
                     parser.error(f"Invalid --time-estimate value: '{part}' (expected positive number)")
+
+        # --cache-only implies --use-cache
+        if getattr(args, 'cache_only', False):
+            args.use_cache = True
 
 def parse_arguments():
     _preprocess_args()
@@ -112,6 +116,12 @@ Examples:
                             help="Maximum CPU core-hours budget for execution")
     run_parser.add_argument('--time-estimate', type=str, default=None, metavar='SEC',
                             help="Estimated time per test (e.g., '120' or '60,120,300')")
+    run_parser.add_argument('--cache-only', action='store_true',
+                            help="Only use cached results; skip tests not in cache (requires cache_file)")
+    run_parser.add_argument('--fail-fast', action='store_true',
+                            help="Stop execution on first test failure")
+    run_parser.add_argument('--meline', action='store_true',
+                            help=argparse.SUPPRESS)  # Easter egg: hide banner
     _add_common_args(run_parser)
 
     # ---- find command ----
@@ -146,6 +156,11 @@ Examples:
     report_parser.add_argument('path', type=Path, help="Path to the run directory (e.g., ./workdir/run_001)")
     report_parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
                                help="Custom report config YAML (auto-detects report_config.yaml in workdir)")
+    report_parser.add_argument('--export-plots', action='store_true',
+                               help="Export plots as image files to __iops_plots folder")
+    report_parser.add_argument('--plot-format', type=str, default='pdf',
+                               choices=['pdf', 'png', 'svg', 'jpg', 'webp'],
+                               help="Image format for exported plots (default: pdf)")
     _add_common_args(report_parser)
 
     # ---- generate command ----
@@ -157,9 +172,9 @@ Examples:
     # Executor type (mutually exclusive)
     executor_group = generate_parser.add_mutually_exclusive_group()
     executor_group.add_argument('--local', action='store_true', dest='executor_local',
-                                help="Generate template for local execution (default)")
+                                help="Generate template for local execution")
     executor_group.add_argument('--slurm', action='store_true', dest='executor_slurm',
-                                help="Generate template for SLURM cluster execution")
+                                help="Generate template for SLURM cluster execution (default)")
 
     # Benchmark type (mutually exclusive)
     benchmark_group = generate_parser.add_mutually_exclusive_group()
@@ -194,12 +209,22 @@ Examples:
     archive_create_parser = archive_subparsers.add_parser('create', help='Create archive from workdir or run',
                                                            description='Create a compressed archive from an IOPS run or workdir.')
     archive_create_parser.add_argument('source', type=Path, help='Path to workdir or run directory')
+    archive_create_parser.add_argument('filter', type=str, nargs='*', metavar='VAR=VALUE',
+                                       help='Filter by variable values (e.g., nodes=4)')
     archive_create_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
                                        help='Output archive path (default: <source>.tar.gz)')
     archive_create_parser.add_argument('--compression', choices=['gz', 'bz2', 'xz', 'none'],
                                        default='gz', help='Compression format (default: gz)')
     archive_create_parser.add_argument('--no-progress', action='store_true',
                                        help='Disable progress bar')
+    archive_create_parser.add_argument('--partial', action='store_true',
+                                       help='Create partial archive with only filtered executions')
+    archive_create_parser.add_argument('--status', type=str, default=None, metavar='STATUS',
+                                       help='Filter by execution status (SUCCEEDED, FAILED, etc.)')
+    archive_create_parser.add_argument('--cached', type=str, choices=['yes', 'no'], default=None,
+                                       help='Filter by cache status')
+    archive_create_parser.add_argument('--min-reps', type=int, default=None, metavar='N',
+                                       help='Include executions with at least N completed repetitions')
     _add_common_args(archive_create_parser)
 
     # archive extract
@@ -213,6 +238,22 @@ Examples:
     archive_extract_parser.add_argument('--no-progress', action='store_true',
                                         help='Disable progress bar')
     _add_common_args(archive_extract_parser)
+
+    # ---- cache command with subcommands ----
+    cache_parser = subparsers.add_parser('cache', help='Cache management commands',
+                                          description='Manage IOPS execution cache.')
+    cache_subparsers = cache_parser.add_subparsers(dest='cache_command', title='cache commands',
+                                                    metavar='<cache-command>')
+
+    # cache rebuild
+    cache_rebuild_parser = cache_subparsers.add_parser('rebuild', help='Rebuild cache with different excluded variables',
+                                                        description='Rebuild a cache database excluding additional variables from the hash.')
+    cache_rebuild_parser.add_argument('source', type=Path, help='Path to source cache database')
+    cache_rebuild_parser.add_argument('--exclude', type=str, required=True, metavar='VAR1,VAR2',
+                                      help='Comma-separated list of variables to exclude from hash')
+    cache_rebuild_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                      help='Output database path (default: <source>_rebuilt.db)')
+    _add_common_args(cache_rebuild_parser)
 
     args = parser.parse_args()
 
@@ -259,16 +300,18 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
 
     sep = "=" * 80
 
-    logger.info("")
-    for line in banner.strip("\n").splitlines():
-        logger.info(line)
+    # Easter egg: --meline hides the banner
+    if not getattr(args, 'meline', False):
+        logger.info("")
+        for line in banner.strip("\n").splitlines():
+            logger.info(line)
 
-    logger.info("")
-    logger.info("  IOPS")
-    logger.info(f"  Version: {IOPS_VERSION}")
-    logger.info(f"  Config File: {args.config_file}")    
-    logger.info("")
-    logger.info(sep)
+        logger.info("")
+        logger.info("  IOPS")
+        logger.info(f"  Version: {IOPS_VERSION}")
+        logger.info(f"  Config File: {args.config_file}")
+        logger.info("")
+        logger.info(sep)
     logger.debug("Execution Context")
     logger.debug(sep)
 
@@ -304,22 +347,18 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug("Variables (vars)")
     logger.debug(sub)
 
+    swept_vars = []
+    derived_vars = []
     for name, var in cfg.vars.items():
-        logger.debug(f"  - {name}")
-        logger.debug(f"      type : {var.type}")
-
         if var.sweep:
-            logger.debug("      sweep:")
-            logger.debug(f"        mode : {var.sweep.mode}")
-            if var.sweep.mode == "range":
-                logger.debug(f"        start: {var.sweep.start}")
-                logger.debug(f"        end  : {var.sweep.end}")
-                logger.debug(f"        step : {var.sweep.step}")
-            elif var.sweep.mode == "list":
-                logger.debug(f"        values: {var.sweep.values}")
+            swept_vars.append(name)
+        elif var.expr:
+            derived_vars.append(name)
 
-        if var.expr:
-            logger.debug(f"      expr : {var.expr}")
+    if swept_vars:
+        logger.debug(f"  Swept: {', '.join(swept_vars)}")
+    if derived_vars:
+        logger.debug(f"  Derived: {', '.join(derived_vars)}")
 
     # ------------------------------------------------------------------
     # Exhaustive vars (if specified)
@@ -335,13 +374,12 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(sub)
     logger.debug("Command")
     logger.debug(sub)
-    logger.debug("  Template:")
-    logger.debug("  " + cfg.command.template.replace("\n", "\n  "))
-
-    if cfg.command.metadata:
-        logger.debug("  Metadata:")
-        for k, v in cfg.command.metadata.items():
-            logger.debug(f"    {k}: {v}")
+    cmd_lines = cfg.command.template.strip().split('\n')
+    logger.debug(f"  Template: {len(cmd_lines)} lines")
+    if cfg.command.env:
+        logger.debug(f"  Environment: {len(cfg.command.env)} variables")
+    if cfg.command.labels:
+        logger.debug(f"  Labels: {len(cfg.command.labels)} defined")
 
     # ------------------------------------------------------------------
     logger.debug(sub)
@@ -349,35 +387,16 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     logger.debug(sub)
 
     for i, script in enumerate(cfg.scripts, start=1):
-        logger.debug(f"  Script #{i}: {script.name}")
-        logger.debug(f"    Submit : {script.submit}")
-
-        logger.debug("    Script template:")
-        logger.debug("    " + script.script_template.replace("\n", "\n    "))
+        script_lines = script.script_template.strip().split('\n')
+        logger.debug(f"  Script #{i}: {script.name} ({len(script_lines)} lines)")
 
         if script.post:
-            logger.debug("    Post-processing script:")
-            logger.debug("    " + script.post.script.replace("\n", "\n    "))
+            post_lines = script.post.script.strip().split('\n')
+            logger.debug(f"    Post-script: {len(post_lines)} lines")
 
         if script.parser:
-            logger.debug("    Parser:")
-            logger.debug(f"      File : {script.parser.file}")
-            logger.debug(f"      metrics: {[m.name for m in script.parser.metrics]}")
-            logger.debug(f"      script: {script.parser.parser_script}")
-
-            if script.parser.metrics:
-                logger.debug("      Metrics:")
-                for m in script.parser.metrics:
-                    logger.debug(f"        - {m.name}")
-                    if m.path:
-                        logger.debug(f"            path: {m.path}")
-
-            if script.parser.parser_script:
-                logger.debug("      Custom parser script:")
-                logger.debug(
-                    "      "
-                    + script.parser.parser_script.replace("\n", "\n      ")
-                )
+            logger.debug(f"    Parser: file={script.parser.file}")
+            logger.debug(f"    Metrics: {[m.name for m in script.parser.metrics]}")
 
     # ------------------------------------------------------------------    
     logger.debug(sub)
@@ -387,18 +406,12 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
     sink = cfg.output.sink
     logger.debug(f"  Type : {sink.type}")
     logger.debug(f"  Path : {sink.path}")
-    logger.debug(f"  Mode : {sink.mode}")
 
     if sink.type == "sqlite":
         logger.debug(f"  Table: {sink.table}")
 
     # Field selection policy
-    if sink.include:
-        logger.debug("  Selection: include-only (only these fields will be saved)")
-        logger.debug("  Include:")
-        for field in sink.include:
-            logger.debug(f"    - {field}")
-    elif sink.exclude:
+    if sink.exclude:
         logger.debug("  Selection: exclude (all fields will be saved except these)")
         logger.debug("  Exclude:")
         for field in sink.exclude:
@@ -418,8 +431,8 @@ def main():
         from iops.setup import BenchmarkWizard
 
         try:
-            # Determine executor (default: local)
-            executor = "slurm" if args.executor_slurm else "local"
+            # Determine executor (default: slurm)
+            executor = "local" if args.executor_local else "slurm"
 
             # Determine benchmark (default: ior)
             benchmark = "mdtest" if args.benchmark_mdtest else "ior"
@@ -433,12 +446,7 @@ def main():
                 full_template=args.full,
                 copy_examples=args.examples
             )
-
-            if output_file:
-                logger.info(f"Configuration template generated successfully: {output_file}")
-            else:
-                logger.info("Template generation cancelled")
-
+            
         except KeyboardInterrupt:
             logger.info("\n\nTemplate generation cancelled by user")
         except Exception as e:
@@ -522,7 +530,12 @@ def main():
                 return
 
         try:
-            report_path = generate_report_from_workdir(args.path, report_config=report_config)
+            report_path = generate_report_from_workdir(
+                args.path,
+                report_config=report_config,
+                export_plots=args.export_plots,
+                plot_format=args.plot_format
+            )
             logger.info(f"✓ Report generated: {report_path}")
             logger.info("=" * 70)
         except Exception as e:
@@ -551,15 +564,45 @@ def main():
 
         if args.archive_command == 'create':
             try:
+                # Parse parameter filters from VAR=VALUE arguments
+                param_filters = {}
+                if hasattr(args, 'filter') and args.filter:
+                    for f in args.filter:
+                        if '=' in f:
+                            key, value = f.split('=', 1)
+                            param_filters[key] = value
+                        else:
+                            logger.warning(f"Ignoring invalid filter (expected VAR=VALUE): {f}")
+
+                # Parse cached filter
+                cached_filter = None
+                if args.cached:
+                    cached_filter = args.cached == 'yes'
+
+                # --min-reps implies --partial
+                min_reps = getattr(args, 'min_reps', None)
+                is_partial = args.partial or min_reps is not None
+
                 # Determine output path
                 if args.output:
                     output_path = args.output
                 else:
                     ext = COMPRESSION_EXTENSIONS.get(args.compression, ".tar.gz")
-                    output_path = Path(f"{args.source.name}{ext}")
+                    # Add -partial suffix for partial archives
+                    suffix = "-partial" if is_partial else ""
+                    output_path = Path(f"{args.source.name}{suffix}{ext}")
 
-                archive_path = create_archive(args.source, output_path, args.compression,
-                                              show_progress=not args.no_progress)
+                archive_path = create_archive(
+                    args.source,
+                    output_path,
+                    args.compression,
+                    show_progress=not args.no_progress,
+                    partial=is_partial,
+                    status_filter=args.status,
+                    cached_filter=cached_filter,
+                    param_filters=param_filters if param_filters else None,
+                    min_completed_reps=min_reps,
+                )
                 logger.info(f"Archive created: {archive_path}")
             except FileNotFoundError as e:
                 logger.error(f"Source not found: {e}")
@@ -601,6 +644,56 @@ def main():
             logger.info("Run 'iops archive --help' for more information.")
             return
 
+    # ---- cache command ----
+    if args.command == 'cache':
+        from iops.cache import rebuild_cache
+
+        if args.cache_command == 'rebuild':
+            try:
+                # Parse exclude vars
+                exclude_vars = [v.strip() for v in args.exclude.split(',') if v.strip()]
+                if not exclude_vars:
+                    logger.error("No variables specified in --exclude")
+                    return
+
+                # Determine output path
+                if args.output:
+                    output_path = args.output
+                else:
+                    source_stem = args.source.stem
+                    output_path = args.source.parent / f"{source_stem}_rebuilt.db"
+
+                stats = rebuild_cache(
+                    source_db=args.source,
+                    output_db=output_path,
+                    exclude_vars=exclude_vars,
+                    logger=logger,
+                )
+
+                logger.info("")
+                logger.info(stats.summary())
+                logger.info(f"Rebuilt cache saved to: {output_path}")
+
+            except FileNotFoundError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error rebuilding cache: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        else:
+            # No subcommand provided
+            logger.error("No cache subcommand specified. Use 'iops cache rebuild'.")
+            logger.info("Run 'iops cache --help' for more information.")
+            return
+
     # ---- run command ----
     if args.command == 'run':
         try:
@@ -616,10 +709,18 @@ def main():
                 raise
             return
 
+        # Validate --cache-only requires cache_file to be configured
+        if getattr(args, 'cache_only', False) and not cfg.benchmark.cache_file:
+            logger.error("--cache-only requires benchmark.cache_file to be configured in the YAML file")
+            return
+
         log_execution_context(cfg, args, logger)
 
         # Check system probe compatibility (warns and disables if non-bash shell detected)
         check_system_probe_compatibility(cfg, logger)
+
+        # Check resource sampler compatibility (warns and disables if non-bash shell detected)
+        check_resource_sampler_compatibility(cfg, logger)
 
         runner = IOPSRunner(cfg=cfg, args=args)
 

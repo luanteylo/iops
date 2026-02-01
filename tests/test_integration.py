@@ -36,12 +36,11 @@ def simple_integration_config(tmp_path):
         },
         "command": {
             "template": "echo 'size={{ size }}'",
-            "metadata": {"operation": "test"}
+            "labels": {"operation": "test"}
         },
         "scripts": [
             {
                 "name": "simple_test",
-                "submit": "bash",
                 "script_template": (
                     "#!/bin/bash\n"
                     "SIZE={{ size }}\n"
@@ -66,8 +65,7 @@ def simple_integration_config(tmp_path):
         "output": {
             "sink": {
                 "type": "csv",
-                "path": str(workdir / "results.csv"),
-                "mode": "append"
+                "path": str(workdir / "results.csv")
             }
         }
     }
@@ -90,6 +88,7 @@ def test_end_to_end_execution(simple_integration_config):
     # Create mock args
     args = Mock()
     args.use_cache = False
+    args.cache_only = False
     args.log_level = "INFO"
     args.max_core_hours = None
 
@@ -126,6 +125,7 @@ def test_integration_with_cache(simple_integration_config, tmp_path):
     # First run
     args = Mock()
     args.use_cache = False
+    args.cache_only = False
     args.log_level = "INFO"
     args.max_core_hours = None
 
@@ -164,12 +164,11 @@ def test_integration_with_post_script(tmp_path):
         },
         "command": {
             "template": "echo 'value={{ value }}'",
-            "metadata": {"operation": "test"}
+            "labels": {"operation": "test"}
         },
         "scripts": [
             {
                 "name": "with_post",
-                "submit": "bash",
                 "script_template": (
                     "#!/bin/bash\n"
                     "echo \"raw: {{ value }}\" > {{ execution_dir }}/raw.txt\n"
@@ -197,8 +196,7 @@ def test_integration_with_post_script(tmp_path):
         "output": {
             "sink": {
                 "type": "csv",
-                "path": str(workdir / "results.csv"),
-                "mode": "overwrite"
+                "path": str(workdir / "results.csv")
             }
         }
     }
@@ -211,6 +209,7 @@ def test_integration_with_post_script(tmp_path):
 
     args = Mock()
     args.use_cache = False
+    args.cache_only = False
     args.log_level = "INFO"
     args.max_core_hours = None
 

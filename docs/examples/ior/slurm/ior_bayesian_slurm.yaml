@@ -37,7 +37,7 @@ benchmark:
   # Execution settings
   repetitions: 3                      # Repetitions per configuration for robust estimates
   executor: "slurm"                   # SLURM cluster execution
-  # executor_options:                 # Optional: customize SLURM commands (useful for wrapper systems)
+  # slurm_options:                 # Optional: customize SLURM commands (useful for wrapper systems)
   #   commands:
   #     submit: "sbatch"                                     # default: sbatch (can be overridden per-script)
   #     status: "squeue -j {job_id} --noheader --format=%T" # default (use {job_id} placeholder)
@@ -120,7 +120,7 @@ command:
     -O summaryFile={{summary_file}} -O summaryFormat=JSON
     -o {{ost_count}}/output.ior
 
-  metadata:
+  labels:
     operation: "write"
     io_engine: "MPI-IO"
     access_pattern: "contiguous"
@@ -132,7 +132,6 @@ command:
 
 scripts:
   - name: "ior"
-    submit: "sbatch"
     script_template: ../scripts/ior_slurm.sh
     # Parser: Extract metrics from IOR JSON output
     parser:
@@ -149,7 +148,6 @@ output:
   sink:
     type: "csv"
     path: "{{ workdir }}/results_bayesian.csv"
-    mode: "append"
     exclude: ["benchmark.name", "benchmark.description"]
 
 # =============================================================================

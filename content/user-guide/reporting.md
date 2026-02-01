@@ -6,6 +6,21 @@ IOPS includes a comprehensive reporting system that generates interactive HTML r
 
 ---
 
+## Table of Contents
+
+1. [Introduction](#introduction)
+2. [Basic Usage](#basic-usage)
+3. [Report Sections](#report-sections)
+4. [Controlling Sections](#controlling-sections)
+5. [Custom Plots](#custom-plots)
+6. [Default Plots](#default-plots)
+7. [Themes and Styling](#themes-and-styling)
+8. [Plot Sizing and Defaults](#plot-sizing-and-defaults)
+9. [Output Configuration](#output-configuration)
+10. [Examples](#examples)
+
+---
+
 ## Introduction
 
 The reporting feature allows you to:
@@ -15,8 +30,9 @@ The reporting feature allows you to:
 - **Customize themes** and styling to match your preferences
 - **Control report sections** to include only relevant analyses
 - **Regenerate reports** with different configurations without re-running benchmarks
+- **Export plots as PDF** for publications and presentations (optional, requires kaleido)
 
-Reports are generated as self-contained HTML files with embedded interactive Plotly visualizations.
+Reports are generated as self-contained HTML files with embedded interactive Plotly visualizations. Optionally, all plots can be exported as PDF files for use in external documents.
 
 ---
 
@@ -128,16 +144,6 @@ Multi-dimensional visualization showing relationships between all variables and 
 
 **When to use**: Understanding complex relationships in multi-variable optimization.
 
-### Pareto Frontier
-
-Multi-objective optimization analysis (shown when 2+ metrics are present):
-
-- Identifies non-dominated configurations
-- Visualizes trade-offs between competing metrics
-- Highlights optimal configurations for different objectives
-
-**When to use**: Benchmarks with multiple conflicting metrics (e.g., bandwidth vs latency).
-
 ### Bayesian Evolution
 
 Shows optimization progress over iterations (Bayesian search only):
@@ -147,6 +153,15 @@ Shows optimization progress over iterations (Bayesian search only):
 - Tracks improvement over time
 
 **When to use**: Only relevant when using `search_method: "bayesian"`.
+
+### Bayesian Parameter Evolution
+
+Shows which parameter values were explored at each iteration, with colors indicating the metric value achieved.
+
+- Disabled by default (can be verbose with many parameters)
+- Enable with `bayesian_parameter_evolution: true` in the `sections` config
+
+**When to use**: When you want detailed visualization of parameter exploration patterns.
 
 ### Custom Plots
 
@@ -165,8 +180,8 @@ reporting:
     best_results: true           # Top configurations
     variable_impact: true        # Variance analysis
     parallel_coordinates: true   # Multi-dimensional plot
-    pareto_frontier: true        # Multi-objective analysis
-    bayesian_evolution: false    # Skip (not using Bayesian)
+    bayesian_evolution: true     # Optimization progress (Bayesian only)
+    bayesian_parameter_evolution: false  # Parameter exploration (default: false)
     custom_plots: true           # User-defined plots
 ```
 
@@ -569,6 +584,55 @@ reporting:
 
 **Default behavior**: If `output_dir` is not specified, reports are saved to the run's workdir (e.g., `/workdir/run_001/analysis_report.html`).
 
+### Plot Export (Optional)
+
+IOPS can export all plots as image files for use in publications, presentations, or external documents. This feature requires the `kaleido` package and is enabled via CLI options.
+
+**Installation:**
+
+```bash
+pip install iops-benchmark[plots]
+```
+
+**Usage:**
+
+```bash
+# Export plots as PDF (default format)
+iops report ./workdir/run_001 --export-plots
+
+# Export plots as PNG
+iops report ./workdir/run_001 --export-plots --plot-format png
+
+# Export plots as SVG (vector format, editable)
+iops report ./workdir/run_001 --export-plots --plot-format svg
+```
+
+**Supported formats:**
+
+| Format | Extension | Type | Best For |
+|--------|-----------|------|----------|
+| `pdf` | .pdf | Vector | Publications, LaTeX documents |
+| `png` | .png | Raster | Web, presentations, general use |
+| `svg` | .svg | Vector | Editable in Inkscape, Illustrator |
+| `jpg` | .jpg | Raster | Smaller file size (lossy) |
+| `webp` | .webp | Raster | Modern web format, good compression |
+
+**Output structure:**
+
+```
+workdir/run_001/
+├── analysis_report.html
+└── __iops_plots/
+    ├── 001_test_summary.pdf
+    ├── 002_best_configurations_bandwidth.pdf
+    ├── 003_bayesian_evolution_bandwidth.pdf
+    └── ...
+```
+
+Files are numbered in the order they appear in the report, with descriptive names based on the plot type and metric.
+
+**Note:** Plot export is opt-in. Without the `--export-plots` flag, only the HTML report is generated. If `kaleido` is not installed and `--export-plots` is used, a warning is displayed.
+
 ---
 
 ##  Examples
@@ -599,7 +663,6 @@ reporting:
     best_results: true
     variable_impact: true
     parallel_coordinates: true
-    pareto_frontier: true
     bayesian_evolution: false      # Not using Bayesian search
     custom_plots: true
 
