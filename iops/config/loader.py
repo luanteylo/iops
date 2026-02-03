@@ -1598,7 +1598,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if not cfg.vars:
         raise ConfigValidationError("At least one variable must be defined in 'vars'")
 
-    valid_var_types = ("int", "float", "str", "bool")
+    valid_var_types = ("int", "float", "str", "bool", "list")
     for name, v in cfg.vars.items():
         # Validate var type
         if v.type not in valid_var_types:
