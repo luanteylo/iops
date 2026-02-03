@@ -70,6 +70,8 @@ def _cast_value(type_name: str, value: Any) -> Any:
             if lv in {"false", "no", "0"}:
                 return False
         return bool(value)
+    if type_name == "list":
+        return list(value)
 
     # unknown type, just return
     return value
