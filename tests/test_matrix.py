@@ -487,3 +487,70 @@ def test_conditional_backward_compatibility(tmp_path, sample_config_dict):
     combos = {(t.vars["nodes"], t.vars["extra"]) for t in matrix}
     expected = {(1, 10), (1, 20), (2, 10), (2, 20)}
     assert combos == expected
+
+
+def test_list_type_variable(tmp_path, sample_config_dict):
+    """Test that list type variables work correctly."""
+    import yaml
+
+    sample_config_dict["vars"] = {
+        "index": {
+            "type": "int",
+            "sweep": {"mode": "list", "values": [0, 1, 2]}
+        },
+        "values": {
+            "type": "list",
+            "expr": "[10, 20, 30]"
+        },
+    }
+
+    config_file = tmp_path / "list_type.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    matrix, _ = build_execution_matrix(config)
+
+    # Should have 3 executions (one for each index)
+    assert len(matrix) == 3
+
+    # Verify list variable is correctly evaluated
+    for test in matrix:
+        assert isinstance(test.vars["values"], list)
+        assert test.vars["values"] == [10, 20, 30]
+
+
+def test_list_type_indexed_access_in_template(tmp_path, sample_config_dict):
+    """Test that list variables can be indexed in command templates."""
+    import yaml
+
+    sample_config_dict["vars"] = {
+        "idx": {
+            "type": "int",
+            "sweep": {"mode": "list", "values": [0, 1, 2]}
+        },
+        "block_sizes": {
+            "type": "list",
+            "expr": "[64, 128, 256]"
+        },
+        "thread_counts": {
+            "type": "list",
+            "expr": "[1, 2, 4]"
+        },
+    }
+    sample_config_dict["command"]["template"] = "cmd --bs {{ block_sizes[idx] }} --threads {{ thread_counts[idx] }}"
+
+    config_file = tmp_path / "list_indexed.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    matrix, _ = build_execution_matrix(config)
+
+    assert len(matrix) == 3
+
+    # Verify list variables are available for indexing
+    for test in matrix:
+        idx = test.vars["idx"]
+        assert test.vars["block_sizes"][idx] == [64, 128, 256][idx]
+        assert test.vars["thread_counts"][idx] == [1, 2, 4][idx]

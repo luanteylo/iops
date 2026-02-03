@@ -7,6 +7,7 @@ All notable changes to IOPS are documented here.
 ## [3.5.1] - Unreleased
 
 ### Added
+- `list` variable type for indexed access to correlated parameter arrays
 - `--add VAR[:TYPE]=VALUE` option for `iops cache rebuild` to add typed variables to all cache entries
 
 ## [3.5.0] - 2026-02-01

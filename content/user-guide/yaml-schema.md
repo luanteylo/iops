@@ -289,7 +289,7 @@ Defines the parameter space (swept variables) and computed values (derived varia
 vars:
   # Swept variable (list mode)
   variable_name:
-    type: string                # Required: "int" | "float" | "str" | "bool"
+    type: string                # Required: "int" | "float" | "str" | "bool" | "list"
     sweep:
       mode: list
       values: [1, 2, 4, 8]
@@ -319,7 +319,9 @@ vars:
 ```
 
 #### `type` (required)
-Data type: `int`, `float`, `str`, or `bool`.
+Data type: `int`, `float`, `str`, `bool`, or `list`.
+
+The `list` type is used for derived variables that hold arrays, enabling indexed access in templates. See [Templating Guide](../templating-and-context#list-variables-for-correlated-parameters) for examples.
 
 #### `sweep` (for swept variables)
 Defines values to sweep. Creates executions via Cartesian product. Mutually exclusive with `expr`.

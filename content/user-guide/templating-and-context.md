@@ -723,6 +723,47 @@ vars:
     expr: "{% if os_env.CLUSTER_NAME == 'hpc1' %}batch{% else %}default{% endif %}"
 ```
 
+#### List variables for correlated parameters
+
+The `list` type allows defining arrays that can be indexed in templates. This is useful when you have multiple parameters that must change together (correlated parameters).
+
+**Use case**: You want to sweep over simulation configurations where grid size and time steps are paired, not all combinations.
+
+```yaml
+vars:
+  # Sweep over an index
+  config_index:
+    type: int
+    sweep:
+      mode: list
+      values: [0, 1, 2, 3, 4]
+
+  # Define correlated parameter lists
+  grid_sizes:
+    type: list
+    expr: "[100, 200, 400, 800, 1600]"
+
+  time_steps:
+    type: list
+    expr: "[1000, 2000, 4000, 8000, 16000]"
+
+command:
+  template: >
+    simulation --grid {{ grid_sizes[config_index] }}
+               --steps {{ time_steps[config_index] }}
+```
+
+This creates **5 executions** with correlated parameters:
+| `config_index` | `grid_sizes[...]` | `time_steps[...]` |
+|----------------|-------------------|-------------------|
+| 0 | 100 | 1000 |
+| 1 | 200 | 2000 |
+| 2 | 400 | 4000 |
+| 3 | 800 | 8000 |
+| 4 | 1600 | 16000 |
+
+Without list variables, sweeping `grid_size: [100, 200, 400, 800, 1600]` and `time_steps: [1000, 2000, 4000, 8000, 16000]` would create **25 executions** (all combinations).
+
 ---
 
 ### `output.sink.path`

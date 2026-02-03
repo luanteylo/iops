@@ -49,7 +49,7 @@ def _render_template(template: str, context: Dict[str, Any]) -> str:
 def _cast_value(type_name: str, value: Any) -> Any:
     """
     Cast a value according to the var 'type' in YAML.
-    Supported types: int, float, str, bool.
+    Supported types: int, float, str, bool, list.
     Fallback: return as-is.
     """
     if value is None:

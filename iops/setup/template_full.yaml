@@ -270,7 +270,7 @@ benchmark:
 # =============================================================================
 # Define parameters that will be swept or computed during execution.
 # Each variable has:
-#   - type: int | float | str | bool
+#   - type: int | float | str | bool | list
 #   - sweep: defines how values vary (for swept variables)
 #   - expr: computation from other variables (for derived variables)
 #
