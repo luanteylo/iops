@@ -211,23 +211,46 @@ cache.clear_cache()
 
 ## Rebuilding the Cache
 
-Sometimes you discover after a long campaign of executions that a variable should have been excluded from the cache hash. For example, a path-based variable was included, causing every execution to have a unique hash even when the benchmark parameters were identical.
-
-The `iops cache rebuild` command allows you to create a new cache database with different excluded variables, consolidating entries that now hash to the same value.
+The `iops cache rebuild` command allows you to modify an existing cache database by:
+- **Excluding variables** from the hash (consolidating entries that now hash to the same value)
+- **Adding variables** with constant values to all entries (enabling cache reuse after config changes)
 
 ### Usage
 
 ```bash
-# Rebuild cache excluding additional variables
-iops cache rebuild ./workdir/__iops_cache.db --exclude summary_file,output_path
+# Exclude variables from hash
+iops cache rebuild cache.db --exclude summary_file,output_path -o new_cache.db
 
-# Specify output file (default: <source>_rebuilt.db)
-iops cache rebuild ./workdir/__iops_cache.db --exclude summary_file -o new_cache.db
+# Add a variable to all entries (with type)
+iops cache rebuild cache.db --add use_new_flag:bool=false -o new_cache.db
+
+# Add multiple variables
+iops cache rebuild cache.db --add cluster:str=skylake --add version:int=2 -o new_cache.db
+
+# Combine exclude and add
+iops cache rebuild cache.db --exclude output_path --add use_feature:bool=true -o new_cache.db
 ```
 
-### Example Scenario
+### Adding Variables (Type Syntax)
 
-You ran 100 executions with this configuration:
+When adding variables, you can specify the type to ensure it matches your YAML config:
+
+```bash
+--add VAR:TYPE=VALUE
+```
+
+| Type | Examples | Notes |
+|------|----------|-------|
+| `str` | `--add label=test` | Default if no type specified |
+| `int` | `--add count:int=10` | |
+| `float` | `--add rate:float=1.5` | |
+| `bool` | `--add flag:bool=false` | Accepts: true/false, yes/no, 1/0 |
+
+**Why types matter**: The cache hash depends on both the value and its type. If your YAML defines `use_feature: { type: bool, ... }`, you must add it as `--add use_feature:bool=false` (not just `--add use_feature=false`) for the hashes to match.
+
+### Example: Excluding Path Variables
+
+You ran 100 executions but forgot to exclude a path-based variable:
 
 ```yaml
 vars:
@@ -239,7 +262,7 @@ vars:
     expr: "{{ execution_dir }}/results.txt"  # Oops! Should have been excluded
 ```
 
-The cache now has 100 unique hashes because `output_file` differs for each execution. After rebuilding with `--exclude output_file`, entries with the same `nodes` value will collapse to the same hash.
+The cache has 100 unique hashes because `output_file` differs for each execution. After rebuilding:
 
 ```bash
 $ iops cache rebuild cache.db --exclude output_file
@@ -249,6 +272,7 @@ Cache Rebuild Summary
 Source entries:        100
 Source unique hashes:  100
 Excluded variables:    output_file
+Added variables:       (none)
 --------------------------------------------------
 Output entries:        100
 Output unique hashes:  3
@@ -257,22 +281,67 @@ Collapsed entries:     97
 Rebuilt cache saved to: cache_rebuilt.db
 ```
 
+### Example: Adding a New Variable
+
+You have a cache from previous runs and want to add a new variable to your config:
+
+**Original config (already executed):**
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep: { mode: list, values: [2, 4, 8] }
+```
+
+**New config (with additional variable):**
+```yaml
+vars:
+  nodes:
+    type: int
+    sweep: { mode: list, values: [2, 4, 8] }
+  use_new_optimization:
+    type: bool
+    sweep: { mode: list, values: [false, true] }
+```
+
+To reuse the existing cache for `use_new_optimization=false` cases:
+
+```bash
+$ iops cache rebuild cache.db --add use_new_optimization:bool=false -o new_cache.db
+
+Cache Rebuild Summary
+==================================================
+Source entries:        3
+Source unique hashes:  3
+Excluded variables:    (none)
+Added variables:       use_new_optimization=False
+--------------------------------------------------
+Output entries:        3
+Output unique hashes:  3
+Collapsed entries:     0
+==================================================
+Rebuilt cache saved to: new_cache.db
+```
+
+Now `iops run new_config.yaml --use-cache` will find cache hits for `use_new_optimization=false` and only execute the `use_new_optimization=true` cases.
+
 ### How It Works
 
 1. Reads all entries from the source cache
-2. Re-normalizes parameters excluding the specified variables
-3. Re-computes the hash for each entry
-4. Writes all entries to the new database
+2. Adds new variables to each entry's parameters (if `--add` specified)
+3. Re-normalizes parameters excluding specified variables (if `--exclude` specified)
+4. Re-computes the hash for each entry
+5. Writes all entries to the new database
 
 **Important**: When multiple entries collapse to the same `(hash, repetition)`, all entries are preserved. The rebuilt database does not enforce uniqueness, allowing you to keep all historical data. When reading from the cache, IOPS uses `ORDER BY created_at DESC LIMIT 1` to return the most recent entry.
 
 ### After Rebuilding
 
-1. Update your YAML config to use the rebuilt cache and add the excluded variables:
+1. Update your YAML config to use the rebuilt cache:
    ```yaml
    benchmark:
-     cache_file: "./workdir/cache_rebuilt.db"
-     cache_exclude_vars: ["output_file"]  # Prevent future issues
+     cache_file: "./workdir/new_cache.db"
+     cache_exclude_vars: ["output_file"]  # If you excluded variables
    ```
 
 2. Future runs with `--use-cache` will now find cache hits for matching parameters.

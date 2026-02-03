@@ -426,3 +426,263 @@ def test_rebuild_conflict_all_data_preserved(tmp_path):
             params = json.loads(row["params_json"])
             assert "path" not in params
             assert params["nodes"] == 2
+
+
+def test_rebuild_add_vars(tmp_path):
+    """Test adding variables to all cache entries."""
+    import sqlite3
+    import json
+
+    source_db = tmp_path / "source.db"
+    output_db = tmp_path / "output.db"
+
+    cache = ExecutionCache(source_db)
+
+    # Store some entries
+    cache.store_result(
+        params={"nodes": 2, "ppn": 4},
+        repetition=1,
+        metrics={"bandwidth": 100},
+        metadata={"status": "SUCCESS"}
+    )
+    cache.store_result(
+        params={"nodes": 4, "ppn": 8},
+        repetition=1,
+        metrics={"bandwidth": 200},
+        metadata={"status": "SUCCESS"}
+    )
+
+    # Rebuild with add_vars
+    stats = rebuild_cache(
+        source_db=source_db,
+        output_db=output_db,
+        add_vars={"cluster": "skylake", "version": "1.0"}
+    )
+
+    assert stats.source_entries == 2
+    assert stats.output_entries == 2
+    assert stats.added_vars == {"cluster": "skylake", "version": "1.0"}
+
+    # Verify the new variables are in params_json
+    with sqlite3.connect(str(output_db)) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT params_json FROM cached_executions")
+        rows = cursor.fetchall()
+
+        for row in rows:
+            params = json.loads(row["params_json"])
+            assert params["cluster"] == "skylake"
+            # Note: "1.0" gets normalized to float 1.0 by normalize_params
+            assert params["version"] == 1.0
+
+
+def test_rebuild_add_vars_changes_hash(tmp_path):
+    """Test that adding variables changes the param_hash."""
+    import sqlite3
+
+    source_db = tmp_path / "source.db"
+    output_db = tmp_path / "output.db"
+
+    cache = ExecutionCache(source_db)
+
+    cache.store_result(
+        params={"nodes": 2},
+        repetition=1,
+        metrics={"value": 100},
+        metadata={}
+    )
+
+    # Get the original hash
+    with sqlite3.connect(str(source_db)) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT param_hash FROM cached_executions")
+        original_hash = cursor.fetchone()[0]
+
+    # Rebuild with add_vars
+    rebuild_cache(
+        source_db=source_db,
+        output_db=output_db,
+        add_vars={"new_var": "value"}
+    )
+
+    # Get the new hash
+    with sqlite3.connect(str(output_db)) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT param_hash FROM cached_executions")
+        new_hash = cursor.fetchone()[0]
+
+    # Hash should be different because we added a variable
+    assert original_hash != new_hash
+
+
+def test_rebuild_add_and_exclude_combined(tmp_path):
+    """Test combining add_vars and exclude_vars in same rebuild."""
+    import sqlite3
+    import json
+
+    source_db = tmp_path / "source.db"
+    output_db = tmp_path / "output.db"
+
+    cache = ExecutionCache(source_db)
+
+    cache.store_result(
+        params={"nodes": 2, "path": "/run1"},
+        repetition=1,
+        metrics={"value": 100},
+        metadata={}
+    )
+    cache.store_result(
+        params={"nodes": 2, "path": "/run2"},
+        repetition=1,
+        metrics={"value": 200},
+        metadata={}
+    )
+
+    # Rebuild: exclude path, add cluster
+    stats = rebuild_cache(
+        source_db=source_db,
+        output_db=output_db,
+        exclude_vars=["path"],
+        add_vars={"cluster": "test"}
+    )
+
+    assert stats.source_entries == 2
+    assert stats.output_entries == 2
+    assert stats.excluded_vars == ["path"]
+    assert stats.added_vars == {"cluster": "test"}
+    # Both entries should collapse to same hash (path excluded, same cluster added)
+    assert stats.output_unique_hashes == 1
+    assert stats.collisions == 1
+
+    # Verify params
+    with sqlite3.connect(str(output_db)) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT params_json FROM cached_executions")
+        rows = cursor.fetchall()
+
+        for row in rows:
+            params = json.loads(row["params_json"])
+            assert "path" not in params  # excluded
+            assert params["cluster"] == "test"  # added
+            assert params["nodes"] == 2  # preserved
+
+
+def test_rebuild_stats_summary_with_added_vars():
+    """Test RebuildStats summary formatting with added variables."""
+    stats = RebuildStats(
+        source_entries=100,
+        source_unique_hashes=50,
+        output_entries=100,
+        output_unique_hashes=50,
+        excluded_vars=[],
+        added_vars={"cluster": "skylake", "version": "2.0"},
+        collisions=0
+    )
+
+    summary = stats.summary()
+
+    assert "cluster=skylake" in summary
+    assert "version=2.0" in summary
+
+
+def test_rebuild_add_vars_typed_values(tmp_path):
+    """Test adding typed variables (bool, int, float) to cache entries."""
+    import sqlite3
+    import json
+
+    source_db = tmp_path / "source.db"
+    output_db = tmp_path / "output.db"
+
+    cache = ExecutionCache(source_db)
+
+    cache.store_result(
+        params={"nodes": 2},
+        repetition=1,
+        metrics={"value": 100},
+        metadata={}
+    )
+
+    # Add typed values (as they would come from CLI after parsing)
+    stats = rebuild_cache(
+        source_db=source_db,
+        output_db=output_db,
+        add_vars={
+            "use_new_flag": False,  # bool
+            "threshold": 1.5,       # float
+            "count": 10,            # int
+            "label": "test",        # str
+        }
+    )
+
+    assert stats.output_entries == 1
+
+    # Verify the typed values are preserved correctly
+    with sqlite3.connect(str(output_db)) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT params_json FROM cached_executions")
+        row = cursor.fetchone()
+        params = json.loads(row["params_json"])
+
+        # Check types are preserved after JSON round-trip
+        assert params["use_new_flag"] is False
+        assert isinstance(params["use_new_flag"], bool)
+        assert params["threshold"] == 1.5
+        assert isinstance(params["threshold"], float)
+        assert params["count"] == 10
+        assert isinstance(params["count"], int)
+        assert params["label"] == "test"
+        assert isinstance(params["label"], str)
+
+
+def test_rebuild_add_vars_bool_matches_yaml_config(tmp_path):
+    """Test that added bool values match what YAML config would produce."""
+    import sqlite3
+    import json
+
+    source_db = tmp_path / "source.db"
+    output_db = tmp_path / "output.db"
+
+    # Simulate what would be in cache from a YAML config with bool var
+    cache = ExecutionCache(source_db)
+    cache.store_result(
+        params={"nodes": 2, "use_feature": True},  # bool from YAML
+        repetition=1,
+        metrics={"value": 100},
+        metadata={}
+    )
+
+    # Get the hash for the entry with use_feature=True
+    with sqlite3.connect(str(source_db)) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT param_hash FROM cached_executions")
+        original_hash = cursor.fetchone()[0]
+
+    # Now rebuild a different cache, adding use_feature=True as bool
+    source_db2 = tmp_path / "source2.db"
+    output_db2 = tmp_path / "output2.db"
+
+    cache2 = ExecutionCache(source_db2)
+    cache2.store_result(
+        params={"nodes": 2},  # no use_feature
+        repetition=1,
+        metrics={"value": 200},
+        metadata={}
+    )
+
+    rebuild_cache(
+        source_db=source_db2,
+        output_db=output_db2,
+        add_vars={"use_feature": True}  # Add as bool
+    )
+
+    # Get the hash after adding use_feature=True
+    with sqlite3.connect(str(output_db2)) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT param_hash FROM cached_executions")
+        rebuilt_hash = cursor.fetchone()[0]
+
+    # The hashes should match - both have nodes=2, use_feature=True (bool)
+    assert original_hash == rebuilt_hash

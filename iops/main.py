@@ -246,11 +246,13 @@ Examples:
                                                     metavar='<cache-command>')
 
     # cache rebuild
-    cache_rebuild_parser = cache_subparsers.add_parser('rebuild', help='Rebuild cache with different excluded variables',
-                                                        description='Rebuild a cache database excluding additional variables from the hash.')
+    cache_rebuild_parser = cache_subparsers.add_parser('rebuild', help='Rebuild cache with modified variables',
+                                                        description='Rebuild a cache database with excluded or added variables.')
     cache_rebuild_parser.add_argument('source', type=Path, help='Path to source cache database')
-    cache_rebuild_parser.add_argument('--exclude', type=str, required=True, metavar='VAR1,VAR2',
+    cache_rebuild_parser.add_argument('--exclude', type=str, default=None, metavar='VAR1,VAR2',
                                       help='Comma-separated list of variables to exclude from hash')
+    cache_rebuild_parser.add_argument('--add', type=str, action='append', default=None, metavar='VAR[:TYPE]=VALUE',
+                                      help='Add a variable to all entries. TYPE is int/float/str/bool (default: str). Can be repeated.')
     cache_rebuild_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
                                       help='Output database path (default: <source>_rebuilt.db)')
     _add_common_args(cache_rebuild_parser)
@@ -651,9 +653,63 @@ def main():
         if args.cache_command == 'rebuild':
             try:
                 # Parse exclude vars
-                exclude_vars = [v.strip() for v in args.exclude.split(',') if v.strip()]
-                if not exclude_vars:
-                    logger.error("No variables specified in --exclude")
+                exclude_vars = []
+                if args.exclude:
+                    exclude_vars = [v.strip() for v in args.exclude.split(',') if v.strip()]
+
+                # Parse add vars (format: VAR:TYPE=VALUE or VAR=VALUE)
+                # Supported types: int, float, str, bool (default: str)
+                add_vars = {}
+                if args.add:
+                    for item in args.add:
+                        if '=' not in item:
+                            logger.error(f"Invalid --add format: '{item}'. Expected VAR=VALUE or VAR:TYPE=VALUE")
+                            return
+                        var_part, var_value = item.split('=', 1)
+                        var_part = var_part.strip()
+                        var_value = var_value.strip()
+
+                        # Check for type specification (VAR:TYPE)
+                        if ':' in var_part:
+                            var_name, var_type = var_part.rsplit(':', 1)
+                            var_name = var_name.strip()
+                            var_type = var_type.strip().lower()
+                        else:
+                            var_name = var_part
+                            var_type = 'str'
+
+                        if not var_name:
+                            logger.error(f"Invalid --add format: '{item}'. Variable name cannot be empty")
+                            return
+
+                        # Convert value to specified type
+                        try:
+                            if var_type == 'int':
+                                var_value = int(var_value)
+                            elif var_type == 'float':
+                                var_value = float(var_value)
+                            elif var_type == 'bool':
+                                if var_value.lower() in ('true', '1', 'yes'):
+                                    var_value = True
+                                elif var_value.lower() in ('false', '0', 'no'):
+                                    var_value = False
+                                else:
+                                    logger.error(f"Invalid bool value: '{var_value}'. Use true/false, yes/no, or 1/0")
+                                    return
+                            elif var_type == 'str':
+                                pass  # Keep as string
+                            else:
+                                logger.error(f"Unknown type '{var_type}'. Supported types: int, float, str, bool")
+                                return
+                        except ValueError as e:
+                            logger.error(f"Cannot convert '{var_value}' to {var_type}: {e}")
+                            return
+
+                        add_vars[var_name] = var_value
+
+                # Validate at least one operation is specified
+                if not exclude_vars and not add_vars:
+                    logger.error("At least one of --exclude or --add must be specified")
                     return
 
                 # Determine output path
@@ -667,6 +723,7 @@ def main():
                     source_db=args.source,
                     output_db=output_path,
                     exclude_vars=exclude_vars,
+                    add_vars=add_vars,
                     logger=logger,
                 )
 

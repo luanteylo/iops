@@ -28,6 +28,7 @@ class RebuildStats:
     output_entries: int = 0
     output_unique_hashes: int = 0
     excluded_vars: List[str] = field(default_factory=list)
+    added_vars: Dict[str, Any] = field(default_factory=dict)
     collisions: int = 0  # Entries that collapsed to same (hash, rep)
 
     def summary(self) -> str:
@@ -38,6 +39,7 @@ class RebuildStats:
             f"Source entries:        {self.source_entries}",
             f"Source unique hashes:  {self.source_unique_hashes}",
             f"Excluded variables:    {', '.join(self.excluded_vars) or '(none)'}",
+            f"Added variables:       {', '.join(f'{k}={v}' for k, v in self.added_vars.items()) or '(none)'}",
             "-" * 50,
             f"Output entries:        {self.output_entries}",
             f"Output unique hashes:  {self.output_unique_hashes}",
@@ -50,15 +52,16 @@ class RebuildStats:
 def rebuild_cache(
     source_db: Path,
     output_db: Path,
-    exclude_vars: List[str],
+    exclude_vars: Optional[List[str]] = None,
+    add_vars: Optional[Dict[str, Any]] = None,
     logger: Optional[logging.Logger] = None,
 ) -> RebuildStats:
     """
-    Rebuild a cache database with additional excluded variables.
+    Rebuild a cache database with modified variables.
 
-    This function reads all entries from the source cache, re-normalizes
-    the parameters with the new exclude_vars, re-hashes them, and writes
-    to a new database.
+    This function reads all entries from the source cache, optionally adds
+    new variables, re-normalizes the parameters with exclude_vars, re-hashes
+    them, and writes to a new database.
 
     When multiple entries collapse to the same (new_hash, repetition) due
     to the excluded variables, all entries are kept (the output database
@@ -68,6 +71,7 @@ def rebuild_cache(
         source_db: Path to the source cache database
         output_db: Path for the rebuilt cache database
         exclude_vars: List of variable names to exclude from the hash
+        add_vars: Dict of variable names and values to add to all entries
         logger: Optional logger for progress messages
 
     Returns:
@@ -89,11 +93,16 @@ def rebuild_cache(
     if output_db.exists():
         raise ValueError(f"Output file already exists: {output_db}. Remove it first or choose a different path.")
 
+    exclude_vars = exclude_vars or []
+    add_vars = add_vars or {}
     exclude_vars_set = set(exclude_vars)
-    stats = RebuildStats(excluded_vars=list(exclude_vars))
+    stats = RebuildStats(excluded_vars=list(exclude_vars), added_vars=dict(add_vars))
 
     logger.info(f"Rebuilding cache: {source_db} -> {output_db}")
-    logger.info(f"Excluding variables: {exclude_vars}")
+    if exclude_vars:
+        logger.info(f"Excluding variables: {exclude_vars}")
+    if add_vars:
+        logger.info(f"Adding variables: {add_vars}")
 
     # Read all entries from source
     with sqlite3.connect(str(source_db)) as src_conn:
@@ -146,6 +155,10 @@ def rebuild_cache(
         # Process and insert entries
         for entry in entries:
             old_params = json.loads(entry["params_json"])
+
+            # Add new variables (before normalization so they get included in hash)
+            if add_vars:
+                old_params.update(add_vars)
 
             # Re-normalize with new exclude_vars
             new_params = normalize_params(old_params, exclude_vars_set)

@@ -32,6 +32,7 @@ iops <subcommand> [arguments] [options]
 | `iops report <path>` | Generate HTML report |
 | `iops find <path> [filters...]` | Explore executions |
 | `iops archive <create\|extract>` | Archive and extract workdirs |
+| `iops cache <rebuild>` | Cache management |
 
 ## Subcommand Reference
 
@@ -397,6 +398,55 @@ Archives include:
   - SHA256 checksums for integrity verification
   - For partial archives: filters applied and original execution count
 
+### cache - Cache Management
+
+Manage IOPS execution cache databases.
+
+#### cache rebuild
+
+Rebuild a cache database with modified variables:
+
+```bash
+iops cache rebuild <source> [options]
+```
+
+**Options:**
+- `--exclude VAR1,VAR2` - Comma-separated list of variables to exclude from hash
+- `--add VAR[:TYPE]=VALUE` - Add a variable to all entries. TYPE is int/float/str/bool (default: str). Can be repeated.
+- `-o, --output PATH` - Output database path (default: `<source>_rebuilt.db`)
+
+**Type Syntax:**
+
+When adding variables, specify the type to match your YAML config:
+
+| Type | Example | Notes |
+|------|---------|-------|
+| `str` | `--add label=test` | Default if no type specified |
+| `int` | `--add count:int=10` | |
+| `float` | `--add rate:float=1.5` | |
+| `bool` | `--add flag:bool=false` | Accepts: true/false, yes/no, 1/0 |
+
+**Examples:**
+
+```bash
+# Exclude variables from hash
+iops cache rebuild cache.db --exclude summary_file,output_path
+
+# Add a variable with type
+iops cache rebuild cache.db --add use_new_flag:bool=false -o new_cache.db
+
+# Add multiple variables
+iops cache rebuild cache.db --add cluster:str=skylake --add version:int=2 -o new_cache.db
+
+# Combine exclude and add
+iops cache rebuild cache.db --exclude output_path --add use_feature:bool=true -o new_cache.db
+
+# Specify output path
+iops cache rebuild cache.db --exclude summary_file -o rebuilt_cache.db
+```
+
+See the [Caching guide](../caching#rebuilding-the-cache) for detailed use cases.
+
 ### --version - Show Version
 
 ```bash
@@ -424,4 +474,6 @@ iops find --help
 iops archive --help
 iops archive create --help
 iops archive extract --help
+iops cache --help
+iops cache rebuild --help
 ```
