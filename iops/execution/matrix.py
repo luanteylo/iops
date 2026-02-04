@@ -882,7 +882,7 @@ def build_execution_matrix(
       and rendered lazily via @property.
 
     Behaviour:
-    - Sweep over all vars that have a `sweep` defined.
+    - Sweep over all vars that have a `sweep` or `adaptive` defined.
     - repetitions is 1 by default (or benchmark.repetitions if present).
 
     Returns:
@@ -895,6 +895,8 @@ def build_execution_matrix(
     # ----------------- split vars ----------------- #
     swept_vars: List[Tuple[str, VarConfig]] = []
     derived_vars: List[Tuple[str, VarConfig]] = []
+    # TODO: create an adaptive_vars list because the logic of the matrix builder will be
+    # diferent
 
     repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
 
@@ -912,6 +914,9 @@ def build_execution_matrix(
         if v.sweep is not None:
             swept_vars.append((name, v))
 
+        # update the adaptive_vars list here
+        # after that we need to create the logic that we will use to build the matrix
+
     if not swept_vars:
         raise ConfigValidationError(
             "No swept variables defined – at least one "
@@ -922,6 +927,7 @@ def build_execution_matrix(
 
     search_vars: List[Tuple[str, VarConfig]] = []
     exhaustive_swept_vars: List[Tuple[str, VarConfig]] = []
+    
 
     for name, vcfg in swept_vars:
         if name in exhaustive_var_names:

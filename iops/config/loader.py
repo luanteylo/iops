@@ -1816,9 +1816,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             raise ConfigValidationError(
                 f"var '{name}' must define either a 'sweep', an 'expr' or an 'adaptive'"
             )
-        if (v.sweep is not None and v.expr is not None) or 
-        (v.sweep is not None and v.adaptive is not None) or 
-        (v.expr is not None and v.adaptive is not None):
+        if (v.sweep is not None and v.expr is not None) or (v.sweep is not None and v.adaptive is not None) or (v.expr is not None and v.adaptive is not None):
             raise ConfigValidationError(
                 f"var '{name}' should use only one of 'sweep', 'expr', or 'adaptive' types; more than one type is not possible"
             )
