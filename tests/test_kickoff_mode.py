@@ -17,6 +17,7 @@ from iops.config.models import (
     BenchmarkConfig,
     VarConfig,
     SweepConfig,
+    AdaptiveConfig,
     CommandConfig,
     ScriptConfig,
     OutputSinkConfig,

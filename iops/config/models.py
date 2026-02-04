@@ -256,9 +256,17 @@ class SweepConfig:
 
 
 @dataclass
+class AdaptiveConfig:
+    initial: Optional[int] = None
+    factor: Optional[float] = None
+    stopping_criterion: Optional[str] = None
+    max_iterations: Optional[int] = None
+
+@dataclass
 class VarConfig:
     type: str                 # "int", "float", "str", etc.
     sweep: Optional[SweepConfig] = None
+    adaptive: Optional[AdaptiveConfig] = None
     expr: Optional[str] = None  # for derived vars
     when: Optional[str] = None  # condition for conditional variables
     default: Optional[Any] = None  # value when condition is false

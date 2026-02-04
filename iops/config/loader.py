@@ -31,6 +31,7 @@ from iops.config.models import (
     ProbesConfig,
     VarConfig,
     SweepConfig,
+    AdaptiveConfig,
     ConstraintConfig,
     CommandConfig,
     ScriptConfig,
@@ -70,8 +71,9 @@ ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
 ALLOWED_ALLOCATION_KEYS = {"mode", "allocation_script", "test_timeout"}
 
-ALLOWED_VAR_KEYS = {"type", "sweep", "expr", "when", "default"}
+ALLOWED_VAR_KEYS = {"type", "sweep", "adaptive", "expr", "when", "default"}
 ALLOWED_SWEEP_KEYS = {"mode", "values", "start", "end", "step"}
+ALLOWED_ADAPTIVE_KEYS = {"initial", "factor", "stopping_criterion", "max_iterations"}
 
 ALLOWED_COMMAND_KEYS = {"template", "metadata", "labels", "env"}
 
@@ -1070,9 +1072,26 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 step=s.get("step"),
                 values=values,
             )
+        adaptive_cfg = None
+        if "adaptive" in cfg:
+            s = cfg["adaptive"]
+            if isinstance(s, dict):
+                # Validate adaptive keys
+                key_errors = _validate_allowed_keys(s, ALLOWED_ADAPTIVE_KEYS, f"vars.{name}.adaptive")
+                if key_errors:
+                    raise ConfigValidationError("\n".join(key_errors))
+
+            # Normalize scalar values to a list (user-friendly: values: 2 -> values: [2])
+            adaptive_cfg = AdaptiveConfig(
+                initial=s.get("initial"),
+                factor=s.get("factor"),
+                stopping_criterion=s.get("stopping_criterion"),
+                max_iterations=s.get("max_iterations"),
+            )
         vars_cfg[name] = VarConfig(
             type=cfg["type"],
             sweep=sweep_cfg,
+            adaptive=adaptive_cfg,
             expr=cfg.get("expr"),
             when=cfg.get("when"),
             default=cfg.get("default"),
@@ -1793,13 +1812,15 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 f"var '{name}' has invalid type '{v.type}'. Must be one of: {valid_var_types}"
             )
 
-        if v.sweep is None and v.expr is None:
+        if v.sweep is None and v.expr is None and v.adaptive is None:
             raise ConfigValidationError(
-                f"var '{name}' must define either a 'sweep' or an 'expr'"
+                f"var '{name}' must define either a 'sweep', an 'expr' or an 'adaptive'"
             )
-        if v.sweep is not None and v.expr is not None:
+        if (v.sweep is not None and v.expr is not None) or 
+        (v.sweep is not None and v.adaptive is not None) or 
+        (v.expr is not None and v.adaptive is not None):
             raise ConfigValidationError(
-                f"var '{name}' cannot have both 'sweep' and 'expr'"
+                f"var '{name}' should use only one of 'sweep', 'expr', or 'adaptive' types; more than one type is not possible"
             )
 
         if v.sweep:
@@ -1824,6 +1845,16 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             else:
                 raise ConfigValidationError(
                     f"var '{name}' has invalid sweep.mode='{v.sweep.mode}'"
+                )
+
+        if v.adaptive:
+            if (
+                v.adaptive.initial is None
+                or v.adaptive.factor is None
+                or v.adaptive.stopping_criterion is None
+            ):
+                raise ConfigValidationError(
+                    f"var '{name}' must have initial, factor, and stopping_criterion"
                 )
 
         # Validate conditional variable fields (when and default)
