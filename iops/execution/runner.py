@@ -873,6 +873,7 @@ class IOPSRunner(HasLogger):
                 var_info = {
                     "type": var_config.type,
                     "swept": var_config.sweep is not None,
+                    "adaptive": var_config.adaptive is not None,
                 }
                 if var_config.sweep:
                     var_info["sweep"] = {
@@ -884,6 +885,10 @@ class IOPSRunner(HasLogger):
                         var_info["sweep"]["step"] = var_config.sweep.step
                     elif var_config.sweep.mode == "list":
                         var_info["sweep"]["values"] = var_config.sweep.values
+
+                if var_config.adaptive:
+                    var_info["adaptive"]["values"] = var_config.adaptive.values
+
                 if var_config.expr:
                     var_info["expr"] = var_config.expr
 

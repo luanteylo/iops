@@ -2057,7 +2057,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
         var_names = []
 
         for var_name, var_config in self.cfg.vars.items():
-            if not var_config.sweep:
+            if not var_config.sweep and not var_config.adaptive:
                 continue  # Skip non-swept variables
 
             # Skip exhaustive variables - they are tested exhaustively, not optimized
