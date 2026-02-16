@@ -136,18 +136,6 @@ def _build_sweep_values(name: str, vcfg: VarConfig) -> List[Any]:
     else:  # mode == "list"
         return [_cast_value(vcfg.type, v) for v in vcfg.sweep.values]
 
-# ----------------- adaptive helpers ----------------- #
-
-def _build_adaptive_values(name: str, vcfg: VarConfig) -> List[Any]:
-    """
-    From a VarConfig with a 'adaptive', return the list of values for this var.
-
-    Note: Input validation (adaptive existence, initial, factor, stopping_criterion)
-    is handled by loader.py's validate_generic_config(). This function assumes valid input.
-    """
-
-    return [_cast_value(vcfg.type, v) for v in [vcfg.adaptive.initial]]
-
 # ----------------- Conditional variable helpers ----------------- #
 
 def _extract_variable_references(expr: str) -> Set[str]:
@@ -745,14 +733,13 @@ class ExecutionInstance:
 
 # ----------------- Single instance creator ----------------- #
 
-def _create_execution_instance(
+def create_execution_instance(
     cfg: GenericBenchmarkConfig,
     base_vars: Dict[str, Any],
     execution_id: int,
     script_index: int = 0,
     search_var_names: Optional[List[str]] = None,
     exhaustive_var_names: Optional[List[str]] = None,
-    adaptive_var_names: Optional[List[str]] = None,
 ) -> Tuple[ExecutionInstance, bool, List[Tuple[Any, str]]]:
     """
     Create a single ExecutionInstance from explicit variable values and validate constraints.
@@ -894,7 +881,8 @@ def build_execution_matrix(
       and rendered lazily via @property.
 
     Behaviour:
-    - Sweep over all vars that have a `sweep` or `adaptive` defined.
+    - Sweep over all vars that have a ``sweep`` defined.
+    - Adaptive variables are excluded from the matrix (handled by AdaptivePlanner).
     - repetitions is 1 by default (or benchmark.repetitions if present).
 
     Returns:
@@ -907,39 +895,22 @@ def build_execution_matrix(
     # ----------------- split vars ----------------- #
     swept_vars: List[Tuple[str, VarConfig]] = []
     derived_vars: List[Tuple[str, VarConfig]] = []
-    adaptive_vars: List[Tuple[str, VarConfig]] = []
 
     repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
 
     # Get exhaustive vars from benchmark config
     exhaustive_var_names = set(cfg.benchmark.exhaustive_vars or [])
 
-    # Classify variables:
+    # Classify variables (adaptive vars are excluded from the matrix):
     for name, v in cfg.vars.items():
-        # Derived variable: has expr and no sweep
-        if v.sweep is None and v.adaptive is None and v.expr is not None:
-            derived_vars.append((name, v))
-
-        # Swept variable: has sweep defined
-        elif v.sweep is not None and v.adaptive is None and v.expr is None:
+        if v.adaptive is not None:
+            # Adaptive variables are not part of the Cartesian product.
+            # They are handled dynamically by AdaptivePlanner.
+            continue
+        elif v.sweep is not None and v.expr is None:
             swept_vars.append((name, v))
-            
-            if not swept_vars:
-                raise ConfigValidationError(
-                    "No swept variables defined – at least one "
-                    "'vars.*.sweep' is required."
-                )
-
-        # Adaptive variable: has adaptive defined
-        elif v.sweep is None and v.adaptive is not None and v.expr is None:
-            adaptive_vars.append((name, v))
-
-            if not adaptive_vars:
-                raise ConfigValidationError(
-                    "No adaptive variables defined – at least one "
-                    "'vars.*.adaptive' is required."
-                )
-            
+        elif v.sweep is None and v.expr is not None:
+            derived_vars.append((name, v))
 
     # ----------------- partition swept vars into search and exhaustive ----------------- #
 
@@ -964,7 +935,7 @@ def build_execution_matrix(
         search_vars = exhaustive_swept_vars
         exhaustive_swept_vars = []
 
-    # ----------------- build sweep and adaptive products ----------------- #
+    # ----------------- build sweep products ----------------- #
 
     # Check if any conditional variables exist
     has_conditional = any(v.when for _, v in swept_vars)
@@ -972,34 +943,6 @@ def build_execution_matrix(
     # Prepare variable name lists for ExecutionInstance
     search_names = [name for name, _ in search_vars]
     exhaustive_names = [name for name, _ in exhaustive_swept_vars]
-    
-    adaptive_names = [name for name, _ in adaptive_vars]
-
-    # ----------------- Building for adaptive variables ----------------- #
-
-    # Get all adaptive variable configs for topological sort
-    adaptive_var_cfgs = {name: vcfg for name, vcfg in adaptive_vars}
-
-    # Topologically sort to ensure dependencies are processed first
-    #sorted_var_names = _topological_sort_variables(adaptive_var_cfgs)
-
-    # Build combinations iteratively
-    combinations: List[Dict[str, Any]] = [{}]
-
-    for name in adaptive_var_cfgs:
-        vcfg = adaptive_var_cfgs[name]
-        values = _build_adaptive_values(name, vcfg)
-        if not values:
-            raise ConfigValidationError(f"Variable '{name}' produced an empty adaptive.")
-
-        new_combinations: List[Dict[str, Any]] = []
-
-        # Unconditional variable: standard Cartesian expansion
-        for combo in combinations:
-            for val in values:
-                new_combinations.append({**combo, name: val})
-
-        combinations = new_combinations
 
     if has_conditional:
         # ----------------- Iterative building for conditional variables ----------------- #
@@ -1095,7 +1038,6 @@ def build_execution_matrix(
     # Get names of swept and derived variables
     swept_var_names_set = {name for name, _ in swept_vars}
     derived_var_names_set = {name for name, _ in derived_vars}
-    adaptive_var_names_set = {name for name, _ in adaptive_vars}
 
     # Classify constraints:
     # - early_constraints: only reference swept variables (can filter before derived eval)
@@ -1108,7 +1050,6 @@ def build_execution_matrix(
             cfg.constraints,
             swept_var_names_set,
             derived_var_names_set,
-            adaptive_var_names_set,
         )
 
     # ----------------- apply early constraints to filter combinations ----------------- #
@@ -1148,14 +1089,13 @@ def build_execution_matrix(
         for script_idx in range(len(cfg.scripts)):
             exec_id += 1
 
-            exec_instance, _, _ = _create_execution_instance(
+            exec_instance, _, _ = create_execution_instance(
                 cfg=cfg,
                 base_vars=base_vars,
                 execution_id=exec_id,
                 script_index=script_idx,
                 search_var_names=search_names,
                 exhaustive_var_names=exhaustive_names,
-                adaptive_var_names=search_names,
             )
             # Note: constraint validation is ignored here because build_execution_matrix
             # handles early constraints before instance creation and late constraints

@@ -257,10 +257,29 @@ class SweepConfig:
 
 @dataclass
 class AdaptiveConfig:
-    initial: Optional[int] = None
+    """
+    Configuration for adaptive (probing) variable search.
+
+    Adaptive variables start at an initial value and progress in one direction
+    until a stop condition is met. Exactly one of factor, increment, or step_expr
+    must be provided to define how the value progresses.
+
+    Attributes:
+        initial: Starting value (required)
+        factor: Multiplicative step (next = previous * factor)
+        increment: Additive step (next = previous + increment)
+        step_expr: Jinja2 expression for custom progression (context: previous, iteration)
+        stop_when: Expression evaluated after each execution (required)
+        max_iterations: Safety limit, None means no limit
+        direction: "ascending" (default) or "descending", controls progression order
+    """
+    initial: Any = None
     factor: Optional[float] = None
-    stopping_criterion: Optional[str] = None
+    increment: Optional[float] = None
+    step_expr: Optional[str] = None
+    stop_when: Optional[str] = None
     max_iterations: Optional[int] = None
+    direction: str = "ascending"
 
 @dataclass
 class VarConfig:

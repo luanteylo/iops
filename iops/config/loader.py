@@ -73,7 +73,7 @@ ALLOWED_ALLOCATION_KEYS = {"mode", "allocation_script", "test_timeout"}
 
 ALLOWED_VAR_KEYS = {"type", "sweep", "adaptive", "expr", "when", "default"}
 ALLOWED_SWEEP_KEYS = {"mode", "values", "start", "end", "step"}
-ALLOWED_ADAPTIVE_KEYS = {"initial", "factor", "stopping_criterion", "max_iterations"}
+ALLOWED_ADAPTIVE_KEYS = {"initial", "factor", "increment", "step_expr", "stop_when", "max_iterations", "direction"}
 
 ALLOWED_COMMAND_KEYS = {"template", "metadata", "labels", "env"}
 
@@ -1081,12 +1081,14 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 if key_errors:
                     raise ConfigValidationError("\n".join(key_errors))
 
-            # Normalize scalar values to a list (user-friendly: values: 2 -> values: [2])
             adaptive_cfg = AdaptiveConfig(
                 initial=s.get("initial"),
                 factor=s.get("factor"),
-                stopping_criterion=s.get("stopping_criterion"),
+                increment=s.get("increment"),
+                step_expr=s.get("step_expr"),
+                stop_when=s.get("stop_when"),
                 max_iterations=s.get("max_iterations"),
+                direction=s.get("direction", "ascending"),
             )
         vars_cfg[name] = VarConfig(
             type=cfg["type"],
@@ -1846,14 +1848,88 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 )
 
         if v.adaptive:
-            if (
-                v.adaptive.initial is None
-                or v.adaptive.factor is None
-                or v.adaptive.stopping_criterion is None
-            ):
+            # Required fields
+            if v.adaptive.initial is None:
                 raise ConfigValidationError(
-                    f"var '{name}' must have initial, factor, and stopping_criterion"
+                    f"var '{name}' adaptive: 'initial' is required"
                 )
+            if not v.adaptive.stop_when:
+                raise ConfigValidationError(
+                    f"var '{name}' adaptive: 'stop_when' is required"
+                )
+
+            # Exactly one of factor, increment, step_expr must be set
+            step_methods = [
+                v.adaptive.factor is not None,
+                v.adaptive.increment is not None,
+                v.adaptive.step_expr is not None,
+            ]
+            if sum(step_methods) != 1:
+                raise ConfigValidationError(
+                    f"var '{name}' adaptive: exactly one of 'factor', 'increment', or 'step_expr' must be set"
+                )
+
+            # factor must not be 0
+            if v.adaptive.factor is not None and v.adaptive.factor == 0:
+                raise ConfigValidationError(
+                    f"var '{name}' adaptive: 'factor' must not be 0"
+                )
+
+            # Direction consistency checks
+            if v.adaptive.direction not in ("ascending", "descending"):
+                raise ConfigValidationError(
+                    f"var '{name}' adaptive: 'direction' must be 'ascending' or 'descending' "
+                    f"(got '{v.adaptive.direction}')"
+                )
+
+            if v.adaptive.direction == "ascending":
+                if v.adaptive.factor is not None and v.adaptive.factor <= 1:
+                    raise ConfigValidationError(
+                        f"var '{name}' adaptive: 'factor' must be > 1 for ascending direction "
+                        f"(got {v.adaptive.factor})"
+                    )
+                if v.adaptive.increment is not None and v.adaptive.increment <= 0:
+                    raise ConfigValidationError(
+                        f"var '{name}' adaptive: 'increment' must be > 0 for ascending direction "
+                        f"(got {v.adaptive.increment})"
+                    )
+            elif v.adaptive.direction == "descending":
+                if v.adaptive.factor is not None and v.adaptive.factor >= 1:
+                    raise ConfigValidationError(
+                        f"var '{name}' adaptive: 'factor' must be < 1 for descending direction "
+                        f"(got {v.adaptive.factor})"
+                    )
+                if v.adaptive.increment is not None and v.adaptive.increment >= 0:
+                    raise ConfigValidationError(
+                        f"var '{name}' adaptive: 'increment' must be < 0 for descending direction "
+                        f"(got {v.adaptive.increment})"
+                    )
+
+            # max_iterations must be positive
+            if v.adaptive.max_iterations is not None and v.adaptive.max_iterations < 1:
+                raise ConfigValidationError(
+                    f"var '{name}' adaptive: 'max_iterations' must be a positive integer "
+                    f"(got {v.adaptive.max_iterations})"
+                )
+
+            # Variable type must be numeric when using factor or increment
+            if v.adaptive.factor is not None or v.adaptive.increment is not None:
+                if v.type not in ("int", "float"):
+                    raise ConfigValidationError(
+                        f"var '{name}' adaptive: variable type must be 'int' or 'float' "
+                        f"when using 'factor' or 'increment' (got '{v.type}')"
+                    )
+
+            # Validate Jinja2 syntax in stop_when
+            ok, err = _validate_jinja_template(v.adaptive.stop_when, f"vars['{name}'].adaptive.stop_when")
+            if not ok:
+                raise ConfigValidationError(err)
+
+            # Validate Jinja2 syntax in step_expr (if present)
+            if v.adaptive.step_expr:
+                ok, err = _validate_jinja_template(v.adaptive.step_expr, f"vars['{name}'].adaptive.step_expr")
+                if not ok:
+                    raise ConfigValidationError(err)
 
         # Validate conditional variable fields (when and default)
         if v.when is not None:
@@ -1884,6 +1960,24 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             ok, err = _validate_jinja_template(v.expr, f"vars['{name}'].expr")
             if not ok:
                 raise ConfigValidationError(err)
+
+    # ---- adaptive variable constraints ----
+    adaptive_var_names = [name for name, v in cfg.vars.items() if v.adaptive is not None]
+    if len(adaptive_var_names) > 1:
+        raise ConfigValidationError(
+            f"Only one adaptive variable is supported per config, "
+            f"but found {len(adaptive_var_names)}: {adaptive_var_names}"
+        )
+
+    for aname in adaptive_var_names:
+        if cfg.benchmark.exhaustive_vars and aname in cfg.benchmark.exhaustive_vars:
+            raise ConfigValidationError(
+                f"Adaptive variable '{aname}' cannot be listed in 'exhaustive_vars'"
+            )
+        if cfg.benchmark.cache_exclude_vars and aname in cfg.benchmark.cache_exclude_vars:
+            raise ConfigValidationError(
+                f"Adaptive variable '{aname}' cannot be listed in 'cache_exclude_vars'"
+            )
 
     # ---- variable reference lists ----
     def validate_var_list(field_name: str, var_list) -> None:
