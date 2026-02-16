@@ -205,6 +205,8 @@ Examples:
     check_parser.add_argument('config_file', type=Path, help="Path to the YAML configuration file")
     check_parser.add_argument('--machine', type=str, default=None, metavar='NAME',
                               help="Apply machine-specific config overrides (or set IOPS_MACHINE env var)")
+    check_parser.add_argument('--resolve', nargs='?', const='-', default=None, metavar='FILE',
+                              help="Output resolved config as YAML (to stdout or FILE)")
     _add_common_args(check_parser)
 
     # ---- archive command with subcommands ----
@@ -557,16 +559,38 @@ def main():
 
     # ---- check command ----
     if args.command == 'check':
-        from iops.config.loader import validate_yaml_config
-        errors = validate_yaml_config(args.config_file, machine=getattr(args, 'machine', None))
-        if errors:
-            logger.error(f"Configuration validation failed with {len(errors)} error(s):")
-            for i, err in enumerate(errors, 1):
-                logger.error(f"  {i}. {err}")
-            return
-        else:
+        machine = getattr(args, 'machine', None)
+
+        if args.resolve is not None:
+            import yaml as _yaml
+            from iops.config.loader import resolve_yaml_config
+            merged, errors = resolve_yaml_config(args.config_file, machine=machine)
+            if errors:
+                logger.error(f"Configuration validation failed with {len(errors)} error(s):")
+                for i, err in enumerate(errors, 1):
+                    logger.error(f"  {i}. {err}")
+                return
+
+            yaml_output = _yaml.dump(merged, default_flow_style=False, sort_keys=False)
+            if args.resolve == '-':
+                print(yaml_output, end='')
+            else:
+                Path(args.resolve).write_text(yaml_output)
+                logger.info(f"Resolved config written to: {args.resolve}")
+
             logger.info("Configuration is valid.")
             return
+        else:
+            from iops.config.loader import validate_yaml_config
+            errors = validate_yaml_config(args.config_file, machine=machine)
+            if errors:
+                logger.error(f"Configuration validation failed with {len(errors)} error(s):")
+                for i, err in enumerate(errors, 1):
+                    logger.error(f"  {i}. {err}")
+                return
+            else:
+                logger.info("Configuration is valid.")
+                return
 
     # ---- archive command ----
     if args.command == 'archive':

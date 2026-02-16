@@ -98,6 +98,7 @@ Checks the YAML syntax and validates all configuration settings.
 
 **Options:**
 - `--machine NAME` - Validate config with machine-specific overrides applied
+- `--resolve [FILE]` - Output the fully resolved config as YAML. Prints to stdout when no file is given, or writes to `FILE`
 
 **Examples:**
 
@@ -107,6 +108,15 @@ iops check benchmark.yaml
 
 # Validate with machine overrides
 iops check benchmark.yaml --machine cluster
+
+# Print resolved config to stdout
+iops check benchmark.yaml --resolve
+
+# Print resolved config with machine overrides applied
+iops check benchmark.yaml --machine cluster --resolve
+
+# Write resolved config to a file
+iops check benchmark.yaml --machine cluster --resolve /tmp/resolved.yaml
 ```
 
 ### generate - Create Config Template

@@ -10,6 +10,7 @@ from iops.config.loader import (
     _apply_machine_override,
     _resolve_machine_name,
     load_generic_config,
+    resolve_yaml_config,
     validate_yaml_config,
 )
 from iops.config.models import ConfigValidationError
@@ -582,3 +583,283 @@ class TestJeromeExample:
         cfg = load_generic_config(config_file, logger)
         assert cfg.benchmark.name == "IOR Benchmark"
         assert cfg.vars["scratch"].expr == "/default/scratch"
+
+
+# =========================================================================
+# resolve_yaml_config tests
+# =========================================================================
+
+class TestResolveYamlConfig:
+    def _write_config(self, tmp_path, config_dict):
+        config_file = tmp_path / "config.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(config_dict, f)
+        return config_file
+
+    def _base_config_dict(self, tmp_path):
+        workdir = tmp_path / "workdir"
+        workdir.mkdir(parents=True, exist_ok=True)
+        return {
+            "benchmark": {
+                "name": "Test Benchmark",
+                "workdir": str(workdir),
+                "executor": "local",
+                "repetitions": 2,
+            },
+            "vars": {
+                "nodes": {"type": "int", "sweep": {"mode": "list", "values": [1, 2, 4]}},
+                "ppn": {"type": "int", "sweep": {"mode": "list", "values": [4, 8]}},
+                "scratch": {"type": "str", "expr": "/default/scratch"},
+                "ntasks": {"type": "int", "expr": "{{ nodes * ppn }}"},
+            },
+            "command": {"template": "echo '{{ nodes }} {{ scratch }}'"},
+            "scripts": [
+                {
+                    "name": "run",
+                    "script_template": "#!/bin/bash\nmpirun -np {{ ntasks }} {{ command.template }}",
+                    "parser": {
+                        "file": "{{ execution_dir }}/output.txt",
+                        "metrics": [{"name": "throughput"}],
+                        "parser_script": "def parse(file_path):\n    return {'throughput': 1.0}",
+                    },
+                }
+            ],
+            "output": {"sink": {"type": "csv", "path": "{{ workdir }}/results.csv"}},
+        }
+
+    # --- basic resolve ---
+
+    def test_resolve_without_machine_strips_machines(self, tmp_path):
+        """Resolving without --machine returns base config, machines stripped."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "cluster": {"vars": {"ppn": {"type": "int", "expr": "32"}}},
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file)
+        assert errors == []
+        assert "machines" not in merged
+        # Base values preserved (override NOT applied)
+        assert merged["vars"]["ppn"]["sweep"]["values"] == [4, 8]
+
+    def test_resolve_without_machines_section(self, tmp_path):
+        """Resolving a config that has no machines section at all."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file)
+        assert errors == []
+        assert "machines" not in merged
+        assert merged["benchmark"]["name"] == "Test Benchmark"
+
+    # --- machine overrides ---
+
+    def test_resolve_with_machine_applies_overrides(self, tmp_path):
+        """Resolving with --machine applies all override sections."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "cluster": {
+                "benchmark": {"executor": "slurm", "repetitions": 5},
+                "vars": {
+                    "nodes": {"type": "int", "sweep": {"mode": "list", "values": [4, 8, 16, 32]}},
+                    "ppn": {"type": "int", "sweep": {"mode": "list", "values": [16, 32, 64]}},
+                    "scratch": {"type": "str", "expr": "/lustre/scratch"},
+                },
+                "scripts": [
+                    {
+                        "name": "run",
+                        "script_template": "#!/bin/bash\n#SBATCH --nodes={{ nodes }}\nsrun {{ command.template }}",
+                    }
+                ],
+                "output": {"sink": {"path": "{{ workdir }}/cluster_results.csv"}},
+            },
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file, machine="cluster")
+        assert errors == []
+        assert "machines" not in merged
+        # benchmark overrides
+        assert merged["benchmark"]["executor"] == "slurm"
+        assert merged["benchmark"]["repetitions"] == 5
+        assert merged["benchmark"]["name"] == "Test Benchmark"  # inherited
+        # vars overrides
+        assert merged["vars"]["nodes"]["sweep"]["values"] == [4, 8, 16, 32]
+        assert merged["vars"]["ppn"]["sweep"]["values"] == [16, 32, 64]
+        assert merged["vars"]["scratch"]["expr"] == "/lustre/scratch"
+        assert merged["vars"]["ntasks"]["expr"] == "{{ nodes * ppn }}"  # inherited
+        # scripts: template overridden, parser inherited
+        assert len(merged["scripts"]) == 1
+        assert "SBATCH" in merged["scripts"][0]["script_template"]
+        assert "parser" in merged["scripts"][0]
+        assert merged["scripts"][0]["parser"]["metrics"][0]["name"] == "throughput"
+        # output overridden
+        assert merged["output"]["sink"]["path"] == "{{ workdir }}/cluster_results.csv"
+        assert merged["output"]["sink"]["type"] == "csv"  # inherited
+
+    def test_resolve_minimal_machine_inherits_everything(self, tmp_path):
+        """A machine that only changes repetitions inherits everything else."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "ci": {"benchmark": {"repetitions": 1}},
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file, machine="ci")
+        assert errors == []
+        assert merged["benchmark"]["repetitions"] == 1
+        assert merged["benchmark"]["executor"] == "local"
+        assert merged["vars"]["nodes"]["sweep"]["values"] == [1, 2, 4]
+        assert merged["vars"]["scratch"]["expr"] == "/default/scratch"
+
+    def test_resolve_multiple_machines_independent(self, tmp_path):
+        """Each machine produces different resolved output."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "fast": {"benchmark": {"repetitions": 1}},
+            "full": {"benchmark": {"repetitions": 10}},
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged_fast, errors_fast = resolve_yaml_config(config_file, machine="fast")
+        merged_full, errors_full = resolve_yaml_config(config_file, machine="full")
+        assert errors_fast == [] and errors_full == []
+        assert merged_fast["benchmark"]["repetitions"] == 1
+        assert merged_full["benchmark"]["repetitions"] == 10
+
+    # --- sweep/expr mutual exclusion ---
+
+    def test_resolve_sweep_to_expr_clears_sweep(self, tmp_path):
+        """Override provides expr for a swept var → sweep removed."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "fixed": {"vars": {"nodes": {"type": "int", "expr": "1"}}},
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file, machine="fixed")
+        assert errors == []
+        assert merged["vars"]["nodes"]["expr"] == "1"
+        assert "sweep" not in merged["vars"]["nodes"]
+
+    def test_resolve_expr_to_sweep_clears_expr(self, tmp_path):
+        """Override provides sweep for a derived var → expr removed."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "swept": {
+                "vars": {
+                    "scratch": {
+                        "type": "str",
+                        "sweep": {"mode": "list", "values": ["/lustre", "/beegfs"]},
+                    }
+                }
+            },
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file, machine="swept")
+        assert errors == []
+        assert merged["vars"]["scratch"]["sweep"]["values"] == ["/lustre", "/beegfs"]
+        assert "expr" not in merged["vars"]["scratch"]
+
+    # --- round-trip: resolved YAML is itself valid ---
+
+    def test_resolve_output_is_valid_config(self, tmp_path):
+        """The resolved dict can be written as YAML and re-validated."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "cluster": {
+                "benchmark": {"executor": "slurm", "repetitions": 5},
+                "vars": {"scratch": {"type": "str", "expr": "/lustre"}},
+            },
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file, machine="cluster")
+        assert errors == []
+
+        # Write merged dict back as YAML and validate it
+        resolved_file = tmp_path / "resolved.yaml"
+        with open(resolved_file, "w") as f:
+            yaml.dump(merged, f)
+
+        roundtrip_errors = validate_yaml_config(resolved_file)
+        assert roundtrip_errors == []
+
+    # --- error cases ---
+
+    def test_resolve_unknown_machine(self, tmp_path):
+        """Unknown machine name returns error with available list."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {"cluster_a": {"benchmark": {"repetitions": 1}}}
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file, machine="nonexistent")
+        assert len(errors) == 1
+        assert "Unknown machine" in errors[0]
+        assert "cluster_a" in errors[0]
+        assert merged == {}
+
+    def test_resolve_invalid_config_returns_errors(self, tmp_path):
+        """Invalid config (empty vars) returns validation error."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["vars"] = {}
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file)
+        assert len(errors) > 0
+        assert merged == {}
+
+    def test_resolve_missing_file(self, tmp_path):
+        """Non-existent config file returns error."""
+        merged, errors = resolve_yaml_config(tmp_path / "nonexistent.yaml")
+        assert len(errors) == 1
+        assert "not found" in errors[0]
+        assert merged == {}
+
+    def test_resolve_invalid_machine_override_keys(self, tmp_path):
+        """Machine override with invalid section keys returns error during structure validation."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {"bad": {"invalid_section": {"x": 1}}}
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        # Even without --machine, structure validation catches invalid keys
+        merged, errors = resolve_yaml_config(config_file)
+        assert len(errors) > 0
+        assert "invalid override keys" in errors[0]
+
+    # --- machine adds new variable ---
+
+    def test_resolve_machine_adds_new_var(self, tmp_path):
+        """Machine override can introduce a new variable."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "cluster": {
+                "vars": {"mpi_module": {"type": "str", "expr": "openmpi/4.1"}},
+            },
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        merged, errors = resolve_yaml_config(config_file, machine="cluster")
+        assert errors == []
+        assert "mpi_module" in merged["vars"]
+        assert merged["vars"]["mpi_module"]["expr"] == "openmpi/4.1"
+        # Original vars still present
+        assert "nodes" in merged["vars"]
+        assert "ppn" in merged["vars"]
+
+    # --- IOPS_MACHINE env var ---
+
+    def test_resolve_picks_up_env_var(self, tmp_path, monkeypatch):
+        """resolve_yaml_config uses IOPS_MACHINE when no machine arg given."""
+        cfg_dict = self._base_config_dict(tmp_path)
+        cfg_dict["machines"] = {
+            "from_env": {"benchmark": {"repetitions": 7}},
+        }
+        config_file = self._write_config(tmp_path, cfg_dict)
+
+        monkeypatch.setenv("IOPS_MACHINE", "from_env")
+        merged, errors = resolve_yaml_config(config_file)
+        assert errors == []
+        assert merged["benchmark"]["repetitions"] == 7

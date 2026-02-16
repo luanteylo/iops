@@ -96,6 +96,13 @@ iops check config.yaml                  # Validates structure including machines
 iops check config.yaml --machine cluster  # Validates merged config
 ```
 
+Use `--resolve` to inspect the final merged YAML after overrides are applied. This is useful for debugging which values a machine override produces:
+
+```bash
+iops check config.yaml --machine cluster --resolve            # Print to stdout
+iops check config.yaml --machine cluster --resolve merged.yaml  # Write to file
+```
+
 Generate a starter template with machine overrides using:
 
 ```bash
@@ -282,7 +289,7 @@ machines:
 
 1. **Start with a working base config** — ensure it works in at least one environment before adding overrides
 2. **Override only what differs** — don't repeat unchanged settings; the merge handles inheritance
-3. **Use `--dry-run`** to verify the merged configuration before execution
+3. **Use `iops check --resolve`** to inspect the fully merged YAML after overrides are applied
 4. **Use semantic names** — `grid5000_lyon` is clearer than `machine2`
 5. **Use `IOPS_MACHINE` in scripts** for automation and CI/CD pipelines
 6. **Include full key paths** — override `benchmark.slurm_options`, not just `slurm_options`

@@ -1521,6 +1521,66 @@ def load_report_config(config_path: Path) -> ReportingConfig:
 
 # ----------------- Validation functions ----------------- #
 
+def resolve_yaml_config(config_path: Path, machine: Optional[str] = None) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Validate a YAML configuration and return the merged data dict.
+
+    Same flow as validate_yaml_config() but also returns the final merged
+    dict (after machine overrides, with the machines section stripped).
+    Useful for ``iops check --resolve`` and tests.
+
+    Args:
+        config_path: Path to the YAML configuration file
+        machine: Machine name for config overrides (or use IOPS_MACHINE env var)
+
+    Returns:
+        Tuple of (data, errors):
+            - data: Merged YAML dict (empty dict when errors are present)
+            - errors: List of error messages (empty if valid)
+    """
+    # 1. Structural validation
+    data, struct_errors = _validate_structure(config_path)
+    if struct_errors:
+        return {}, struct_errors
+
+    # 2. Apply machine override if specified
+    machine_name = _resolve_machine_name(machine)
+    if machine_name:
+        try:
+            data = _apply_machine_override(data, machine_name)
+        except ConfigValidationError as e:
+            return {}, [str(e)]
+    else:
+        data.pop("machines", None)
+
+    # Keep a copy of the merged dict before parsing consumes it
+    import copy
+    merged = copy.deepcopy(data)
+
+    # 3. Try to parse into config object
+    errors: List[str] = []
+    config_dir = config_path.parent
+    try:
+        cfg = _parse_to_config(data, config_dir)
+    except KeyError as e:
+        return {}, [f"Missing required field: {e}"]
+    except ConfigValidationError as e:
+        return {}, [str(e)]
+    except Exception as e:
+        return {}, [f"Error parsing configuration: {e}"]
+
+    # 4. Semantic validation
+    try:
+        validate_generic_config(cfg)
+    except ConfigValidationError as e:
+        errors.append(str(e))
+
+    if errors:
+        return {}, errors
+
+    return merged, []
+
+
 def validate_yaml_config(config_path: Path, machine: Optional[str] = None) -> List[str]:
     """
     Validate a YAML configuration file and return a list of all errors found.
