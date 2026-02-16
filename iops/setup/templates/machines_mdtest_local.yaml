@@ -1,0 +1,83 @@
+
+# =============================================================================
+# Machine Overrides
+# =============================================================================
+#
+# Use --machine to run the same benchmark on different systems.
+#
+# The base config above runs mdtest locally. The 'cluster' machine below
+# overrides settings for SLURM cluster execution.
+#
+# Usage:
+#   iops run config.yaml                     # Run locally (base config)
+#   iops run config.yaml --machine cluster   # Run on SLURM cluster
+#   iops check config.yaml --machine cluster # Validate cluster config
+#   IOPS_MACHINE=cluster iops run config.yaml  # Via environment variable
+#
+# Only what you override is changed — everything else is inherited from
+# the base config. For example, files_per_proc, tree_depth, and the parser
+# are reused as-is.
+# =============================================================================
+
+machines:
+  cluster:
+    benchmark:
+      executor: "slurm"
+
+    vars:
+      # On the cluster, sweep nodes and processes per node
+      nodes:
+        type: int
+        sweep:
+          mode: list
+          values: [1, 2, 4]
+
+      processes_per_node:
+        type: int
+        sweep:
+          mode: list
+          values: [4, 8, 16]
+
+      # Override 'processes' to be derived from nodes x ppn
+      # (in the base config, processes is swept — the override automatically
+      # replaces sweep with expr)
+      processes:
+        type: int
+        expr: "{{ nodes * processes_per_node }}"
+
+      # Use cluster filesystem for test directory
+      test_dir:
+        type: str
+        expr: "/path/to/testfs/mdtest_{{ execution_id }}"
+
+    scripts:
+      - name: "mdtest"
+        # Override the script with SLURM directives
+        # The parser section is inherited from the base config
+        script_template: |
+          #!/bin/bash
+
+          #SBATCH --job-name=mdtest_{{ execution_id }}
+          #SBATCH --nodes={{ nodes }}
+          #SBATCH --ntasks={{ processes }}
+          #SBATCH --ntasks-per-node={{ processes_per_node }}
+          #SBATCH --time=01:00:00
+          #SBATCH --chdir={{ execution_dir }}
+          #SBATCH -o batch%j.out
+          #SBATCH -e batch%j.err
+          #SBATCH --exclusive
+
+          # Customize for your cluster:
+          # #SBATCH --partition=your_partition
+          # #SBATCH --account=your_account
+
+          module purge
+          module load mpi
+
+          mkdir -p {{ test_dir }}
+          mpirun {{ command.template }} > {{ output_file }} 2>&1
+          rm -rf {{ test_dir }}
+
+    output:
+      sink:
+        path: "/path/on/cluster/results.csv"

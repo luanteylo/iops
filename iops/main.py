@@ -120,6 +120,8 @@ Examples:
                             help="Only use cached results; skip tests not in cache (requires cache_file)")
     run_parser.add_argument('--fail-fast', action='store_true',
                             help="Stop execution on first test failure")
+    run_parser.add_argument('--machine', type=str, default=None, metavar='NAME',
+                            help="Apply machine-specific config overrides (or set IOPS_MACHINE env var)")
     run_parser.add_argument('--meline', action='store_true',
                             help=argparse.SUPPRESS)  # Easter egg: hide banner
     _add_common_args(run_parser)
@@ -187,6 +189,10 @@ Examples:
     generate_parser.add_argument('--full', action='store_true',
                                  help="Generate fully documented template with all options")
 
+    # Machine overrides
+    generate_parser.add_argument('--machines', action='store_true',
+                                 help="Include a 'machines' section with cross-executor overrides (local <-> SLURM)")
+
     # Examples
     generate_parser.add_argument('--examples', action='store_true',
                                  help="Copy example configurations and scripts to ./examples/")
@@ -197,6 +203,8 @@ Examples:
     check_parser = subparsers.add_parser('check', help='Validate a configuration file',
                                           description='Validate a YAML configuration file without executing.')
     check_parser.add_argument('config_file', type=Path, help="Path to the YAML configuration file")
+    check_parser.add_argument('--machine', type=str, default=None, metavar='NAME',
+                              help="Apply machine-specific config overrides (or set IOPS_MACHINE env var)")
     _add_common_args(check_parser)
 
     # ---- archive command with subcommands ----
@@ -446,7 +454,8 @@ def main():
                 executor=executor,
                 benchmark=benchmark,
                 full_template=args.full,
-                copy_examples=args.examples
+                copy_examples=args.examples,
+                include_machines=args.machines,
             )
             
         except KeyboardInterrupt:
@@ -549,7 +558,7 @@ def main():
     # ---- check command ----
     if args.command == 'check':
         from iops.config.loader import validate_yaml_config
-        errors = validate_yaml_config(args.config_file)
+        errors = validate_yaml_config(args.config_file, machine=getattr(args, 'machine', None))
         if errors:
             logger.error(f"Configuration validation failed with {len(errors)} error(s):")
             for i, err in enumerate(errors, 1):
@@ -754,7 +763,7 @@ def main():
     # ---- run command ----
     if args.command == 'run':
         try:
-            cfg = load_generic_config(args.config_file, logger=logger, dry_run=args.dry_run)
+            cfg = load_generic_config(args.config_file, logger=logger, dry_run=args.dry_run, machine=args.machine)
         except ConfigValidationError as e:
             logger.error(f"Configuration error: {e}")
             if args.verbose:

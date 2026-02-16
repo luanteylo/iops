@@ -17,6 +17,14 @@ class BenchmarkWizard:
         ("mdtest", "slurm"): "templates/mdtest_slurm.yaml",
     }
 
+    # Machines snippet mapping: (benchmark, executor) -> snippet file
+    MACHINES_SNIPPETS = {
+        ("ior", "local"): "templates/machines_ior_local.yaml",
+        ("ior", "slurm"): "templates/machines_ior_slurm.yaml",
+        ("mdtest", "local"): "templates/machines_mdtest_local.yaml",
+        ("mdtest", "slurm"): "templates/machines_mdtest_slurm.yaml",
+    }
+
     def __init__(self):
         self.setup_dir = Path(__file__).parent
         self.full_template_path = self.setup_dir / "template_full.yaml"
@@ -38,7 +46,8 @@ class BenchmarkWizard:
         executor: str = "local",
         benchmark: str = "ior",
         full_template: bool = False,
-        copy_examples: bool = False
+        copy_examples: bool = False,
+        include_machines: bool = False,
     ) -> Optional[str]:
         """
         Generate a configuration template.
@@ -49,6 +58,7 @@ class BenchmarkWizard:
             benchmark: Benchmark type ("ior" or "mdtest")
             full_template: If True, generate fully documented template with all options
             copy_examples: If True, copy example configurations and scripts
+            include_machines: If True, append a machines section with cross-executor overrides
 
         Returns:
             Path to the generated file, or None if cancelled.
@@ -87,7 +97,17 @@ class BenchmarkWizard:
                 return None
 
             shutil.copy(template_path, output_file)
+
+            # Append machines section if requested
+            if include_machines and not full_template:
+                self._append_machines_snippet(output_file, benchmark, executor)
+
             print(f"\n[OK] Configuration template saved to: {output_file.absolute()}")
+
+            if include_machines and not full_template:
+                machine_name = "cluster" if executor == "local" else "local"
+                print(f"     Includes 'machines' section with '{machine_name}' override.")
+                print(f"     Run with: iops run {output_file.name} --machine {machine_name}")
 
             # Copy examples folder only if requested
             examples_copied = False
@@ -99,6 +119,22 @@ class BenchmarkWizard:
         except Exception as e:
             print(f"\n[X] Error saving file: {e}")
             return None
+
+    def _append_machines_snippet(self, output_file: Path, benchmark: str, executor: str) -> None:
+        """Append a machines override section to the generated template."""
+        snippet_file = self.MACHINES_SNIPPETS.get((benchmark, executor))
+        if not snippet_file:
+            return
+
+        snippet_path = self.setup_dir / snippet_file
+        if not snippet_path.exists():
+            return
+
+        with open(snippet_path, "r", encoding="utf-8") as f:
+            snippet = f.read()
+
+        with open(output_file, "a", encoding="utf-8") as f:
+            f.write(snippet)
 
     def _copy_examples_folder(self, output_file: Path) -> bool:
         """
