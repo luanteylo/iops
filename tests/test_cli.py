@@ -316,7 +316,8 @@ class TestGenerate:
                 executor='slurm',
                 benchmark='ior',
                 full_template=False,
-                copy_examples=False
+                copy_examples=False,
+                include_machines=False,
             )
 
     def test_generate_cancelled(self):

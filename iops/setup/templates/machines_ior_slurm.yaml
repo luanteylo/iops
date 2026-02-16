@@ -1,0 +1,70 @@
+
+# =============================================================================
+# Machine Overrides
+# =============================================================================
+#
+# Use --machine to run the same benchmark on different systems.
+#
+# The base config above targets a SLURM cluster. The 'local' machine
+# below overrides settings for running on a local workstation.
+#
+# Usage:
+#   iops run config.yaml                   # Run on SLURM (base config)
+#   iops run config.yaml --machine local   # Run locally
+#   iops check config.yaml --machine local # Validate local config
+#   IOPS_MACHINE=local iops run config.yaml  # Via environment variable
+#
+# Only what you override is changed — everything else is inherited from
+# the base config. For example, volume_size_gb and the parser are reused as-is.
+# =============================================================================
+
+machines:
+  local:
+    benchmark:
+      executor: "local"
+
+    vars:
+      # On the local machine, sweep a simple process count
+      processes:
+        type: int
+        sweep:
+          mode: list
+          values: [1, 2, 4, 8]
+
+      # Fix nodes to 1 (not swept locally)
+      # (in the base config, nodes is swept — the override automatically
+      # replaces sweep with expr)
+      nodes:
+        type: int
+        expr: "1"
+
+      # Map processes_per_node to local process count
+      processes_per_node:
+        type: int
+        expr: "{{ processes }}"
+
+      # Total tasks (same as processes on a single node)
+      ntasks:
+        type: int
+        expr: "{{ processes }}"
+
+      # Recompute block size for single-node
+      block_mb:
+        type: int
+        expr: "(volume_size_gb * 1024) // processes"
+
+    scripts:
+      - name: "ior"
+        # Override the script for local execution (no SBATCH directives)
+        # The parser section is inherited from the base config
+        script_template: |
+          #!/bin/bash
+          set -euo pipefail
+
+          echo "Running IOR locally with {{ processes }} processes"
+          mpirun -np {{ processes }} {{ command.template }}
+          echo "Completed repetition {{ repetition }}"
+
+    output:
+      sink:
+        path: "./local_results.csv"

@@ -9,6 +9,10 @@ All notable changes to IOPS are documented here.
 ### Added
 - `list` variable type for indexed access to correlated parameter arrays
 - `--add VAR[:TYPE]=VALUE` option for `iops cache rebuild` to add typed variables to all cache entries
+- `machines` section for per-machine config overrides with deep-merge semantics
+- `--machine NAME` flag (and `IOPS_MACHINE` env var) for `iops run` and `iops check`
+- `iops check --resolve [FILE]` to output the fully merged config as YAML
+- `iops generate --machines` to scaffold a config with machine override examples
 
 ## [3.5.0] - 2026-02-01
 

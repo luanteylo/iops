@@ -51,7 +51,7 @@ from iops.config.models import (
 # ----------------- Allowed Keys for Config Validation ----------------- #
 
 # Allowed keys for each config section (used for unknown key detection)
-ALLOWED_TOP_LEVEL_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting"}
+ALLOWED_TOP_LEVEL_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting", "machines"}
 
 ALLOWED_BENCHMARK_KEYS = {
     "name", "description", "workdir", "repetitions", "cache_file",
@@ -91,6 +91,8 @@ ALLOWED_BAYESIAN_CONFIG_KEYS = {
 }
 
 ALLOWED_CONSTRAINT_KEYS = {"name", "rule", "violation_policy", "description"}
+
+ALLOWED_MACHINE_OVERRIDE_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting"}
 
 ALLOWED_REPORTING_KEYS = {
     "enabled", "output_dir", "output_filename", "theme", "sections",
@@ -671,6 +673,88 @@ def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) ->
             )
 
 
+# ----------------- Machine override functions ----------------- #
+
+def _resolve_machine_name(machine_arg: Optional[str]) -> Optional[str]:
+    """Resolve the machine name from CLI arg or IOPS_MACHINE env var.
+
+    CLI argument takes precedence over environment variable.
+    Returns None if neither is set.
+    """
+    if machine_arg:
+        return machine_arg
+    return os.environ.get("IOPS_MACHINE")
+
+
+def _apply_machine_override(data: Dict[str, Any], machine_name: str) -> Dict[str, Any]:
+    """Apply machine-specific overrides to the raw YAML data.
+
+    Extracts the named machine's overrides from data["machines"],
+    validates the override keys, and deep-merges into the base config.
+
+    Args:
+        data: Raw parsed YAML dict (must contain "machines" section)
+        machine_name: Name of the machine to apply
+
+    Returns:
+        New merged dict with machine overrides applied (machines section removed)
+
+    Raises:
+        ConfigValidationError: If machine name not found or invalid override keys
+    """
+    from iops.config.merge import deep_merge
+
+    machines = data.get("machines")
+    if not machines or not isinstance(machines, dict):
+        raise ConfigValidationError(
+            f"--machine '{machine_name}' was specified but no 'machines' section found in config"
+        )
+
+    if machine_name not in machines:
+        available = sorted(machines.keys())
+        raise ConfigValidationError(
+            f"Unknown machine '{machine_name}'. Available machines: {available}"
+        )
+
+    override = machines[machine_name]
+    if not isinstance(override, dict):
+        raise ConfigValidationError(
+            f"machines.{machine_name} must be a dictionary of config overrides"
+        )
+
+    # Validate override keys
+    invalid_keys = set(override.keys()) - ALLOWED_MACHINE_OVERRIDE_KEYS
+    if invalid_keys:
+        raise ConfigValidationError(
+            f"machines.{machine_name} contains invalid override keys: {sorted(invalid_keys)}. "
+            f"Allowed keys: {sorted(ALLOWED_MACHINE_OVERRIDE_KEYS)}"
+        )
+
+    # Build base config (everything except machines)
+    base = {k: v for k, v in data.items() if k != "machines"}
+
+    merged = deep_merge(base, override)
+
+    # Post-merge fixup: sweep and expr are mutually exclusive in vars.
+    # When a machine override provides one, the other must be cleared.
+    override_vars = override.get("vars", {}) or {}
+    merged_vars = merged.get("vars", {}) or {}
+    for var_name, override_var in override_vars.items():
+        if not isinstance(override_var, dict) or var_name not in merged_vars:
+            continue
+        merged_var = merged_vars[var_name]
+        if not isinstance(merged_var, dict):
+            continue
+        # If override provides expr, clear sweep from merged result
+        if "expr" in override_var and "sweep" in merged_var:
+            merged_var.pop("sweep")
+        # If override provides sweep, clear expr from merged result
+        elif "sweep" in override_var and "expr" in merged_var:
+            merged_var.pop("expr")
+
+    return merged
+
+
 # ----------------- Main loading function ----------------- #
 
 def _validate_structure(config_path: Path) -> Tuple[Optional[Dict[str, Any]], List[str]]:
@@ -728,6 +812,25 @@ def _validate_structure(config_path: Path) -> Tuple[Optional[Dict[str, Any]], Li
     if key_errors:
         errors.extend(key_errors)
         return None, errors
+
+    # Validate machines section structure (even without --machine)
+    if "machines" in data and data["machines"] is not None:
+        machines = data["machines"]
+        if not isinstance(machines, dict):
+            errors.append("'machines' section must be a dictionary mapping machine names to override configs")
+            return None, errors
+        for machine_name, machine_data in machines.items():
+            if not isinstance(machine_data, dict):
+                errors.append(f"machines.{machine_name} must be a dictionary of config overrides")
+                continue
+            invalid_keys = set(machine_data.keys()) - ALLOWED_MACHINE_OVERRIDE_KEYS
+            if invalid_keys:
+                errors.append(
+                    f"machines.{machine_name} contains invalid override keys: {sorted(invalid_keys)}. "
+                    f"Allowed keys: {sorted(ALLOWED_MACHINE_OVERRIDE_KEYS)}"
+                )
+        if errors:
+            return None, errors
 
     return data, []
 
@@ -1156,20 +1259,24 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     )
 
 
-def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> GenericBenchmarkConfig:
+def load_generic_config(
+    config_path: Path, logger, dry_run: bool = False, machine: Optional[str] = None
+) -> GenericBenchmarkConfig:
     """
     Load and parse a YAML configuration file into a GenericBenchmarkConfig object.
 
     This is the main entry point for loading configurations. It:
     1. Validates structure (file exists, valid YAML, required sections)
-    2. Parses into config objects
-    3. Validates semantics (single source of truth: validate_generic_config)
-    4. Creates workdir
+    2. Applies machine override (if --machine or IOPS_MACHINE)
+    3. Parses into config objects
+    4. Validates semantics (single source of truth: validate_generic_config)
+    5. Creates workdir
 
     Args:
         config_path: Path to the YAML configuration file
         logger: Logger instance for debug messages
         dry_run: If True, create 'dryrun_' folders instead of 'run_' folders
+        machine: Machine name for config overrides (or use IOPS_MACHINE env var)
 
     Returns:
         Validated GenericBenchmarkConfig object with workdir created
@@ -1182,14 +1289,22 @@ def load_generic_config(config_path: Path, logger, dry_run: bool = False) -> Gen
     if errors:
         raise ConfigValidationError("\n".join(errors))
 
-    # 2. Parse to config object
+    # 2. Apply machine override if specified
+    machine_name = _resolve_machine_name(machine)
+    if machine_name:
+        data = _apply_machine_override(data, machine_name)
+        logger.info(f"Applied machine override: '{machine_name}'")
+    else:
+        data.pop("machines", None)
+
+    # 3. Parse to config object
     config_dir = config_path.parent
     cfg = _parse_to_config(data, config_dir)
 
-    # 3. Semantic validation (single source of truth)
+    # 4. Semantic validation (single source of truth)
     validate_generic_config(cfg)
 
-    # 4. Create workdir (side effect)
+    # 5. Create workdir (side effect)
     create_workdir(cfg, logger, dry_run=dry_run)
 
     return cfg
@@ -1406,18 +1521,80 @@ def load_report_config(config_path: Path) -> ReportingConfig:
 
 # ----------------- Validation functions ----------------- #
 
-def validate_yaml_config(config_path: Path) -> List[str]:
+def resolve_yaml_config(config_path: Path, machine: Optional[str] = None) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Validate a YAML configuration and return the merged data dict.
+
+    Same flow as validate_yaml_config() but also returns the final merged
+    dict (after machine overrides, with the machines section stripped).
+    Useful for ``iops check --resolve`` and tests.
+
+    Args:
+        config_path: Path to the YAML configuration file
+        machine: Machine name for config overrides (or use IOPS_MACHINE env var)
+
+    Returns:
+        Tuple of (data, errors):
+            - data: Merged YAML dict (empty dict when errors are present)
+            - errors: List of error messages (empty if valid)
+    """
+    # 1. Structural validation
+    data, struct_errors = _validate_structure(config_path)
+    if struct_errors:
+        return {}, struct_errors
+
+    # 2. Apply machine override if specified
+    machine_name = _resolve_machine_name(machine)
+    if machine_name:
+        try:
+            data = _apply_machine_override(data, machine_name)
+        except ConfigValidationError as e:
+            return {}, [str(e)]
+    else:
+        data.pop("machines", None)
+
+    # Keep a copy of the merged dict before parsing consumes it
+    import copy
+    merged = copy.deepcopy(data)
+
+    # 3. Try to parse into config object
+    errors: List[str] = []
+    config_dir = config_path.parent
+    try:
+        cfg = _parse_to_config(data, config_dir)
+    except KeyError as e:
+        return {}, [f"Missing required field: {e}"]
+    except ConfigValidationError as e:
+        return {}, [str(e)]
+    except Exception as e:
+        return {}, [f"Error parsing configuration: {e}"]
+
+    # 4. Semantic validation
+    try:
+        validate_generic_config(cfg)
+    except ConfigValidationError as e:
+        errors.append(str(e))
+
+    if errors:
+        return {}, errors
+
+    return merged, []
+
+
+def validate_yaml_config(config_path: Path, machine: Optional[str] = None) -> List[str]:
     """
     Validate a YAML configuration file and return a list of all errors found.
 
     This function uses the same validation logic as load_generic_config() but
     collects errors instead of raising exceptions. It delegates to:
     1. _validate_structure() for structural validation
-    2. _parse_to_config() for parsing
-    3. validate_generic_config() for semantic validation
+    2. Machine override application (if specified)
+    3. _parse_to_config() for parsing
+    4. validate_generic_config() for semantic validation
 
     Args:
         config_path: Path to the YAML configuration file
+        machine: Machine name for config overrides (or use IOPS_MACHINE env var)
 
     Returns:
         List of error messages (empty if valid)
@@ -1429,7 +1606,17 @@ def validate_yaml_config(config_path: Path) -> List[str]:
     if struct_errors:
         return struct_errors
 
-    # 2. Try to parse into config object
+    # 2. Apply machine override if specified
+    machine_name = _resolve_machine_name(machine)
+    if machine_name:
+        try:
+            data = _apply_machine_override(data, machine_name)
+        except ConfigValidationError as e:
+            return [str(e)]
+    else:
+        data.pop("machines", None)
+
+    # 3. Try to parse into config object
     config_dir = config_path.parent
     try:
         cfg = _parse_to_config(data, config_dir)
@@ -1443,7 +1630,7 @@ def validate_yaml_config(config_path: Path) -> List[str]:
         errors.append(f"Error parsing configuration: {e}")
         return errors
 
-    # 3. Semantic validation (single source of truth)
+    # 4. Semantic validation (single source of truth)
     try:
         validate_generic_config(cfg)
     except ConfigValidationError as e:

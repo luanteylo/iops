@@ -16,6 +16,7 @@ title: "IOPS YAML Format Reference"
 6. [`scripts`](#scripts)
 7. [`output`](#output)
 8. [`reporting` (optional)](#reporting-optional)
+9. [`machines` (optional)](#machines-optional)
 
 See also: [Templating and Context Reference](../templating-and-context) for Jinja2 syntax, dynamic values, conditionals, and context variables.
 
@@ -31,6 +32,7 @@ command:         # Command template and labels
 scripts:         # Execution scripts and parsers
 output:          # Output configuration (CSV, Parquet, SQLite)
 reporting:       # (Optional) Report generation settings
+machines:        # (Optional) Per-machine config overrides
 ```
 
 **Required sections:** `benchmark`, `vars`, `command`, `scripts`, `output`
@@ -978,3 +980,25 @@ reporting:
 ```
 
 </details>
+
+---
+
+## `machines` (optional)
+
+Per-machine configuration overrides. Select at runtime with `--machine NAME` or `IOPS_MACHINE` env var.
+
+```yaml
+machines:
+  machine_name:       # Arbitrary machine identifier
+    benchmark: {}     # Optional: benchmark overrides
+    vars: {}          # Optional: variable overrides
+    command: {}       # Optional: command overrides
+    scripts: []       # Optional: script overrides
+    output: {}        # Optional: output overrides
+    constraints: []   # Optional: constraint overrides
+    reporting: {}     # Optional: reporting overrides
+```
+
+Each machine entry can override any combination of the standard top-level sections. Overrides are deep-merged into the base configuration — only what you specify is changed.
+
+See the [Machine Overrides Guide](machines) for merge rules, examples, and best practices.

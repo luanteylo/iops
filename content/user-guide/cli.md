@@ -51,6 +51,7 @@ Runs the benchmark defined in the configuration file.
 - `--use-cache` - Skip tests with cached results
 - `--cache-only` - Only use cached results; skip tests not in cache (requires `cache_file`)
 - `--fail-fast` - Stop execution on first test failure
+- `--machine NAME` - Apply machine-specific config overrides (or set `IOPS_MACHINE` env var)
 - `--max-core-hours N` - Set core-hours budget limit (SLURM only)
 - `--time-estimate SEC` - Estimated test duration in seconds
 - `--log-file PATH` - Write logs to file
@@ -76,6 +77,13 @@ iops run benchmark.yaml --cache-only
 
 # With budget limit and time estimate
 iops run benchmark.yaml --max-core-hours 1000 --time-estimate 300
+
+# Use machine-specific overrides
+iops run benchmark.yaml --machine cluster
+
+# Or use environment variable
+export IOPS_MACHINE=cluster
+iops run benchmark.yaml
 ```
 
 ### check - Validate Configuration
@@ -83,16 +91,32 @@ iops run benchmark.yaml --max-core-hours 1000 --time-estimate 300
 Validate a configuration file without executing:
 
 ```bash
-iops check <config.yaml>
+iops check <config.yaml> [options]
 ```
 
 Checks the YAML syntax and validates all configuration settings.
+
+**Options:**
+- `--machine NAME` - Validate config with machine-specific overrides applied
+- `--resolve [FILE]` - Output the fully resolved config as YAML. Prints to stdout when no file is given, or writes to `FILE`
 
 **Examples:**
 
 ```bash
 # Validate configuration
 iops check benchmark.yaml
+
+# Validate with machine overrides
+iops check benchmark.yaml --machine cluster
+
+# Print resolved config to stdout
+iops check benchmark.yaml --resolve
+
+# Print resolved config with machine overrides applied
+iops check benchmark.yaml --machine cluster --resolve
+
+# Write resolved config to a file
+iops check benchmark.yaml --machine cluster --resolve /tmp/resolved.yaml
 ```
 
 ### generate - Create Config Template
@@ -109,6 +133,7 @@ Creates a YAML configuration template. By default, generates a simple starter te
 - `--slurm` - Generate template for SLURM executor (default: local)
 - `--mdtest` - Generate template for mdtest benchmark (default: IOR)
 - `--full` - Generate comprehensive template with all options documented
+- `--machines` - Include cross-executor machine overrides section (local + SLURM)
 - `--examples` - Copy example configurations and scripts to output directory
 
 **Templates:**
@@ -140,6 +165,9 @@ iops generate mdtest_slurm.yaml --mdtest --slurm
 
 # Generate comprehensive template with all options
 iops generate full_config.yaml --full
+
+# Generate template with machine overrides (local + SLURM)
+iops generate my_config.yaml --machines
 
 # Generate template and copy example files
 iops generate my_config.yaml --examples
