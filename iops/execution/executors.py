@@ -983,6 +983,10 @@ class SlurmExecutor(BaseExecutor):
         Parser-based success heuristic:
           - if parser.file exists AND parse_metrics_from_execution succeeds => True
           - else => False, and sets test.metadata["__error"].
+          
+        Note: When parser_script is defined, the file existence check is skipped
+        because the script itself is responsible for locating and validating its input.
+        This allows parser_script to handle directories, globs, or other non-file paths.
         """
         parser = test.parser
         if parser is None:
@@ -993,9 +997,19 @@ class SlurmExecutor(BaseExecutor):
         except Exception:
             fpath = None
 
-        if not self._safe_is_file(fpath):
-            test.metadata["__error"] = f"Parser file does not exist: {parser.file}"
-            return False
+        # Only check file existence if no parser_script is defined.
+        # When parser_script is present, it handles its own input validation
+        # and may accept directories, globs, or other non-file paths.
+        has_parser_script = getattr(parser, 'parser_script', None)
+        if not has_parser_script:
+            if not self._safe_is_file(fpath):
+                test.metadata["__error"] = f"Parser file does not exist: {parser.file}"
+                return False
+        else:
+            # With parser_script, only check that the path exists (file OR directory)
+            if fpath and not self._safe_exists(fpath):
+                test.metadata["__error"] = f"Parser path does not exist: {parser.file}"
+                return False
 
         try:
             results = parse_metrics_from_execution(test) or {}
