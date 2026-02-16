@@ -45,6 +45,21 @@ When `--machine NAME` is specified, IOPS deep-merges the machine's overrides int
 | **Other lists** | Replace entirely | `sweep.values`, `exclude` |
 | **Scalars** | Override wins | `benchmark.executor`, `output.sink.path` |
 
+The distinction follows the Kubernetes convention: lists of **named objects** (each item has a `name` key) are merged by identity, while lists of scalars or anonymous objects are replaced wholesale.
+
+**Per-field reference:**
+
+| Config path | List type | Merge behavior |
+|---|---|---|
+| `vars.<var>.sweep.values` | Scalars | **Replace** |
+| `scripts` | Named objects (`name`) | **Merge by name**, append new |
+| `scripts[].parser.metrics` | Named objects (`name`) | **Merge by name**, append new |
+| `constraints` | Named objects (`name`) | **Merge by name**, append new |
+| `output.sink.exclude` | Strings | **Replace** |
+| `output.sink.include` | Strings | **Replace** |
+| `reporting.metrics.<m>.plots` | Anonymous objects | **Replace** |
+| `reporting.default_plots` | Anonymous objects | **Replace** |
+
 ### sweep/expr Mutual Exclusion
 
 Since `sweep` and `expr` are mutually exclusive, IOPS handles conflicts automatically:
