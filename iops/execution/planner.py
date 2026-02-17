@@ -2780,14 +2780,17 @@ class AdaptivePlanner(BasePlanner, HasLogger):
         # Find the probe to get iteration/previous
         probe = self._find_probe_for_test(test)
 
-        context = {
+        # Unpack metrics first so individual metric names (e.g. totalTime, bwMiB)
+        # are directly accessible, then overlay built-in names to prevent collisions.
+        context = dict(metrics) if metrics else {}
+        context.update({
             "exit_code": exit_code,
             "status": status,
             "metrics": metrics,
             "execution_time": execution_time,
             "previous": probe.current_value if probe else None,
             "iteration": probe.iteration if probe else 0,
-        }
+        })
 
         try:
             result = eval(acfg.stop_when, {"__builtins__": {}}, context)

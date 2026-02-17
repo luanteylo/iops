@@ -612,6 +612,41 @@ class TestAdaptivePlannerBasic:
         assert results[label].failed_value is None
         assert results[label].found_value == 40
 
+    def test_stop_when_can_access_metrics_directly(self, tmp_path):
+        """Metrics are unpacked into the stop_when context so they are accessible by name."""
+        cfg_dict = _make_base_config(tmp_path)
+        cfg_dict["vars"]["x"] = {
+            "type": "int",
+            "adaptive": {
+                "initial": 100,
+                "factor": 2,
+                "stop_when": "totalTime > 5",
+            },
+        }
+        # Use a metric named 'totalTime'; the stop_when expression references it directly
+        cfg_dict["scripts"][0]["parser"]["metrics"] = [
+            {"name": "totalTime", "type": "float"},
+        ]
+        cfg_dict["scripts"][0]["parser"]["parser_script"] = (
+            "def parse(file_path):\n"
+            "    return {'totalTime': 10.0}"
+        )
+        cfg = _build_config(tmp_path, cfg_dict)
+
+        def metadata_fn(test):
+            # Supply totalTime=10.0 which is > 5, so the stop condition fires on the first probe
+            return _succeed_metadata(metrics={"totalTime": 10.0})
+
+        results, recorded = _run_planner_pass(cfg, metadata_fn)
+
+        label = "(no swept vars)"
+        # The probe should have stopped immediately because totalTime > 5 on the first value
+        assert results[label].stop_reason == "condition_met"
+        assert results[label].failed_value == 100
+        assert results[label].found_value is None
+        # Only one value (the initial 100) should have been probed
+        assert len(recorded) == 1
+
     def test_metric_based_stop(self, tmp_path):
         """stop_when: 'metrics.get(\"throughput\", 0) < 100', throughput degrades."""
         cfg_dict = _make_base_config(tmp_path)

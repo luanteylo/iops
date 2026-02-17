@@ -107,12 +107,20 @@ The `stop_when` field is a Python expression evaluated after each execution comp
 |----------|------|-------------|
 | `exit_code` | int or None | Process return code (`__returncode`) |
 | `status` | str | Executor status (`SUCCEEDED`, `FAILED`, etc.) |
-| `metrics` | dict | Parsed metrics from the benchmark output (see note below) |
+| `metrics` | dict | Parsed metrics as a dict (e.g., `metrics.get('bwMiB', 0)`) |
+| *metric names* | any | Each parsed metric is also available directly by name (e.g., `totalTime`, `bwMiB`) |
 | `execution_time` | float or None | Wall-clock elapsed time in seconds (from executor timestamps) |
 | `previous` | any | The adaptive value that was just tested (named `previous` for consistency with `step_expr`, where it means "use the previous value to compute the next") |
 | `iteration` | int | 0-based iteration counter |
 
-**Important:** Parsed metrics are only accessible through the `metrics` dict, not as standalone variables. For example, if your parser returns `{"bwMiB": 1024, "totalTime": 4.5}`, use `metrics.get('totalTime', 0)` in `stop_when`, not `totalTime` directly. Using a bare metric name will raise `name 'totalTime' is not defined` and the probe will stop immediately.
+Parsed metrics are available both directly by name and through the `metrics` dict. For example, if your parser returns `{"bwMiB": 1024, "totalTime": 4.5}`, both forms work:
+
+```yaml
+stop_when: "totalTime > 2"                    # direct access
+stop_when: "metrics.get('totalTime', 0) > 2"  # dict access (safer if metric might be missing)
+```
+
+Metric names cannot conflict with the built-in context variables listed above (`exit_code`, `status`, `metrics`, `execution_time`, `previous`, `iteration`). IOPS validates this at config load time.
 
 Note that `execution_time` (wall-clock time from executor timestamps, including queue wait and setup) is different from any timing metric your parser might return (like IOR's `totalTime`, which measures only the benchmark operation itself).
 
@@ -125,7 +133,7 @@ stop_when: "exit_code != 0"
 
 **Stop when a metric degrades below a threshold:**
 ```yaml
-stop_when: "metrics.get('gflops', 0) < 50"
+stop_when: "gflops < 50"
 ```
 
 **Stop when execution takes too long:**
@@ -139,7 +147,7 @@ stop_when: "execution_time is not None and execution_time > 300"
 stop_when: "exit_code != 0 or (execution_time is not None and execution_time > 120)"
 
 # Stop when benchmark succeeds but performance degrades
-stop_when: "exit_code == 0 and metrics.get('gflops', 0) < 50"
+stop_when: "exit_code == 0 and gflops < 50"
 ```
 
 ## Direction

@@ -438,6 +438,66 @@ def test_parser_script_file_loads_successfully(tmp_path, sample_config_dict):
     assert "return {'metric': 42.0}" in config.scripts[0].parser.parser_script
 
 
+# ============================================================================
+# Reserved variable name validation tests
+# ============================================================================
+
+
+def test_var_name_conflicts_with_reserved_template_var_raises_error(tmp_path, sample_config_dict):
+    """Test that a var named after a reserved template variable raises an error."""
+    config_file = tmp_path / "reserved_var.yaml"
+
+    # 'workdir' is a built-in template variable; users cannot redefine it
+    sample_config_dict["vars"]["workdir"] = {
+        "type": "str",
+        "expr": "/some/path",
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="conflicts with a built-in template variable"):
+        load_config(config_file)
+
+
+def test_var_name_not_reserved_passes(tmp_path, sample_config_dict):
+    """Test that a normal, non-reserved var name passes validation."""
+    config_file = tmp_path / "normal_var.yaml"
+
+    # 'nodes' is an ordinary user-defined name and should be accepted
+    sample_config_dict["vars"]["nodes"] = {
+        "type": "int",
+        "sweep": {"mode": "list", "values": [1, 2, 4]},
+    }
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert "nodes" in config.vars
+
+
+# ============================================================================
+# Reserved metric name validation tests
+# ============================================================================
+
+
+def test_metric_name_conflicts_with_reserved_stop_when_var_raises_error(tmp_path, sample_config_dict):
+    """Test that a parser metric named after a reserved stop_when variable raises an error."""
+    config_file = tmp_path / "reserved_metric.yaml"
+
+    # 'status' is a built-in stop_when context variable; it cannot be used as a metric name
+    sample_config_dict["scripts"][0]["parser"]["metrics"] = [
+        {"name": "status", "type": "float"},
+    ]
+
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="conflicts with a built-in stop_when variable"):
+        load_config(config_file)
+
+
 def test_inline_script_not_mistaken_for_file(tmp_path, sample_config_dict):
     """Test that inline scripts with multiple lines are not treated as file paths."""
     # Multi-line inline script should work even if first line looks like a path

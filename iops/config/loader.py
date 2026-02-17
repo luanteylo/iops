@@ -1808,6 +1808,19 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if not cfg.vars:
         raise ConfigValidationError("At least one variable must be defined in 'vars'")
 
+    # Built-in names reserved by the template rendering context
+    _RESERVED_TEMPLATE_VARS = {
+        "benchmark", "workdir", "log_dir", "execution_dir",
+        "execution_id", "repetition", "repetitions", "os_env",
+        "metadata", "command",
+    }
+    for name in cfg.vars:
+        if name in _RESERVED_TEMPLATE_VARS:
+            raise ConfigValidationError(
+                f"var '{name}' conflicts with a built-in template variable. "
+                f"Reserved names: {sorted(_RESERVED_TEMPLATE_VARS)}"
+            )
+
     valid_var_types = ("int", "float", "str", "bool", "list")
     for name, v in cfg.vars.items():
         # Validate var type
@@ -2083,6 +2096,19 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     f"script '{s.name}' parser.metrics must be non-empty "
                     f"(positional mapping requires metric names)"
                 )
+
+            # Metric names must not conflict with stop_when built-in context
+            _RESERVED_STOP_WHEN_VARS = {
+                "exit_code", "status", "metrics",
+                "execution_time", "previous", "iteration",
+            }
+            for metric in s.parser.metrics:
+                if metric.name in _RESERVED_STOP_WHEN_VARS:
+                    raise ConfigValidationError(
+                        f"script '{s.name}' parser metric '{metric.name}' conflicts with "
+                        f"a built-in stop_when variable. "
+                        f"Reserved names: {sorted(_RESERVED_STOP_WHEN_VARS)}"
+                    )
 
     # ---- output ----
     sink = cfg.output.sink
