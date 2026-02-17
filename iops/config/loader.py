@@ -1678,9 +1678,9 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
 
     # search_method: exhaustive, random, or bayesian
     if cfg.benchmark.search_method is not None:
-        if cfg.benchmark.search_method not in ("exhaustive", "random", "bayesian"):
+        if cfg.benchmark.search_method not in ("exhaustive", "random", "bayesian", "adaptive"):
             raise ConfigValidationError(
-                "benchmark.search_method must be one of: exhaustive, random, bayesian"
+                "benchmark.search_method must be one of: exhaustive, random, bayesian, adaptive"
             )
 
     # executor validation
@@ -1978,6 +1978,19 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             raise ConfigValidationError(
                 f"Adaptive variable '{aname}' cannot be listed in 'cache_exclude_vars'"
             )
+
+    if adaptive_var_names and cfg.benchmark.search_method != "adaptive":
+        raise ConfigValidationError(
+            f"Config has adaptive variable '{adaptive_var_names[0]}', "
+            f"but benchmark.search_method is '{cfg.benchmark.search_method}'. "
+            f"Set benchmark.search_method to 'adaptive' to use adaptive variables."
+        )
+
+    if cfg.benchmark.search_method == "adaptive" and not adaptive_var_names:
+        raise ConfigValidationError(
+            "benchmark.search_method is 'adaptive' but no variable has an 'adaptive' configuration. "
+            "Define an adaptive variable or change the search_method."
+        )
 
     # ---- variable reference lists ----
     def validate_var_list(field_name: str, var_list) -> None:
