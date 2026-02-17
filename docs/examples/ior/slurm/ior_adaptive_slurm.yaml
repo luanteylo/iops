@@ -1,0 +1,203 @@
+# =============================================================================
+# IOPS Benchmark Configuration - PlaFRIM Adaptive Probing
+# =============================================================================
+#
+# This example uses adaptive probing to find the maximum data volume that
+# IOR can write within a time budget on each node count.
+#
+# Instead of sweeping a fixed list of volume sizes, the adaptive variable
+# starts at a small value and doubles each iteration until the write takes
+# longer than 120 seconds. This automatically discovers the per-node-count
+# throughput ceiling without guessing the right sweep values in advance.
+#
+# Features:
+#   - Adaptive probing: doubles volume_size_gb until execution exceeds 120s
+#   - Per-node-count threshold: each node count gets its own independent probe
+#   - Time-based stop: no need for crashes, just "too slow" detection
+#   - Safety limit: max_iterations caps the search at 10 doublings
+#   - Metric parsing: captures bandwidth (bwMiB) at each step
+#
+# Usage:
+#   Validate:     iops check ior_adaptive_slurm.yaml
+#   Dry run:      iops run ior_adaptive_slurm.yaml --dry-run
+#   Execute:      iops run ior_adaptive_slurm.yaml
+#   Report:       iops report ./run_XXX
+#
+# =============================================================================
+
+benchmark:
+  name: "IOR Adaptive Volume Probing - PlaFRIM"
+  workdir: "./"
+  cache_file: "./iops_adaptive.db"
+
+  search_method: "adaptive"           # Required for adaptive variables
+  repetitions: 1
+  executor: "slurm"
+  random_seed: 42
+
+  cache_exclude_vars: ["summary_file"]
+  report_vars: ["nodes", "processes_per_node", "volume_size_gb"]
+
+# -----------------------------------------------------------------------------
+# Variables
+# -----------------------------------------------------------------------------
+
+vars:
+  # Swept: test multiple node counts (one independent probe per value)
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16]
+
+  processes_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [8]
+
+  # Adaptive: double the volume until execution takes too long
+  volume_size_gb:
+    type: int
+    adaptive:
+      initial: 8                      # Start at 8 GB total volume
+      factor: 2                       # Double each iteration: 8, 16, 32, 64, ...
+      stop_when: "execution_time is not None and execution_time > 120"
+      max_iterations: 10              # Safety cap (max value: 8 * 2^9 = 4096 GB)
+
+  # Derived variables
+  ntasks:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+
+  block_size_mb:
+    type: int
+    expr: "{{ (volume_size_gb * 1024) // ntasks }}"
+
+  summary_file:
+    type: str
+    expr: "{{ execution_dir }}/summary_{{ execution_id }}_{{ repetition }}.json"
+
+# -----------------------------------------------------------------------------
+# Command
+# -----------------------------------------------------------------------------
+
+command:
+  template: >
+    ior -w -b {{ block_size_mb }}mb -t 1mb
+    -O summaryFile={{ summary_file }} -O summaryFormat=JSON
+    -o /beegfs/lgouveia/ior_adaptive/output.ior
+
+  labels:
+    operation: "write"
+    io_engine: "MPI-IO"
+    access_pattern: "contiguous"
+    cluster: "PlaFRIM"
+
+# -----------------------------------------------------------------------------
+# Scripts
+# -----------------------------------------------------------------------------
+
+scripts:
+  - name: "ior"
+    script_template: |
+      #!/bin/bash
+
+      #SBATCH --job-name=iops_{{ execution_id }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=00:30:00
+      #SBATCH --chdir={{ execution_dir }}
+      #SBATCH -o batch%j.out
+      #SBATCH -e batch%j.err
+      #SBATCH --exclusive
+      #SBATCH --constraint ['bora']
+
+      module purge
+      module load mpi/openmpi/4.0.1
+
+      echo "=== SLURM Allocation Info ==="
+      echo "Nodes: $SLURM_JOB_NUM_NODES"
+      echo "Tasks: $SLURM_NTASKS"
+      echo "Volume: {{ volume_size_gb }} GB"
+      echo "Block size: {{ block_size_mb }} MB per process"
+      echo "============================="
+
+      mpirun --mca btl ^uct --mca fs ^lustre --mca osc ^ucx --mca pml ^ucx --mca btl_openib_allow_ib 1 \
+      {{ command.template }}
+
+    parser:
+      file: "{{ summary_file }}"
+      metrics:
+        - name: bwMiB
+      parser_script: |
+        import json
+
+        def parse(file_path):
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            tests = data.get("tests", [])
+            if not tests:
+                raise ValueError("No tests found in IOR JSON")
+
+            results = tests[0].get("Results", [])
+            if not results:
+                raise ValueError("No Results found in IOR JSON")
+
+            write_res = next(
+                (r for r in results if str(r.get("access", "")).lower() == "write"),
+                results[0],
+            )
+
+            return {"bwMiB": write_res.get("bwMiB")}
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results_adaptive.csv"
+    exclude: ["benchmark.name"]
+
+# =============================================================================
+# How it works:
+# =============================================================================
+#
+# The stop condition is time-based: the probe stops when a write takes longer
+# than 120 seconds. This means IOR does not need to crash. It succeeds, but
+# IOPS observes that the execution was "too slow" and records the threshold.
+#
+# With nodes=[4, 8, 16] and 1 processes_per_node value, IOPS creates 3
+# independent probes (one per node count). Each probe runs like this:
+#
+#   Probe 0 (nodes=4):  volume_size_gb=8    15s  ok
+#   Probe 1 (nodes=8):  volume_size_gb=8    8s   ok
+#   Probe 2 (nodes=16): volume_size_gb=8    5s   ok
+#   Probe 0 (nodes=4):  volume_size_gb=16   30s  ok
+#   Probe 1 (nodes=8):  volume_size_gb=16   15s  ok
+#   Probe 2 (nodes=16): volume_size_gb=16   8s   ok
+#   Probe 0 (nodes=4):  volume_size_gb=32   70s  ok
+#   Probe 1 (nodes=8):  volume_size_gb=32   30s  ok
+#   Probe 2 (nodes=16): volume_size_gb=32   15s  ok
+#   Probe 0 (nodes=4):  volume_size_gb=64   150s STOP -> found=32, failed=64
+#   Probe 1 (nodes=8):  volume_size_gb=64   70s  ok
+#   Probe 2 (nodes=16): volume_size_gb=64   30s  ok
+#   Probe 1 (nodes=8):  volume_size_gb=128  150s STOP -> found=64, failed=128
+#   Probe 2 (nodes=16): volume_size_gb=128  70s  ok
+#   Probe 2 (nodes=16): volume_size_gb=256  150s STOP -> found=128, failed=256
+#
+# Each node count discovers the largest volume it can write within 2 minutes.
+# More nodes handle larger volumes because data is spread across more processes.
+#
+# Results appear in the run summary:
+#
+#   Adaptive probing results for 'volume_size_gb':
+#     nodes=4:  found=32,  failed=64,  iterations=4, stop_reason=condition_met
+#     nodes=8:  found=64,  failed=128, iterations=5, stop_reason=condition_met
+#     nodes=16: found=128, failed=256, iterations=6, stop_reason=condition_met
+#
+# =============================================================================
