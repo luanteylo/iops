@@ -136,6 +136,7 @@ class BaseExecutor(ABC, HasLogger):
         meta.setdefault("__submission_time", None)
         meta.setdefault("__job_start", None)
         meta.setdefault("__end", None)
+        meta.setdefault("__returncode", None)
         meta.setdefault("__error", None)
 
     def _write_status_update(self, test: ExecutionInstance, status: str) -> None:
@@ -805,6 +806,13 @@ class SlurmExecutor(BaseExecutor):
 
         test.metadata["__slurm_state"] = slurm_state
         test.metadata["__slurm_exitcode"] = exitcode
+
+        # Store normalized __returncode (integer) for cross-executor consistency
+        if exitcode is not None:
+            try:
+                test.metadata["__returncode"] = int(exitcode.split(":")[0])
+            except (ValueError, IndexError):
+                test.metadata["__returncode"] = None
 
         final = self._map_final_status(slurm_state, exitcode)
 
