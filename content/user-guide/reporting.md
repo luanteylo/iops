@@ -163,6 +163,16 @@ Shows which parameter values were explored at each iteration, with colors indica
 
 **When to use**: When you want detailed visualization of parameter exploration patterns.
 
+### Adaptive Probing Results
+
+Shows adaptive probing outcomes (adaptive search only). This section is automatically included when using `search_method: "adaptive"` and contains:
+
+- **Probing Configuration** (collapsible): displays the adaptive variable settings (initial value, step method, stop condition, direction, max iterations)
+- **Probe Results Summary**: a table with one row per swept variable combination showing the last passing value, the value that triggered the stop condition, iteration count, and stop reason
+- **Trajectory Plots**: for each metric, an interactive line chart showing how the metric changes as the adaptive variable increases, with one trace per swept variable combination. Found values are marked with green-outlined circles and stop-triggered values with red X markers.
+
+**When to use**: Only relevant when using `search_method: "adaptive"`. The section appears automatically with no additional configuration needed.
+
 ### Custom Plots
 
 User-defined plots specified in the `metrics` section (see below).

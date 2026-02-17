@@ -826,6 +826,8 @@ class ReportGenerator:
             html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
         elif search_method == 'random':
             html_parts.append(self._generate_random_search_section(metrics, report_vars))
+        elif search_method == 'adaptive':
+            html_parts.append(self._generate_adaptive_probing_section(metrics, report_vars))
         else:
             # Exhaustive or other search methods
             html_parts.append(self._generate_exhaustive_search_section(metrics, report_vars))
@@ -1764,6 +1766,228 @@ class ReportGenerator:
             showlegend=True,
             legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
         )
+
+        return fig
+
+    def _generate_adaptive_probing_section(self, metrics: List[str], report_vars: List[str]) -> str:
+        """Generate adaptive probing results section."""
+        adaptive_results = self.metadata.get('adaptive_results', {})
+        if not adaptive_results:
+            return "<h2>Adaptive Probing Results</h2>\n<p><em>No adaptive results found in metadata.</em></p>\n"
+
+        html = "<h2>Adaptive Probing Results</h2>\n"
+
+        # Find adaptive variable(s) from metadata
+        adaptive_vars = {}
+        for var_name, var_info in self.metadata['variables'].items():
+            if var_info.get('adaptive') and var_info['adaptive'] is not False:
+                adaptive_vars[var_name] = var_info['adaptive']
+
+        if not adaptive_vars:
+            html += "<p><em>No adaptive variable configuration found.</em></p>\n"
+            return html
+
+        for adaptive_var, adaptive_config in adaptive_vars.items():
+            html += f"<p>Shows the results of adaptive probing for <strong>{adaptive_var}</strong>. "
+            html += "Each swept variable combination gets an independent probe that advances the "
+            html += "adaptive value until the stop condition is met.</p>\n"
+
+            # Probing configuration (collapsible)
+            html += "<details>\n<summary>Probing Configuration</summary>\n"
+            html += '<div class="details-content">\n<table>\n'
+            html += "<tr><th>Parameter</th><th>Value</th></tr>\n"
+            html += f"<tr><td><strong>Variable</strong></td><td>{adaptive_var}</td></tr>\n"
+            html += f"<tr><td><strong>Initial Value</strong></td><td>{adaptive_config.get('initial', 'N/A')}</td></tr>\n"
+            html += f"<tr><td><strong>Direction</strong></td><td>{adaptive_config.get('direction', 'ascending')}</td></tr>\n"
+
+            # Step method
+            if 'factor' in adaptive_config:
+                html += f"<tr><td><strong>Step Method</strong></td><td>Multiply by {adaptive_config['factor']}</td></tr>\n"
+            elif 'increment' in adaptive_config:
+                html += f"<tr><td><strong>Step Method</strong></td><td>Increment by {adaptive_config['increment']}</td></tr>\n"
+            elif 'step_expr' in adaptive_config:
+                html += f"<tr><td><strong>Step Method</strong></td><td>Expression: <code>{adaptive_config['step_expr']}</code></td></tr>\n"
+
+            html += f"<tr><td><strong>Stop Condition</strong></td><td><code>{adaptive_config.get('stop_when', 'N/A')}</code></td></tr>\n"
+            html += f"<tr><td><strong>Max Iterations</strong></td><td>{adaptive_config.get('max_iterations', 'N/A')}</td></tr>\n"
+            html += "</table>\n</div>\n</details>\n"
+
+            # Probe results summary table
+            probe_results = adaptive_results.get(adaptive_var, {})
+            if probe_results:
+                html += "<h3>Probe Results Summary</h3>\n"
+                html += "<table>\n"
+                html += "<tr><th>Configuration</th><th>Found Value</th><th>Failed Value</th>"
+                html += "<th>Iterations</th><th>Stop Reason</th></tr>\n"
+
+                for probe_key, probe_data in probe_results.items():
+                    found_val = probe_data.get('found_value', 'N/A')
+                    failed_val = probe_data.get('failed_value', 'N/A')
+                    if failed_val is None:
+                        failed_val = 'N/A'
+                    iterations = probe_data.get('iterations', 'N/A')
+                    stop_reason = probe_data.get('stop_reason', 'N/A')
+                    # Format stop_reason for display
+                    stop_display = stop_reason.replace('_', ' ').title() if isinstance(stop_reason, str) else stop_reason
+
+                    html += f"<tr><td>{probe_key}</td><td>{found_val}</td><td>{failed_val}</td>"
+                    html += f"<td>{iterations}</td><td>{stop_display}</td></tr>\n"
+
+                html += "</table>\n"
+
+            # Trajectory plots for each metric
+            for metric in metrics:
+                try:
+                    fig = self._create_adaptive_trajectory_plot(metric, adaptive_var, report_vars)
+                    if fig is not None:
+                        html += f"<h3>{metric} vs {adaptive_var}</h3>\n"
+                        html += f"<p>Shows how {metric} changes as {adaptive_var} increases for each swept variable combination.</p>\n"
+                        safe_metric = metric.replace(' ', '_')
+                        html += f"<div>{self._fig_to_html(fig, div_id=f'adaptive_{safe_metric}_{adaptive_var}', plot_name=f'adaptive_{safe_metric}_trajectory')}</div>\n"
+                except Exception as e:
+                    html += f'<p class="error">Error generating trajectory plot for {metric}: {str(e)}</p>\n'
+
+        return html
+
+    def _create_adaptive_trajectory_plot(
+        self, metric: str, adaptive_var: str, report_vars: List[str]
+    ) -> Optional[go.Figure]:
+        """
+        Create a trajectory plot showing metric vs adaptive variable, grouped by swept combinations.
+
+        Args:
+            metric: Metric name to plot on Y axis
+            adaptive_var: Adaptive variable name for X axis
+            report_vars: List of swept variable names for grouping
+
+        Returns:
+            Plotly figure or None if data is insufficient
+        """
+        metric_col = self._get_metric_column(metric)
+        adaptive_col = self._get_var_column(adaptive_var)
+
+        if metric_col not in self.df.columns or adaptive_col not in self.df.columns:
+            return None
+
+        # Get swept variable columns (exclude the adaptive variable)
+        swept_cols = []
+        for var in report_vars:
+            col = self._get_var_column(var)
+            if col in self.df.columns and var != adaptive_var:
+                swept_cols.append((var, col))
+
+        # Build a group key for each row from the swept variables
+        if swept_cols:
+            self.df['__probe_group'] = self.df.apply(
+                lambda row: ', '.join(f"{v}={row[c]}" for v, c in swept_cols),
+                axis=1
+            )
+        else:
+            self.df['__probe_group'] = 'all'
+
+        # Group by probe group and adaptive variable, averaging across repetitions
+        group_cols = ['__probe_group', adaptive_col]
+        agg_dict = {metric_col: ['mean', 'std']}
+        df_grouped = self.df.groupby(group_cols).agg(agg_dict).reset_index()
+        df_grouped.columns = ['probe_group', 'adaptive_val', 'metric_mean', 'metric_std']
+        df_grouped = df_grouped.sort_values(['probe_group', 'adaptive_val'])
+
+        # Get probe groups and assign colors
+        groups = df_grouped['probe_group'].unique()
+        colors = self.get_color_palette(len(groups), self._get_user_colors())
+
+        # Get adaptive results for marking found/failed values
+        adaptive_results = self.metadata.get('adaptive_results', {}).get(adaptive_var, {})
+
+        fig = go.Figure()
+
+        for i, group in enumerate(groups):
+            group_data = df_grouped[df_grouped['probe_group'] == group]
+            x_vals = self._to_python_list(group_data['adaptive_val'])
+            y_vals = self._to_python_list(group_data['metric_mean'])
+            y_std = self._to_python_list(group_data['metric_std'])
+
+            # Build hover text
+            hover_texts = []
+            for j, (_, row) in enumerate(group_data.iterrows()):
+                parts = [
+                    f"{group}",
+                    f"{adaptive_var} = {row['adaptive_val']}",
+                    f"{metric} = {row['metric_mean']:.4f}",
+                ]
+                if row['metric_std'] > 0:
+                    parts.append(f"std = {row['metric_std']:.4f}")
+                hover_texts.append("<br>".join(parts))
+
+            # Main trace: line + markers
+            fig.add_trace(go.Scatter(
+                x=x_vals,
+                y=y_vals,
+                mode='lines+markers',
+                name=group,
+                marker=dict(size=10, color=colors[i], line=dict(width=1, color='white')),
+                line=dict(color=colors[i], width=2),
+                hovertemplate='%{text}<extra></extra>',
+                text=hover_texts,
+                legendgroup=group,
+            ))
+
+            # Mark found value with a larger marker
+            probe_data = adaptive_results.get(group.replace(', ', ','))
+            if probe_data:
+                found_val = probe_data.get('found_value')
+                if found_val is not None:
+                    found_rows = group_data[group_data['adaptive_val'] == found_val]
+                    if not found_rows.empty:
+                        found_y = self._to_python_list(found_rows['metric_mean'])[0]
+                        fig.add_trace(go.Scatter(
+                            x=[found_val],
+                            y=[found_y],
+                            mode='markers',
+                            name=f'{group} (last passed)',
+                            marker=dict(
+                                size=16, color=colors[i],
+                                symbol='circle',
+                                line=dict(width=3, color='#2ecc71'),
+                            ),
+                            hovertemplate=f'{group}<br>{adaptive_var} = {found_val} (last passed)<br>{metric} = {found_y:.4f}<extra></extra>',
+                            legendgroup=group,
+                            showlegend=False,
+                        ))
+
+                failed_val = probe_data.get('failed_value')
+                if failed_val is not None:
+                    failed_rows = group_data[group_data['adaptive_val'] == failed_val]
+                    if not failed_rows.empty:
+                        failed_y = self._to_python_list(failed_rows['metric_mean'])[0]
+                        fig.add_trace(go.Scatter(
+                            x=[failed_val],
+                            y=[failed_y],
+                            mode='markers',
+                            name=f'{group} (stop triggered)',
+                            marker=dict(
+                                size=16, color=colors[i],
+                                symbol='x',
+                                line=dict(width=3, color='#e74c3c'),
+                            ),
+                            hovertemplate=f'{group}<br>{adaptive_var} = {failed_val} (stop triggered)<br>{metric} = {failed_y:.4f}<extra></extra>',
+                            legendgroup=group,
+                            showlegend=False,
+                        ))
+
+        fig.update_layout(
+            title=f'{metric} vs {adaptive_var} (Adaptive Probing)',
+            xaxis_title=adaptive_var,
+            yaxis_title=metric,
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)'),
+        )
+
+        # Clean up temporary column
+        if '__probe_group' in self.df.columns:
+            self.df.drop(columns=['__probe_group'], inplace=True)
 
         return fig
 
