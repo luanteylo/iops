@@ -6,14 +6,16 @@ This module contains all planner implementations:
 - ExhaustivePlanner: Brute-force search of entire parameter space
 - RandomSamplingPlanner: Random sampling of parameter space
 - BayesianPlanner: Bayesian optimization for intelligent search
+- AdaptivePlanner: Adaptive probing search for finding threshold values
 """
 
 from iops.logger import HasLogger
 from iops.config.models import GenericBenchmarkConfig
-from iops.execution.matrix import ExecutionInstance, build_execution_matrix, _cast_value
+from iops.execution.matrix import ExecutionInstance, build_execution_matrix, _cast_value, _render_template, create_execution_instance
 
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from collections import defaultdict
 import logging
@@ -2588,6 +2590,423 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.current_test = None
         self.current_params = None
         self.current_rep = 0
+
+
+# ============================================================================ #
+# Adaptive Planner
+# ============================================================================ #
+
+@dataclass
+class ProbeState:
+    """Tracks the adaptive probe for one static combination."""
+    static_vars: Dict[str, Any]     # swept variable values for this combo
+    current_value: Any              # current adaptive variable value
+    iteration: int = 0             # 0-based iteration counter
+    found_value: Any = None        # last value where stop_when was False
+    failed_value: Any = None       # first value where stop_when was True
+    finished: bool = False
+    stop_reason: Optional[str] = None  # "condition_met" | "max_iterations" | "all_succeeded"
+    pending_reps: int = 0          # reps emitted but not yet recorded
+    completed_reps: int = 0        # reps recorded for current value
+    stop_triggered_count: int = 0  # how many reps triggered stop_when
+    execution_id: Optional[int] = None  # current execution_id for this probe's value
+
+
+@dataclass
+class ProbeResult:
+    """Final result for one static combination."""
+    found_value: Any
+    failed_value: Any
+    iterations: int
+    stop_reason: str
+
+
+@BasePlanner.register("adaptive")
+class AdaptivePlanner(BasePlanner, HasLogger):
+    """
+    Adaptive probing planner that searches for threshold values.
+
+    An adaptive variable starts at an initial value and progresses (e.g., doubling)
+    until a stop_when condition triggers. When the config also has swept variables,
+    each swept combination gets its own independent probe.
+
+    Configuration (YAML):
+        vars:
+          problem_size:
+            type: int
+            adaptive:
+              initial: 1000
+              factor: 2
+              stop_when: "exit_code != 0"
+              max_iterations: 10
+
+        benchmark:
+          search_method: "adaptive"
+
+    The planner will:
+    1. Build the static matrix from non-adaptive swept vars
+    2. Create one probe per static combination
+    3. For each probe, emit all repetitions for the current adaptive value
+    4. After all reps complete, evaluate stop_when and either finish or advance
+    5. Continue until all probes are finished
+    """
+
+    def __init__(self, cfg: GenericBenchmarkConfig):
+        super().__init__(cfg)
+
+        # Identify the single adaptive variable
+        self._adaptive_var_name: Optional[str] = None
+        self._adaptive_config = None
+        self._adaptive_var_type: str = "int"
+
+        for name, vcfg in cfg.vars.items():
+            if vcfg.adaptive is not None:
+                self._adaptive_var_name = name
+                self._adaptive_config = vcfg.adaptive
+                self._adaptive_var_type = vcfg.type
+                break
+
+        if self._adaptive_var_name is None:
+            raise ValueError(
+                "AdaptivePlanner requires exactly one variable with 'adaptive' config."
+            )
+
+        self.logger.info(
+            "Adaptive planner initialized: variable='%s', initial=%s",
+            self._adaptive_var_name, self._adaptive_config.initial,
+        )
+
+        # Build static matrix (non-adaptive swept vars)
+        kept_instances, skipped_instances = build_execution_matrix(cfg)
+        self.skipped_matrix = skipped_instances
+
+        # Extract unique static combinations from the matrix
+        # Each instance has base_vars that include only non-adaptive swept vars
+        static_combos: List[Dict[str, Any]] = []
+        seen_combos: set = set()
+
+        if kept_instances:
+            for inst in kept_instances:
+                combo_key = tuple(sorted(inst.base_vars.items()))
+                if combo_key not in seen_combos:
+                    seen_combos.add(combo_key)
+                    static_combos.append(dict(inst.base_vars))
+        else:
+            # No swept vars: single probe with empty static vars
+            static_combos.append({})
+
+        # Configuration
+        self._repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
+        acfg = self._adaptive_config
+        max_iter = acfg.max_iterations if acfg.max_iterations is not None else 100
+
+        # Create one ProbeState per static combination
+        initial_value = _cast_value(self._adaptive_var_type, acfg.initial)
+        self._probes: List[ProbeState] = []
+        for combo in static_combos:
+            self._probes.append(ProbeState(
+                static_vars=combo,
+                current_value=initial_value,
+            ))
+
+        # Execution ID counter
+        self._next_exec_id = 1
+
+        # Progress tracking
+        self._attempt_count = 0
+        self._attempt_total = len(self._probes) * max_iter * self._repetitions
+
+        # Round-robin index for probe selection
+        self._probe_index = 0
+
+        self.logger.info(
+            "  Static combinations: %d, max_iterations: %s, repetitions: %d",
+            len(self._probes), max_iter, self._repetitions,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+
+    def _compute_next_value(self, probe: ProbeState) -> Any:
+        """Compute the next adaptive value based on the step config."""
+        acfg = self._adaptive_config
+        prev = probe.current_value
+        iteration = probe.iteration
+
+        if acfg.factor is not None:
+            raw = prev * acfg.factor
+        elif acfg.increment is not None:
+            raw = prev + acfg.increment
+        else:
+            # step_expr: Jinja2 template
+            rendered = _render_template(
+                acfg.step_expr,
+                {"previous": prev, "iteration": iteration},
+            )
+            raw = rendered
+
+        return _cast_value(self._adaptive_var_type, raw)
+
+    def _evaluate_stop_when(self, test: ExecutionInstance) -> bool:
+        """
+        Evaluate the stop_when expression against a completed test's metadata.
+
+        Returns True if the stop condition is met (probe should stop).
+        """
+        acfg = self._adaptive_config
+
+        # Build execution_time from timestamps
+        execution_time = None
+        start = test.metadata.get("__job_start") or test.metadata.get("__submission_time")
+        end = test.metadata.get("__end")
+        if start and end:
+            try:
+                from datetime import datetime as _dt
+                if isinstance(start, str):
+                    start = _dt.fromisoformat(start)
+                if isinstance(end, str):
+                    end = _dt.fromisoformat(end)
+                execution_time = (end - start).total_seconds()
+            except Exception:
+                pass
+
+        exit_code = test.metadata.get("__returncode")
+        status = test.metadata.get("__executor_status", "UNKNOWN")
+        metrics = test.metadata.get("metrics", {})
+
+        # Find the probe to get iteration/previous
+        probe = self._find_probe_for_test(test)
+
+        context = {
+            "exit_code": exit_code,
+            "status": status,
+            "metrics": metrics,
+            "execution_time": execution_time,
+            "previous": probe.current_value if probe else None,
+            "iteration": probe.iteration if probe else 0,
+        }
+
+        try:
+            result = eval(acfg.stop_when, {"__builtins__": {}}, context)
+            return bool(result)
+        except Exception as e:
+            self.logger.warning(
+                "Failed to evaluate stop_when='%s': %s. Treating as triggered.",
+                acfg.stop_when, e,
+            )
+            return True
+
+    def _find_probe_for_test(self, test: ExecutionInstance) -> Optional[ProbeState]:
+        """Find the probe that owns this test by matching static vars."""
+        # Extract just the non-adaptive vars from the test
+        test_static = {
+            k: v for k, v in test.base_vars.items()
+            if k != self._adaptive_var_name
+        }
+
+        for probe in self._probes:
+            if probe.static_vars == test_static:
+                return probe
+        return None
+
+    def _static_combo_label(self, static_vars: Dict[str, Any]) -> str:
+        """Create a human-readable label for a static combination."""
+        if not static_vars:
+            return "(no swept vars)"
+        return ",".join(f"{k}={v}" for k, v in sorted(static_vars.items()))
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+
+    def next_test(self) -> Optional[ExecutionInstance]:
+        """
+        Return the next test to run, or None when all probes are finished.
+
+        Emits all repetitions for a probe's current adaptive value before moving
+        to the next probe. Uses round-robin across non-finished probes.
+        """
+        # Find a non-finished probe that needs work
+        num_probes = len(self._probes)
+        checked = 0
+
+        while checked < num_probes:
+            idx = self._probe_index % num_probes
+            self._probe_index = (self._probe_index + 1) % num_probes
+            checked += 1
+
+            probe = self._probes[idx]
+            if probe.finished:
+                continue
+
+            # Does this probe need more reps emitted for current value?
+            if probe.pending_reps < self._repetitions:
+                # Assign execution_id on first rep
+                if probe.pending_reps == 0:
+                    probe.execution_id = self._next_exec_id
+                    self._next_exec_id += 1
+
+                # Merge static vars + adaptive var
+                base_vars = dict(probe.static_vars)
+                base_vars[self._adaptive_var_name] = probe.current_value
+
+                instance, is_valid, violations = create_execution_instance(
+                    cfg=self.cfg,
+                    base_vars=base_vars,
+                    execution_id=probe.execution_id,
+                )
+
+                if not is_valid:
+                    # Constraint violation: skip this probe value
+                    self.logger.info(
+                        "  [Adaptive] Constraint violation for %s=%s (%s), finishing probe.",
+                        self._adaptive_var_name, probe.current_value,
+                        self._static_combo_label(probe.static_vars),
+                    )
+                    probe.finished = True
+                    probe.stop_reason = "constraint_violation"
+                    continue
+
+                probe.pending_reps += 1
+                self._attempt_count += 1
+
+                rep = probe.pending_reps  # 1-based
+                self._prepare_execution_artifacts(instance, rep)
+
+                self.logger.debug(
+                    "  [Adaptive] Emitting %s=%s rep %d/%d (%s)",
+                    self._adaptive_var_name, probe.current_value,
+                    rep, self._repetitions,
+                    self._static_combo_label(probe.static_vars),
+                )
+
+                return instance
+
+        # All probes finished or waiting for results
+        # Check if any probe is still waiting (pending_reps emitted but not all completed)
+        for probe in self._probes:
+            if not probe.finished and probe.pending_reps > 0 and probe.completed_reps < probe.pending_reps:
+                # Still waiting for results, but nothing to emit
+                return None
+
+        return None
+
+    def record_completed_test(self, test: ExecutionInstance) -> None:
+        """
+        Record a completed test and potentially advance the probe.
+
+        After all reps for a value complete, evaluates stop_when and either
+        finishes the probe or advances to the next value.
+        """
+        probe = self._find_probe_for_test(test)
+        if probe is None:
+            self.logger.warning(
+                "  [Adaptive] Could not find probe for completed test exec_id=%s",
+                test.execution_id,
+            )
+            return
+
+        probe.completed_reps += 1
+
+        # Evaluate stop_when for this rep
+        if self._evaluate_stop_when(test):
+            probe.stop_triggered_count += 1
+
+        # Wait for all reps to complete
+        if probe.completed_reps < self._repetitions:
+            return
+
+        acfg = self._adaptive_config
+        max_iter = acfg.max_iterations if acfg.max_iterations is not None else 100
+
+        # All reps done for this value. Decide next action.
+        if probe.stop_triggered_count > 0:
+            # Stop condition triggered
+            probe.failed_value = probe.current_value
+            probe.finished = True
+            probe.stop_reason = "condition_met"
+            self.logger.info(
+                "  [Adaptive] Stop condition met at %s=%s (%s). "
+                "found_value=%s, failed_value=%s",
+                self._adaptive_var_name, probe.current_value,
+                self._static_combo_label(probe.static_vars),
+                probe.found_value, probe.failed_value,
+            )
+        else:
+            # No stop triggered: this value succeeded
+            probe.found_value = probe.current_value
+            probe.iteration += 1
+
+            if probe.iteration >= max_iter:
+                # Max iterations reached
+                probe.finished = True
+                probe.stop_reason = "max_iterations"
+                self.logger.info(
+                    "  [Adaptive] Max iterations (%d) reached for %s (%s). "
+                    "Last found_value=%s",
+                    max_iter, self._adaptive_var_name,
+                    self._static_combo_label(probe.static_vars),
+                    probe.found_value,
+                )
+            else:
+                # Advance to next value
+                next_val = self._compute_next_value(probe)
+                probe.current_value = next_val
+                self.logger.info(
+                    "  [Adaptive] Advancing %s to %s (iteration %d) for %s",
+                    self._adaptive_var_name, next_val, probe.iteration,
+                    self._static_combo_label(probe.static_vars),
+                )
+
+        # Reset per-value counters
+        probe.pending_reps = 0
+        probe.completed_reps = 0
+        probe.stop_triggered_count = 0
+
+        # Update progress estimate as probes finish
+        if probe.finished:
+            self._update_progress_estimate()
+
+    def _update_progress_estimate(self) -> None:
+        """
+        Dynamically update the total attempt estimate as probes finish.
+
+        Since adaptive probing has an unknown total, we refine the estimate
+        based on actual iterations observed.
+        """
+        finished_attempts = 0
+        remaining_estimate = 0
+        acfg = self._adaptive_config
+        max_iter = acfg.max_iterations if acfg.max_iterations is not None else 100
+
+        for probe in self._probes:
+            if probe.finished:
+                # Actual attempts used by this probe
+                finished_attempts += (probe.iteration + 1) * self._repetitions
+            else:
+                # Estimate remaining: (max_iterations - current_iteration) * reps
+                finished_attempts += probe.iteration * self._repetitions
+                remaining_estimate += (max_iter - probe.iteration) * self._repetitions
+
+        self._attempt_total = finished_attempts + remaining_estimate
+
+    def get_probe_results(self) -> Dict[str, ProbeResult]:
+        """
+        Return results for all probes, keyed by static combination label.
+
+        Used by reporting (Task 7) to display adaptive search results.
+        """
+        results: Dict[str, ProbeResult] = {}
+        for probe in self._probes:
+            label = self._static_combo_label(probe.static_vars)
+            results[label] = ProbeResult(
+                found_value=probe.found_value,
+                failed_value=probe.failed_value,
+                iterations=probe.iteration + (1 if probe.finished else 0),
+                stop_reason=probe.stop_reason or "in_progress",
+            )
+        return results
 
 
 # Backwards compatibility alias
