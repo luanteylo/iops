@@ -7,6 +7,11 @@ All notable changes to IOPS are documented here.
 ## [3.5.1] - Unreleased
 
 ### Added
+- Adaptive variable probing (`search_method: "adaptive"`) for finding threshold values automatically
+  - Supports multiplicative (`factor`), additive (`increment`), and custom (`step_expr`) progression
+  - Configurable stop conditions via `stop_when` expressions (exit code, metrics, execution time)
+  - Independent probes per swept variable combination
+  - Probe results stored in `__iops_run_metadata.json` under `adaptive_results`
 - `list` variable type for indexed access to correlated parameter arrays
 - `--add VAR[:TYPE]=VALUE` option for `iops cache rebuild` to add typed variables to all cache entries
 - `machines` section for per-machine config overrides with deep-merge semantics

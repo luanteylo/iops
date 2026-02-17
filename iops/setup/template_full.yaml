@@ -42,10 +42,12 @@ benchmark:
   #   - "exhaustive": Test all parameter combinations (full factorial sweep)
   #   - "random": Randomly sample N configurations from parameter space
   #   - "bayesian": Intelligent optimization using Bayesian methods (fewer tests)
+  #   - "adaptive": Probe for threshold values by stepping until a stop condition is met
   # When to use:
   #   - exhaustive: Small parameter spaces, need complete coverage
   #   - random: Large parameter spaces, quick exploration, budget constraints
   #   - bayesian: Expensive evaluations, smooth objective functions
+  #   - adaptive: Finding limits (max memory, performance cliffs, scaling breakpoints)
   
   search_method: "exhaustive"
   
@@ -82,8 +84,11 @@ benchmark:
   #   - ET: Extra Trees - Similar to RF, slightly higher variance
   #   - GP: Gaussian Process - Best for continuous spaces, struggles with categoricals
   #   - GBRT: Gradient Boosted Regression Trees
-  
 
+  # Uncomment to enable adaptive probing:
+  # Finds threshold values by starting at an initial value and stepping until a condition is met.
+  # Requires exactly one variable with an 'adaptive' config (see vars section below).
+  #search_method: "adaptive"
 
   # Required: Execution backend
   # Options:
@@ -354,6 +359,54 @@ vars:
   #     values: [1, 2, 4]
   #   when: "nodes > 4 and processes_per_node >= 8"
   #   default: 1
+
+  # ---------------------------------------------------------------------------
+  # ADAPTIVE VARIABLES (probing search for threshold values)
+  # ---------------------------------------------------------------------------
+  # Adaptive variables start at an initial value and progress (double, add, or
+  # custom expression) until a stop condition is met. Useful for finding limits
+  # like maximum problem sizes, memory capacity, or performance cliffs.
+  #
+  # Requirements:
+  #   - benchmark.search_method must be "adaptive"
+  #   - Only ONE adaptive variable per config
+  #   - Exactly one step method: factor, increment, or step_expr
+  #   - factor/increment require numeric types (int or float)
+  #
+  # Adaptive variable with multiplicative step:
+  # problem_size:
+  #   type: int
+  #   adaptive:
+  #     initial: 1000              # Starting value (required)
+  #     factor: 2                  # Next = previous * factor (must be > 1 for ascending)
+  #     stop_when: "exit_code != 0"  # Stop condition (required)
+  #     max_iterations: 15         # Safety limit (optional, default: 100)
+  #     direction: "ascending"     # "ascending" (default) or "descending"
+  #
+  # Adaptive variable with additive step:
+  # buffer_size:
+  #   type: int
+  #   adaptive:
+  #     initial: 100
+  #     increment: 50              # Next = previous + increment
+  #     stop_when: "exit_code != 0"
+  #
+  # Adaptive variable with custom step expression:
+  # problem_size:
+  #   type: int
+  #   adaptive:
+  #     initial: 100
+  #     step_expr: "{{ previous * 2 + 100 }}"  # Jinja2 expression (context: previous, iteration)
+  #     stop_when: "metrics.get('throughput', 0) < 100"
+  #
+  # Stop condition context:
+  #   - exit_code: process return code
+  #   - status: executor status (SUCCEEDED, FAILED, etc.)
+  #   - metrics: parsed metrics dict from benchmark output
+  #   - execution_time: elapsed time in seconds (when available)
+  #   - previous: current adaptive value
+  #   - iteration: 0-based iteration counter
+  # ---------------------------------------------------------------------------
 
   # ---------------------------------------------------------------------------
   # DERIVED VARIABLES (computed from other variables)

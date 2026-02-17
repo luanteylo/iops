@@ -295,6 +295,79 @@ class TestApplyMachineOverride:
         assert result["vars"]["scratch"]["sweep"]["values"] == ["/a", "/b"]
         assert "expr" not in result["vars"]["scratch"]
 
+    def test_sweep_to_adaptive_clears_sweep(self, tmp_path):
+        """When override provides adaptive for a swept var, sweep is removed."""
+        data = self._base_config(tmp_path)
+        assert "sweep" in data["vars"]["nodes"]
+        data["machines"] = {
+            "cluster_a": {
+                "benchmark": {"search_method": "adaptive"},
+                "vars": {
+                    "nodes": {
+                        "type": "int",
+                        "adaptive": {
+                            "initial": 1,
+                            "factor": 2,
+                            "stop_when": "exit_code != 0",
+                        },
+                    },
+                },
+            }
+        }
+        result = _apply_machine_override(data, "cluster_a")
+        assert "adaptive" in result["vars"]["nodes"]
+        assert "sweep" not in result["vars"]["nodes"]
+
+    def test_adaptive_to_sweep_clears_adaptive(self, tmp_path):
+        """When override provides sweep for an adaptive var, adaptive is removed."""
+        data = self._base_config(tmp_path)
+        data["benchmark"]["search_method"] = "adaptive"
+        data["vars"]["nodes"] = {
+            "type": "int",
+            "adaptive": {
+                "initial": 1,
+                "factor": 2,
+                "stop_when": "exit_code != 0",
+            },
+        }
+        data["machines"] = {
+            "cluster_a": {
+                "benchmark": {"search_method": "exhaustive"},
+                "vars": {
+                    "nodes": {
+                        "type": "int",
+                        "sweep": {"mode": "list", "values": [1, 2, 4]},
+                    },
+                },
+            }
+        }
+        result = _apply_machine_override(data, "cluster_a")
+        assert "sweep" in result["vars"]["nodes"]
+        assert "adaptive" not in result["vars"]["nodes"]
+
+    def test_expr_to_adaptive_clears_expr(self, tmp_path):
+        """When override provides adaptive for a derived var, expr is removed."""
+        data = self._base_config(tmp_path)
+        assert "expr" in data["vars"]["scratch"]
+        data["machines"] = {
+            "cluster_a": {
+                "benchmark": {"search_method": "adaptive"},
+                "vars": {
+                    "scratch": {
+                        "type": "str",
+                        "adaptive": {
+                            "initial": "a",
+                            "step_expr": "{{ previous }}x",
+                            "stop_when": "exit_code != 0",
+                        },
+                    },
+                },
+            }
+        }
+        result = _apply_machine_override(data, "cluster_a")
+        assert "adaptive" in result["vars"]["scratch"]
+        assert "expr" not in result["vars"]["scratch"]
+
     def test_unknown_machine_error(self, tmp_path):
         data = self._base_config(tmp_path)
         data["machines"] = {"cluster_a": {"benchmark": {"executor": "local"}}}

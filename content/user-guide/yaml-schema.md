@@ -50,7 +50,7 @@ benchmark:
   description: string               # Optional: human-readable description
   repetitions: integer              # Optional: repetitions per test (default: 1)
 
-  search_method: string             # Optional: "exhaustive" | "random" | "bayesian"
+  search_method: string             # Optional: "exhaustive" | "random" | "bayesian" | "adaptive"
   random_config:                    # Required if search_method: "random"
     n_samples: integer              #   Sample exactly N configurations
     percentage: float               #   OR sample percentage of parameter space
@@ -112,7 +112,7 @@ Free-text description of the benchmark purpose.
 Number of times each test should be repeated.
 
 #### `search_method` (optional, default: "exhaustive")
-Test selection strategy: `exhaustive`, `random`, or `bayesian`.
+Test selection strategy: `exhaustive`, `random`, `bayesian`, or `adaptive`. See [Adaptive Variables](../adaptive-variables) for the `adaptive` method.
 
 <details>
 <summary><strong>random_config</strong> (required if search_method: "random")</summary>
@@ -314,6 +314,16 @@ vars:
     when: "other_var == true"   # Optional: condition expression
     default: 0                  # Required if 'when' is specified
 
+  # Adaptive variable (probing search)
+  variable_name:
+    type: int
+    adaptive:
+      initial: 1000             # Starting value (required)
+      factor: 2                 # Multiplicative step (one of factor/increment/step_expr)
+      stop_when: "exit_code != 0"  # Stop condition (required)
+      max_iterations: 10        # Safety limit (optional)
+      direction: "ascending"    # "ascending" (default) or "descending"
+
   # Derived variable
   variable_name:
     type: int
@@ -326,7 +336,7 @@ Data type: `int`, `float`, `str`, `bool`, or `list`.
 The `list` type is used for derived variables that hold arrays, enabling indexed access in templates. See [Templating Guide](../templating-and-context#list-variables-for-correlated-parameters) for examples.
 
 #### `sweep` (for swept variables)
-Defines values to sweep. Creates executions via Cartesian product. Mutually exclusive with `expr`.
+Defines values to sweep. Creates executions via Cartesian product. Mutually exclusive with `expr` and `adaptive`.
 
 <details>
 <summary><strong>sweep.mode: list</strong></summary>
@@ -369,7 +379,7 @@ vars:
 </details>
 
 #### `expr` (for derived variables)
-Expression to compute the variable. Mutually exclusive with `sweep`.
+Expression to compute the variable. Mutually exclusive with `sweep` and `adaptive`.
 
 <details>
 <summary><strong>Expression Examples</strong></summary>
@@ -413,6 +423,38 @@ Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, 
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory |
 | `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
+
+</details>
+
+#### `adaptive` (for adaptive/probing variables)
+Defines a variable that is explored by adaptive probing. Mutually exclusive with `sweep` and `expr`. Requires `benchmark.search_method: "adaptive"`. Only one adaptive variable is allowed per config.
+
+See [Adaptive Variables](../adaptive-variables) for a full guide with examples.
+
+<details>
+<summary><strong>Adaptive Configuration Fields</strong></summary>
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `initial` | Yes | | Starting value |
+| `factor` | One of three | | Multiplicative step (next = previous * factor) |
+| `increment` | One of three | | Additive step (next = previous + increment) |
+| `step_expr` | One of three | | Jinja2 expression for custom progression |
+| `stop_when` | Yes | | Python expression evaluated after each execution |
+| `max_iterations` | No | 100 (internal) | Maximum number of values to test |
+| `direction` | No | `"ascending"` | `"ascending"` or `"descending"` |
+
+**Example:**
+```yaml
+vars:
+  problem_size:
+    type: int
+    adaptive:
+      initial: 1000
+      factor: 2
+      stop_when: "exit_code != 0"
+      max_iterations: 15
+```
 
 </details>
 

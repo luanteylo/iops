@@ -737,22 +737,24 @@ def _apply_machine_override(data: Dict[str, Any], machine_name: str) -> Dict[str
 
     merged = deep_merge(base, override)
 
-    # Post-merge fixup: sweep and expr are mutually exclusive in vars.
-    # When a machine override provides one, the other must be cleared.
+    # Post-merge fixup: sweep, expr, and adaptive are mutually exclusive in vars.
+    # When a machine override provides one, the others must be cleared.
     override_vars = override.get("vars", {}) or {}
     merged_vars = merged.get("vars", {}) or {}
+    _var_type_keys = ("sweep", "expr", "adaptive")
     for var_name, override_var in override_vars.items():
         if not isinstance(override_var, dict) or var_name not in merged_vars:
             continue
         merged_var = merged_vars[var_name]
         if not isinstance(merged_var, dict):
             continue
-        # If override provides expr, clear sweep from merged result
-        if "expr" in override_var and "sweep" in merged_var:
-            merged_var.pop("sweep")
-        # If override provides sweep, clear expr from merged result
-        elif "sweep" in override_var and "expr" in merged_var:
-            merged_var.pop("expr")
+        # Find which var type key the override provides
+        override_type_keys = [k for k in _var_type_keys if k in override_var]
+        if override_type_keys:
+            # Clear any competing type keys from the merged result
+            for k in _var_type_keys:
+                if k not in override_type_keys and k in merged_var:
+                    merged_var.pop(k)
 
     return merged
 
@@ -1978,6 +1980,16 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             raise ConfigValidationError(
                 f"Adaptive variable '{aname}' cannot be listed in 'cache_exclude_vars'"
             )
+
+    for aname in adaptive_var_names:
+        for vname, v in cfg.vars.items():
+            if v.when and re.search(rf'\b{re.escape(aname)}\b', v.when):
+                raise ConfigValidationError(
+                    f"Conditional variable '{vname}' has 'when' expression that references "
+                    f"adaptive variable '{aname}'. Adaptive variables are not available "
+                    f"during matrix generation when 'when' conditions are evaluated. "
+                    f"Use only swept variables in 'when' expressions."
+                )
 
     if adaptive_var_names and cfg.benchmark.search_method != "adaptive":
         raise ConfigValidationError(

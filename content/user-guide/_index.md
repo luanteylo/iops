@@ -15,7 +15,8 @@ Comprehensive guide to using IOPS features and capabilities.
 
 ## Execution
 
-- **[Search Methods](search-methods)** - Parameter space exploration: exhaustive, random sampling, and Bayesian optimization
+- **[Search Methods](search-methods)** - Parameter space exploration: exhaustive, random sampling, Bayesian optimization, and adaptive probing
+- **[Adaptive Variables](adaptive-variables)** - Find threshold values automatically with adaptive probing (max memory, performance cliffs)
 - **[Execution Backends](execution-backends)** - Run locally or on SLURM clusters
 - **[Single-Allocation Mode](single-allocation-mode)** - Run all tests in one SLURM allocation (MPI setup, troubleshooting)
 - **[Result Caching](caching)** - Skip redundant tests with smart caching

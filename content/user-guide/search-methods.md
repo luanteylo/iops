@@ -87,6 +87,35 @@ benchmark:
 - **fallback_to_exhaustive** (bool, default: true): Use exhaustive if sample size >= total space
 
 
+## Adaptive Probing
+
+Automatically finds threshold values by starting at an initial value and stepping (doubling, adding, or custom expression) until a stop condition is met. Useful for finding limits like maximum problem sizes, memory capacity, or performance cliffs.
+
+```yaml
+benchmark:
+  search_method: "adaptive"
+
+vars:
+  problem_size:
+    type: int
+    adaptive:
+      initial: 1000
+      factor: 2                          # Double each iteration
+      stop_when: "exit_code != 0"        # Stop when benchmark fails
+      max_iterations: 15                 # Safety limit
+```
+
+### Key Features
+
+- **One adaptive variable per config**: All other variables use `sweep` or `expr`
+- **Independent probes**: When swept variables are present, each combination gets its own probe
+- **Multiple repetitions**: All reps complete before evaluating the stop condition
+- **Three step modes**: `factor` (multiplicative), `increment` (additive), `step_expr` (custom Jinja2)
+- **Configurable stop conditions**: Based on exit code, parsed metrics, execution time, or status
+
+See [Adaptive Variables](../adaptive-variables) for a complete guide.
+
+
 ## Comparison
 
 | Method | Coverage | Speed | Best For | Deterministic |
@@ -94,8 +123,9 @@ benchmark:
 | **Exhaustive** | Complete | Slow for large spaces | Small spaces, full coverage | Yes |
 | **Bayesian** | Focused (~90% optimal with 7% coverage) | Fast for optimization | Finding optima, expensive tests | No |
 | **Random** | Statistical (~79% optimal with 7% coverage) | Fast | Exploration, large spaces | With seed |
+| **Adaptive** | Threshold search | Variable | Finding limits, capacity testing | Yes |
 
-*Performance figures based on empirical testing with 20 iterations across 10 seeds.*
+*Performance figures for exhaustive/bayesian/random based on empirical testing with 20 iterations across 10 seeds.*
 
 ## Exhaustive Variables
 

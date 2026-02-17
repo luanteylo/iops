@@ -60,11 +60,12 @@ The distinction follows the Kubernetes convention: lists of **named objects** (e
 | `reporting.metrics.<m>.plots` | Anonymous objects | **Replace** |
 | `reporting.default_plots` | Anonymous objects | **Replace** |
 
-### sweep/expr Mutual Exclusion
+### sweep/expr/adaptive Mutual Exclusion
 
-Since `sweep` and `expr` are mutually exclusive, IOPS handles conflicts automatically:
-- Override provides `expr` → base's `sweep` is removed
-- Override provides `sweep` → base's `expr` is removed
+Since `sweep`, `expr`, and `adaptive` are mutually exclusive, IOPS handles conflicts automatically after merging:
+- Override provides `expr` → base's `sweep` and `adaptive` are removed
+- Override provides `sweep` → base's `expr` and `adaptive` are removed
+- Override provides `adaptive` → base's `sweep` and `expr` are removed
 
 ```yaml
 # Base: total_cores is swept
@@ -82,6 +83,31 @@ machines:
       total_cores:
         expr: "{{ nodes * ppn }}"
 # Result: sweep is removed, only expr remains
+```
+
+This also works for switching to or from adaptive variables:
+
+```yaml
+# Base: problem_size is swept
+vars:
+  problem_size:
+    type: int
+    sweep:
+      mode: list
+      values: [1000, 2000, 4000]
+
+# Machine override: problem_size becomes adaptive
+machines:
+  hpc:
+    benchmark:
+      search_method: "adaptive"
+    vars:
+      problem_size:
+        adaptive:
+          initial: 1000
+          factor: 2
+          stop_when: "exit_code != 0"
+# Result: sweep is removed, only adaptive remains
 ```
 
 ---

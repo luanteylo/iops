@@ -422,6 +422,24 @@ class TestAdaptiveConfigValidation:
         cfg["benchmark"]["cache_exclude_vars"] = ["x"]
         self._load_invalid(tmp_path, cfg, "cannot be listed in 'cache_exclude_vars'")
 
+    def test_conditional_when_references_adaptive_var_raises_error(self, tmp_path):
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = {
+            "type": "int",
+            "adaptive": {
+                "initial": 100,
+                "factor": 2,
+                "stop_when": "exit_code != 0",
+            },
+        }
+        cfg["vars"]["compression_level"] = {
+            "type": "int",
+            "sweep": {"mode": "list", "values": [1, 5, 9]},
+            "when": "x > 200",
+            "default": 0,
+        }
+        self._load_invalid(tmp_path, cfg, "references adaptive variable")
+
     def test_multiple_adaptive_vars_raises_error(self, tmp_path):
         cfg = _make_base_config(tmp_path)
         cfg["vars"]["x"] = {
