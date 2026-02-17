@@ -975,17 +975,19 @@ class BasePlanner(ABC, HasLogger):
             with open(index_file, "r") as f:
                 index = json.load(f)
         else:
-            # Get expected total from planner progress
-            # Note: progress['total'] already includes repetitions (it's _attempt_total)
-            progress = self.get_progress()
-            total_expected = progress.get('total', 0)
             repetitions = max(1, int(getattr(self.cfg.benchmark, "repetitions", 1) or 1))
             index = {
                 "benchmark": self.cfg.benchmark.name,
-                "total_expected": total_expected,
+                "total_expected": 0,
                 "repetitions": repetitions,
                 "executions": {}
             }
+
+        # Always refresh total_expected from the planner's current estimate.
+        # For adaptive planners, this refines the worst-case initial estimate
+        # as probes finish, so watch mode sees accurate progress.
+        progress = self.get_progress()
+        index["total_expected"] = progress.get('total', 0)
 
         # Get relative path from run_root to exec_parent_dir
         exec_rel_path = exec_parent_dir.relative_to(run_root)
