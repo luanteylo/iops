@@ -107,10 +107,14 @@ The `stop_when` field is a Python expression evaluated after each execution comp
 |----------|------|-------------|
 | `exit_code` | int or None | Process return code (`__returncode`) |
 | `status` | str | Executor status (`SUCCEEDED`, `FAILED`, etc.) |
-| `metrics` | dict | Parsed metrics from the benchmark output |
-| `execution_time` | float or None | Elapsed time in seconds (when timestamps are available) |
+| `metrics` | dict | Parsed metrics from the benchmark output (see note below) |
+| `execution_time` | float or None | Wall-clock elapsed time in seconds (from executor timestamps) |
 | `previous` | any | The adaptive value that was just tested (named `previous` for consistency with `step_expr`, where it means "use the previous value to compute the next") |
 | `iteration` | int | 0-based iteration counter |
+
+**Important:** Parsed metrics are only accessible through the `metrics` dict, not as standalone variables. For example, if your parser returns `{"bwMiB": 1024, "totalTime": 4.5}`, use `metrics.get('totalTime', 0)` in `stop_when`, not `totalTime` directly. Using a bare metric name will raise `name 'totalTime' is not defined` and the probe will stop immediately.
+
+Note that `execution_time` (wall-clock time from executor timestamps, including queue wait and setup) is different from any timing metric your parser might return (like IOR's `totalTime`, which measures only the benchmark operation itself).
 
 ### Examples
 
