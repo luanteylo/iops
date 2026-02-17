@@ -129,6 +129,15 @@ stop_when: "metrics.get('gflops', 0) < 50"
 stop_when: "execution_time is not None and execution_time > 300"
 ```
 
+**Combining conditions** with `and`/`or`:
+```yaml
+# Stop if benchmark crashes OR takes longer than 2 minutes
+stop_when: "exit_code != 0 or (execution_time is not None and execution_time > 120)"
+
+# Stop when benchmark succeeds but performance degrades
+stop_when: "exit_code == 0 and metrics.get('gflops', 0) < 50"
+```
+
 ## Direction
 
 The `direction` field controls the expected progression order. It defaults to `"ascending"`.
