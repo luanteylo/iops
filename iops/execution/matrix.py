@@ -740,6 +740,7 @@ def create_execution_instance(
     script_index: int = 0,
     search_var_names: Optional[List[str]] = None,
     exhaustive_var_names: Optional[List[str]] = None,
+    adaptive_var_names: Optional[List[str]] = None,
 ) -> Tuple[ExecutionInstance, bool, List[Tuple[Any, str]]]:
     """
     Create a single ExecutionInstance from explicit variable values and validate constraints.
@@ -1096,6 +1097,7 @@ def build_execution_matrix(
                 script_index=script_idx,
                 search_var_names=search_names,
                 exhaustive_var_names=exhaustive_names,
+                adaptive_var_names=search_names,
             )
             # Note: constraint validation is ignored here because build_execution_matrix
             # handles early constraints before instance creation and late constraints
