@@ -20,6 +20,7 @@ Adaptive variables let IOPS automatically probe for threshold values by starting
 10. [Complete Example](#complete-example)
 11. [Constraints](#constraints)
     - [Why only one adaptive variable?](#why-only-one-adaptive-variable)
+    - [Adaptive vs Bayesian optimization](#adaptive-vs-bayesian-optimization)
 12. [Configuration Reference](#configuration-reference)
 
 ---
@@ -120,7 +121,7 @@ stop_when: "exit_code != 0"
 
 **Stop when a metric degrades below a threshold:**
 ```yaml
-stop_when: "metrics.get('throughput', 0) < 100"
+stop_when: "metrics.get('gflops', 0) < 50"
 ```
 
 **Stop when execution takes too long:**
@@ -260,13 +261,13 @@ vars:
       mode: list
       values: [1, 2, 4]
 
-  io_pattern:
-    type: str
+  ppn:
+    type: int
     sweep:
       mode: list
-      values: ["sequential", "random"]
+      values: [8, 16]
 
-  problem_size:
+  matrix_size:
     type: int
     adaptive:
       initial: 1000
@@ -274,17 +275,17 @@ vars:
       stop_when: "exit_code != 0"
 ```
 
-This creates 3 x 2 = 6 independent probes: `(nodes=1, io_pattern=sequential)`, `(nodes=1, io_pattern=random)`, `(nodes=2, io_pattern=sequential)`, and so on. Each finds its own threshold for `problem_size`.
+This creates 3 x 2 = 6 independent probes: `(nodes=1, ppn=8)`, `(nodes=1, ppn=16)`, `(nodes=2, ppn=8)`, and so on. Each finds its own threshold for `matrix_size`.
 
 ## Complete Example
 
-This example finds the maximum problem size before an out-of-memory failure for each node count:
+This example finds the largest matrix that a DGEMM (dense matrix multiplication) kernel can process before running out of memory or exceeding a time limit, for each node count:
 
 ```yaml
 benchmark:
-  name: "Memory Limit Finder"
+  name: "DGEMM Scaling Limit Finder"
   workdir: "./workdir"
-  executor: "local"
+  executor: "slurm"
   search_method: "adaptive"
   repetitions: 1
 
@@ -295,38 +296,55 @@ vars:
       mode: list
       values: [1, 2, 4, 8]
 
-  problem_size:
+  ppn:
+    type: int
+    sweep:
+      mode: list
+      values: [16]
+
+  ntasks:
+    type: int
+    expr: "{{ nodes * ppn }}"
+
+  matrix_size:
     type: int
     adaptive:
       initial: 1000
       factor: 2
-      stop_when: "exit_code != 0"
-      max_iterations: 15
+      stop_when: "execution_time is not None and execution_time > 120"
+      max_iterations: 12
 
-  total_elements:
+  memory_per_task_mb:
     type: int
-    expr: "problem_size * nodes"
+    expr: "{{ (matrix_size * matrix_size * 8 * 3) // (ntasks * 1024 * 1024) }}"
 
 command:
-  template: "benchmark --size {{ problem_size }} --nodes {{ nodes }}"
+  template: "dgemm_benchmark --size {{ matrix_size }} --np {{ ntasks }}"
 
 scripts:
-  - name: "bench"
-    submit: "bash"
+  - name: "dgemm"
     script_template: |
       #!/bin/bash
-      {{ command.template }}
-      echo '{"peak_mem_mb": 1024}' > {{ execution_dir }}/result.json
+      #SBATCH --job-name=iops_{{ execution_id }}
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --ntasks-per-node={{ ppn }}
+      #SBATCH --time=00:15:00
+      #SBATCH --exclusive
+
+      module load mpi blas
+      mpirun {{ command.template }}
 
     parser:
-      file: "{{ execution_dir }}/result.json"
+      file: "{{ execution_dir }}/dgemm_result.json"
       metrics:
-        - name: peak_mem_mb
+        - name: gflops
       parser_script: |
         import json
         def parse(file_path):
             with open(file_path) as f:
-                return json.load(f)
+                data = json.load(f)
+            return {"gflops": data["gflops"]}
 
 output:
   sink:
@@ -334,11 +352,13 @@ output:
     path: "{{ workdir }}/results.csv"
 ```
 
+With 4 node counts and 1 ppn value, IOPS creates 4 probes. Each doubles `matrix_size` (1000, 2000, 4000, 8000, ...) until the computation takes longer than 2 minutes. More nodes handle larger matrices because the work is distributed across more processes.
+
 ## Constraints
 
 - Only one adaptive variable per config
 - Adaptive variables cannot appear in `exhaustive_vars` or `cache_exclude_vars`
-- `benchmark.search_method` must be `"adaptive"` when an adaptive variable is defined
+- `benchmark.search_method` must be `"adaptive"` when an adaptive variable is defined (adaptive cannot be combined with `"bayesian"`, `"random"`, or `"exhaustive"` search methods)
 - `factor` and `increment` require numeric types (`int` or `float`)
 - `step_expr` works with any type
 - Conditional variables (`when`) cannot reference the adaptive variable, because `when` conditions are evaluated during matrix generation before the adaptive value is known. Use only swept variables in `when` expressions.
@@ -347,7 +367,7 @@ output:
 
 This is a deliberate design choice to keep the search well-defined and the results interpretable:
 
-- **Ambiguous search strategy.** With one adaptive variable the progression is clear: step forward in one dimension until you hit a wall. With two adaptive variables (say `problem_size` and `buffer_size`), how should they advance? Both at once? One at a time? Alternate? Each strategy produces different results, and there is no obviously correct default.
+- **Ambiguous search strategy.** With one adaptive variable the progression is clear: step forward in one dimension until you hit a wall. With two adaptive variables (say `matrix_size` and `block_factor`), how should they advance? Both at once? One at a time? Alternate? Each strategy produces different results, and there is no obviously correct default.
 - **Stop condition attribution.** The `stop_when` expression tells you "something failed," but with two adaptive variables moving simultaneously you cannot tell which one caused the failure. With one adaptive variable the cause is unambiguous.
 - **Exponential probe space.** With one adaptive variable and N swept combos you get N independent 1D probes. With two adaptive variables each probe becomes a 2D search, which is closer to what Bayesian optimization already handles (with a surrogate model to guide it).
 - **Clean result structure.** The output is a simple `found_value` / `failed_value` pair per probe. With two adaptive variables you would need a 2D boundary, which is harder to represent and act on.
@@ -356,21 +376,56 @@ If you need to explore thresholds for two variables, sweep one and probe the oth
 
 ```yaml
 vars:
-  buffer_size:
+  block_factor:
     type: int
     sweep:
       mode: list
-      values: [64, 128, 256, 512]    # sweep this one
+      values: [32, 64, 128, 256]     # sweep this one
 
-  problem_size:
+  matrix_size:
     type: int
     adaptive:
       initial: 1000
       factor: 2
-      stop_when: "exit_code != 0"    # probe this one per buffer_size
+      stop_when: "exit_code != 0"    # probe this one per block_factor
 ```
 
-This gives you the threshold `problem_size` for each `buffer_size` value, which is usually more actionable than probing both dimensions blindly. Alternatively, run two separate adaptive configs (one per variable) for fully independent threshold searches.
+This gives you the threshold `matrix_size` for each `block_factor` value, which is usually more actionable than probing both dimensions blindly. Alternatively, run two separate adaptive configs (one per variable) for fully independent threshold searches.
+
+### Adaptive vs Bayesian optimization
+
+Adaptive probing and Bayesian optimization are separate search methods and cannot be used together in the same config. They solve different problems:
+
+- **Adaptive** probes a single dimension to find a threshold (e.g., "what is the largest matrix size before running out of memory?")
+- **Bayesian** explores a multi-dimensional space to find an optimal combination (e.g., "which nodes/ppn/block_factor combo maximizes GFLOPS?")
+
+A common two-step workflow is to run adaptive first to discover limits, then use those limits to define sweep ranges for a Bayesian run:
+
+```yaml
+# Step 1: adaptive config discovers max matrix_size per node count
+# Result: nodes=4 -> 8000, nodes=8 -> 16000, nodes=16 -> 32000
+
+# Step 2: use discovered limits as sweep ranges for Bayesian optimization
+benchmark:
+  search_method: "bayesian"
+  bayesian_config:
+    objective_metric: "gflops"
+    objective: "maximize"
+    n_iterations: 30
+
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16]
+
+  matrix_size:
+    type: int
+    sweep:
+      mode: list
+      values: [1000, 2000, 4000, 8000, 16000]  # informed by adaptive results
+```
 
 ## Configuration Reference
 
