@@ -802,7 +802,7 @@ class IOPSRunner(HasLogger):
 
         return stats if stats else None
 
-    def _save_run_metadata(self, test_count: int = 0, benchmark_start_time: Optional[datetime] = None, benchmark_end_time: Optional[datetime] = None, planner_stats: Optional[Dict[str, Any]] = None):
+    def _save_run_metadata(self, test_count: int = 0, benchmark_start_time: Optional[datetime] = None, benchmark_end_time: Optional[datetime] = None, planner_stats: Optional[Dict[str, Any]] = None, adaptive_results: Optional[Dict[str, Any]] = None):
         """Save runtime metadata for report generation."""
         try:
             # Calculate timing metrics if provided
@@ -868,6 +868,9 @@ class IOPSRunner(HasLogger):
                 "reporting": serialize_reporting_config(self.cfg.reporting),
             }
 
+            if adaptive_results:
+                metadata["adaptive_results"] = adaptive_results
+
             # Add variable definitions
             for var_name, var_config in self.cfg.vars.items():
                 var_info = {
@@ -887,7 +890,19 @@ class IOPSRunner(HasLogger):
                         var_info["sweep"]["values"] = var_config.sweep.values
 
                 if var_config.adaptive:
-                    var_info["adaptive"]["values"] = var_config.adaptive.values
+                    var_info["adaptive"] = {
+                        "initial": var_config.adaptive.initial,
+                        "stop_when": var_config.adaptive.stop_when,
+                        "direction": var_config.adaptive.direction,
+                    }
+                    if var_config.adaptive.factor is not None:
+                        var_info["adaptive"]["factor"] = var_config.adaptive.factor
+                    if var_config.adaptive.increment is not None:
+                        var_info["adaptive"]["increment"] = var_config.adaptive.increment
+                    if var_config.adaptive.step_expr is not None:
+                        var_info["adaptive"]["step_expr"] = var_config.adaptive.step_expr
+                    if var_config.adaptive.max_iterations is not None:
+                        var_info["adaptive"]["max_iterations"] = var_config.adaptive.max_iterations
 
                 if var_config.expr:
                     var_info["expr"] = var_config.expr
@@ -1708,12 +1723,44 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"Total runtime: {runtime_str}")
         self.logger.info("=" * 70)
 
+        # Adaptive probing results summary
+        adaptive_results = None
+        if hasattr(self.planner, 'get_probe_results'):
+            probe_results = self.planner.get_probe_results()
+            adaptive_var_name = self.planner._adaptive_var_name
+
+            self.logger.info("")
+            self.logger.info(f"Adaptive probing results for '{adaptive_var_name}':")
+            for label, result in probe_results.items():
+                parts = [f"found={result.found_value}"]
+                if result.failed_value is not None:
+                    parts.append(f"failed={result.failed_value}")
+                parts.append(f"iterations={result.iterations}")
+                parts.append(f"stop_reason={result.stop_reason}")
+                prefix = f"  {label}: " if label else "  "
+                self.logger.info(f"{prefix}{', '.join(parts)}")
+            self.logger.info("")
+
+            # Serialize for metadata JSON
+            adaptive_results = {
+                adaptive_var_name: {
+                    label: {
+                        "found_value": r.found_value,
+                        "failed_value": r.failed_value,
+                        "iterations": r.iterations,
+                        "stop_reason": r.stop_reason,
+                    }
+                    for label, r in probe_results.items()
+                }
+            }
+
         # Save runtime metadata for report generation
         self._save_run_metadata(
             test_count=test_count,
             benchmark_start_time=self.benchmark_start_time,
             benchmark_end_time=benchmark_end_time,
-            planner_stats=self._get_planner_stats()
+            planner_stats=self._get_planner_stats(),
+            adaptive_results=adaptive_results,
         )
 
         # Aggregate resource traces if enabled
