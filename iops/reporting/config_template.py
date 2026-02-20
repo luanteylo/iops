@@ -20,6 +20,22 @@ if TYPE_CHECKING:
     )
 
 
+def _literal_block_dumper():
+    """Return a YAML Dumper that renders multi-line strings as literal blocks (|)."""
+    import yaml
+
+    class _Dumper(yaml.SafeDumper):
+        pass
+
+    def _str_representer(dumper, data):
+        if '\n' in data:
+            return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+    _Dumper.add_representer(str, _str_representer)
+    return _Dumper
+
+
 def _serialize_plot_config(plot_cfg) -> Dict[str, Any]:
     """Serialize a PlotConfig to dict."""
     return {
@@ -349,7 +365,8 @@ def save_report_config_template(
             f.write("# ============================================================================\n")
             f.write("\n")
 
-            yaml.dump(yaml_content, f, default_flow_style=False, sort_keys=False, indent=2)
+            yaml.dump(yaml_content, f, default_flow_style=False, sort_keys=False, indent=2,
+                      Dumper=_literal_block_dumper())
 
         logger.info(f"Report config template saved: {output_path.relative_to(cfg.benchmark.workdir.parent)}")
         return output_path

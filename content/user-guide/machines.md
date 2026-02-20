@@ -130,10 +130,31 @@ machines:
 
 Machine names are arbitrary identifiers (e.g., `laptop`, `cluster_a`, `grid5000_lyon`).
 
-IOPS validates the `machines` section structure even without `--machine`, and validates the fully merged config when a machine is selected:
+### Validation Timing
+
+IOPS validates configuration in two phases:
+
+1. **Structural validation (before merge):** Checks that all required top-level sections (`benchmark`, `vars`, `command`, `scripts`, `output`) are present in the base config, and that the `machines` section structure is well-formed. This runs even without `--machine`.
+
+2. **Semantic validation (after merge):** Validates the fully merged configuration (types, references, constraints, etc.). This runs on the final result after machine overrides have been applied.
+
+Because structural validation runs first, **the base config must be self-contained** with all required sections present at the top level. You cannot define a required section (e.g., `output`) only inside a machine override. If needed, provide a minimal placeholder at the top level and let the machine override replace it:
+
+```yaml
+# Base: placeholder output (will be overridden per machine)
+output:
+  sink:
+    type: csv
+
+machines:
+  cluster:
+    output:
+      sink:
+        path: "/scratch/results.csv"
+```
 
 ```bash
-iops check config.yaml                  # Validates structure including machines
+iops check config.yaml                    # Validates structure including machines
 iops check config.yaml --machine cluster  # Validates merged config
 ```
 

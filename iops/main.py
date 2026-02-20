@@ -21,6 +21,22 @@ def load_version():
     with version_file.open() as f:
         return f.read().strip()
     
+def _literal_block_dumper():
+    """Return a YAML Dumper that renders multi-line strings as literal blocks (|)."""
+    import yaml
+
+    class _Dumper(yaml.SafeDumper):
+        pass
+
+    def _str_representer(dumper, data):
+        if '\n' in data:
+            return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+    _Dumper.add_representer(str, _str_representer)
+    return _Dumper
+
+
 def _add_common_args(parser):
     """Add common arguments shared across subcommands."""
     parser.add_argument('--log-file', type=Path, default=Path("iops.log"), metavar='PATH',
@@ -571,7 +587,8 @@ def main():
                     logger.error(f"  {i}. {err}")
                 return
 
-            yaml_output = _yaml.dump(merged, default_flow_style=False, sort_keys=False)
+            yaml_output = _yaml.dump(merged, default_flow_style=False, sort_keys=False,
+                                     Dumper=_literal_block_dumper())
             if args.resolve == '-':
                 print(yaml_output, end='')
             else:

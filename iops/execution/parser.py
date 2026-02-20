@@ -29,7 +29,8 @@ def _build_parse_fn(
         parser_script: The parser script code defining a parse() function
         context: Optional dict of variables to inject into the script's namespace.
                  These will be available as global variables in the parser script.
-                 Typically includes: vars, env, execution_id, execution_dir, workdir, repetition, repetitions
+                 Typically includes: vars, env, execution_id, execution_dir, workdir,
+                 repetition, repetitions, metrics
         stdout_buffer: Optional StringIO to capture stdout during compilation
         stderr_buffer: Optional StringIO to capture stderr during compilation
     """
@@ -103,6 +104,7 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
         - log_dir: The logs directory path (as string)
         - repetition: The current repetition number
         - repetitions: Total number of repetitions
+        - metrics: List of expected metric names (e.g., ["throughput", "latency"])
     """
     parser = test.parser
     if parser is None:
@@ -125,6 +127,7 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
         "log_dir": str(test.log_dir) if test.log_dir else None,
         "repetition": test.repetition,
         "repetitions": test.repetitions,
+        "metrics": metric_names,
     }
 
     # Capture stdout/stderr during parser execution

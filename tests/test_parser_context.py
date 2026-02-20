@@ -8,6 +8,7 @@ Tests that parser scripts have access to execution context variables:
 - workdir: The root working directory path
 - repetition: The current repetition number
 - repetitions: Total number of repetitions
+- metrics: List of expected metric names
 """
 
 import pytest
@@ -104,6 +105,41 @@ def parse(file_path):
         result = fn("/tmp/test.txt")
         assert result == {"total_reps": 5}
 
+    def test_metrics_accessible_in_parser(self):
+        """Parser script can access metrics global (list of expected metric names)."""
+        script = """
+def parse(file_path):
+    return {"metric_list": metrics}
+"""
+        context = {"vars": {}, "env": {}, "metrics": ["throughput", "latency"]}
+        fn = _build_parse_fn(script, context)
+        result = fn("/tmp/test.txt")
+        assert result == {"metric_list": ["throughput", "latency"]}
+
+    def test_metrics_used_for_conditional_computation(self):
+        """Parser can skip expensive computations based on metrics list."""
+        script = """
+def parse(file_path):
+    results = {}
+    if "fast_metric" in metrics:
+        results["fast_metric"] = 42
+    if "slow_metric" in metrics:
+        results["slow_metric"] = 999
+    return results
+"""
+        # Only fast_metric requested
+        context = {"vars": {}, "env": {}, "metrics": ["fast_metric"]}
+        fn = _build_parse_fn(script, context)
+        result = fn("/tmp/test.txt")
+        assert result == {"fast_metric": 42}
+        assert "slow_metric" not in result
+
+        # Both requested
+        context = {"vars": {}, "env": {}, "metrics": ["fast_metric", "slow_metric"]}
+        fn = _build_parse_fn(script, context)
+        result = fn("/tmp/test.txt")
+        assert result == {"fast_metric": 42, "slow_metric": 999}
+
     def test_all_context_variables_accessible(self):
         """Parser script can access all context variables together."""
         script = """
@@ -116,6 +152,7 @@ def parse(file_path):
         "work_dir": workdir,
         "rep": repetition,
         "total_reps": repetitions,
+        "metric_count": len(metrics),
     }
 """
         context = {
@@ -126,6 +163,7 @@ def parse(file_path):
             "workdir": "/workdir",
             "repetition": 2,
             "repetitions": 5,
+            "metrics": ["throughput", "latency"],
         }
         fn = _build_parse_fn(script, context)
         result = fn("/tmp/test.txt")
@@ -137,6 +175,7 @@ def parse(file_path):
             "work_dir": "/workdir",
             "rep": 2,
             "total_reps": 5,
+            "metric_count": 2,
         }
 
     def test_backwards_compatibility_without_context(self):
@@ -495,6 +534,63 @@ def parse(file_path):
         assert metrics["bandwidth_per_proc"] == 93.75  # 2000/32 * 1.5
         assert metrics["latency"] == 5.5
         assert metrics["repetition_id"] == "exec_0010_r3"
+
+    def test_metrics_passed_to_parser(self, tmp_path):
+        """Metrics list from ExecutionInstance is passed to parser script."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("data\n")
+
+        parser_script = """
+def parse(file_path):
+    results = {}
+    if "fast_metric" in metrics:
+        results["fast_metric"] = 1.0
+    if "slow_metric" in metrics:
+        results["slow_metric"] = 2.0
+    return results
+"""
+        mock_exec = self._create_mock_execution(
+            vars_dict={},
+            env_dict={},
+            execution_id="exec_0001",
+            repetition=1,
+            parser_file=str(output_file),
+            parser_script=parser_script,
+            metrics=["fast_metric", "slow_metric"],
+        )
+
+        result = parse_metrics_from_execution(mock_exec)
+        assert result["metrics"]["fast_metric"] == 1.0
+        assert result["metrics"]["slow_metric"] == 2.0
+
+    def test_metrics_selective_computation(self, tmp_path):
+        """Parser can selectively compute only requested metrics."""
+        output_file = tmp_path / "output.txt"
+        output_file.write_text("data\n")
+
+        parser_script = """
+def parse(file_path):
+    results = {}
+    if "throughput" in metrics:
+        results["throughput"] = 100.0
+    if "l1_norm" in metrics:
+        results["l1_norm"] = 0.001
+    return results
+"""
+        # Only request throughput
+        mock_exec = self._create_mock_execution(
+            vars_dict={},
+            env_dict={},
+            execution_id="exec_0001",
+            repetition=1,
+            parser_file=str(output_file),
+            parser_script=parser_script,
+            metrics=["throughput"],
+        )
+
+        result = parse_metrics_from_execution(mock_exec)
+        assert result["metrics"]["throughput"] == 100.0
+        assert "l1_norm" not in result["metrics"]
 
     def test_parser_without_using_context(self, tmp_path):
         """Parser that doesn't use context still works (backwards compatible)."""
