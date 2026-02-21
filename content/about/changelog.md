@@ -18,6 +18,10 @@ All notable changes to IOPS are documented here.
 - `--machine NAME` flag (and `IOPS_MACHINE` env var) for `iops run` and `iops check`
 - `iops check --resolve [FILE]` to output the fully merged config as YAML
 - `iops generate --machines` to scaffold a config with machine override examples
+- `metrics` global variable in parser scripts (list of expected metric names for selective computation)
+
+### Fixed
+- `--resolve` now renders multi-line strings (parser scripts, script templates) with YAML literal block style (`|`) instead of escaped single-line format
 
 ## [3.5.0] - 2026-02-01
 
