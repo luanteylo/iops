@@ -16,6 +16,7 @@ import signal
 import sys
 import subprocess
 import shlex
+import shutil
 import socket
 import glob
 import csv
@@ -25,6 +26,9 @@ METADATA_FILENAME = "__iops_run_metadata.json"
 
 # Resource trace summary filename
 RESOURCE_SUMMARY_FILENAME = "__iops_resource_summary.csv"
+
+# Copy of the input YAML configuration file
+CONFIG_COPY_FILENAME = "__iops_config.yaml"
 
 
 def _get_iops_version() -> str:
@@ -924,6 +928,13 @@ class IOPSRunner(HasLogger):
                 json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
 
             self.logger.debug(f"Saved runtime metadata to: {metadata_path}")
+
+            # Copy the original input YAML config file to the run folder
+            config_file = getattr(self.args, 'config_file', None)
+            if config_file and Path(config_file).is_file():
+                config_copy_path = self.cfg.benchmark.workdir / CONFIG_COPY_FILENAME
+                shutil.copy2(config_file, config_copy_path)
+                self.logger.debug(f"Saved config copy to: {config_copy_path}")
 
         except Exception as e:
             self.logger.warning(f"Failed to save runtime metadata: {e}")

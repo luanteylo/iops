@@ -1314,9 +1314,20 @@ def load_generic_config(
 
     # 2. Apply machine override if specified
     machine_name = _resolve_machine_name(machine)
+    has_machines = "machines" in data and isinstance(data.get("machines"), dict) and data["machines"]
+
     if machine_name:
+        available = sorted(data["machines"].keys())
+        logger.info(f"Machine profile: '{machine_name}' (available: {', '.join(available)})")
         data = _apply_machine_override(data, machine_name)
-        logger.info(f"Applied machine override: '{machine_name}'")
+    elif has_machines:
+        available = sorted(data["machines"].keys())
+        logger.warning(
+            f"Config defines machine profiles: {', '.join(available)}, "
+            f"but no machine was selected (via --machine or IOPS_MACHINE env var). "
+            f"Running with base configuration."
+        )
+        data.pop("machines", None)
     else:
         data.pop("machines", None)
 
