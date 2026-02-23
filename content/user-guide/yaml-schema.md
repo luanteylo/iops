@@ -441,7 +441,7 @@ See [Adaptive Variables](../adaptive-variables) for a full guide with examples.
 | `increment` | One of three | | Additive step (next = previous + increment) |
 | `step_expr` | One of three | | Jinja2 expression for custom progression |
 | `stop_when` | Yes | | Python expression evaluated after each execution |
-| `max_iterations` | No | 100 (internal) | Maximum number of values to test |
+| `max_iterations` | No | No limit | Maximum number of values to test |
 | `direction` | No | `"ascending"` | `"ascending"` or `"descending"` |
 
 **Example:**

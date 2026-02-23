@@ -380,7 +380,7 @@ vars:
   #     initial: 1000              # Starting value (required)
   #     factor: 2                  # Next = previous * factor (must be > 1 for ascending)
   #     stop_when: "exit_code != 0"  # Stop condition (required)
-  #     max_iterations: 15         # Safety limit (optional, default: 100)
+  #     max_iterations: 15         # Safety limit (optional, no limit if omitted)
   #     direction: "ascending"     # "ascending" (default) or "descending"
   #
   # Adaptive variable with additive step:

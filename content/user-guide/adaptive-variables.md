@@ -182,7 +182,7 @@ adaptive:
   max_iterations: 10           # Test at most 10 values
 ```
 
-When `max_iterations` is omitted, the internal limit defaults to 100.
+When `max_iterations` is omitted, the probe runs without a limit and only stops when the `stop_when` condition is triggered.
 
 ## Probe Results
 
@@ -457,5 +457,5 @@ vars:
 | `increment` | One of three | | Additive step (next = previous + increment) |
 | `step_expr` | One of three | | Jinja2 expression for custom progression |
 | `stop_when` | Yes | | Python expression evaluated after each execution |
-| `max_iterations` | No | 100 (internal) | Maximum number of values to test |
+| `max_iterations` | No | No limit | Maximum number of values to test |
 | `direction` | No | `"ascending"` | Expected progression: `"ascending"` or `"descending"` |

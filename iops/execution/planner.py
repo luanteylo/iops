@@ -307,16 +307,10 @@ else
 fi
 '''
 
-# Optional imports for Bayesian optimization
-try:
-    from skopt import Optimizer
-    from skopt.space import Integer, Real, Categorical
-    import numpy as np
-    SKOPT_AVAILABLE = True
-    # Suppress skopt warning about duplicate points - it handles this by using random points
-    warnings.filterwarnings('ignore', message='.*objective has been evaluated at point.*', category=UserWarning)
-except ImportError:
-    SKOPT_AVAILABLE = False
+# Bayesian optimization imports are deferred to BayesianPlanner.__init__
+# to avoid loading scipy/OpenBLAS at module level (which can fail on
+# constrained SLURM nodes with low RLIMIT_NPROC).
+SKOPT_AVAILABLE = None  # resolved lazily
 
 
 # ============================================================================ #
@@ -1668,6 +1662,18 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Store exhaustive_var_names for filtering search space
         self.exhaustive_var_names = set(cfg.benchmark.exhaustive_vars or [])
 
+        # Lazy import: avoid loading scipy/OpenBLAS unless Bayesian is actually used
+        global SKOPT_AVAILABLE, Optimizer, Integer, Real, Categorical, np
+        if SKOPT_AVAILABLE is None:
+            try:
+                from skopt import Optimizer
+                from skopt.space import Integer, Real, Categorical
+                import numpy as np
+                SKOPT_AVAILABLE = True
+                warnings.filterwarnings('ignore', message='.*objective has been evaluated at point.*', category=UserWarning)
+            except ImportError:
+                SKOPT_AVAILABLE = False
+
         if not SKOPT_AVAILABLE:
             raise ImportError(
                 "scikit-optimize is required for Bayesian optimization. "
@@ -2700,7 +2706,7 @@ class AdaptivePlanner(BasePlanner, HasLogger):
         # Configuration
         self._repetitions = max(1, int(getattr(cfg.benchmark, "repetitions", 1) or 1))
         acfg = self._adaptive_config
-        max_iter = acfg.max_iterations if acfg.max_iterations is not None else 100
+        max_iter = acfg.max_iterations  # None means no limit
 
         # Create one ProbeState per static combination
         initial_value = _cast_value(self._adaptive_var_type, acfg.initial)
@@ -2714,9 +2720,10 @@ class AdaptivePlanner(BasePlanner, HasLogger):
         # Execution ID counter
         self._next_exec_id = 1
 
-        # Progress tracking
+        # Progress tracking (use a rough estimate when no limit is set)
         self._attempt_count = 0
-        self._attempt_total = len(self._probes) * max_iter * self._repetitions
+        estimate_iter = max_iter if max_iter is not None else 20
+        self._attempt_total = len(self._probes) * estimate_iter * self._repetitions
 
         # Round-robin index for probe selection
         self._probe_index = 0
@@ -2923,7 +2930,7 @@ class AdaptivePlanner(BasePlanner, HasLogger):
             return
 
         acfg = self._adaptive_config
-        max_iter = acfg.max_iterations if acfg.max_iterations is not None else 100
+        max_iter = acfg.max_iterations  # None means no limit
 
         # All reps done for this value. Decide next action.
         if probe.stop_triggered_count > 0:
@@ -2943,7 +2950,7 @@ class AdaptivePlanner(BasePlanner, HasLogger):
             probe.found_value = probe.current_value
             probe.iteration += 1
 
-            if probe.iteration >= max_iter:
+            if max_iter is not None and probe.iteration >= max_iter:
                 # Max iterations reached
                 probe.finished = True
                 probe.stop_reason = "max_iterations"
@@ -2983,16 +2990,18 @@ class AdaptivePlanner(BasePlanner, HasLogger):
         finished_attempts = 0
         remaining_estimate = 0
         acfg = self._adaptive_config
-        max_iter = acfg.max_iterations if acfg.max_iterations is not None else 100
+        max_iter = acfg.max_iterations  # None means no limit
 
         for probe in self._probes:
             if probe.finished:
                 # Actual attempts used by this probe
                 finished_attempts += (probe.iteration + 1) * self._repetitions
             else:
-                # Estimate remaining: (max_iterations - current_iteration) * reps
+                # Estimate remaining: use max_iterations if set, otherwise
+                # estimate 10 more iterations from current position
                 finished_attempts += probe.iteration * self._repetitions
-                remaining_estimate += (max_iter - probe.iteration) * self._repetitions
+                estimate = (max_iter - probe.iteration) if max_iter is not None else 10
+                remaining_estimate += estimate * self._repetitions
 
         self._attempt_total = finished_attempts + remaining_estimate
 
