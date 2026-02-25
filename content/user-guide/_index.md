@@ -11,6 +11,7 @@ Comprehensive guide to using IOPS features and capabilities.
 - **[Templating and Context](templating-and-context)** - Jinja2 syntax, dynamic values, conditionals, and context variables per configuration section
 - **[Matrix Generation](matrix-generation)** - How IOPS builds the parameter space from variables, including conditional variables
 - **[Machine Overrides](machines)** - Use a single config for multiple systems with per-machine overrides
+- **[Writing Parsers](writing-parsers)** - Extract metrics from benchmark output with custom Python scripts
 - **[Using IOPS on Grid'5000](/iops/blog/grid500/)** - Run IOPS with OAR scheduler using wrapper scripts
 
 ## Execution
