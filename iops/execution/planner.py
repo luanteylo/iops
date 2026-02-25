@@ -1676,8 +1676,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         if not SKOPT_AVAILABLE:
             raise ImportError(
-                "scikit-optimize is required for Bayesian optimization. "
-                "Install it with: pip install scikit-optimize"
+                "Bayesian optimization requires the 'scikit-optimize' library.\n"
+                "Install with: pip install iops-benchmark[bayesian]"
             )
 
         # Bayesian config is guaranteed by loader to be set when search_method is "bayesian"

@@ -10,6 +10,7 @@ import pytest
 import yaml
 import logging
 from pathlib import Path
+from unittest.mock import patch
 
 
 def load_config(config_path):
@@ -409,3 +410,15 @@ class TestBayesianExhaustiveVars:
             assert abs(observed - expected) < 0.01, (
                 f"Expected aggregated value ~{expected}, got {observed}"
             )
+
+
+class TestSkoptNotInstalled:
+    """Test behavior when scikit-optimize is not installed."""
+
+    def test_bayesian_planner_raises_import_error(self, bayesian_config):
+        """BayesianPlanner raises ImportError with install instructions when skopt is missing."""
+        import iops.execution.planner as planner_module
+
+        with patch.object(planner_module, "SKOPT_AVAILABLE", False):
+            with pytest.raises(ImportError, match=r"pip install iops-benchmark\[bayesian\]"):
+                planner_module.BayesianPlanner(bayesian_config)
