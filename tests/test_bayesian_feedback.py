@@ -415,6 +415,19 @@ class TestBayesianExhaustiveVars:
 class TestSkoptNotInstalled:
     """Test behavior when scikit-optimize is not installed."""
 
+    def test_config_validation_raises_early(self, tmp_path, bayesian_config_dict):
+        """Config validation catches missing skopt before execution starts."""
+        from iops.config.models import ConfigValidationError
+        import iops.config.loader as loader_module
+
+        config_file = tmp_path / "bayesian_config.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(bayesian_config_dict, f)
+
+        with patch.object(loader_module, "SKOPT_AVAILABLE", False):
+            with pytest.raises(ConfigValidationError, match=r"pip install iops-benchmark\[bayesian\]"):
+                load_config(config_file)
+
     def test_bayesian_planner_raises_import_error(self, bayesian_config):
         """BayesianPlanner raises ImportError with install instructions when skopt is missing."""
         import iops.execution.planner as planner_module

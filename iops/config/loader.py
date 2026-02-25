@@ -20,6 +20,13 @@ try:
 except ImportError:
     PYARROW_AVAILABLE = False
 
+# Optional scikit-optimize for Bayesian optimization
+try:
+    import skopt
+    SKOPT_AVAILABLE = True
+except ImportError:
+    SKOPT_AVAILABLE = False
+
 from iops.config.models import (
     ConfigValidationError,
     GenericBenchmarkConfig,
@@ -1785,6 +1792,11 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
 
     # bayesian_config validation (required when search_method is "bayesian")
     if cfg.benchmark.search_method == "bayesian":
+        if not SKOPT_AVAILABLE:
+            raise ConfigValidationError(
+                "Bayesian optimization requires the 'scikit-optimize' library.\n"
+                "Install with: pip install iops-benchmark[bayesian]"
+            )
         bc = cfg.benchmark.bayesian_config
         if bc is None:
             raise ConfigValidationError(
