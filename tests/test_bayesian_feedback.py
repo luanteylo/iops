@@ -83,6 +83,7 @@ def bayesian_config_dict(tmp_path):
 @pytest.fixture
 def bayesian_config(tmp_path, bayesian_config_dict):
     """Create and load a Bayesian config."""
+    pytest.importorskip("skopt")
     config_file = tmp_path / "bayesian_config.yaml"
     with open(config_file, "w") as f:
         yaml.dump(bayesian_config_dict, f)
@@ -250,6 +251,7 @@ def bayesian_exhaustive_config_dict(tmp_path):
 @pytest.fixture
 def bayesian_exhaustive_config(tmp_path, bayesian_exhaustive_config_dict):
     """Create and load a Bayesian config with exhaustive_vars."""
+    pytest.importorskip("skopt")
     config_file = tmp_path / "bayesian_exhaustive_config.yaml"
     with open(config_file, "w") as f:
         yaml.dump(bayesian_exhaustive_config_dict, f)

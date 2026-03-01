@@ -26,7 +26,7 @@ test:
   tags:
     - ci.inria.fr
   before_script:
-    - pip install -e .
+    - pip install -e ".[bayesian]"
     - pip install -r requirements-dev.txt
   script:
     - pytest tests/

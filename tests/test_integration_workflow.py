@@ -364,6 +364,14 @@ class TestRandomPlannerWorkflow:
 # Bayesian Planner Tests
 # =============================================================================
 
+try:
+    import skopt
+    _HAS_SKOPT = True
+except ImportError:
+    _HAS_SKOPT = False
+
+
+@pytest.mark.skipif(not _HAS_SKOPT, reason="scikit-optimize not installed")
 class TestBayesianPlannerWorkflow:
     """Test full workflow with Bayesian planner."""
 
@@ -547,6 +555,7 @@ class TestTrackExecutions:
         rows = get_results(mock_workdir)
         assert len(rows) == 6
 
+    @pytest.mark.skipif(not _HAS_SKOPT, reason="scikit-optimize not installed")
     def test_track_executions_disabled_with_bayesian(self, mock_workdir, mock_config_file):
         """Test track_executions=false works with Bayesian planner."""
         config_content = create_mock_config(
