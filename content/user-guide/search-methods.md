@@ -60,6 +60,7 @@ benchmark:
 - **convergence_patience** (int, default: 3): Number of consecutive convergence events before early stopping. When convergence is detected, `xi` is boosted to encourage exploration.
 - **xi_boost_factor** (float, default: 5.0): Multiplier for `xi` when convergence is detected. Helps escape local optima by encouraging more exploration.
 
+See [Bayesian Optimization](../bayesian-optimization) for a complete guide covering parameter encoding, surrogate model selection, and convergence behavior.
 
 
 

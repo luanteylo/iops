@@ -20,6 +20,9 @@ All notable changes to IOPS are documented here.
 - `iops generate --machines` to scaffold a config with machine override examples
 - `metrics` global variable in parser scripts (list of expected metric names for selective computation)
 
+### Changed
+- Made scikit-optimize an optional dependency, installed via `pip install iops-benchmark[bayesian]`
+
 ### Fixed
 - `--resolve` now renders multi-line strings (parser scripts, script templates) with YAML literal block style (`|`) instead of escaped single-line format
 
