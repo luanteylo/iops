@@ -4,7 +4,7 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
-## [3.5.1] - Unreleased
+## [3.5.2] - 2026-03-02
 
 ### Added
 - Adaptive variable probing (`search_method: "adaptive"`) for finding threshold values automatically
@@ -19,12 +19,17 @@ All notable changes to IOPS are documented here.
 - `iops check --resolve [FILE]` to output the fully merged config as YAML
 - `iops generate --machines` to scaffold a config with machine override examples
 - `metrics` global variable in parser scripts (list of expected metric names for selective computation)
+- Copy input YAML config to run folder for reproducibility
+- Reports section on the website with interactive Plotly report viewer
 
 ### Changed
 - Made scikit-optimize an optional dependency, installed via `pip install iops-benchmark[bayesian]`
 
 ### Fixed
 - `--resolve` now renders multi-line strings (parser scripts, script templates) with YAML literal block style (`|`) instead of escaped single-line format
+- Watch mode progress display for adaptive planner
+- Parser script now accepts directory paths
+- Bayesian test failures when scikit-optimize is not installed
 
 ## [3.5.0] - 2026-02-01
 

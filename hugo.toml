@@ -41,6 +41,11 @@ enableGitInfo = true
   weight = 5
 
 [[menu.main]]
+  name = "Reports"
+  url = "reports/"
+  weight = 6
+
+[[menu.main]]
   name = "Search"
   url = "search/"
   weight = 7

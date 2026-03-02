@@ -276,6 +276,7 @@ output:
 
 ## Related Documentation
 
+- [Full Interactive Report]({{< ref "/reports" >}}) - Explore the complete results from this study
 - [Resource Tracing]({{< ref "/user-guide/resource-tracing" >}}) - CPU and memory monitoring
 - [Conditional Variables]({{< ref "/user-guide/matrix-generation#conditional-variables" >}}) - How `when` clauses work
 - [YAML Schema Reference]({{< ref "/user-guide/yaml-schema" >}}) - Complete configuration reference
