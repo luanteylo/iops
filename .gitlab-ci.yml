@@ -59,6 +59,34 @@ pages:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+# Deploy to iops.gitlabpages.inria.fr
+deploy-iops-domain:
+  stage: deploy
+  variables:
+    GIT_DEPTH: 0
+  script:
+    # Build site with the iops.gitlabpages.inria.fr base URL
+    - hugo --minify --baseURL "https://iops.gitlabpages.inria.fr/" -d iops-pages
+    # Build dev docs
+    - git fetch origin dev-3.5
+    - git worktree add dev-branch origin/dev-3.5
+    - cd dev-branch
+    - git submodule update --init --recursive
+    - hugo --minify --baseURL "https://iops.gitlabpages.inria.fr/dev/" -d ../iops-pages/dev
+    - cd ..
+    - rm -rf dev-branch
+    # Push to the iops.gitlabpages.inria.fr repo
+    - git clone https://oauth2:${IOPS_PAGES_TOKEN}@gitlab.inria.fr/iops/iops.gitlabpages.inria.fr.git deploy-repo
+    - rm -rf deploy-repo/public
+    - mv iops-pages deploy-repo/public
+    - cd deploy-repo
+    - git config user.email "ci@iops"
+    - git config user.name "IOPS CI"
+    - git add -A
+    - git diff --cached --quiet || (git commit -m "Update site from IOPS main" && git push)
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 # Preview documentation for merge requests
 pages:preview:
   stage: build
