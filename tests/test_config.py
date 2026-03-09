@@ -175,6 +175,50 @@ def test_config_track_executions_disabled(tmp_path, sample_config_dict):
     assert config.benchmark.track_executions is False
 
 
+def test_cache_file_jinja2_templating(tmp_path, sample_config_dict):
+    """Test that cache_file supports Jinja2 templating with os_env."""
+    import os
+    os.environ["IOPS_TEST_CACHE_DIR"] = str(tmp_path / "cache_dir")
+
+    sample_config_dict["benchmark"]["cache_file"] = "{{ os_env.IOPS_TEST_CACHE_DIR }}/cache.db"
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert config.benchmark.cache_file == (tmp_path / "cache_dir" / "cache.db").resolve()
+
+    del os.environ["IOPS_TEST_CACHE_DIR"]
+
+
+def test_cache_file_jinja2_workdir(tmp_path, sample_config_dict):
+    """Test that cache_file can reference workdir via Jinja2.
+
+    Note: workdir in cache_file context is the raw workdir from the YAML,
+    before the run directory suffix (run_NNN) is appended.
+    """
+    workdir = sample_config_dict["benchmark"]["workdir"]
+    sample_config_dict["benchmark"]["cache_file"] = "{{ workdir }}/cache.db"
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert config.benchmark.cache_file == (Path(workdir).resolve() / "cache.db")
+
+
+def test_cache_file_plain_path(tmp_path, sample_config_dict):
+    """Test that cache_file still works with plain paths (no templates)."""
+    plain_path = str(tmp_path / "plain_cache.db")
+    sample_config_dict["benchmark"]["cache_file"] = plain_path
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert config.benchmark.cache_file == Path(plain_path).resolve()
+
+
 # ============== Unknown Key Validation Tests ==============
 
 

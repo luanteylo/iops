@@ -130,6 +130,24 @@ def _expand_path(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
 
 
+def _render_cache_file_path(raw_path: str, benchmark_name: str, workdir: Path) -> Path:
+    """Render cache_file path with Jinja2 templating, then expand to absolute path.
+
+    Available template context: os_env, workdir, benchmark.name.
+    """
+    context = {
+        "os_env": dict(os.environ),
+        "workdir": str(workdir),
+        "benchmark": {"name": benchmark_name},
+    }
+    try:
+        rendered = _jinja_env.from_string(raw_path).render(**context)
+    except Exception:
+        # If rendering fails, fall back to raw path (plain string without templates)
+        rendered = raw_path
+    return _expand_path(rendered)
+
+
 def _handle_deprecated_field(data: dict, old_name: str, new_name: str, section: str = "benchmark") -> None:
     """
     Handle renamed config fields with deprecation warning.
@@ -1023,12 +1041,14 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             sampling_interval=b.get("trace_interval", 1.0),
         )
 
+    workdir = _expand_path(b["workdir"])
+
     benchmark = BenchmarkConfig(
         name=b["name"],
         description=b.get("description"),
-        workdir=_expand_path(b["workdir"]),
+        workdir=workdir,
         repetitions=b.get("repetitions", 1),
-        cache_file=_expand_path(b["cache_file"]) if "cache_file" in b else None,
+        cache_file=_render_cache_file_path(b["cache_file"], b["name"], workdir) if "cache_file" in b else None,
         search_method=search_method,
         executor=b.get("executor", "slurm"),
         slurm_options=slurm_options,
