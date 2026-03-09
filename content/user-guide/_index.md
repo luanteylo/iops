@@ -31,6 +31,10 @@ Comprehensive guide to using IOPS features and capabilities.
 - **[Archiving Workdirs](exploring-executions#archiving-workdirs)** - Create portable archives with `iops archive` for sharing and backup
 - **[Custom Reports & Visualization](reporting)** - Generate interactive HTML reports with Plotly charts
 
+## Migration
+
+- **[JUBE Conversion](jube-conversion)** - Convert JUBE XML benchmarks to IOPS YAML with `iops convert`
+
 ## Reference
 
 - **[Command Line Interface](cli)** - Complete CLI reference for `iops run`, `iops find`, `iops report`, and more

@@ -66,7 +66,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache', 'convert'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -282,6 +282,20 @@ Examples:
     cache_rebuild_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
                                       help='Output database path (default: <source>_rebuilt.db)')
     _add_common_args(cache_rebuild_parser)
+
+    # ---- convert command ----
+    convert_parser = subparsers.add_parser('convert', help='Convert JUBE XML to IOPS YAML',
+                                            description='Convert a JUBE benchmark XML file to IOPS YAML format.')
+    convert_parser.add_argument('input_file', type=Path, help="Path to the JUBE XML file")
+    convert_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                help="Output YAML path (default: <input_stem>_iops.yaml)")
+    convert_parser.add_argument('--benchmark', type=str, default=None, metavar='NAME',
+                                help="Select a specific benchmark if XML contains multiple")
+    convert_parser.add_argument('--executor', type=str, default='local', choices=['local', 'slurm'],
+                                help="Target executor (default: local)")
+    convert_parser.add_argument('-n', '--dry-run', action='store_true',
+                                help="Print converted YAML to stdout instead of writing a file")
+    _add_common_args(convert_parser)
 
     args = parser.parse_args()
 
@@ -800,6 +814,42 @@ def main():
             logger.error("No cache subcommand specified. Use 'iops cache rebuild'.")
             logger.info("Run 'iops cache --help' for more information.")
             return
+
+    # ---- convert command ----
+    if args.command == 'convert':
+        try:
+            from iops.convert import convert_jube_to_iops
+        except ImportError:
+            logger.error(
+                "JUBE library is required for conversion but is not installed.\n"
+                "Install it with: pip install git+https://github.com/FZJ-JSC/JUBE.git"
+            )
+            return
+
+        if not args.input_file.exists():
+            logger.error(f"Input file not found: {args.input_file}")
+            return
+
+        try:
+            result = convert_jube_to_iops(
+                input_file=args.input_file,
+                output_file=args.output,
+                benchmark_name=args.benchmark,
+                executor=args.executor,
+                dry_run=args.dry_run,
+                logger=logger,
+            )
+            if result:
+                logger.info(f"Converted config written to: {result}")
+        except ValueError as e:
+            logger.error(str(e))
+            if args.verbose:
+                raise
+        except Exception as e:
+            logger.error(f"Conversion failed: {e}")
+            if args.verbose:
+                raise
+        return
 
     # ---- run command ----
     if args.command == 'run':

@@ -33,6 +33,7 @@ iops <subcommand> [arguments] [options]
 | `iops find <path> [filters...]` | Explore executions |
 | `iops archive <create\|extract>` | Archive and extract workdirs |
 | `iops cache <rebuild>` | Cache management |
+| `iops convert <file.xml>` | Convert JUBE XML to IOPS YAML |
 
 ## Subcommand Reference
 
@@ -475,6 +476,40 @@ iops cache rebuild cache.db --exclude summary_file -o rebuilt_cache.db
 
 See the [Caching guide](../caching#rebuilding-the-cache) for detailed use cases.
 
+### convert - Convert JUBE to IOPS
+
+Convert a JUBE benchmark XML file to IOPS YAML format:
+
+```bash
+iops convert <file.xml> [options]
+```
+
+Requires the JUBE Python library (`pip install git+https://github.com/FZJ-JSC/JUBE.git`).
+
+**Options:**
+- `-o, --output PATH` - Output YAML path (default: `<input_stem>_iops.yaml`)
+- `--benchmark NAME` - Select a specific benchmark if XML contains multiple
+- `--executor {local,slurm}` - Target executor (default: local)
+- `-n, --dry-run` - Print to stdout instead of writing a file
+
+**Examples:**
+
+```bash
+# Basic conversion
+iops convert benchmark.xml
+
+# Convert for SLURM
+iops convert benchmark.xml --executor slurm -o slurm_config.yaml
+
+# Preview output
+iops convert benchmark.xml --dry-run
+
+# Select benchmark from multi-benchmark XML
+iops convert multi.xml --benchmark ior_bench
+```
+
+See the [JUBE Conversion guide](../jube-conversion) for details on concept mapping, limitations, and post-conversion validation.
+
 ### --version - Show Version
 
 ```bash
@@ -504,4 +539,5 @@ iops archive create --help
 iops archive extract --help
 iops cache --help
 iops cache rebuild --help
+iops convert --help
 ```
