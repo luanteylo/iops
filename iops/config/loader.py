@@ -72,7 +72,7 @@ ALLOWED_BENCHMARK_KEYS = {
     "trace_resources", "trace_interval",
 }
 
-ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "sampling_interval"}
+ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "sampling_interval"}
 
 ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
@@ -997,6 +997,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             system_snapshot=probes_data.get("system_snapshot", True),
             execution_index=probes_data.get("execution_index", True),
             resource_sampling=probes_data.get("resource_sampling", False),
+            gpu_sampling=probes_data.get("gpu_sampling", False),
             sampling_interval=probes_data.get("sampling_interval", 1.0),
         )
 
