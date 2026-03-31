@@ -389,7 +389,7 @@ _iops_gpu_sample_nvidia() {{
     # separator instead of IFS-based read which would split on each character.
     nvidia-smi --query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw,clocks.current.sm,clocks.current.memory \
         --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v ts="$ts" -v host="$host" '{{
-        printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", ts, host, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+        printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\\n", ts, host, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
     }}'
 }}
 
