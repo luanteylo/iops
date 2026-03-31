@@ -4,26 +4,31 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
-## [Unreleased]
+## [3.5.3] - 2026-03-31
+
+This release introduces GPU monitoring support to the IOPS probe system, enabling
+energy consumption tracking, power draw analysis, and thermal monitoring during
+benchmark execution. It also adds a new Resource Sampling section to HTML reports
+and a JUBE-to-IOPS configuration converter.
 
 ### Added
-- GPU sampling probe (`probes.gpu_sampling`) for monitoring GPU metrics during benchmark execution
-  - Collects utilization, memory usage, temperature, power draw, and clock speeds
-  - Supports NVIDIA GPUs via `nvidia-smi`, designed for future AMD/Intel extension
-  - Gracefully skips when no supported GPU is detected
-  - Per-node GPU sample files (`__iops_gpu_trace_<hostname>.csv`)
+- GPU sampling probe (`probes.gpu_sampling`) for real-time GPU monitoring during benchmark execution
+  - Tracks utilization, memory usage, temperature, power draw, and clock speeds
+  - Supports NVIDIA GPUs via `nvidia-smi`, with vendor detection designed for future AMD/Intel extension
+  - Gracefully skips when no supported GPU is detected (no errors, no empty files)
+  - Per-node GPU sample files (`__iops_gpu_trace_<hostname>.csv`) with SLURM multi-node support
   - Energy consumption calculation via trapezoidal integration of power over time (`gpu_energy_j`)
-  - Per-GPU metrics columns (`gpu0_avg_power_w`, `gpu1_energy_j`, etc.) to isolate active vs idle GPUs
-  - GPU metrics aggregated into `__iops_resource_summary.csv` alongside CPU/memory metrics
-- Resource Sampling section in HTML reports (`sections.resource_sampling`)
+  - Per-GPU metric columns (`gpu0_avg_power_w`, `gpu1_energy_j`, etc.) for multi-GPU analysis
+  - Aggregated GPU metrics in `__iops_resource_summary.csv` alongside CPU/memory metrics
+  - GPU hardware detection in system snapshot (`gpu_count`, `gpu_model`, `gpu_driver`, `gpu_memory_mib`)
+- Resource Sampling section in HTML reports (`reporting.sections.resource_sampling`)
   - Auto-detects available CPU/memory and GPU metrics from `__iops_resource_summary.csv`
   - Summary table with min/max/mean for each resource metric
   - Heatmap and bar chart visualizations correlating user variables with resource footprint
   - Enabled by default when resource summary data is available
-- GPU hardware detection in system snapshot probe (`gpu_count`, `gpu_model`, `gpu_driver`, `gpu_memory_mib` in `__iops_sysinfo.json`)
 - `iops convert` command for translating JUBE XML benchmarks to IOPS YAML format [experimental]
 - Jinja2 templating support in `benchmark.cache_file`
-- `examples/gpu_stress/` synthetic CUDA workload for testing GPU probes
+- `examples/gpu_stress/` synthetic CUDA SGEMM workload for testing GPU probes
 
 ### Fixed
 - GPU sampler CSV parsing for GPU names containing spaces (e.g. "Tesla V100-PCIE-16GB")
