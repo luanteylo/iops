@@ -384,12 +384,13 @@ _iops_gpu_sample_nvidia() {{
     local host=$(hostname 2>/dev/null || echo "unknown")
 
     # Query all GPUs in one call, CSV output, no header
+    # nvidia-smi separates fields with ", " (comma-space). GPU names may contain
+    # spaces (e.g. "Tesla V100-PCIE-16GB"), so we use awk with ", " as the field
+    # separator instead of IFS-based read which would split on each character.
     nvidia-smi --query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw,clocks.current.sm,clocks.current.memory \
-        --format=csv,noheader,nounits 2>/dev/null | while IFS=', ' read -r idx gname util_gpu util_mem mem_used mem_total temp power clk_sm clk_mem; do
-        # Trim whitespace from GPU name (may contain spaces)
-        gname=$(echo "$gname" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        echo "$ts,$host,$idx,$gname,$util_gpu,$util_mem,$mem_used,$mem_total,$temp,$power,$clk_sm,$clk_mem"
-    done
+        --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v ts="$ts" -v host="$host" '{{
+        printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", ts, host, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    }}'
 }}
 
 _iops_gpu_sampler_loop() {{

@@ -423,6 +423,7 @@ class SectionConfig:
     parallel_coordinates: bool = True
     bayesian_evolution: bool = True
     bayesian_parameter_evolution: bool = False  # Disabled by default (verbose with many params)
+    resource_sampling: bool = True              # Auto-enabled when resource summary CSV exists
     custom_plots: bool = True
 
 

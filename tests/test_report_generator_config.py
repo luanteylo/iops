@@ -718,3 +718,166 @@ class TestEdgeCases:
         assert plot.y_var is None
         assert plot.z_metric is None
         assert plot.group_by is None
+
+
+# ============================================================================
+# Resource Sampling Section Tests
+# ============================================================================
+
+class TestResourceSamplingSection:
+    """Tests for the resource sampling report section."""
+
+    def _create_generator(self, workdir):
+        """Create a ReportGenerator with minimal setup."""
+        generator = ReportGenerator(workdir=workdir)
+        generator.report_config = ReportingConfig(
+            sections=SectionConfig(resource_sampling=True),
+            theme=ReportThemeConfig(),
+            best_results=BestResultsConfig(),
+            plot_defaults=PlotDefaultsConfig(),
+            metrics={},
+            default_plots=[],
+        )
+        return generator
+
+    def test_returns_empty_when_disabled(self, temp_workdir):
+        """Test that section returns empty string when disabled."""
+        generator = self._create_generator(temp_workdir)
+        generator.report_config.sections.resource_sampling = False
+        assert generator._generate_resource_sampling_section([]) == ""
+
+    def test_returns_empty_when_no_csv(self, temp_workdir):
+        """Test that section returns empty string when CSV does not exist."""
+        generator = self._create_generator(temp_workdir)
+        assert generator._generate_resource_sampling_section([]) == ""
+
+    def test_returns_empty_when_csv_empty(self, temp_workdir):
+        """Test that section returns empty string when CSV is empty."""
+        import csv as csv_mod
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text("execution_id,repetition\n")
+
+        generator = self._create_generator(temp_workdir)
+        # Empty CSV (header only, no data rows) should produce empty result
+        # because there are no cpu or gpu metric columns
+        assert generator._generate_resource_sampling_section([]) == ""
+
+    def test_section_with_cpu_metrics(self, temp_workdir):
+        """Test section generates HTML with CPU/memory metrics."""
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text(
+            "execution_id,repetition,nodes,cpu_avg_pct,mem_peak_gb\n"
+            "exec_0001,1,1,45.0,8.5\n"
+            "exec_0002,1,2,78.0,16.2\n"
+        )
+
+        generator = self._create_generator(temp_workdir)
+        html = generator._generate_resource_sampling_section(["nodes"])
+
+        assert "Resource Sampling" in html
+        assert "CPU & Memory" in html
+        assert "Avg CPU Utilization" in html
+        assert "Peak Memory" in html
+
+    def test_section_with_gpu_metrics(self, temp_workdir):
+        """Test section generates HTML with GPU metrics."""
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text(
+            "execution_id,repetition,nodes,gpu_avg_power_w,gpu_energy_j,gpu_avg_utilization_pct\n"
+            "exec_0001,1,1,200.0,2000.0,85.0\n"
+            "exec_0002,1,2,350.0,3500.0,92.0\n"
+        )
+
+        generator = self._create_generator(temp_workdir)
+        html = generator._generate_resource_sampling_section(["nodes"])
+
+        assert "Resource Sampling" in html
+        assert "GPU Metrics" in html
+        assert "Avg Power Draw" in html
+        assert "Energy Consumed" in html
+
+    def test_section_with_both_cpu_and_gpu(self, temp_workdir):
+        """Test section with both CPU/memory and GPU metrics."""
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text(
+            "execution_id,repetition,nodes,cpu_avg_pct,mem_peak_gb,gpu_avg_power_w,gpu_energy_j\n"
+            "exec_0001,1,1,45.0,8.5,200.0,2000.0\n"
+            "exec_0002,1,2,78.0,16.2,350.0,3500.0\n"
+        )
+
+        generator = self._create_generator(temp_workdir)
+        html = generator._generate_resource_sampling_section(["nodes"])
+
+        assert "CPU & Memory" in html
+        assert "GPU Metrics" in html
+
+    def test_summary_table_content(self, temp_workdir):
+        """Test that the summary table shows min/max/mean values."""
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text(
+            "execution_id,repetition,nodes,cpu_avg_pct\n"
+            "exec_0001,1,1,40.0\n"
+            "exec_0002,1,2,60.0\n"
+            "exec_0003,1,4,80.0\n"
+        )
+
+        generator = self._create_generator(temp_workdir)
+        html = generator._generate_resource_sampling_section(["nodes"])
+
+        # Summary table should include min=40, max=80, mean=60
+        assert "40.00" in html
+        assert "80.00" in html
+        assert "60.00" in html
+
+    def test_heatmap_with_two_variables(self, temp_workdir):
+        """Test that heatmap is generated when two user variables exist."""
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text(
+            "execution_id,repetition,nodes,ppn,cpu_avg_pct\n"
+            "exec_0001,1,1,4,45.0\n"
+            "exec_0002,1,2,4,78.0\n"
+            "exec_0003,1,1,8,55.0\n"
+            "exec_0004,1,2,8,90.0\n"
+        )
+
+        generator = self._create_generator(temp_workdir)
+        html = generator._generate_resource_sampling_section(["nodes", "ppn"])
+
+        # Should contain a plotly div (heatmap)
+        assert "plotly" in html.lower() or "plot-container" in html
+
+    def test_bar_chart_with_one_variable(self, temp_workdir):
+        """Test that bar chart is generated when one user variable exists."""
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text(
+            "execution_id,repetition,nodes,gpu_avg_power_w\n"
+            "exec_0001,1,1,200.0\n"
+            "exec_0002,1,2,350.0\n"
+        )
+
+        generator = self._create_generator(temp_workdir)
+        html = generator._generate_resource_sampling_section(["nodes"])
+
+        assert "plot-container" in html
+
+    def test_section_config_default_true(self):
+        """Test that resource_sampling defaults to True in SectionConfig."""
+        config = SectionConfig()
+        assert config.resource_sampling is True
+
+    def test_section_config_yaml_key_accepted(self, sample_config_dict, tmp_path):
+        """Test that resource_sampling is accepted in YAML sections config."""
+        import yaml
+        from conftest import load_config
+
+        sample_config_dict["reporting"] = {
+            "sections": {
+                "resource_sampling": False,
+            }
+        }
+        config_file = tmp_path / "test_config.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(sample_config_dict, f)
+
+        config = load_config(config_file)
+        assert config.reporting.sections.resource_sampling is False
