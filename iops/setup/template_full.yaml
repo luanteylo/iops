@@ -211,13 +211,14 @@ benchmark:
 
   # Optional: Probe configuration for system monitoring and execution tracking
   # Probes are features that collect additional information during execution.
-  # All probes are enabled by default except resource_sampling which requires opt-in.
+  # All probes are enabled by default except resource_sampling and gpu_sampling which require opt-in.
   probes:
     # system_snapshot: Collect system info from compute nodes (default: true)
     # When enabled, IOPS injects a probe that collects:
     #   - hostname, cpu_model, cpu_cores, memory_kb, kernel, os
     #   - InfiniBand devices (ib_devices)
     #   - Parallel filesystems (Lustre, GPFS, BeeGFS, etc.)
+    #   - GPU info when available (gpu_count, gpu_model, gpu_driver, gpu_memory_mib)
     # System info is aggregated in __iops_run_metadata.json and displayed in HTML reports
     system_snapshot: true
 
@@ -227,7 +228,7 @@ benchmark:
     # Set to false if file I/O overhead is a concern (e.g., interference with benchmarks)
     execution_index: true
 
-    # resource_sampling: Enable resource tracing during execution (default: false)
+    # resource_sampling: Enable CPU/memory tracing during execution (default: false)
     # When enabled, IOPS samples CPU utilization (per-core) and memory usage during benchmark
     # execution. A background sampler runs with low priority (nice) to minimize interference.
     # Output files:
@@ -236,9 +237,19 @@ benchmark:
     # The summary CSV enables heatmap analysis correlating parameters with resource footprint.
     # resource_sampling: true
 
-    # sampling_interval: Sampling interval for resource tracing in seconds (default: 1.0)
+    # gpu_sampling: Enable GPU metrics tracing during execution (default: false)
+    # When enabled, IOPS samples GPU utilization, memory, temperature, power draw, and clocks
+    # during benchmark execution. Currently supports NVIDIA GPUs (via nvidia-smi), designed
+    # for future extension to AMD and Intel GPUs. Gracefully skips if no GPU is detected.
+    # Output files:
+    #   - Per-execution: __iops_gpu_trace_<hostname>.csv (one per node)
+    #   - Run-level: GPU metrics appended to __iops_resource_summary.csv
+    # Key metrics: gpu_energy_j (total energy in Joules), gpu_avg_power_w, gpu_max_temperature_c
+    # gpu_sampling: true
+
+    # sampling_interval: Sampling interval in seconds (default: 1.0)
+    # Shared by both resource_sampling and gpu_sampling.
     # Lower values provide finer granularity but generate more data.
-    # Only used when resource_sampling is enabled.
     # sampling_interval: 0.5
 
   # Optional: Create all execution folders upfront at run start (default: false)

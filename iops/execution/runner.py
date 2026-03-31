@@ -1,6 +1,6 @@
 
 from iops.logger import HasLogger
-from iops.execution.planner import BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX
+from iops.execution.planner import BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX, GPU_TRACE_FILENAME_PREFIX
 from iops.execution.executors import BaseExecutor
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
@@ -428,12 +428,153 @@ class IOPSRunner(HasLogger):
 
         return metrics
 
+    def _compute_gpu_trace_metrics(self, trace_files: List[Path]) -> Dict[str, Any]:
+        """
+        Compute aggregated metrics from GPU trace files.
+
+        Metrics are computed **per GPU** first, then aggregated across GPUs.
+        This prevents idle GPUs from dragging down averages (e.g. a machine
+        with 2 GPUs but only 1 used should report the active GPU's stats).
+
+        Per-GPU stats:
+        - avg utilization, avg power, avg temperature, peak memory, energy
+
+        Aggregation across GPUs:
+        - Utilization/power/temperature: reported per GPU (gpu_N_*) and as
+          overall max-of-averages for quick comparison
+        - Energy: summed across all GPUs (total consumption)
+        - Memory: max across all GPUs
+
+        Args:
+            trace_files: List of paths to __iops_gpu_trace_*.csv files
+
+        Returns:
+            Dictionary with per-GPU and aggregated GPU metrics
+        """
+        timestamps = []
+
+        # Per-GPU data collection
+        # Key: gpu_key (e.g. "node01:gpu0"), Value: dict of lists
+        per_gpu_data = {}
+
+        for trace_file in trace_files:
+            try:
+                with open(trace_file, 'r', newline='') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        try:
+                            hostname = row.get('hostname', 'unknown')
+                            gpu_idx = row.get('gpu_index', '0')
+                            gpu_key = f"{hostname}:gpu{gpu_idx}"
+
+                            ts = float(row.get('timestamp', 0))
+                            timestamps.append(ts)
+
+                            util_gpu = float(row.get('utilization_gpu_pct', 0))
+                            util_mem = float(row.get('utilization_mem_pct', 0))
+                            mem_used = float(row.get('memory_used_mib', 0))
+                            temp = float(row.get('temperature_c', 0))
+                            power = float(row.get('power_draw_w', 0))
+
+                            if gpu_key not in per_gpu_data:
+                                per_gpu_data[gpu_key] = {
+                                    'util_gpu': [], 'util_mem': [], 'mem_used': [],
+                                    'temp': [], 'power': [], 'power_series': [],
+                                }
+                            d = per_gpu_data[gpu_key]
+                            d['util_gpu'].append(util_gpu)
+                            d['util_mem'].append(util_mem)
+                            d['mem_used'].append(mem_used)
+                            d['temp'].append(temp)
+                            d['power'].append(power)
+                            d['power_series'].append((ts, power))
+
+                        except (ValueError, KeyError) as e:
+                            self.logger.debug(f"Skipping malformed GPU trace row: {e}")
+                            continue
+
+            except Exception as e:
+                self.logger.debug(f"Failed to read GPU trace file {trace_file}: {e}")
+                continue
+
+        metrics = {
+            "gpu_count": len(per_gpu_data),
+            "gpu_samples_collected": len(timestamps),
+        }
+
+        if not per_gpu_data:
+            return metrics
+
+        # Compute per-GPU summaries and add per-GPU columns
+        gpu_avg_utils = []
+        gpu_avg_powers = []
+        gpu_avg_temps = []
+        gpu_peak_mems = []
+        gpu_energies = []
+
+        for gpu_key in sorted(per_gpu_data.keys()):
+            d = per_gpu_data[gpu_key]
+            # Extract GPU index for column naming (e.g. "gpu0" from "node01:gpu0")
+            gpu_label = gpu_key.split(":")[-1]  # "gpu0", "gpu1", etc.
+
+            avg_util = sum(d['util_gpu']) / len(d['util_gpu'])
+            avg_power = sum(d['power']) / len(d['power'])
+            avg_temp = sum(d['temp']) / len(d['temp'])
+            peak_mem = max(d['mem_used'])
+
+            gpu_avg_utils.append(avg_util)
+            gpu_avg_powers.append(avg_power)
+            gpu_avg_temps.append(avg_temp)
+            gpu_peak_mems.append(peak_mem)
+
+            # Energy: trapezoidal integration of power over time
+            energy_j = 0.0
+            series = sorted(d['power_series'], key=lambda x: x[0])
+            for i in range(1, len(series)):
+                dt = series[i][0] - series[i - 1][0]
+                avg_p = (series[i][1] + series[i - 1][1]) / 2.0
+                energy_j += avg_p * dt
+            gpu_energies.append(energy_j)
+
+            # Per-GPU columns
+            metrics[f"{gpu_label}_avg_utilization_pct"] = round(avg_util, 2)
+            metrics[f"{gpu_label}_avg_power_w"] = round(avg_power, 2)
+            metrics[f"{gpu_label}_energy_j"] = round(energy_j, 2)
+            metrics[f"{gpu_label}_avg_temperature_c"] = round(avg_temp, 2)
+            metrics[f"{gpu_label}_mem_peak_mib"] = round(peak_mem, 2)
+
+        # Aggregate across GPUs (use max-of-averages so idle GPUs don't drag stats down)
+        metrics["gpu_avg_utilization_pct"] = round(max(gpu_avg_utils), 2)
+        metrics["gpu_max_utilization_pct"] = round(
+            max(max(d['util_gpu']) for d in per_gpu_data.values()), 2)
+        metrics["gpu_avg_mem_utilization_pct"] = round(
+            max(sum(d['util_mem']) / len(d['util_mem']) for d in per_gpu_data.values()), 2)
+        metrics["gpu_mem_peak_mib"] = round(max(gpu_peak_mems), 2)
+        metrics["gpu_avg_temperature_c"] = round(max(gpu_avg_temps), 2)
+        metrics["gpu_max_temperature_c"] = round(
+            max(max(d['temp']) for d in per_gpu_data.values()), 2)
+        metrics["gpu_avg_power_w"] = round(max(gpu_avg_powers), 2)
+        metrics["gpu_max_power_w"] = round(
+            max(max(d['power']) for d in per_gpu_data.values()), 2)
+
+        # Energy: sum across all GPUs (total consumption)
+        metrics["gpu_energy_j"] = round(sum(gpu_energies), 2)
+
+        # Trace duration
+        if len(timestamps) >= 2:
+            metrics["gpu_trace_duration_s"] = round(max(timestamps) - min(timestamps), 2)
+        else:
+            metrics["gpu_trace_duration_s"] = 0
+
+        return metrics
+
     def _aggregate_resource_traces(self, completed_tests: List) -> None:
         """
         Aggregate resource traces from all completed executions into a summary CSV.
 
         Creates __iops_resource_summary.csv in the run root directory with one row
-        per execution+repetition, containing all user vars and aggregated resource metrics.
+        per execution+repetition, containing all user vars and aggregated resource metrics
+        (CPU/memory and GPU when available).
 
         This enables heatmap visualizations correlating variables with resource footprint.
 
@@ -442,7 +583,8 @@ class IOPSRunner(HasLogger):
         """
         probes = self.cfg.benchmark.probes
         resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
-        if not resource_sampling:
+        gpu_sampling = probes.gpu_sampling if probes else False
+        if not resource_sampling and not gpu_sampling:
             return
 
         rows = []
@@ -461,41 +603,47 @@ class IOPSRunner(HasLogger):
                 self.logger.debug(f"Skipping exec_{exec_id} rep_{rep}: no execution_dir")
                 continue
 
-            # Find trace files for this execution
-            trace_pattern = str(test.execution_dir / f"{TRACE_FILENAME_PREFIX}*.csv")
-            trace_files = [Path(f) for f in glob.glob(trace_pattern)]
+            # Build row with all vars
+            row = {
+                "execution_id": f"exec_{exec_id:04d}",
+                "repetition": rep,
+            }
+            for k, v in test.vars.items():
+                if not k.startswith("__"):
+                    row[k] = v
 
-            if not trace_files:
-                self.logger.debug(f"No trace files found for exec_{exec_id} rep_{rep}")
-                continue
+            has_data = False
 
-            try:
-                # Compute metrics from trace files
-                metrics = self._compute_trace_metrics(trace_files)
+            # CPU/memory trace files
+            if resource_sampling:
+                trace_pattern = str(test.execution_dir / f"{TRACE_FILENAME_PREFIX}*.csv")
+                trace_files = [Path(f) for f in glob.glob(trace_pattern)]
+                if trace_files:
+                    try:
+                        metrics = self._compute_trace_metrics(trace_files)
+                        row.update(metrics)
+                        has_data = True
+                    except Exception as e:
+                        self.logger.warning(f"Failed to aggregate CPU traces for exec_{exec_id} rep_{rep}: {e}")
 
-                # Build row with all vars + metrics
-                row = {
-                    "execution_id": f"exec_{exec_id:04d}",
-                    "repetition": rep,
-                }
+            # GPU trace files
+            if gpu_sampling:
+                gpu_trace_pattern = str(test.execution_dir / f"{GPU_TRACE_FILENAME_PREFIX}*.csv")
+                gpu_trace_files = [Path(f) for f in glob.glob(gpu_trace_pattern)]
+                if gpu_trace_files:
+                    try:
+                        gpu_metrics = self._compute_gpu_trace_metrics(gpu_trace_files)
+                        row.update(gpu_metrics)
+                        has_data = True
+                    except Exception as e:
+                        self.logger.warning(f"Failed to aggregate GPU traces for exec_{exec_id} rep_{rep}: {e}")
 
-                # Add all user vars (filter out internal keys)
-                for k, v in test.vars.items():
-                    if not k.startswith("__"):
-                        row[k] = v
-
-                # Add computed metrics
-                row.update(metrics)
-
+            if has_data:
                 rows.append(row)
-
-                # Capture fieldnames from first row
                 if fieldnames is None:
                     fieldnames = list(row.keys())
-
-            except Exception as e:
-                self.logger.warning(f"Failed to aggregate traces for exec_{exec_id} rep_{rep}: {e}")
-                continue
+            else:
+                self.logger.debug(f"No trace files found for exec_{exec_id} rep_{rep}")
 
         if not rows:
             self.logger.info("No resource traces to aggregate")

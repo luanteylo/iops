@@ -53,6 +53,12 @@ except ImportError:
 #    - For SLURM multi-node: uses srun to launch on all nodes
 #    - Registers sentinel file cleanup with exit handler
 #
+# 4. GPU Sampler (__iops_runtime_gpu_sampler.sh):
+#    - Collects GPU utilization, memory, temperature, power, clocks
+#    - Supports NVIDIA GPUs via nvidia-smi (extensible to AMD/Intel)
+#    - For SLURM multi-node: uses srun to launch on all nodes
+#    - Registers sentinel file cleanup with exit handler
+#
 # Key design decisions:
 # - Single EXIT trap avoids conflicts between features
 # - All commands have fallbacks and 2>/dev/null to never fail
@@ -148,6 +154,23 @@ _iops_collect_sysinfo() {{
       echo "  \\"os\\": \\"$(grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\\"' || uname -s 2>/dev/null || echo 'unknown')\\","
       echo "  \\"ib_devices\\": \\"$(ls /sys/class/infiniband/ 2>/dev/null | tr '\\n' ',' | sed 's/,$//' || echo '')\\","
       echo "  \\"filesystems\\": \\"$(_iops_detect_pfs)\\","
+
+      # GPU detection (vendor-agnostic, NVIDIA first)
+      _gpu_count=0
+      _gpu_model=""
+      _gpu_driver=""
+      _gpu_memory_mib=0
+      if command -v nvidia-smi >/dev/null 2>&1; then
+        _gpu_count=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || echo 0)
+        _gpu_model=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | sed 's/"/\\\\"/g' || echo "")
+        _gpu_driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ' || echo "")
+        _gpu_memory_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || echo 0)
+      fi
+      echo "  \\"gpu_count\\": $_gpu_count,"
+      echo "  \\"gpu_model\\": \\"$_gpu_model\\","
+      echo "  \\"gpu_driver\\": \\"$_gpu_driver\\","
+      echo "  \\"gpu_memory_mib\\": $_gpu_memory_mib,"
+
       echo "  \\"duration_seconds\\": ${{SECONDS}}"
       echo "}}"
     }} > "$_iops_sysinfo"
@@ -303,6 +326,122 @@ else
         _iops_sampler_loop </dev/null >/dev/null 2>&1 &
         # Lower priority of sampler process
         renice -n 19 -p "$!" >/dev/null 2>&1 || true
+    fi
+fi
+'''
+
+# Filename for the GPU sampler script - runs during execution to collect GPU metrics
+# Naming convention: __iops_runtime_* for scripts that run during benchmark execution
+RUNTIME_GPU_SAMPLER_FILENAME = "__iops_runtime_gpu_sampler.sh"
+
+# Filename prefix for GPU trace output (written by sampler during execution)
+GPU_TRACE_FILENAME_PREFIX = "__iops_gpu_trace_"
+
+# Sentinel file for GPU sampler (signals samplers to stop)
+GPU_SAMPLER_SENTINEL_FILENAME = "__iops_gpu_trace_running"
+
+# GPU sampler script template - runs in background during execution
+# Collects GPU utilization, memory, temperature, power, and clocks at configurable intervals
+#
+# Vendor support:
+# - NVIDIA: Uses nvidia-smi --query-gpu (detected via command -v nvidia-smi)
+# - AMD/Intel: Placeholder for future extension
+#
+# For SLURM multi-node jobs:
+# - Launched via srun on all nodes
+# - Uses sentinel file for termination (removed by exit handler)
+# - Each node writes to its own trace file (hostname in filename)
+#
+# This script can be:
+# - Sourced by the main script (sets up launcher + registers cleanup)
+# - Executed standalone via srun (just runs the sampling loop)
+GPU_SAMPLER_TEMPLATE = '''#!/bin/bash
+# IOPS GPU Sampler - Collects GPU metrics during execution
+# This file is auto-generated. It can be sourced (to set up and launch) or
+# executed directly via srun (for multi-node sampling).
+#
+# Supported vendors: NVIDIA (via nvidia-smi)
+# Future: AMD (rocm-smi), Intel (xpu-smi)
+
+_IOPS_GPU_EXEC_DIR="{execution_dir}"
+_IOPS_GPU_TRACE_FILE="${{_IOPS_GPU_EXEC_DIR}}/{gpu_trace_prefix}$(hostname).csv"
+_IOPS_GPU_INTERVAL={gpu_trace_interval}
+_IOPS_GPU_SENTINEL="${{_IOPS_GPU_EXEC_DIR}}/{gpu_sentinel_filename}"
+
+# Detect GPU vendor and set query command
+_IOPS_GPU_VENDOR=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+    _IOPS_GPU_VENDOR="nvidia"
+fi
+# Future vendor detection:
+# elif command -v rocm-smi >/dev/null 2>&1; then
+#     _IOPS_GPU_VENDOR="amd"
+# elif command -v xpu-smi >/dev/null 2>&1; then
+#     _IOPS_GPU_VENDOR="intel"
+
+_iops_gpu_sample_nvidia() {{
+    local ts=$(date +%s.%N 2>/dev/null || date +%s)
+    local host=$(hostname 2>/dev/null || echo "unknown")
+
+    # Query all GPUs in one call, CSV output, no header
+    # nvidia-smi separates fields with ", " (comma-space). GPU names may contain
+    # spaces (e.g. "Tesla V100-PCIE-16GB"), so we use awk with ", " as the field
+    # separator instead of IFS-based read which would split on each character.
+    nvidia-smi --query-gpu=index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw,clocks.current.sm,clocks.current.memory \
+        --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v ts="$ts" -v host="$host" '{{
+        printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\\n", ts, host, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    }}'
+}}
+
+_iops_gpu_sampler_loop() {{
+    # Skip if no supported GPU vendor detected
+    if [[ -z "$_IOPS_GPU_VENDOR" ]]; then
+        return
+    fi
+
+    # Write CSV header (vendor-neutral column names)
+    echo "timestamp,hostname,gpu_index,gpu_name,utilization_gpu_pct,utilization_mem_pct,memory_used_mib,memory_total_mib,temperature_c,power_draw_w,clock_sm_mhz,clock_mem_mhz" > "$_IOPS_GPU_TRACE_FILE"
+
+    # Main sampling loop - exits when sentinel file is removed
+    while [[ -f "$_IOPS_GPU_SENTINEL" ]]; do
+        sleep "$_IOPS_GPU_INTERVAL"
+        if [[ "$_IOPS_GPU_VENDOR" == "nvidia" ]]; then
+            _iops_gpu_sample_nvidia >> "$_IOPS_GPU_TRACE_FILE" 2>/dev/null
+        fi
+    done
+}}
+
+# Cleanup function - removes sentinel file to signal all GPU samplers to stop
+_iops_stop_gpu_samplers() {{
+    rm -f "$_IOPS_GPU_SENTINEL" 2>/dev/null || true
+}}
+
+# Check if running standalone (executed) vs sourced
+if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
+    # Running standalone (via srun) - just run the sampling loop
+    _iops_gpu_sampler_loop
+else
+    # Being sourced - set up and launch the GPU samplers
+
+    # Skip if no supported GPU vendor detected
+    if [[ -n "$_IOPS_GPU_VENDOR" ]]; then
+        # Create sentinel file (signals samplers to keep running)
+        touch "$_IOPS_GPU_SENTINEL"
+
+        # Register cleanup with the centralized exit handler
+        _iops_register_exit "_iops_stop_gpu_samplers"
+
+        # Launch samplers on all nodes
+        if [[ -n "$SLURM_JOB_ID" && "${{SLURM_NNODES:-1}}" -gt 1 ]]; then
+            # SLURM multi-node: use srun to launch sampler on all nodes
+            srun --overlap --nodes=${{SLURM_NNODES}} --ntasks-per-node=1 \
+                bash "${{BASH_SOURCE[0]}}" </dev/null >/dev/null 2>&1 &
+        else
+            # Single node: run sampler locally in background
+            _iops_gpu_sampler_loop </dev/null >/dev/null 2>&1 &
+            # Lower priority of sampler process
+            renice -n 19 -p "$!" >/dev/null 2>&1 || true
+        fi
     fi
 fi
 '''
@@ -820,6 +959,7 @@ class BasePlanner(ABC, HasLogger):
 
         1. Runtime scripts (__iops_runtime_*): Run during benchmark execution
            - Resource sampler: Collects CPU/memory metrics in background
+           - GPU sampler: Collects GPU utilization, power, temperature in background
 
         2. At-exit scripts (__iops_atexit_*): Run via EXIT trap when script completes
            - System info probe: Collects node information
@@ -843,10 +983,11 @@ class BasePlanner(ABC, HasLogger):
         # Check which features are enabled (use probes config or fallback to deprecated fields)
         probes = self.cfg.benchmark.probes
         resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
+        gpu_sampling = probes.gpu_sampling if probes else False
         system_snapshot = probes.system_snapshot if probes else self.cfg.benchmark.collect_system_info
 
         # If no features enabled, return script unchanged
-        if not resource_sampling and not system_snapshot:
+        if not resource_sampling and not gpu_sampling and not system_snapshot:
             return script_text
 
         # Build list of source lines to inject
@@ -875,6 +1016,20 @@ class BasePlanner(ABC, HasLogger):
             with open(sampler_file, "w") as f:
                 f.write(sampler_script)
             source_lines.append(f'source "{sampler_file}"  # disable: probes.resource_sampling: false')
+
+        if gpu_sampling:
+            # To disable: set probes.gpu_sampling: false in config
+            sampling_interval = probes.sampling_interval if probes else self.cfg.benchmark.trace_interval
+            gpu_sampler_script = GPU_SAMPLER_TEMPLATE.format(
+                execution_dir=str(exec_dir),
+                gpu_trace_prefix=GPU_TRACE_FILENAME_PREFIX,
+                gpu_trace_interval=sampling_interval,
+                gpu_sentinel_filename=GPU_SAMPLER_SENTINEL_FILENAME
+            )
+            gpu_sampler_file = exec_dir / RUNTIME_GPU_SAMPLER_FILENAME
+            with open(gpu_sampler_file, "w") as f:
+                f.write(gpu_sampler_script)
+            source_lines.append(f'source "{gpu_sampler_file}"  # disable: probes.gpu_sampling: false')
 
         # 3. At-exit scripts (run on script exit via trap)
         if system_snapshot:

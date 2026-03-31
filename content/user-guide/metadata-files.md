@@ -43,7 +43,7 @@ Located in `workdir/run_XXX/`:
 |------|---------|
 | `__iops_run_metadata.json` | Report generation (config, timing, variables) |
 | `__iops_index.json` | Fast execution lookup for `iops find` |
-| `__iops_resource_summary.csv` | Aggregated CPU/memory metrics |
+| `__iops_resource_summary.csv` | Aggregated CPU/memory and GPU metrics |
 | `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
 | `__iops_plots/` | PDF exports of report plots (requires kaleido) |
 
@@ -94,8 +94,11 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 | File | Purpose |
 |------|---------|
 | `__iops_runtime_sampler.sh` | CPU/memory sampling script |
-| `__iops_trace_running` | Sentinel file (signals samplers to run) |
-| `__iops_trace_<host>.csv` | Per-node resource trace data |
+| `__iops_trace_running` | Sentinel file (signals CPU/memory samplers to run) |
+| `__iops_trace_<host>.csv` | Per-node CPU/memory trace data |
+| `__iops_runtime_gpu_sampler.sh` | GPU metrics sampling script |
+| `__iops_gpu_trace_running` | Sentinel file (signals GPU samplers to run) |
+| `__iops_gpu_trace_<host>.csv` | Per-node GPU trace data |
 
 ## Controlling Metadata Generation
 
@@ -477,6 +480,59 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 ```
 
 **Controlled by:** `benchmark.probes.resource_sampling`
+
+---
+
+### `__iops_runtime_gpu_sampler.sh`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_runtime_gpu_sampler.sh`
+
+**Written:** During artifact preparation (before benchmark runs)
+
+**Purpose:** Background GPU sampler script that collects GPU metrics (utilization, memory, temperature, power draw, clock speeds) at configurable intervals. Currently supports NVIDIA GPUs via `nvidia-smi`, with vendor detection designed for future AMD and Intel GPU support. Gracefully skips if no supported GPU is detected.
+
+The sampler follows the same architecture as the CPU/memory sampler:
+
+1. Detects GPU vendor at runtime (`command -v nvidia-smi`)
+2. Creates a sentinel file (`__iops_gpu_trace_running`) and starts sampling
+3. For single-node: runs the sampling loop locally in the background
+4. For multi-node SLURM: uses `srun --overlap` to launch samplers on all nodes
+5. Each node writes to its own trace file (`__iops_gpu_trace_<hostname>.csv`)
+6. When the script exits, the exit handler removes the sentinel file, stopping all samplers
+
+**Controlled by:** `benchmark.probes.gpu_sampling`
+
+---
+
+### `__iops_gpu_trace_running`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_gpu_trace_running`
+
+**Written:** When GPU tracing starts (before benchmark runs)
+
+**Removed:** When benchmark script exits (via exit handler)
+
+**Purpose:** A sentinel file that signals GPU samplers to keep running. Independent of the CPU/memory sampler sentinel. When removed, all GPU samplers terminate gracefully.
+
+**Controlled by:** `benchmark.probes.gpu_sampling`
+
+---
+
+### `__iops_gpu_trace_<host>.csv`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_gpu_trace_<hostname>.csv`
+
+**Written:** Continuously during benchmark execution by the GPU sampler
+
+**Purpose:** Contains GPU metrics samples for all GPUs on each node. For multi-node jobs, each node produces its own file with its hostname in the filename.
+
+**Format:**
+```csv
+timestamp,hostname,gpu_index,gpu_name,utilization_gpu_pct,utilization_mem_pct,memory_used_mib,memory_total_mib,temperature_c,power_draw_w,clock_sm_mhz,clock_mem_mhz
+1705123456.5,node01,0,NVIDIA A100-SXM4-80GB,85,40,30000,81920,62,250.50,1410,1215
+```
+
+**Controlled by:** `benchmark.probes.gpu_sampling`
 
 ---
 

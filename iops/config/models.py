@@ -207,12 +207,16 @@ class ProbesConfig:
             Corresponds to deprecated field: track_executions
         resource_sampling: Enable resource tracing (CPU/memory sampling during execution).
             Corresponds to deprecated field: trace_resources
-        sampling_interval: Sampling interval in seconds for resource tracing.
+        gpu_sampling: Enable GPU metrics sampling during execution (power, utilization,
+            temperature, memory, clocks). Currently supports NVIDIA GPUs via nvidia-smi,
+            designed for future extension to other vendors.
+        sampling_interval: Sampling interval in seconds for resource tracing and GPU sampling.
             Corresponds to deprecated field: trace_interval
     """
     system_snapshot: bool = True      # Was: collect_system_info
     execution_index: bool = True      # Was: track_executions
     resource_sampling: bool = False   # Was: trace_resources
+    gpu_sampling: bool = False        # GPU metrics (power, utilization, temperature, etc.)
     sampling_interval: float = 1.0    # Was: trace_interval
 
 
@@ -419,6 +423,7 @@ class SectionConfig:
     parallel_coordinates: bool = True
     bayesian_evolution: bool = True
     bayesian_parameter_evolution: bool = False  # Disabled by default (verbose with many params)
+    resource_sampling: bool = True              # Auto-enabled when resource summary CSV exists
     custom_plots: bool = True
 
 

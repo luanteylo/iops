@@ -88,7 +88,8 @@ benchmark:
   probes:                           # Optional: probe configuration
     system_snapshot: boolean        #   Collect system info (default: true)
     execution_index: boolean        #   Write metadata files (default: true)
-    resource_sampling: boolean      #   Enable resource tracing (default: false)
+    resource_sampling: boolean      #   Enable CPU/memory sampling (default: false)
+    gpu_sampling: boolean           #   Enable GPU metrics tracing (default: false)
     sampling_interval: float        #   Sampling interval in seconds (default: 1.0)
 
   create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
@@ -238,7 +239,8 @@ benchmark:
   probes:
     system_snapshot: true      # Collect system info from compute nodes
     execution_index: true      # Write metadata files for 'iops find'
-    resource_sampling: false   # Enable CPU/memory tracing
+    resource_sampling: false   # Enable CPU/memory sampling
+    gpu_sampling: false        # Enable GPU metrics tracing
     sampling_interval: 1.0     # Sampling interval in seconds
 ```
 
@@ -246,8 +248,9 @@ benchmark:
 |-------|---------|-------------|
 | `system_snapshot` | `true` | Collect hardware/environment info from compute nodes |
 | `execution_index` | `true` | Write metadata files for `iops find` command |
-| `resource_sampling` | `false` | Enable CPU and memory tracing during execution. See [Resource Tracing](../resource-tracing) |
-| `sampling_interval` | `1.0` | Sampling interval in seconds for resource tracing |
+| `resource_sampling` | `false` | Enable CPU and memory sampling during execution. See [Resource Sampling](../resource-tracing) |
+| `gpu_sampling` | `false` | Enable GPU metrics sampling (utilization, power, temperature, memory, clocks). Supports NVIDIA GPUs via nvidia-smi. See [Resource Sampling](../resource-tracing) |
+| `sampling_interval` | `1.0` | Sampling interval in seconds for resource and GPU sampling |
 
 </details>
 

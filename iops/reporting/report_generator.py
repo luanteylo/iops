@@ -546,6 +546,7 @@ class ReportGenerator:
             parallel_coordinates=data.get('sections', {}).get('parallel_coordinates', True),
             bayesian_evolution=data.get('sections', {}).get('bayesian_evolution', True),
             bayesian_parameter_evolution=data.get('sections', {}).get('bayesian_parameter_evolution', False),
+            resource_sampling=data.get('sections', {}).get('resource_sampling', True),
             custom_plots=data.get('sections', {}).get('custom_plots', True),
         )
 
@@ -595,6 +596,7 @@ class ReportGenerator:
                 parallel_coordinates=True,
                 bayesian_evolution=True,
                 bayesian_parameter_evolution=False,  # Disabled by default
+                resource_sampling=True,
                 custom_plots=True,  # Will use legacy plots
             ),
             metrics={},  # Empty triggers legacy plot generation
@@ -834,6 +836,11 @@ class ReportGenerator:
 
         # Add comprehensive variable analysis section
         html_parts.append(self._generate_variable_analysis_section(metrics, report_vars))
+
+        # Resource sampling analysis (CPU/memory and GPU metrics from probes)
+        resource_html = self._generate_resource_sampling_section(report_vars)
+        if resource_html:
+            html_parts.append(resource_html)
 
         # Custom plots defined by user in reporting config
         html_parts.append(self._generate_custom_plots_section(metrics, report_vars))
@@ -1990,6 +1997,218 @@ class ReportGenerator:
             self.df.drop(columns=['__probe_group'], inplace=True)
 
         return fig
+
+    # ------------------------------------------------------------------ #
+    # Resource Sampling Section
+    # ------------------------------------------------------------------ #
+
+    # Filename for the resource summary CSV (duplicated from runner.py to avoid cross-layer import)
+    _RESOURCE_SUMMARY_FILENAME = "__iops_resource_summary.csv"
+
+    # Resource metrics to visualize, grouped by category
+    # Each tuple: (column_name, display_label, unit)
+    _CPU_MEMORY_METRICS = [
+        ("cpu_avg_pct", "Avg CPU Utilization", "%"),
+        ("cpu_max_pct", "Peak CPU Utilization", "%"),
+        ("cpu_imbalance_pct", "CPU Imbalance", "%"),
+        ("mem_peak_gb", "Peak Memory", "GB"),
+        ("mem_avg_gb", "Avg Memory", "GB"),
+    ]
+
+    _GPU_METRICS = [
+        ("gpu_avg_utilization_pct", "Avg GPU Utilization", "%"),
+        ("gpu_max_utilization_pct", "Peak GPU Utilization", "%"),
+        ("gpu_avg_power_w", "Avg Power Draw", "W"),
+        ("gpu_max_power_w", "Peak Power Draw", "W"),
+        ("gpu_energy_j", "Energy Consumed", "J"),
+        ("gpu_avg_temperature_c", "Avg Temperature", "\u00b0C"),
+        ("gpu_max_temperature_c", "Peak Temperature", "\u00b0C"),
+        ("gpu_mem_peak_mib", "Peak GPU Memory", "MiB"),
+    ]
+
+    def _generate_resource_sampling_section(self, report_vars: List[str]) -> str:
+        """
+        Generate Resource Sampling section from aggregated resource traces.
+
+        Loads __iops_resource_summary.csv and generates:
+        1. Summary table with min/max/mean for each resource metric
+        2. Bar/heatmap plots correlating user variables with resource metrics
+
+        Auto-detects which metrics (CPU/memory vs GPU) are available from the CSV columns.
+
+        Returns:
+            HTML string for the section, or empty string if no data available
+        """
+        if not self.report_config.sections.resource_sampling:
+            return ""
+
+        # Load the resource summary CSV
+        summary_path = self.workdir / self._RESOURCE_SUMMARY_FILENAME
+        if not summary_path.exists():
+            return ""
+
+        try:
+            df = pd.read_csv(summary_path)
+        except Exception:
+            return ""
+
+        if df.empty:
+            return ""
+
+        # Detect available metric categories
+        cpu_metrics = [(col, label, unit) for col, label, unit in self._CPU_MEMORY_METRICS if col in df.columns]
+        gpu_metrics = [(col, label, unit) for col, label, unit in self._GPU_METRICS if col in df.columns]
+
+        if not cpu_metrics and not gpu_metrics:
+            return ""
+
+        # Identify user variable columns (everything except known resource/metadata columns)
+        known_columns = (
+            {"execution_id", "repetition", "nodes_traced", "samples_collected", "trace_duration_s",
+             "gpu_count", "gpu_samples_collected", "gpu_trace_duration_s", "gpu_avg_mem_utilization_pct",
+             "mem_peak_per_node_gb"}
+            | {col for col, _, _ in self._CPU_MEMORY_METRICS}
+            | {col for col, _, _ in self._GPU_METRICS}
+        )
+        user_vars = [c for c in df.columns if c not in known_columns]
+        # Filter to report_vars if specified, preserving order
+        if report_vars:
+            user_vars = [v for v in report_vars if v in user_vars]
+
+        html = '<div class="metric-section">\n'
+        html += "<h2>Resource Sampling</h2>\n"
+        html += "<p>Resource metrics collected during benchmark execution by IOPS probes.</p>\n"
+
+        # Summary table
+        html += self._resource_summary_table(df, cpu_metrics, gpu_metrics)
+
+        # Generate plots
+        if cpu_metrics:
+            html += "<h3>CPU & Memory</h3>\n"
+            for col, label, unit in cpu_metrics:
+                html += self._resource_metric_plot(df, col, label, unit, user_vars)
+
+        if gpu_metrics:
+            html += "<h3>GPU Metrics</h3>\n"
+            for col, label, unit in gpu_metrics:
+                html += self._resource_metric_plot(df, col, label, unit, user_vars)
+
+        html += '</div>\n'
+        return html
+
+    def _resource_summary_table(self, df: pd.DataFrame,
+                                cpu_metrics: list, gpu_metrics: list) -> str:
+        """Generate an HTML summary table with min/max/mean for each resource metric."""
+        html = "<details open>\n<summary>Resource Metrics Summary</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
+        html += "<tr><th>Metric</th><th>Min</th><th>Max</th><th>Mean</th><th>Unit</th></tr>\n"
+
+        for col, label, unit in cpu_metrics + gpu_metrics:
+            if col not in df.columns:
+                continue
+            series = pd.to_numeric(df[col], errors='coerce').dropna()
+            if series.empty:
+                continue
+            html += (
+                f"<tr><td>{label}</td>"
+                f"<td>{series.min():.2f}</td>"
+                f"<td>{series.max():.2f}</td>"
+                f"<td>{series.mean():.2f}</td>"
+                f"<td>{unit}</td></tr>\n"
+            )
+
+        html += "</table>\n</div>\n</details>\n"
+        return html
+
+    def _resource_metric_plot(self, df: pd.DataFrame, metric_col: str,
+                              label: str, unit: str, user_vars: list) -> str:
+        """
+        Generate a plot for a single resource metric vs user variables.
+
+        With 2+ variables: heatmap (first var x, second var y, metric as color).
+        With 1 variable: bar chart.
+        With 0 variables: skip (nothing to correlate).
+        """
+        series = pd.to_numeric(df[metric_col], errors='coerce')
+        if series.dropna().empty or series.nunique() <= 1:
+            return ""
+
+        try:
+            if len(user_vars) >= 2:
+                return self._resource_heatmap(df, metric_col, label, unit, user_vars[0], user_vars[1])
+            elif len(user_vars) == 1:
+                return self._resource_bar(df, metric_col, label, unit, user_vars[0])
+            else:
+                return ""
+        except Exception as e:
+            return f'<p class="error">Error generating {label} plot: {str(e)}</p>\n'
+
+    def _resource_heatmap(self, df: pd.DataFrame, metric_col: str,
+                          label: str, unit: str, x_var: str, y_var: str) -> str:
+        """Create a heatmap of a resource metric across two user variables."""
+        # Aggregate over repetitions
+        agg_df = df.groupby([x_var, y_var], as_index=False)[metric_col].mean()
+
+        pivot = agg_df.pivot_table(index=y_var, columns=x_var, values=metric_col, aggfunc='mean')
+        if pivot.empty:
+            return ""
+
+        # Convert to Python lists for Plotly compatibility
+        x_vals = [str(v) for v in pivot.columns.tolist()]
+        y_vals = [str(v) for v in pivot.index.tolist()]
+        z_vals = [[None if pd.isna(v) else round(float(v), 2) for v in row] for row in pivot.values]
+
+        fig = go.Figure(data=go.Heatmap(
+            z=z_vals,
+            x=x_vals,
+            y=y_vals,
+            colorscale='Viridis',
+            colorbar=dict(title=unit),
+            hovertemplate=f'{x_var}: %{{x}}<br>{y_var}: %{{y}}<br>{label}: %{{z}} {unit}<extra></extra>',
+        ))
+
+        fig.update_layout(
+            title=f'{label} ({unit})',
+            xaxis_title=x_var,
+            yaxis_title=y_var,
+            template='plotly_white',
+            height=400,
+        )
+
+        html = '<div class="plot-container">\n'
+        html += self._fig_to_html(fig, plot_name=f'resource_{metric_col}')
+        html += '</div>\n'
+        return html
+
+    def _resource_bar(self, df: pd.DataFrame, metric_col: str,
+                      label: str, unit: str, x_var: str) -> str:
+        """Create a bar chart of a resource metric vs a single user variable."""
+        agg_df = df.groupby(x_var, as_index=False).agg(
+            mean=(metric_col, 'mean'),
+            std=(metric_col, 'std'),
+        ).sort_values(x_var)
+
+        x_vals = [str(v) for v in agg_df[x_var].tolist()]
+
+        fig = go.Figure(data=go.Bar(
+            x=x_vals,
+            y=agg_df['mean'].tolist(),
+            error_y=dict(type='data', array=agg_df['std'].fillna(0).tolist(), visible=True),
+            hovertemplate=f'{x_var}: %{{x}}<br>{label}: %{{y:.2f}} {unit}<extra></extra>',
+        ))
+
+        fig.update_layout(
+            title=f'{label} ({unit})',
+            xaxis_title=x_var,
+            yaxis_title=f'{label} ({unit})',
+            template='plotly_white',
+            height=400,
+        )
+
+        html = '<div class="plot-container">\n'
+        html += self._fig_to_html(fig, plot_name=f'resource_{metric_col}')
+        html += '</div>\n'
+        return html
 
     def _generate_custom_plots_section(self, metrics: List[str], report_vars: List[str]) -> str:
         """Generate custom plots section based on user-defined reporting config."""

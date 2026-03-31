@@ -72,7 +72,7 @@ ALLOWED_BENCHMARK_KEYS = {
     "trace_resources", "trace_interval",
 }
 
-ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "sampling_interval"}
+ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "sampling_interval"}
 
 ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
@@ -110,7 +110,7 @@ ALLOWED_REPORTING_KEYS = {
 ALLOWED_THEME_KEYS = {"style", "colors", "font_family"}
 ALLOWED_SECTIONS_KEYS = {
     "test_summary", "best_results", "variable_impact", "parallel_coordinates",
-    "bayesian_evolution", "bayesian_parameter_evolution", "custom_plots",
+    "bayesian_evolution", "bayesian_parameter_evolution", "resource_sampling", "custom_plots",
 }
 ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
 ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
@@ -997,6 +997,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             system_snapshot=probes_data.get("system_snapshot", True),
             execution_index=probes_data.get("execution_index", True),
             resource_sampling=probes_data.get("resource_sampling", False),
+            gpu_sampling=probes_data.get("gpu_sampling", False),
             sampling_interval=probes_data.get("sampling_interval", 1.0),
         )
 
@@ -1418,6 +1419,7 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
             parallel_coordinates=sections_data.get("parallel_coordinates", True),
             bayesian_evolution=sections_data.get("bayesian_evolution", True),
             bayesian_parameter_evolution=sections_data.get("bayesian_parameter_evolution", False),
+            resource_sampling=sections_data.get("resource_sampling", True),
             custom_plots=sections_data.get("custom_plots", True),
         )
 

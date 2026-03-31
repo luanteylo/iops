@@ -2,6 +2,10 @@
 title: "JUBE Conversion"
 ---
 
+> **Experimental Feature**
+>
+> JUBE conversion is experimental. It may contain bugs or undergo breaking changes in future releases. Please report any issues you encounter.
+
 Convert existing [JUBE](https://github.com/FZJ-JSC/JUBE) benchmark configurations to IOPS format using `iops convert`.
 
 ---
