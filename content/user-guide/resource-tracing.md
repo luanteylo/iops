@@ -142,32 +142,50 @@ The following intermediate values are computed per sample:
 
 ### GPU Aggregated Metrics
 
-When `gpu_sampling` is enabled, the following GPU metrics are added to the summary CSV. A **sample** is one row in the GPU sample CSV, representing a measurement at a specific timestamp for a specific GPU on a specific node.
+When `gpu_sampling` is enabled, GPU metrics are added to the summary CSV. Metrics are computed **per GPU first**, then aggregated across GPUs. This prevents idle GPUs from dragging down the averages on multi-GPU machines where only a subset of GPUs is active.
 
-| Metric | Description | Formula |
-|--------|-------------|---------|
-| `gpu_count` | Number of distinct GPUs traced | `count(distinct hostname:gpu_index)` |
-| `gpu_avg_utilization_pct` | Average GPU compute utilization | `sum(utilization_gpu_pct) / count(samples)` |
-| `gpu_max_utilization_pct` | Peak GPU compute utilization | `max(utilization_gpu_pct)` |
-| `gpu_avg_mem_utilization_pct` | Average GPU memory utilization | `sum(utilization_mem_pct) / count(samples)` |
-| `gpu_mem_peak_mib` | Peak GPU memory used | `max(memory_used_mib)` |
-| `gpu_avg_temperature_c` | Average GPU temperature | `sum(temperature_c) / count(samples)` |
-| `gpu_max_temperature_c` | Peak GPU temperature | `max(temperature_c)` |
-| `gpu_avg_power_w` | Average power draw | `sum(power_draw_w) / count(samples)` |
-| `gpu_max_power_w` | Peak power draw | `max(power_draw_w)` |
-| `gpu_energy_j` | Total energy consumed (Joules) | Trapezoidal integration of power over time per GPU, summed across all GPUs |
-| `gpu_trace_duration_s` | Time span of GPU trace data | `max(timestamp) - min(timestamp)` |
+#### Per-GPU Columns
+
+Each GPU gets its own set of columns in the summary CSV, named by device index:
+
+| Column pattern | Example | Description |
+|----------------|---------|-------------|
+| `gpuN_avg_utilization_pct` | `gpu0_avg_utilization_pct` | Average utilization for GPU N |
+| `gpuN_avg_power_w` | `gpu0_avg_power_w` | Average power draw for GPU N |
+| `gpuN_energy_j` | `gpu0_energy_j` | Energy consumed by GPU N (Joules) |
+| `gpuN_avg_temperature_c` | `gpu0_avg_temperature_c` | Average temperature for GPU N |
+| `gpuN_mem_peak_mib` | `gpu0_mem_peak_mib` | Peak memory used by GPU N |
+
+These per-GPU columns let you identify which GPUs were active and compare their individual resource profiles.
+
+#### Aggregate Columns
+
+Aggregate metrics use the **maximum of per-GPU averages** so that idle GPUs do not dilute the stats. For example, if GPU 0 averages 90% utilization and GPU 1 is idle at 0%, `gpu_avg_utilization_pct` reports 90%, not 45%.
+
+| Metric | Description | Aggregation |
+|--------|-------------|-------------|
+| `gpu_count` | Number of distinct GPUs sampled | `count(distinct hostname:gpu_index)` |
+| `gpu_avg_utilization_pct` | Best per-GPU average utilization | `max(per-GPU avg utilization)` |
+| `gpu_max_utilization_pct` | Peak instantaneous utilization | `max(all samples)` |
+| `gpu_avg_mem_utilization_pct` | Best per-GPU average memory utilization | `max(per-GPU avg mem utilization)` |
+| `gpu_mem_peak_mib` | Peak GPU memory used | `max(all per-GPU peaks)` |
+| `gpu_avg_temperature_c` | Highest per-GPU average temperature | `max(per-GPU avg temperature)` |
+| `gpu_max_temperature_c` | Peak instantaneous temperature | `max(all samples)` |
+| `gpu_avg_power_w` | Highest per-GPU average power | `max(per-GPU avg power)` |
+| `gpu_max_power_w` | Peak instantaneous power | `max(all samples)` |
+| `gpu_energy_j` | Total energy consumed (Joules) | `sum(per-GPU energy)` |
+| `gpu_trace_duration_s` | Time span of GPU sample data | `max(timestamp) - min(timestamp)` |
 | `gpu_samples_collected` | Total GPU samples | `count(rows)` |
 
 #### Energy Calculation
 
-The `gpu_energy_j` metric provides total GPU energy consumption in Joules, computed by integrating instantaneous power draw over time using the trapezoidal rule:
+The `gpu_energy_j` metric provides total GPU energy consumption in Joules. Energy is computed per GPU by integrating instantaneous power draw over time using the trapezoidal rule, then summed across all GPUs:
 
 ```
 E = sum over all GPUs of: integral(P(t) dt)
 ```
 
-For each GPU, consecutive power samples are integrated: `E_interval = (P_i + P_{i+1}) / 2 * (t_{i+1} - t_i)`. This gives accurate results even with varying power draw. To convert to kilowatt-hours: `kWh = gpu_energy_j / 3600000`.
+For each GPU, consecutive power samples are integrated: `E_interval = (P_i + P_{i+1}) / 2 * (t_{i+1} - t_i)`. This gives accurate results even with varying power draw. Per-GPU energy is available via `gpu0_energy_j`, `gpu1_energy_j`, etc. To convert to kilowatt-hours: `kWh = gpu_energy_j / 3600000`.
 
 ## Configuration Reference
 
