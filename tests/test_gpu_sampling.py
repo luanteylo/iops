@@ -480,6 +480,7 @@ class TestGpuTraceMetrics:
 
         assert metrics["gpu_count"] == 1
         assert metrics["gpu_samples_collected"] == 1
+        # Aggregate metrics
         assert metrics["gpu_avg_utilization_pct"] == 85.0
         assert metrics["gpu_max_utilization_pct"] == 85.0
         assert metrics["gpu_avg_mem_utilization_pct"] == 40.0
@@ -489,6 +490,12 @@ class TestGpuTraceMetrics:
         assert metrics["gpu_avg_power_w"] == 250.5
         assert metrics["gpu_max_power_w"] == 250.5
         assert metrics["gpu_trace_duration_s"] == 0  # single sample
+        # Per-GPU columns
+        assert metrics["gpu0_avg_utilization_pct"] == 85.0
+        assert metrics["gpu0_avg_power_w"] == 250.5
+        assert metrics["gpu0_energy_j"] == 0.0  # single sample, no interval
+        assert metrics["gpu0_avg_temperature_c"] == 62.0
+        assert metrics["gpu0_mem_peak_mib"] == 30000.0
 
     def test_multiple_samples_metrics(self, tmp_path):
         """Test aggregated metrics across multiple samples."""
@@ -507,7 +514,7 @@ class TestGpuTraceMetrics:
 
         assert metrics["gpu_count"] == 1
         assert metrics["gpu_samples_collected"] == 3
-        assert metrics["gpu_avg_utilization_pct"] == 70.0
+        assert metrics["gpu_avg_utilization_pct"] == pytest.approx(70.0, abs=0.01)
         assert metrics["gpu_max_utilization_pct"] == 80.0
         assert metrics["gpu_mem_peak_mib"] == 40000.0
         assert metrics["gpu_avg_temperature_c"] == pytest.approx(63.33, abs=0.01)
@@ -574,6 +581,42 @@ class TestGpuTraceMetrics:
         assert metrics["gpu_count"] == 2
         # GPU-A: 200W * 1s = 200J, GPU-B: 200W * 1s = 200J, Total = 400J
         assert metrics["gpu_energy_j"] == 400.0
+        # Per-GPU energy
+        assert metrics["gpu0_energy_j"] == 200.0
+        assert metrics["gpu1_energy_j"] == 200.0
+
+    def test_idle_gpu_does_not_pollute_averages(self, tmp_path):
+        """Test that an idle GPU does not drag down active GPU averages."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        # GPU 0: active at 90% util, 250W, 65C
+        # GPU 1: idle at 0% util, 25W, 35C
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU,90.0,40.0,30000,81920,65,250.0,1410,1215\n"
+            + "1000.0,node01,1,GPU,0.0,0.0,0,81920,35,25.0,135,877\n"
+            + "1001.0,node01,0,GPU,90.0,40.0,30000,81920,65,250.0,1410,1215\n"
+            + "1001.0,node01,1,GPU,0.0,0.0,0,81920,35,25.0,135,877\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_count"] == 2
+        # Aggregate uses max-of-per-gpu-averages, so idle GPU doesn't drag down
+        assert metrics["gpu_avg_utilization_pct"] == 90.0  # max(90, 0) = 90
+        assert metrics["gpu_avg_power_w"] == 250.0          # max(250, 25) = 250
+        assert metrics["gpu_avg_temperature_c"] == 65.0     # max(65, 35) = 65
+        # Per-GPU columns show the difference clearly
+        assert metrics["gpu0_avg_utilization_pct"] == 90.0
+        assert metrics["gpu1_avg_utilization_pct"] == 0.0
+        assert metrics["gpu0_avg_power_w"] == 250.0
+        assert metrics["gpu1_avg_power_w"] == 25.0
+        # Energy: active GPU contributes, idle contributes its own idle power
+        assert metrics["gpu0_energy_j"] == 250.0  # 250W * 1s
+        assert metrics["gpu1_energy_j"] == 25.0    # 25W * 1s
+        assert metrics["gpu_energy_j"] == 275.0    # sum of both
 
     def test_multiple_nodes(self, tmp_path):
         """Test metrics from multiple nodes."""

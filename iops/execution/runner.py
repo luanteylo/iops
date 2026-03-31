@@ -432,38 +432,30 @@ class IOPSRunner(HasLogger):
         """
         Compute aggregated metrics from GPU trace files.
 
-        Reads all GPU trace CSV files (one per node) and computes summary metrics
-        including energy consumption (integral of power over time).
+        Metrics are computed **per GPU** first, then aggregated across GPUs.
+        This prevents idle GPUs from dragging down averages (e.g. a machine
+        with 2 GPUs but only 1 used should report the active GPU's stats).
+
+        Per-GPU stats:
+        - avg utilization, avg power, avg temperature, peak memory, energy
+
+        Aggregation across GPUs:
+        - Utilization/power/temperature: reported per GPU (gpu_N_*) and as
+          overall max-of-averages for quick comparison
+        - Energy: summed across all GPUs (total consumption)
+        - Memory: max across all GPUs
 
         Args:
             trace_files: List of paths to __iops_gpu_trace_*.csv files
 
         Returns:
-            Dictionary with aggregated GPU metrics:
-            - gpu_count: Number of distinct GPUs traced
-            - gpu_avg_utilization_pct: Average GPU utilization
-            - gpu_max_utilization_pct: Peak GPU utilization
-            - gpu_avg_mem_utilization_pct: Average memory utilization
-            - gpu_mem_peak_mib: Peak GPU memory used
-            - gpu_avg_temperature_c: Average GPU temperature
-            - gpu_max_temperature_c: Peak GPU temperature
-            - gpu_avg_power_w: Average power draw
-            - gpu_max_power_w: Peak power draw
-            - gpu_energy_j: Total energy consumed (power integrated over time)
-            - gpu_trace_duration_s: Time span of GPU trace data
-            - gpu_samples_collected: Total number of GPU samples
+            Dictionary with per-GPU and aggregated GPU metrics
         """
-        all_util_gpu = []
-        all_util_mem = []
-        all_mem_used = []
-        all_temp = []
-        all_power = []
         timestamps = []
-        gpus_seen = set()
 
-        # Per-GPU power time series for energy calculation
-        # Key: (hostname, gpu_index), Value: list of (timestamp, power_w)
-        per_gpu_power_series = {}
+        # Per-GPU data collection
+        # Key: gpu_key (e.g. "node01:gpu0"), Value: dict of lists
+        per_gpu_data = {}
 
         for trace_file in trace_files:
             try:
@@ -474,7 +466,6 @@ class IOPSRunner(HasLogger):
                             hostname = row.get('hostname', 'unknown')
                             gpu_idx = row.get('gpu_index', '0')
                             gpu_key = f"{hostname}:gpu{gpu_idx}"
-                            gpus_seen.add(gpu_key)
 
                             ts = float(row.get('timestamp', 0))
                             timestamps.append(ts)
@@ -485,16 +476,18 @@ class IOPSRunner(HasLogger):
                             temp = float(row.get('temperature_c', 0))
                             power = float(row.get('power_draw_w', 0))
 
-                            all_util_gpu.append(util_gpu)
-                            all_util_mem.append(util_mem)
-                            all_mem_used.append(mem_used)
-                            all_temp.append(temp)
-                            all_power.append(power)
-
-                            # Track power series per GPU for energy integration
-                            if gpu_key not in per_gpu_power_series:
-                                per_gpu_power_series[gpu_key] = []
-                            per_gpu_power_series[gpu_key].append((ts, power))
+                            if gpu_key not in per_gpu_data:
+                                per_gpu_data[gpu_key] = {
+                                    'util_gpu': [], 'util_mem': [], 'mem_used': [],
+                                    'temp': [], 'power': [], 'power_series': [],
+                                }
+                            d = per_gpu_data[gpu_key]
+                            d['util_gpu'].append(util_gpu)
+                            d['util_mem'].append(util_mem)
+                            d['mem_used'].append(mem_used)
+                            d['temp'].append(temp)
+                            d['power'].append(power)
+                            d['power_series'].append((ts, power))
 
                         except (ValueError, KeyError) as e:
                             self.logger.debug(f"Skipping malformed GPU trace row: {e}")
@@ -505,46 +498,67 @@ class IOPSRunner(HasLogger):
                 continue
 
         metrics = {
-            "gpu_count": len(gpus_seen),
+            "gpu_count": len(per_gpu_data),
             "gpu_samples_collected": len(timestamps),
         }
 
-        if not timestamps:
+        if not per_gpu_data:
             return metrics
 
-        # Utilization metrics
-        if all_util_gpu:
-            metrics["gpu_avg_utilization_pct"] = round(sum(all_util_gpu) / len(all_util_gpu), 2)
-            metrics["gpu_max_utilization_pct"] = round(max(all_util_gpu), 2)
+        # Compute per-GPU summaries and add per-GPU columns
+        gpu_avg_utils = []
+        gpu_avg_powers = []
+        gpu_avg_temps = []
+        gpu_peak_mems = []
+        gpu_energies = []
 
-        if all_util_mem:
-            metrics["gpu_avg_mem_utilization_pct"] = round(sum(all_util_mem) / len(all_util_mem), 2)
+        for gpu_key in sorted(per_gpu_data.keys()):
+            d = per_gpu_data[gpu_key]
+            # Extract GPU index for column naming (e.g. "gpu0" from "node01:gpu0")
+            gpu_label = gpu_key.split(":")[-1]  # "gpu0", "gpu1", etc.
 
-        # Memory metrics
-        if all_mem_used:
-            metrics["gpu_mem_peak_mib"] = round(max(all_mem_used), 2)
+            avg_util = sum(d['util_gpu']) / len(d['util_gpu'])
+            avg_power = sum(d['power']) / len(d['power'])
+            avg_temp = sum(d['temp']) / len(d['temp'])
+            peak_mem = max(d['mem_used'])
 
-        # Temperature metrics
-        if all_temp:
-            metrics["gpu_avg_temperature_c"] = round(sum(all_temp) / len(all_temp), 2)
-            metrics["gpu_max_temperature_c"] = round(max(all_temp), 2)
+            gpu_avg_utils.append(avg_util)
+            gpu_avg_powers.append(avg_power)
+            gpu_avg_temps.append(avg_temp)
+            gpu_peak_mems.append(peak_mem)
 
-        # Power metrics
-        if all_power:
-            metrics["gpu_avg_power_w"] = round(sum(all_power) / len(all_power), 2)
-            metrics["gpu_max_power_w"] = round(max(all_power), 2)
-
-        # Energy calculation: integrate power over time per GPU, then sum
-        # E = sum over GPUs of integral(P(t) dt) using trapezoidal rule
-        total_energy_j = 0.0
-        for gpu_key, series in per_gpu_power_series.items():
-            series.sort(key=lambda x: x[0])  # sort by timestamp
+            # Energy: trapezoidal integration of power over time
+            energy_j = 0.0
+            series = sorted(d['power_series'], key=lambda x: x[0])
             for i in range(1, len(series)):
                 dt = series[i][0] - series[i - 1][0]
-                avg_power = (series[i][1] + series[i - 1][1]) / 2.0
-                total_energy_j += avg_power * dt
+                avg_p = (series[i][1] + series[i - 1][1]) / 2.0
+                energy_j += avg_p * dt
+            gpu_energies.append(energy_j)
 
-        metrics["gpu_energy_j"] = round(total_energy_j, 2)
+            # Per-GPU columns
+            metrics[f"{gpu_label}_avg_utilization_pct"] = round(avg_util, 2)
+            metrics[f"{gpu_label}_avg_power_w"] = round(avg_power, 2)
+            metrics[f"{gpu_label}_energy_j"] = round(energy_j, 2)
+            metrics[f"{gpu_label}_avg_temperature_c"] = round(avg_temp, 2)
+            metrics[f"{gpu_label}_mem_peak_mib"] = round(peak_mem, 2)
+
+        # Aggregate across GPUs (use max-of-averages so idle GPUs don't drag stats down)
+        metrics["gpu_avg_utilization_pct"] = round(max(gpu_avg_utils), 2)
+        metrics["gpu_max_utilization_pct"] = round(
+            max(max(d['util_gpu']) for d in per_gpu_data.values()), 2)
+        metrics["gpu_avg_mem_utilization_pct"] = round(
+            max(sum(d['util_mem']) / len(d['util_mem']) for d in per_gpu_data.values()), 2)
+        metrics["gpu_mem_peak_mib"] = round(max(gpu_peak_mems), 2)
+        metrics["gpu_avg_temperature_c"] = round(max(gpu_avg_temps), 2)
+        metrics["gpu_max_temperature_c"] = round(
+            max(max(d['temp']) for d in per_gpu_data.values()), 2)
+        metrics["gpu_avg_power_w"] = round(max(gpu_avg_powers), 2)
+        metrics["gpu_max_power_w"] = round(
+            max(max(d['power']) for d in per_gpu_data.values()), 2)
+
+        # Energy: sum across all GPUs (total consumption)
+        metrics["gpu_energy_j"] = round(sum(gpu_energies), 2)
 
         # Trace duration
         if len(timestamps) >= 2:
