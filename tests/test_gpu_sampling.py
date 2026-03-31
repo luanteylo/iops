@@ -7,7 +7,9 @@ power, clocks) during benchmark execution.
 
 import pytest
 import yaml
+import csv
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from conftest import load_config
 
@@ -426,3 +428,191 @@ class TestGpuSamplerConstants:
         assert RUNTIME_SAMPLER_FILENAME != RUNTIME_GPU_SAMPLER_FILENAME
         assert TRACE_FILENAME_PREFIX != GPU_TRACE_FILENAME_PREFIX
         assert SAMPLER_SENTINEL_FILENAME != GPU_SAMPLER_SENTINEL_FILENAME
+
+
+# ============================================================================ #
+# GPU Trace Aggregation Tests
+# ============================================================================ #
+
+GPU_TRACE_HEADER = (
+    "timestamp,hostname,gpu_index,gpu_name,"
+    "utilization_gpu_pct,utilization_mem_pct,"
+    "memory_used_mib,memory_total_mib,"
+    "temperature_c,power_draw_w,"
+    "clock_sm_mhz,clock_mem_mhz\n"
+)
+
+
+class TestGpuTraceMetrics:
+    """Tests for _compute_gpu_trace_metrics."""
+
+    def _make_runner(self):
+        from iops.execution.runner import IOPSRunner
+        runner = MagicMock(spec=IOPSRunner)
+        runner.logger = MagicMock()
+        return runner
+
+    def test_empty_trace_file(self, tmp_path):
+        """Test with a GPU trace file containing only the header."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        trace_file.write_text(GPU_TRACE_HEADER)
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_count"] == 0
+        assert metrics["gpu_samples_collected"] == 0
+
+    def test_single_gpu_single_sample(self, tmp_path):
+        """Test with one GPU and one sample."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1705123456.0,node01,0,NVIDIA A100,85.0,40.0,30000,81920,62,250.5,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_count"] == 1
+        assert metrics["gpu_samples_collected"] == 1
+        assert metrics["gpu_avg_utilization_pct"] == 85.0
+        assert metrics["gpu_max_utilization_pct"] == 85.0
+        assert metrics["gpu_avg_mem_utilization_pct"] == 40.0
+        assert metrics["gpu_mem_peak_mib"] == 30000.0
+        assert metrics["gpu_avg_temperature_c"] == 62.0
+        assert metrics["gpu_max_temperature_c"] == 62.0
+        assert metrics["gpu_avg_power_w"] == 250.5
+        assert metrics["gpu_max_power_w"] == 250.5
+        assert metrics["gpu_trace_duration_s"] == 0  # single sample
+
+    def test_multiple_samples_metrics(self, tmp_path):
+        """Test aggregated metrics across multiple samples."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1705123456.0,node01,0,NVIDIA A100,60.0,30.0,20000,81920,55,200.0,1410,1215\n"
+            + "1705123457.0,node01,0,NVIDIA A100,80.0,50.0,40000,81920,70,300.0,1410,1215\n"
+            + "1705123458.0,node01,0,NVIDIA A100,70.0,40.0,30000,81920,65,250.0,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_count"] == 1
+        assert metrics["gpu_samples_collected"] == 3
+        assert metrics["gpu_avg_utilization_pct"] == 70.0
+        assert metrics["gpu_max_utilization_pct"] == 80.0
+        assert metrics["gpu_mem_peak_mib"] == 40000.0
+        assert metrics["gpu_avg_temperature_c"] == pytest.approx(63.33, abs=0.01)
+        assert metrics["gpu_max_temperature_c"] == 70.0
+        assert metrics["gpu_avg_power_w"] == 250.0
+        assert metrics["gpu_max_power_w"] == 300.0
+        assert metrics["gpu_trace_duration_s"] == 2.0
+
+    def test_energy_calculation(self, tmp_path):
+        """Test energy calculation via trapezoidal integration."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        # Constant 200W for 2 seconds = 400 Joules
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+            + "1001.0,node01,0,GPU,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+            + "1002.0,node01,0,GPU,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        # 200W * 2s = 400J (trapezoidal with constant power)
+        assert metrics["gpu_energy_j"] == 400.0
+
+    def test_energy_calculation_varying_power(self, tmp_path):
+        """Test energy calculation with varying power draw."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        # Power ramps from 100W to 300W over 2 seconds
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU,50.0,30.0,10000,81920,60,100.0,1410,1215\n"
+            + "1001.0,node01,0,GPU,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+            + "1002.0,node01,0,GPU,50.0,30.0,10000,81920,60,300.0,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        # Trapezoidal: (100+200)/2 * 1 + (200+300)/2 * 1 = 150 + 250 = 400J
+        assert metrics["gpu_energy_j"] == 400.0
+
+    def test_energy_multiple_gpus(self, tmp_path):
+        """Test energy sums across multiple GPUs."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        # Two GPUs, each drawing 200W for 1 second = 400J total
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU-A,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+            + "1000.0,node01,1,GPU-B,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+            + "1001.0,node01,0,GPU-A,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+            + "1001.0,node01,1,GPU-B,50.0,30.0,10000,81920,60,200.0,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_count"] == 2
+        # GPU-A: 200W * 1s = 200J, GPU-B: 200W * 1s = 200J, Total = 400J
+        assert metrics["gpu_energy_j"] == 400.0
+
+    def test_multiple_nodes(self, tmp_path):
+        """Test metrics from multiple nodes."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace1 = tmp_path / "__iops_gpu_trace_node01.csv"
+        trace1.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU,80.0,40.0,30000,81920,60,250.0,1410,1215\n"
+        )
+        trace2 = tmp_path / "__iops_gpu_trace_node02.csv"
+        trace2.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node02,0,GPU,90.0,50.0,40000,81920,70,300.0,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace1, trace2])
+
+        assert metrics["gpu_count"] == 2
+        assert metrics["gpu_samples_collected"] == 2
+        assert metrics["gpu_max_utilization_pct"] == 90.0
+        assert metrics["gpu_mem_peak_mib"] == 40000.0
+        assert metrics["gpu_max_temperature_c"] == 70.0
+        assert metrics["gpu_max_power_w"] == 300.0
+
+    def test_malformed_rows_skipped(self, tmp_path):
+        """Test that malformed rows are skipped gracefully."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU,80.0,40.0,30000,81920,60,250.0,1410,1215\n"
+            + "bad_ts,node01,0,GPU,invalid,bad,data,here,bad,vals,x,y\n"
+            + "1001.0,node01,0,GPU,90.0,50.0,40000,81920,70,300.0,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_samples_collected"] == 2

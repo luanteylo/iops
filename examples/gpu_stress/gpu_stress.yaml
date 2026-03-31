@@ -1,0 +1,73 @@
+# IOPS GPU Stress Test
+#
+# Tests the GPU sampling probe by running a synthetic CUDA SGEMM workload
+# with varying matrix sizes and durations.
+#
+# Prerequisites:
+#   - NVIDIA GPU with CUDA toolkit installed
+#   - Build the workload first: make -C examples/gpu_stress
+#
+# Usage:
+#   iops run examples/gpu_stress/gpu_stress.yaml
+#   iops run examples/gpu_stress/gpu_stress.yaml --dry-run  # preview only
+
+benchmark:
+  name: "GPU Stress Test"
+  description: "Synthetic SGEMM workload to validate GPU probe metrics"
+  workdir: "./workdir_gpu_stress"
+  executor: local
+  search_method: exhaustive
+  repetitions: 1
+  probes:
+    system_snapshot: true
+    resource_sampling: true
+    gpu_sampling: true
+    sampling_interval: 0.5
+
+vars:
+  matrix_size:
+    type: int
+    sweep:
+      mode: list
+      values: [2048, 4096]
+
+  duration:
+    type: int
+    sweep:
+      mode: list
+      values: [5, 10]
+
+command:
+  template: >
+    {{ os_env.PWD }}/examples/gpu_stress/gpu_stress
+    --size {{ matrix_size }}
+    --duration {{ duration }}
+    --gpu 0
+
+scripts:
+  - name: "gpu_stress"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      {{ command.template }} > {{ execution_dir }}/result.json 2>{{ execution_dir }}/gpu_stress.log
+    parser:
+      file: "{{ execution_dir }}/result.json"
+      metrics:
+        - name: gflops
+        - name: iterations
+        - name: duration_s
+      parser_script: |
+        import json
+        def parse(file_path):
+            with open(file_path) as f:
+                data = json.load(f)
+            return {
+                "gflops": data["gflops"],
+                "iterations": data["iterations"],
+                "duration_s": data["duration_s"],
+            }
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"

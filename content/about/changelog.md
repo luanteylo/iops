@@ -4,6 +4,21 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [Unreleased]
+
+### Added
+- GPU sampling probe (`probes.gpu_sampling`) for monitoring GPU metrics during benchmark execution
+  - Collects utilization, memory usage, temperature, power draw, and clock speeds
+  - Supports NVIDIA GPUs via `nvidia-smi`, designed for future AMD/Intel extension
+  - Gracefully skips when no supported GPU is detected
+  - Per-node GPU sample files (`__iops_gpu_trace_<hostname>.csv`)
+  - Energy consumption calculation via trapezoidal integration of power over time (`gpu_energy_j`)
+  - GPU metrics aggregated into `__iops_resource_summary.csv` alongside CPU/memory metrics
+- GPU hardware detection in system snapshot probe (`gpu_count`, `gpu_model`, `gpu_driver`, `gpu_memory_mib` in `__iops_sysinfo.json`)
+- `iops convert` command for translating JUBE XML benchmarks to IOPS YAML format [experimental]
+- Jinja2 templating support in `benchmark.cache_file`
+- `examples/gpu_stress/` synthetic CUDA workload for testing GPU probes
+
 ## [3.5.2] - 2026-03-02
 
 ### Added
