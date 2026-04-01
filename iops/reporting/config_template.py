@@ -122,6 +122,25 @@ def _get_all_metrics(scripts: List["ScriptConfig"]) -> List[str]:
     return metrics
 
 
+def _get_resource_metrics(workdir: Path) -> List[str]:
+    """Get list of resource metric names from __iops_resource_summary.csv if it exists."""
+    import csv as csv_mod
+    summary_path = workdir / "__iops_resource_summary.csv"
+    if not summary_path.exists():
+        return []
+    try:
+        with open(summary_path, 'r', newline='') as f:
+            reader = csv_mod.reader(f)
+            header = next(reader, None)
+        if not header:
+            return []
+        # Exclude identifiers and user variables (keep only resource metric columns)
+        skip = {"execution_id", "repetition"}
+        return [col for col in header if col not in skip]
+    except Exception:
+        return []
+
+
 def _create_clean_report_config(
     reporting: "ReportingConfig",
     scripts: List["ScriptConfig"],
@@ -306,9 +325,10 @@ def save_report_config_template(
             config_dict = _generate_default_report_config(cfg.vars, cfg.scripts)
             has_user_config = False
 
-        # Get swept variables and metrics for reference comments
+        # Get swept variables, metrics, and resource metrics for reference comments
         swept_vars = _get_swept_vars(cfg.vars)
         all_metrics = _get_all_metrics(cfg.scripts)
+        resource_metrics = _get_resource_metrics(cfg.benchmark.workdir)
 
         # Wrap in reporting section
         yaml_content = {"reporting": config_dict}
@@ -346,13 +366,23 @@ def save_report_config_template(
                 f.write("#\n")
 
             if all_metrics:
-                f.write("# Metrics (use for configuring plots):\n")
+                f.write("# Benchmark Metrics (from parser scripts):\n")
                 for metric in all_metrics:
                     f.write(f"#   - {metric}\n")
                 f.write("#\n")
             else:
-                f.write("# No metrics detected\n")
+                f.write("# No benchmark metrics detected\n")
                 f.write("#\n")
+
+            if resource_metrics:
+                # Separate user vars from resource metrics
+                var_names = set(cfg.vars.keys())
+                res_only = [m for m in resource_metrics if m not in var_names]
+                if res_only:
+                    f.write("# Resource Sampling Metrics (from probes, also usable in plots):\n")
+                    for metric in res_only:
+                        f.write(f"#   - {metric}\n")
+                    f.write("#\n")
 
             f.write("# Plot Types Available:\n")
             f.write("#   - bar, line, scatter, heatmap, box, violin, surface_3d\n")

@@ -771,6 +771,7 @@ output:
 #     variable_impact: true
 #     bayesian_evolution: true           # Optimization progress (Bayesian only)
 #     bayesian_parameter_evolution: false # Parameter exploration plot (default: false)
+#     resource_sampling: true             # Resource metrics summary table (default: true)
 #     custom_plots: true
 #
 #   # Optional: Best results configuration
@@ -781,6 +782,8 @@ output:
 #
 #   # Optional: Per-metric custom plots
 #   # Plot types: line, bar, scatter, heatmap, box, violin, surface_3d, execution_scatter, coverage_heatmap, parallel_coordinates
+#   # Both benchmark metrics (from parsers) and resource sampling metrics (from probes) can be used.
+#   # Available resource metrics are listed in the generated report_config.yaml after execution.
 #   metrics:
 #     bwMiB:
 #       plots:
@@ -795,6 +798,16 @@ output:
 #           row_vars: ["nodes", "processes_per_node"]  # Required: variables for rows (multi-level supported)
 #           col_var: "volume_size_gb"    # Required: variable for columns
 #           aggregation: "mean"          # Options: mean, median, count, std, min, max
+#
+#     # Resource sampling metrics (available when probes are enabled)
+#     # Common metrics: cpu_avg_pct, cpu_max_pct, mem_peak_gb, mem_avg_gb,
+#     #   gpu_avg_utilization_pct, gpu_avg_power_w, gpu_energy_j,
+#     #   gpu_avg_temperature_c, gpu_mem_peak_mib, gpu0_energy_j, etc.
+#     # gpu_energy_j:
+#     #   plots:
+#     #     - type: "bar"
+#     #       x_var: "nodes"
+#     #       title: "GPU Energy Consumption"
 #
 #   # Optional: Default plots for metrics without custom config
 #   # execution_scatter is automatically included in legacy mode

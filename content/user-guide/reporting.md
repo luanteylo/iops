@@ -173,9 +173,19 @@ Shows adaptive probing outcomes (adaptive search only). This section is automati
 
 **When to use**: Only relevant when using `search_method: "adaptive"`. The section appears automatically with no additional configuration needed.
 
+### Resource Sampling
+
+Displays a summary table of resource metrics collected by IOPS probes during benchmark execution (CPU/memory utilization, GPU power, temperature, energy, etc.).
+
+- Shows min/max/mean for each resource metric
+- Automatically appears when `__iops_resource_summary.csv` exists
+- Resource metrics are also available as regular metrics for custom plots (see below)
+
+**When to use**: Always useful when `probes.resource_sampling` or `probes.gpu_sampling` is enabled. The summary table gives a quick overview, while custom plots let you visualize correlations with your benchmark variables.
+
 ### Custom Plots
 
-User-defined plots specified in the `metrics` section (see below).
+User-defined plots specified in the `metrics` section (see below). This includes both benchmark metrics (from parser scripts) and resource sampling metrics (from probes).
 
 ---
 
@@ -192,6 +202,7 @@ reporting:
     parallel_coordinates: true   # Multi-dimensional plot
     bayesian_evolution: true     # Optimization progress (Bayesian only)
     bayesian_parameter_evolution: false  # Parameter exploration (default: false)
+    resource_sampling: true      # Resource metrics summary table
     custom_plots: true           # User-defined plots
 ```
 
@@ -747,5 +758,65 @@ reporting:
           color_by: "nodes"
           title: "Bandwidth vs Latency Trade-off"
 ```
+
+### Resource Sampling Plots
+
+When `probes.resource_sampling` or `probes.gpu_sampling` is enabled, resource metrics are automatically registered and can be used in custom plots just like benchmark metrics. Available resource metrics are listed in the generated `report_config.yaml` under "Resource Sampling Metrics".
+
+```yaml
+reporting:
+  enabled: true
+
+  metrics:
+    # GPU energy consumption vs benchmark parameters
+    gpu_energy_j:
+      plots:
+        - type: "bar"
+          x_var: "matrix_size"
+          title: "GPU Energy Consumption by Matrix Size"
+          yaxis_label: "Energy (Joules)"
+
+        - type: "heatmap"
+          x_var: "matrix_size"
+          y_var: "duration"
+          title: "Energy Consumption Heatmap"
+
+    # GPU power draw correlation
+    gpu_avg_power_w:
+      plots:
+        - type: "line"
+          x_var: "matrix_size"
+          title: "Average GPU Power Draw"
+          yaxis_label: "Power (Watts)"
+
+    # CPU utilization across configurations
+    cpu_avg_pct:
+      plots:
+        - type: "bar"
+          x_var: "nodes"
+          title: "CPU Utilization by Node Count"
+
+    # Per-GPU metrics (available on multi-GPU machines)
+    gpu0_energy_j:
+      plots:
+        - type: "bar"
+          x_var: "matrix_size"
+          title: "GPU 0 Energy Consumption"
+```
+
+**Common resource metrics:**
+
+| Metric | Description | Probe |
+|--------|-------------|-------|
+| `cpu_avg_pct` | Average CPU utilization (%) | `resource_sampling` |
+| `cpu_max_pct` | Peak CPU utilization (%) | `resource_sampling` |
+| `mem_peak_gb` | Peak memory used (GB) | `resource_sampling` |
+| `gpu_avg_utilization_pct` | Average GPU utilization (%) | `gpu_sampling` |
+| `gpu_avg_power_w` | Average GPU power draw (W) | `gpu_sampling` |
+| `gpu_energy_j` | Total GPU energy consumed (J) | `gpu_sampling` |
+| `gpu_avg_temperature_c` | Average GPU temperature (C) | `gpu_sampling` |
+| `gpu_mem_peak_mib` | Peak GPU memory used (MiB) | `gpu_sampling` |
+| `gpu0_energy_j` | Energy consumed by GPU 0 (J) | `gpu_sampling` |
+| `gpu0_avg_power_w` | Average power draw of GPU 0 (W) | `gpu_sampling` |
 
 

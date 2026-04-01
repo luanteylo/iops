@@ -304,8 +304,71 @@ class ReportGenerator:
         if 'metadata.__executor_status' in self.df.columns:
             self.df = self.df[self.df['metadata.__executor_status'] == 'SUCCEEDED'].copy()
 
+        # Merge resource sampling metrics (from __iops_resource_summary.csv)
+        self._merge_resource_metrics()
+
         # Validate and filter metrics to only those available in results
         self._validate_and_filter_metrics()
+
+    def _merge_resource_metrics(self):
+        """
+        Merge resource sampling metrics into the main results DataFrame.
+
+        Loads __iops_resource_summary.csv and joins its metric columns into
+        self.df with 'metrics.' prefix, making them available to the custom
+        plots system alongside benchmark metrics.
+
+        Joins on execution_id and repetition. Resource columns that are user
+        variables or identifiers are excluded (only metric columns are merged).
+        """
+        summary_path = self.workdir / self._RESOURCE_SUMMARY_FILENAME
+        if not summary_path.exists():
+            return
+
+        try:
+            resource_df = pd.read_csv(summary_path)
+        except Exception:
+            return
+
+        if resource_df.empty:
+            return
+
+        # Identify which columns are resource metrics (not identifiers or user vars)
+        existing_var_cols = {col.replace('vars.', '') for col in self.df.columns if col.startswith('vars.')}
+        non_metric_cols = {"execution_id", "repetition"} | existing_var_cols
+
+        metric_cols = [c for c in resource_df.columns if c not in non_metric_cols]
+        if not metric_cols:
+            return
+
+        # Build join keys: map resource_df execution_id format to results DataFrame format
+        # Resource CSV uses "exec_0001", results use integer or string execution_id
+        join_cols = ["execution_id", "repetition"] if "repetition" in resource_df.columns else ["execution_id"]
+
+        # Rename metric columns to use metrics.* prefix
+        rename_map = {col: f"metrics.{col}" for col in metric_cols}
+        resource_subset = resource_df[join_cols + metric_cols].rename(columns=rename_map)
+
+        # Normalize execution_id format for joining
+        if 'execution.execution_id' in self.df.columns:
+            # Results use "execution.execution_id", resource uses "execution_id"
+            resource_subset = resource_subset.rename(columns={"execution_id": "execution.execution_id"})
+            join_key = "execution.execution_id"
+        else:
+            join_key = "execution_id"
+
+        # Normalize repetition column name
+        if "execution.repetition" in self.df.columns and "repetition" in resource_subset.columns:
+            resource_subset = resource_subset.rename(columns={"repetition": "execution.repetition"})
+
+        # Determine actual join columns present in both DataFrames
+        actual_join_cols = [c for c in resource_subset.columns if c in self.df.columns and not c.startswith("metrics.")]
+
+        if not actual_join_cols:
+            return
+
+        # Merge (left join to preserve all results rows)
+        self.df = self.df.merge(resource_subset, on=actual_join_cols, how='left')
 
     def _validate_and_filter_metrics(self):
         """
@@ -2028,13 +2091,12 @@ class ReportGenerator:
 
     def _generate_resource_sampling_section(self, report_vars: List[str]) -> str:
         """
-        Generate Resource Sampling section from aggregated resource traces.
+        Generate Resource Sampling section with a summary table.
 
-        Loads __iops_resource_summary.csv and generates:
-        1. Summary table with min/max/mean for each resource metric
-        2. Bar/heatmap plots correlating user variables with resource metrics
-
-        Auto-detects which metrics (CPU/memory vs GPU) are available from the CSV columns.
+        Loads __iops_resource_summary.csv and generates a summary table showing
+        min/max/mean for each resource metric. Resource metrics are also merged
+        into the main DataFrame (by load_results) so users can create custom
+        plots with them in the reporting.metrics configuration.
 
         Returns:
             HTML string for the section, or empty string if no data available
@@ -2062,44 +2124,14 @@ class ReportGenerator:
         if not cpu_metrics and not gpu_metrics:
             return ""
 
-        # Identify user variable columns (everything except known resource/metadata columns)
-        known_columns = (
-            {"execution_id", "repetition", "nodes_traced", "samples_collected", "trace_duration_s",
-             "gpu_count", "gpu_samples_collected", "gpu_trace_duration_s", "gpu_avg_mem_utilization_pct",
-             "mem_peak_per_node_gb"}
-            | {col for col, _, _ in self._CPU_MEMORY_METRICS}
-            | {col for col, _, _ in self._GPU_METRICS}
-        )
-        user_vars = [c for c in df.columns if c not in known_columns]
-        # Filter to report_vars if specified, preserving order
-        if report_vars:
-            user_vars = [v for v in report_vars if v in user_vars]
-
         html = '<div class="metric-section">\n'
         html += "<h2>Resource Sampling</h2>\n"
-        html += "<p>Resource metrics collected during benchmark execution by IOPS probes.</p>\n"
+        html += "<p>Resource metrics collected during benchmark execution by IOPS probes. "
+        html += "These metrics are available for custom plots in the <code>reporting.metrics</code> "
+        html += "configuration (see <code>report_config.yaml</code>).</p>\n"
 
         # Summary table
-        html += self._resource_summary_table(df, cpu_metrics, gpu_metrics)
-
-        # Generate plots
-        if cpu_metrics:
-            html += "<h3>CPU & Memory</h3>\n"
-            for col, label, unit in cpu_metrics:
-                html += self._resource_metric_plot(df, col, label, unit, user_vars)
-
-        if gpu_metrics:
-            html += "<h3>GPU Metrics</h3>\n"
-            for col, label, unit in gpu_metrics:
-                html += self._resource_metric_plot(df, col, label, unit, user_vars)
-
-        html += '</div>\n'
-        return html
-
-    def _resource_summary_table(self, df: pd.DataFrame,
-                                cpu_metrics: list, gpu_metrics: list) -> str:
-        """Generate an HTML summary table with min/max/mean for each resource metric."""
-        html = "<details open>\n<summary>Resource Metrics Summary</summary>\n"
+        html += "<details open>\n<summary>Resource Metrics Summary</summary>\n"
         html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Metric</th><th>Min</th><th>Max</th><th>Mean</th><th>Unit</th></tr>\n"
 
@@ -2118,95 +2150,6 @@ class ReportGenerator:
             )
 
         html += "</table>\n</div>\n</details>\n"
-        return html
-
-    def _resource_metric_plot(self, df: pd.DataFrame, metric_col: str,
-                              label: str, unit: str, user_vars: list) -> str:
-        """
-        Generate a plot for a single resource metric vs user variables.
-
-        With 2+ variables: heatmap (first var x, second var y, metric as color).
-        With 1 variable: bar chart.
-        With 0 variables: skip (nothing to correlate).
-        """
-        series = pd.to_numeric(df[metric_col], errors='coerce')
-        if series.dropna().empty or series.nunique() <= 1:
-            return ""
-
-        try:
-            if len(user_vars) >= 2:
-                return self._resource_heatmap(df, metric_col, label, unit, user_vars[0], user_vars[1])
-            elif len(user_vars) == 1:
-                return self._resource_bar(df, metric_col, label, unit, user_vars[0])
-            else:
-                return ""
-        except Exception as e:
-            return f'<p class="error">Error generating {label} plot: {str(e)}</p>\n'
-
-    def _resource_heatmap(self, df: pd.DataFrame, metric_col: str,
-                          label: str, unit: str, x_var: str, y_var: str) -> str:
-        """Create a heatmap of a resource metric across two user variables."""
-        # Aggregate over repetitions
-        agg_df = df.groupby([x_var, y_var], as_index=False)[metric_col].mean()
-
-        pivot = agg_df.pivot_table(index=y_var, columns=x_var, values=metric_col, aggfunc='mean')
-        if pivot.empty:
-            return ""
-
-        # Convert to Python lists for Plotly compatibility
-        x_vals = [str(v) for v in pivot.columns.tolist()]
-        y_vals = [str(v) for v in pivot.index.tolist()]
-        z_vals = [[None if pd.isna(v) else round(float(v), 2) for v in row] for row in pivot.values]
-
-        fig = go.Figure(data=go.Heatmap(
-            z=z_vals,
-            x=x_vals,
-            y=y_vals,
-            colorscale='Viridis',
-            colorbar=dict(title=unit),
-            hovertemplate=f'{x_var}: %{{x}}<br>{y_var}: %{{y}}<br>{label}: %{{z}} {unit}<extra></extra>',
-        ))
-
-        fig.update_layout(
-            title=f'{label} ({unit})',
-            xaxis_title=x_var,
-            yaxis_title=y_var,
-            template='plotly_white',
-            height=400,
-        )
-
-        html = '<div class="plot-container">\n'
-        html += self._fig_to_html(fig, plot_name=f'resource_{metric_col}')
-        html += '</div>\n'
-        return html
-
-    def _resource_bar(self, df: pd.DataFrame, metric_col: str,
-                      label: str, unit: str, x_var: str) -> str:
-        """Create a bar chart of a resource metric vs a single user variable."""
-        agg_df = df.groupby(x_var, as_index=False).agg(
-            mean=(metric_col, 'mean'),
-            std=(metric_col, 'std'),
-        ).sort_values(x_var)
-
-        x_vals = [str(v) for v in agg_df[x_var].tolist()]
-
-        fig = go.Figure(data=go.Bar(
-            x=x_vals,
-            y=agg_df['mean'].tolist(),
-            error_y=dict(type='data', array=agg_df['std'].fillna(0).tolist(), visible=True),
-            hovertemplate=f'{x_var}: %{{x}}<br>{label}: %{{y:.2f}} {unit}<extra></extra>',
-        ))
-
-        fig.update_layout(
-            title=f'{label} ({unit})',
-            xaxis_title=x_var,
-            yaxis_title=f'{label} ({unit})',
-            template='plotly_white',
-            height=400,
-        )
-
-        html = '<div class="plot-container">\n'
-        html += self._fig_to_html(fig, plot_name=f'resource_{metric_col}')
         html += '</div>\n'
         return html
 

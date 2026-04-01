@@ -867,6 +867,7 @@ reporting:
     parallel_coordinates: boolean #   (default: true)
     bayesian_evolution: boolean #   (default: true)
     bayesian_parameter_evolution: boolean #   (default: false)
+    resource_sampling: boolean  #   (default: true)
     custom_plots: boolean       #   (default: true)
 
   best_results:                 # Optional: best results configuration
@@ -875,8 +876,8 @@ reporting:
     min_samples: integer        #   Minimum repetitions required (default: 1)
 
   metrics:                      # Optional: per-metric plot definitions
-    metric_name:
-      plots:
+    metric_name:                #   Benchmark metrics (from parsers) or resource
+      plots:                    #   sampling metrics (cpu_avg_pct, gpu_energy_j, etc.)
         - type: string
           x_var: string
           ...
@@ -932,6 +933,7 @@ reporting:
     parallel_coordinates: true # Multi-dimensional visualization
     bayesian_evolution: true   # Optimization progress (Bayesian only)
     bayesian_parameter_evolution: false  # Parameter exploration (default: false)
+    resource_sampling: true    # Resource metrics summary table
     custom_plots: true         # User-defined plots
 ```
 
@@ -953,11 +955,12 @@ reporting:
 <details>
 <summary><strong>metrics</strong> (optional)</summary>
 
-Define custom plots per metric:
+Define custom plots per metric. Both benchmark metrics (from parser scripts) and resource sampling metrics (from probes) can be used:
 
 ```yaml
 reporting:
   metrics:
+    # Benchmark metric (from parser)
     bwMiB:
       plots:
         - type: "execution_scatter"
@@ -976,7 +979,16 @@ reporting:
           row_vars: ["nodes", "processes_per_node"]
           col_var: "volume_size_gb"
           aggregation: "mean"
+
+    # Resource sampling metric (from gpu_sampling probe)
+    gpu_energy_j:
+      plots:
+        - type: "bar"
+          x_var: "nodes"
+          title: "GPU Energy Consumption"
 ```
+
+Available resource metrics are listed in the generated `report_config.yaml`. See [Custom Reports](../reporting#resource-sampling-plots) for the full list.
 
 **Plot types:** `bar`, `line`, `scatter`, `heatmap`, `box`, `violin`, `surface_3d`, `parallel_coordinates`, `execution_scatter`, `coverage_heatmap`
 

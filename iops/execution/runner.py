@@ -659,8 +659,57 @@ class IOPSRunner(HasLogger):
 
             self.logger.info(f"Resource trace summary: {summary_path} ({len(rows)} rows)")
 
+            # Register resource metrics in run metadata so they appear in reports
+            self._register_resource_metrics(fieldnames)
+
         except Exception as e:
             self.logger.warning(f"Failed to write resource summary: {e}")
+
+    # Columns in the resource summary that are not metrics (identifiers or user vars)
+    _RESOURCE_NON_METRIC_COLS = {"execution_id", "repetition"}
+
+    def _register_resource_metrics(self, fieldnames: List[str]) -> None:
+        """
+        Append resource sampling metrics to __iops_run_metadata.json.
+
+        This makes resource metrics (cpu_avg_pct, gpu_energy_j, etc.) available
+        to the report system as regular metrics, so users can create custom plots
+        with them just like benchmark metrics.
+
+        Args:
+            fieldnames: Column names from the resource summary CSV
+        """
+        metadata_path = self.cfg.benchmark.workdir / METADATA_FILENAME
+        if not metadata_path.exists():
+            return
+
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+
+            # Identify resource metric columns (not identifiers, not user vars)
+            existing_var_names = set(self.cfg.vars.keys())
+            existing_metric_names = set(m['name'] for m in metadata.get('metrics', []))
+
+            for col in fieldnames:
+                if col in self._RESOURCE_NON_METRIC_COLS:
+                    continue
+                if col in existing_var_names:
+                    continue
+                if col in existing_metric_names:
+                    continue
+                metadata['metrics'].append({
+                    "name": col,
+                    "script": "__iops_resource_sampling",
+                })
+
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
+
+            self.logger.debug("Registered resource metrics in run metadata")
+
+        except Exception as e:
+            self.logger.debug(f"Failed to register resource metrics: {e}")
 
     def _signal_handler(self, signum, frame):
         """Handle Ctrl+C (SIGINT) to cancel all submitted SLURM jobs."""
