@@ -92,6 +92,8 @@ benchmark:
     gpu_sampling: boolean           #   Enable GPU metrics tracing (default: false)
     sampling_interval: float        #   Sampling interval in seconds (default: 1.0)
 
+  parallel: integer                 # Optional: max concurrent tests (default: 1)
+
   create_folders_upfront: boolean   # Optional: create all folders at start (default: false)
   exhaustive_vars: list             # Optional: vars to test exhaustively
   report_vars: list                 # Optional: vars to include in reports
@@ -283,6 +285,18 @@ Jinja2 expression to compute cores per test (e.g., `"{{ nodes * ppn }}"`).
 
 #### `estimated_time_seconds` (optional)
 Estimated time per test. Used for dry-run budget analysis.
+
+#### `parallel` (optional, default: 1)
+Maximum number of tests to run concurrently. Overridable via `--parallel N`.
+
+When set to a value greater than 1, IOPS dispatches multiple tests to a thread pool and waits for completions as they arrive. Works with both `local` and `slurm` executors.
+
+Planner-aware behavior:
+- **Exhaustive / Random**: Supports any degree of parallelism (tests are independent).
+- **Bayesian**: Always capped to 1 (the optimizer's ask/tell cycle is strictly sequential). A warning is logged if a higher value is requested.
+- **Adaptive**: Parallelism is capped to the number of independent probes (one per swept-variable combination). Tests within a single probe remain sequential.
+
+Ignored in single-allocation mode (`slurm_options.allocation.mode: "single"`).
 
 ---
 

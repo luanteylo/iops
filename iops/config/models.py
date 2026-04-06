@@ -246,6 +246,7 @@ class BenchmarkConfig:
     create_folders_upfront: bool = False  # Create all exec folders at start (enables SKIPPED status visibility)
     trace_resources: bool = False  # DEPRECATED: use probes.resource_sampling
     trace_interval: float = 1.0  # DEPRECATED: use probes.sampling_interval
+    parallel: int = 1  # Max concurrent test executions (1 = sequential)
 
 
 @dataclass

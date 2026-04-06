@@ -200,6 +200,14 @@ benchmark:
   # END SLURM-ONLY CONFIGURATION
   # ===========================================================================
 
+  # Optional: Maximum number of tests to run concurrently (default: 1 = sequential)
+  # Can be overridden with --parallel N CLI argument.
+  # Works with both local and SLURM executors.
+  # Planner-aware: Bayesian search is always sequential (capped to 1).
+  # Adaptive search parallelizes across independent probes.
+  # Ignored in single-allocation mode.
+  # parallel: 4
+
   # Optional: Random seed for reproducible random operations (default: None)
   # Used by random and bayesian search methods
   random_seed: 42

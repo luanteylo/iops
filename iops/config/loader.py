@@ -70,6 +70,7 @@ ALLOWED_BENCHMARK_KEYS = {
     # Deprecated fields (use probes.* instead) - kept for backwards compatibility
     "collect_system_info", "track_executions", "create_folders_upfront",
     "trace_resources", "trace_interval",
+    "parallel",
 }
 
 ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "sampling_interval"}
@@ -1069,6 +1070,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         create_folders_upfront=b.get("create_folders_upfront", False),
         trace_resources=probes_config.resource_sampling,
         trace_interval=probes_config.sampling_interval,
+        parallel=int(b.get("parallel", 1)),
     )
 
     # ---- vars ----
@@ -1717,6 +1719,8 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError("benchmark.workdir must be a directory")
     if cfg.benchmark.repetitions is not None and cfg.benchmark.repetitions < 1:
         raise ConfigValidationError("benchmark.repetitions must be >= 1")
+    if cfg.benchmark.parallel < 1:
+        raise ConfigValidationError("benchmark.parallel must be >= 1")
 
     # search_method: exhaustive, random, or bayesian
     if cfg.benchmark.search_method is not None:

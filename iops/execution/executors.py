@@ -795,9 +795,11 @@ class SlurmExecutor(BaseExecutor):
         test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
         # Unregister job from runner tracking (job completed, no need to cancel)
-        if self.runner and hasattr(self.runner, 'submitted_job_ids') and job_id in self.runner.submitted_job_ids:
-            self.runner.submitted_job_ids.discard(job_id)
-            self.logger.debug(f"  [JobTracker] Unregistered completed job {job_id} (remaining tracked: {len(self.runner.submitted_job_ids)})")
+        if self.runner and hasattr(self.runner, '_jobs_lock'):
+            with self.runner._jobs_lock:
+                self.runner.submitted_job_ids.discard(job_id)
+                remaining = len(self.runner.submitted_job_ids)
+            self.logger.debug(f"  [JobTracker] Unregistered completed job {job_id} (remaining tracked: {remaining})")
 
         # 1) Prefer scontrol (best SLURM-native final status without accounting)
         info = self._scontrol_info(job_id)

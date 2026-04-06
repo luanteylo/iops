@@ -4,6 +4,16 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [3.5.4] - 2026-04-06
+
+### Added
+- Parallel test execution via `benchmark.parallel` config field and `--parallel N` CLI flag
+  - Run multiple tests concurrently using a thread pool (works with both local and SLURM executors)
+  - Planner-aware: Exhaustive and Random support unlimited parallelism, Bayesian is capped to 1 (sequential), Adaptive parallelizes across independent probes
+  - Thread-safe budget tracking, result writing, cache access, and SLURM job management
+  - Incompatible with single-allocation mode (ignored with a warning)
+- `BasePlanner.max_parallel()` and `BasePlanner.next_tests(n)` methods for planner parallelism negotiation
+
 ## [3.5.3] - 2026-03-31
 
 This release introduces GPU monitoring support to the IOPS probe system, enabling

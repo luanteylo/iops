@@ -52,6 +52,7 @@ Runs the benchmark defined in the configuration file.
 - `--use-cache` - Skip tests with cached results
 - `--cache-only` - Only use cached results; skip tests not in cache (requires `cache_file`)
 - `--fail-fast` - Stop execution on first test failure
+- `--parallel N` - Max concurrent test executions (overrides `benchmark.parallel` in config)
 - `--machine NAME` - Apply machine-specific config overrides (or set `IOPS_MACHINE` env var)
 - `--max-core-hours N` - Set core-hours budget limit (SLURM only)
 - `--time-estimate SEC` - Estimated test duration in seconds
@@ -75,6 +76,9 @@ iops run benchmark.yaml --use-cache --log-level DEBUG
 
 # Cache-only mode: only use cached results, skip uncached tests
 iops run benchmark.yaml --cache-only
+
+# Run 4 tests concurrently
+iops run benchmark.yaml --parallel 4
 
 # With budget limit and time estimate
 iops run benchmark.yaml --max-core-hours 1000 --time-estimate 300
