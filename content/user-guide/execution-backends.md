@@ -9,7 +9,8 @@ IOPS supports two execution backends for running benchmarks: local execution and
 ## Table of Contents
 
 1. [Local Executor](#local-executor)
-2. [SLURM Executor](#slurm-executor)
+2. [Parallel Execution](#parallel-execution)
+3. [SLURM Executor](#slurm-executor)
    - [Budget Control](#budget-control) → [dedicated guide](../budget-control)
    - [Job Monitoring](#job-monitoring)
    - [Custom SLURM Commands](#custom-slurm-commands)
@@ -48,6 +49,42 @@ scripts:
       set -euo pipefail
       {{ command.template }}
 ```
+
+## Parallel Execution
+
+By default, IOPS runs tests sequentially (one at a time). You can run multiple tests concurrently by setting the `parallel` option:
+
+```yaml
+benchmark:
+  parallel: 4  # Run up to 4 tests at the same time
+```
+
+Or from the command line: `iops run config.yaml --parallel 4`
+
+The CLI flag overrides the YAML value.
+
+Parallel execution works with both `local` and `slurm` executors. With the local executor, multiple subprocesses run simultaneously. With SLURM, multiple jobs are submitted and polled concurrently, reducing total wall-clock time when queue wait is short.
+
+### Planner Compatibility
+
+Not all search methods support full parallelism. IOPS automatically caps the effective degree based on the planner:
+
+| Search Method | Max Parallelism | Reason |
+|---|---|---|
+| `exhaustive` | Unlimited | All tests are independent |
+| `random` | Unlimited | All tests are independent |
+| `bayesian` | 1 (sequential) | Optimizer needs results from each test to suggest the next |
+| `adaptive` | Number of probes | Each probe (one per swept-variable combination) is independent, but tests within a probe are sequential |
+
+When the requested degree exceeds what the planner supports, IOPS logs a warning and uses the planner's maximum.
+
+### Limitations
+
+- **Single-allocation mode** (`slurm_options.allocation.mode: "single"`) runs all tests in one SLURM job script and is incompatible with parallel execution. The `parallel` setting is ignored with a warning.
+- **Budget tracking** remains accurate under parallel execution. Core-hours are accumulated atomically as tests complete.
+- **Result ordering** in the output file may differ from sequential runs since tests complete in non-deterministic order.
+
+---
 
 ## SLURM Executor
 
