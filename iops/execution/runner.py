@@ -11,6 +11,7 @@ from typing import Optional, List, Set, Dict, Any
 from pathlib import Path
 from jinja2 import Template
 from datetime import datetime
+import concurrent.futures
 import json
 import signal
 import sys
@@ -20,6 +21,7 @@ import shutil
 import socket
 import glob
 import csv
+import threading
 
 # IOPS metadata filename
 METADATA_FILENAME = "__iops_run_metadata.json"
@@ -165,6 +167,39 @@ class IOPSRunner(HasLogger):
         # Register signal handler for Ctrl+C (SIGINT) if using SLURM executor
         if cfg.benchmark.executor == "slurm":
             signal.signal(signal.SIGINT, self._signal_handler)
+
+        # Parallel execution setup
+        cli_parallel = getattr(args, 'parallel', None)
+        # Guard against Mock objects from tests
+        if not isinstance(cli_parallel, int):
+            cli_parallel = None
+        config_parallel = cfg.benchmark.parallel
+        requested_parallel = cli_parallel if cli_parallel is not None else config_parallel
+        planner_max = self.planner.max_parallel()
+        self.effective_parallel = min(requested_parallel, planner_max)
+
+        # Kickoff mode is incompatible with parallel execution
+        if self.kickoff_mode and self.effective_parallel > 1:
+            self.logger.warning("parallel ignored in single-allocation mode (kickoff)")
+            self.effective_parallel = 1
+
+        if self.effective_parallel < requested_parallel:
+            self.logger.warning(
+                f"Planner '{cfg.benchmark.search_method}' limits parallelism "
+                f"to {self.effective_parallel} (requested: {requested_parallel})"
+            )
+
+        if self.effective_parallel > 1:
+            self.logger.info(f"Parallel execution: {self.effective_parallel} concurrent tests")
+
+        # Thread safety locks for parallel execution
+        self._jobs_lock = threading.Lock()
+        self._writer_lock = threading.Lock()
+        self._cache_lock = threading.Lock()
+        self._budget_lock = threading.Lock()
+
+        # Thread pool (created in run(), stored for signal handler access)
+        self._thread_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
 
     def _is_kickoff_mode(self) -> bool:
         """
@@ -741,19 +776,27 @@ class IOPSRunner(HasLogger):
 
         self.logger.info("-" * 70)
 
-        if not self.submitted_job_ids:
+        # Shut down thread pool if running
+        if self._thread_pool is not None:
+            self._thread_pool.shutdown(wait=False, cancel_futures=True)
+
+        # Snapshot job IDs under lock to avoid races with executor threads
+        with self._jobs_lock:
+            jobs_snapshot = list(self.submitted_job_ids)
+
+        if not jobs_snapshot:
             self.logger.info("No SLURM jobs to cancel")
             self.logger.info("Exiting...")
             sys.exit(0)
 
-        self.logger.info(f"Canceling {len(self.submitted_job_ids)} submitted SLURM job(s)...")
+        self.logger.info(f"Canceling {len(jobs_snapshot)} submitted SLURM job(s)...")
 
         # Cancel all submitted jobs
         failed_cancellations = []
         # Get cancel command template from executor (handles command wrappers)
         cancel_cmd_template = getattr(self.executor, 'cmd_cancel', 'scancel {job_id}')
 
-        for job_id in self.submitted_job_ids:
+        for job_id in jobs_snapshot:
             try:
                 self.logger.info(f"  Canceling job {job_id}...")
                 # Format the command template with job_id
@@ -791,7 +834,7 @@ class IOPSRunner(HasLogger):
             manual_cmd = cancel_cmd_template.replace('{job_id}', '<job_id>')
             self.logger.warning(f"You may need to cancel them manually with: {manual_cmd}")
         else:
-            self.logger.info(f"\n✓ All {len(self.submitted_job_ids)} job(s) canceled successfully")
+            self.logger.info(f"\n✓ All {len(jobs_snapshot)} job(s) canceled successfully")
 
         self.logger.info("=" * 70)
         self.logger.info("Cleanup complete - Exiting")
@@ -799,8 +842,10 @@ class IOPSRunner(HasLogger):
 
     def register_slurm_job(self, job_id: str):
         """Register a submitted SLURM job ID for cleanup on interrupt."""
-        self.submitted_job_ids.add(job_id)
-        self.logger.debug(f"  [JobTracker] Registered SLURM job {job_id} (total tracked: {len(self.submitted_job_ids)})")
+        with self._jobs_lock:
+            self.submitted_job_ids.add(job_id)
+            count = len(self.submitted_job_ids)
+        self.logger.debug(f"  [JobTracker] Registered SLURM job {job_id} (total tracked: {count})")
 
     def _validate_cached_metrics(self, cached_metrics: dict) -> bool:
         """
@@ -1232,7 +1277,8 @@ class IOPSRunner(HasLogger):
                     else:
                         self.logger.warning(f"  Failed to cancel job {job_id}: {result.stderr.strip()}")
 
-                self.submitted_job_ids.discard(job_id)
+                with self._jobs_lock:
+                    self.submitted_job_ids.discard(job_id)
 
             except subprocess.TimeoutExpired:
                 self.logger.warning(f"  Timeout cancelling job {job_id}")
@@ -1648,25 +1694,201 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"  • Metadata: {self.cfg.benchmark.workdir / METADATA_FILENAME}")
         self.logger.info("=" * 70)
 
-    def run(self):
-        # Record benchmark start time (class attribute for signal handler access)
-        self.benchmark_start_time = datetime.now()
+    # ------------------------------------------------------------------ #
+    # Cache check helper (used by both sequential and parallel paths)
+    # ------------------------------------------------------------------ #
 
-        self.logger.info("=" * 70)
-        self.logger.info(f"Starting IOPS Runner: {self.cfg.benchmark.name}")
-        self.logger.info(f"Benchmark start time: {self.benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        self.logger.info("=" * 70)
+    def _try_cache_read(self, test) -> bool:
+        """
+        Try to load test result from cache.
 
-        test_count = 0
+        Returns True if cache hit (test metadata populated), False otherwise.
+        """
+        if not (self.cache and self.use_cache_reads):
+            return False
 
+        cached_result = self.cache.get_cached_result(
+            params=test.vars,
+            repetition=test.repetition,
+        )
+
+        if cached_result:
+            if not self._validate_cached_metrics(cached_result['metrics']):
+                self.cache_misses += 1
+                self.logger.debug(f"  [Cache] MISS: Cached result missing required metrics")
+                return False
+
+            self.cache_hits += 1
+            test.metadata.update(cached_result['metadata'])
+            test.metadata['metrics'] = cached_result['metrics']
+            test.metadata['__cached'] = True
+            test.metadata['__cached_at'] = cached_result['cached_at']
+
+            metrics_preview = ", ".join(list(cached_result['metrics'].keys())[:3])
+            if len(cached_result['metrics']) > 3:
+                metrics_preview += f" (+{len(cached_result['metrics'])-3} more)"
+
+            self.logger.debug(
+                f"  [Cache] HIT: Loaded from cache (cached_at={cached_result['cached_at']}) "
+                f"metrics=[{metrics_preview}]"
+            )
+            return True
+        else:
+            self.cache_misses += 1
+            self.logger.debug(f"  [Cache] MISS: Will execute and cache result")
+            return False
+
+    def _execute_and_cache(self, test) -> None:
+        """
+        Submit test to executor, wait for completion, and store in cache.
+
+        This is the unit of work that runs in a thread during parallel execution.
+        For sequential execution, it is called directly from the main thread.
+        """
+        # Write initial status before execution starts
+        probes = self.cfg.benchmark.probes
+        execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+        if execution_index:
+            self._write_status_file(test, status=self.executor.INITIAL_STATUS)
+
+        self.executor.submit(test)
+        self.executor.wait_and_collect(test)
+
+        # Store in cache if configured and execution succeeded
+        if self.cache and test.metadata.get("__executor_status") == self.executor.STATUS_SUCCEEDED:
+            with self._cache_lock:
+                self.cache.store_result(
+                    params=test.vars,
+                    repetition=test.repetition,
+                    metrics=test.metadata.get('metrics', {}),
+                    metadata={
+                        k: v for k, v in test.metadata.items()
+                        if k not in ['metrics']
+                    },
+                )
+
+    def _process_completed(self, test, test_number: int, used_cache: bool) -> bool:
+        """
+        Post-completion processing for a test (always runs in main thread).
+
+        Returns True if execution should stop (fail-fast triggered).
+        """
+        # Write status file for 'iops find' command
+        probes = self.cfg.benchmark.probes
+        execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+        if execution_index:
+            self._write_status_file(test)
+
+        # Log test summary
+        status = test.metadata.get("__executor_status", "UNKNOWN")
+        cache_marker = "[CACHED]" if used_cache else "[EXECUTED]"
+
+        self.logger.debug(
+            f"  [Result] Status={status} cached={used_cache} "
+            f"metrics_count={len(test.metadata.get('metrics', {}))}"
+        )
+
+        if self.args.log_level.upper() == 'DEBUG' and not used_cache:
+            self.logger.debug("-" * 80)
+            self.logger.debug(test.describe())
+            self.logger.debug("-" * 80)
+
+        if self.args.log_level.upper() != 'DEBUG':
+            metrics_str = ""
+            if test.metadata.get('metrics'):
+                metrics = test.metadata['metrics']
+                metrics_preview = ", ".join([f"{k}={v}" for k, v in list(metrics.items())[:3]])
+                if len(metrics) > 3:
+                    metrics_preview += f", ... ({len(metrics)} total)"
+                metrics_str = f" | {metrics_preview}"
+
+            self.logger.info(
+                f"[{test_number:3d}] {test.execution_id} (rep {test.repetition}/{test.repetitions}) "
+                f"→ {status} {cache_marker}{metrics_str}"
+            )
+
+        # Check for fail-fast mode
+        if getattr(self.args, 'fail_fast', False) and status in ("FAILED", "ERROR"):
+            self.logger.error("=" * 70)
+            self.logger.error(f"Test failed and --fail-fast is enabled. Stopping execution.")
+            self.logger.error("=" * 70)
+            with self._writer_lock:
+                save_test_execution(test)
+            self._track_system_info(test)
+            self.planner.record_completed_test(test)
+            self.completed_tests.append(test)
+            return True  # signal stop
+
+        # Save result
+        with self._writer_lock:
+            save_test_execution(test)
+
+        self._track_system_info(test)
+
+        if self.actual_output_path is None:
+            self.actual_output_path = getattr(test, "output_path", None)
+
+        self.planner.record_completed_test(test)
+        self.completed_tests.append(test)
+
+        # Track core-hours
+        core_hours_used = self._compute_core_hours(test)
+        with self._budget_lock:
+            if used_cache:
+                self.saved_core_hours += core_hours_used
+            else:
+                self.accumulated_core_hours += core_hours_used
+
+        return False  # continue
+
+    def _show_progress(self, test_count: int) -> None:
+        """Display progress and budget information periodically."""
+        progress = self.planner.get_progress()
+        show_progress = (
+            test_count % 10 == 0 or
+            progress['percentage'] in [25, 50, 75] or
+            progress['remaining'] == 0
+        )
+
+        if show_progress and progress['total'] > 0:
+            progress_bar = self._make_progress_bar(progress['percentage'])
+            self.logger.info("-" * 70)
+            self.logger.info(f"Progress: {progress_bar} {progress['percentage']:.1f}%")
+            self.logger.info(f"  Completed: {progress['completed']}/{progress['total']} tests ({progress['remaining']} remaining)")
+
+            if self.max_core_hours is not None:
+                used_pct = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
+                remaining_budget = self.max_core_hours - self.accumulated_core_hours
+                saved_str = f", {self.saved_core_hours:.2f} saved by cache" if self.saved_core_hours > 0 else ""
+                self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} ({used_pct:.1f}% used, {remaining_budget:.2f} remaining{saved_str})")
+            else:
+                saved_str = f", {self.saved_core_hours:.2f} saved by cache" if self.saved_core_hours > 0 else ""
+                self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}{saved_str}")
+
+            self.logger.info("-" * 70)
+
+    def _budget_exceeded_check(self) -> bool:
+        """Check if budget limit has been reached. Thread-safe."""
+        if self.max_core_hours is None:
+            return False
+        with self._budget_lock:
+            exceeded = self.accumulated_core_hours >= self.max_core_hours
+        if exceeded:
+            self.budget_exceeded = True
+            self.logger.warning("=" * 70)
+            self.logger.warning(f"Budget limit reached: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours")
+            self.logger.warning("Stopping execution of further tests.")
+            self.logger.warning("=" * 70)
+        return exceeded
+
+    # ------------------------------------------------------------------ #
+    # Sequential execution (parallel=1, original behavior)
+    # ------------------------------------------------------------------ #
+
+    def _run_sequential(self, test_count: int) -> int:
+        """Run tests one at a time (original behavior)."""
         while True:
-            # Check budget before scheduling next test
-            if self.max_core_hours is not None and self.accumulated_core_hours >= self.max_core_hours:
-                self.budget_exceeded = True
-                self.logger.warning("=" * 70)
-                self.logger.warning(f"Budget limit reached: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours")
-                self.logger.warning("Stopping execution of further tests.")
-                self.logger.warning("=" * 70)
+            if self._budget_exceeded_check():
                 break
 
             test = self.planner.next_test()
@@ -1675,53 +1897,15 @@ class IOPSRunner(HasLogger):
 
             test_count += 1
 
-            # Log test start
             self.logger.debug(
                 f"[Test {test_count:3d}] Starting: exec_id={test.execution_id} "
                 f"rep={test.repetition}/{test.repetitions}"
             )
 
-            # Check cache if reads are enabled
-            used_cache = False
-            if self.cache and self.use_cache_reads:
-                cached_result = self.cache.get_cached_result(
-                    params=test.vars,
-                    repetition=test.repetition,
-                )
+            used_cache = self._try_cache_read(test)
 
-                if cached_result:
-                    # Validate that cached metrics contain all expected metrics
-                    if not self._validate_cached_metrics(cached_result['metrics']):
-                        # Cached result is incomplete, treat as cache miss
-                        self.cache_misses += 1
-                        self.logger.debug(f"  [Cache] MISS: Cached result missing required metrics")
-                        cached_result = None  # Will trigger execution below
-                    else:
-                        # Use cached result
-                        self.cache_hits += 1
-                        used_cache = True
-
-                        # Populate test with cached data
-                        test.metadata.update(cached_result['metadata'])
-                        test.metadata['metrics'] = cached_result['metrics']
-                        test.metadata['__cached'] = True
-                        test.metadata['__cached_at'] = cached_result['cached_at']
-
-                        metrics_preview = ", ".join(list(cached_result['metrics'].keys())[:3])
-                        if len(cached_result['metrics']) > 3:
-                            metrics_preview += f" (+{len(cached_result['metrics'])-3} more)"
-
-                        self.logger.debug(
-                            f"  [Cache] HIT: Loaded from cache (cached_at={cached_result['cached_at']}) "
-                            f"metrics=[{metrics_preview}]"
-                        )
-                else:
-                    self.cache_misses += 1
-                    self.logger.debug(f"  [Cache] MISS: Will execute and cache result")
-
-            # Execute if not using cache
             if not used_cache:
-                # In cache-only mode, skip execution for tests not in cache
+                # Cache-only mode: skip uncached tests
                 if self.cache_only:
                     self.skipped_cache_only += 1
                     test.metadata['__executor_status'] = 'SKIPPED'
@@ -1734,133 +1918,139 @@ class IOPSRunner(HasLogger):
                     execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
                     if execution_index:
                         self._write_status_file(test, status='SKIPPED')
-                    # Still notify planner so it can aggregate available repetitions
                     self.planner.record_completed_test(test)
                     continue
 
-                # Write initial status before execution starts
-                # Local executor: RUNNING (runs immediately)
-                # SLURM executor: PENDING (job goes to queue first)
-                probes = self.cfg.benchmark.probes
-                execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
-                if execution_index:
-                    self._write_status_file(test, status=self.executor.INITIAL_STATUS)
+                self._execute_and_cache(test)
 
-                self.executor.submit(test)
-                self.executor.wait_and_collect(test)
-
-                # Store in cache if configured and execution succeeded
-                if self.cache and test.metadata.get("__executor_status") == self.executor.STATUS_SUCCEEDED:
-                    self.cache.store_result(
-                        params=test.vars,
-                        repetition=test.repetition,
-                        metrics=test.metadata.get('metrics', {}),
-                        metadata={
-                            k: v for k, v in test.metadata.items()
-                            if k not in ['metrics']  # Don't duplicate metrics
-                        },
-                    )
-
-            # Write status file for 'iops find' command (for both executed and cached results)
-            # Can be disabled with probes.execution_index: false to reduce file I/O
-            probes = self.cfg.benchmark.probes
-            execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
-            if execution_index:
-                self._write_status_file(test)
-
-            # Log test summary (clean single-line output at INFO level)
-            status = test.metadata.get("__executor_status", "UNKNOWN")
-            cache_marker = "[CACHED]" if used_cache else "[EXECUTED]"
-
-            # Full execution details at DEBUG level
-            self.logger.debug(
-                f"  [Result] Status={status} cached={used_cache} "
-                f"metrics_count={len(test.metadata.get('metrics', {}))}"
-            )
-
-            if self.args.log_level.upper() == 'DEBUG' and not used_cache:
-                # Detailed execution info for executed tests only (cached tests don't have new execution details)
-                self.logger.debug("-" * 80)
-                self.logger.debug(test.describe())
-                self.logger.debug("-" * 80)
-
-            if self.args.log_level.upper() != 'DEBUG':
-                # Clean single-line output for INFO
-                metrics_str = ""
-                if test.metadata.get('metrics'):
-                    metrics = test.metadata['metrics']
-                    # Show first 3 metrics as preview
-                    metrics_preview = ", ".join([f"{k}={v}" for k, v in list(metrics.items())[:3]])
-                    if len(metrics) > 3:
-                        metrics_preview += f", ... ({len(metrics)} total)"
-                    metrics_str = f" | {metrics_preview}"
-
-                self.logger.info(
-                    f"[{test_count:3d}] {test.execution_id} (rep {test.repetition}/{test.repetitions}) "
-                    f"→ {status} {cache_marker}{metrics_str}"
-                )
-
-            # Check for fail-fast mode
-            if getattr(self.args, 'fail_fast', False) and status in ("FAILED", "ERROR"):
-                self.logger.error("=" * 70)
-                self.logger.error(f"Test failed and --fail-fast is enabled. Stopping execution.")
-                self.logger.error("=" * 70)
-                # Still save this test before breaking
-                save_test_execution(test)
-                self._track_system_info(test)
-                self.planner.record_completed_test(test)
-                self.completed_tests.append(test)
+            should_stop = self._process_completed(test, test_count, used_cache)
+            if should_stop:
                 break
 
-            # Add test to output file
-            save_test_execution(test)
+            self._show_progress(test_count)
 
-            # Track system info from compute node (if collected)
-            self._track_system_info(test)
+        return test_count
 
-            # Track actual output path from first test (for final summary)
-            if self.actual_output_path is None:
-                self.actual_output_path = getattr(test, "output_path", None)
+    # ------------------------------------------------------------------ #
+    # Parallel execution (parallel>1, batch-dispatch pattern)
+    # ------------------------------------------------------------------ #
 
-            # Record completed test (used by Bayesian planner for optimization)
-            self.planner.record_completed_test(test)
+    def _run_parallel(self, test_count: int) -> int:
+        """Run tests with concurrent execution using a thread pool."""
+        pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.effective_parallel
+        )
+        self._thread_pool = pool
 
-            # Track completed tests for resource trace aggregation
-            self.completed_tests.append(test)
+        # Map future -> (test, test_number, used_cache)
+        in_flight: Dict[concurrent.futures.Future, tuple] = {}
 
-            # Track core-hours (always, for reporting even without budget)
-            core_hours_used = self._compute_core_hours(test)
-            if used_cache:
-                self.saved_core_hours += core_hours_used
-            else:
-                self.accumulated_core_hours += core_hours_used
+        try:
+            while True:
+                if self._budget_exceeded_check():
+                    break
 
-            # Display progress and budget information periodically
-            progress = self.planner.get_progress()
-            show_progress = (
-                test_count % 10 == 0 or  # Every 10 tests
-                progress['percentage'] in [25, 50, 75] or  # At milestone percentages
-                progress['remaining'] == 0  # Last test
-            )
+                # Fill available slots
+                available = self.effective_parallel - len(in_flight)
+                if available > 0:
+                    batch = self.planner.next_tests(available)
+                    for test in batch:
+                        test_count += 1
 
-            if show_progress and progress['total'] > 0:
-                progress_bar = self._make_progress_bar(progress['percentage'])
-                self.logger.info("-" * 70)
-                self.logger.info(f"Progress: {progress_bar} {progress['percentage']:.1f}%")
-                self.logger.info(f"  Completed: {progress['completed']}/{progress['total']} tests ({progress['remaining']} remaining)")
+                        self.logger.debug(
+                            f"[Test {test_count:3d}] Starting: exec_id={test.execution_id} "
+                            f"rep={test.repetition}/{test.repetitions}"
+                        )
 
-                # Show core-hour usage (with budget info if configured)
-                if self.max_core_hours is not None:
-                    used_pct = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
-                    remaining_budget = self.max_core_hours - self.accumulated_core_hours
-                    saved_str = f", {self.saved_core_hours:.2f} saved by cache" if self.saved_core_hours > 0 else ""
-                    self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}/{self.max_core_hours:.2f} ({used_pct:.1f}% used, {remaining_budget:.2f} remaining{saved_str})")
-                else:
-                    # Show core-hours without budget
-                    saved_str = f", {self.saved_core_hours:.2f} saved by cache" if self.saved_core_hours > 0 else ""
-                    self.logger.info(f"  Core-hours: {self.accumulated_core_hours:.2f}{saved_str}")
+                        # Cache check in main thread (fast, avoids thread overhead)
+                        used_cache = self._try_cache_read(test)
 
-                self.logger.info("-" * 70)
+                        if used_cache:
+                            should_stop = self._process_completed(test, test_count, used_cache=True)
+                            if should_stop:
+                                self._cancel_in_flight(in_flight)
+                                return test_count
+                            self._show_progress(test_count)
+                            continue
+
+                        # Cache-only mode: skip uncached tests
+                        if self.cache_only:
+                            self.skipped_cache_only += 1
+                            test.metadata['__executor_status'] = 'SKIPPED'
+                            test.metadata['__skip_reason'] = 'Not in cache (cache-only mode)'
+                            self.logger.info(
+                                f"[{test_count:3d}] {test.execution_id} (rep {test.repetition}/{test.repetitions}) "
+                                f"-> SKIPPED (not in cache)"
+                            )
+                            probes = self.cfg.benchmark.probes
+                            execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+                            if execution_index:
+                                self._write_status_file(test, status='SKIPPED')
+                            self.planner.record_completed_test(test)
+                            continue
+
+                        # Submit to thread pool
+                        future = pool.submit(self._execute_and_cache, test)
+                        in_flight[future] = (test, test_count)
+
+                if not in_flight:
+                    break  # nothing running, nothing to schedule
+
+                # Wait for first completion
+                done, _ = concurrent.futures.wait(
+                    in_flight.keys(),
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                for future in done:
+                    test, t_num = in_flight.pop(future)
+                    try:
+                        future.result()  # propagate exceptions
+                    except Exception as exc:
+                        self.logger.error(f"Test {test.execution_id} raised exception: {exc}")
+                        test.metadata['__executor_status'] = 'ERROR'
+                        test.metadata['__error'] = str(exc)
+
+                    should_stop = self._process_completed(test, t_num, used_cache=False)
+                    if should_stop:
+                        self._cancel_in_flight(in_flight)
+                        return test_count
+
+                    self._show_progress(test_count)
+
+        finally:
+            pool.shutdown(wait=True)
+            self._thread_pool = None
+
+        return test_count
+
+    def _cancel_in_flight(self, in_flight: dict) -> None:
+        """Cancel all in-flight futures (used for fail-fast and budget exceeded)."""
+        for future in in_flight:
+            future.cancel()
+        # Wait for non-cancelled futures to complete
+        for future, (test, t_num) in list(in_flight.items()):
+            if not future.cancelled():
+                try:
+                    future.result(timeout=5)
+                except Exception:
+                    pass
+
+    def run(self):
+        # Record benchmark start time (class attribute for signal handler access)
+        self.benchmark_start_time = datetime.now()
+
+        self.logger.info("=" * 70)
+        self.logger.info(f"Starting IOPS Runner: {self.cfg.benchmark.name}")
+        self.logger.info(f"Benchmark start time: {self.benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info("=" * 70)
+
+        test_count = 0
+
+        if self.effective_parallel > 1:
+            test_count = self._run_parallel(test_count)
+        else:
+            test_count = self._run_sequential(test_count)
 
         # Final statistics
         self.logger.info("=" * 70)

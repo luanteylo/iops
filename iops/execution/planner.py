@@ -21,6 +21,7 @@ from collections import defaultdict
 import logging
 import random
 import json
+import sys
 import warnings
 import copy
 
@@ -536,6 +537,33 @@ class BasePlanner(ABC, HasLogger):
     @abstractmethod
     def next_test(self) -> Any:
         pass
+
+    def next_tests(self, n: int) -> list:
+        """
+        Request up to n tests for parallel execution.
+
+        Default implementation calls next_test() up to n times.
+        Subclasses may override for smarter batching.
+
+        Returns:
+            List of ExecutionInstance objects (may be shorter than n).
+        """
+        batch = []
+        for _ in range(n):
+            test = self.next_test()
+            if test is None:
+                break
+            batch.append(test)
+        return batch
+
+    def max_parallel(self) -> int:
+        """
+        Maximum parallelism this planner supports.
+
+        Returns sys.maxsize by default (unlimited). Planners with
+        sequential dependencies should override to return a lower value.
+        """
+        return sys.maxsize
 
     @abstractmethod
     def record_completed_test(self, test: Any) -> None:
@@ -2343,6 +2371,9 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         return result
 
+    def max_parallel(self) -> int:
+        return 1
+
     def next_test(self) -> Optional[ExecutionInstance]:
         """
         Return the next test to execute.
@@ -2986,6 +3017,9 @@ class AdaptivePlanner(BasePlanner, HasLogger):
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
+
+    def max_parallel(self) -> int:
+        return len(self._probes)
 
     def next_test(self) -> Optional[ExecutionInstance]:
         """

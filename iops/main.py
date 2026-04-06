@@ -136,6 +136,8 @@ Examples:
                             help="Only use cached results; skip tests not in cache (requires cache_file)")
     run_parser.add_argument('--fail-fast', action='store_true',
                             help="Stop execution on first test failure")
+    run_parser.add_argument('--parallel', type=int, default=None, metavar='N',
+                            help="Max concurrent test executions (overrides config)")
     run_parser.add_argument('--machine', type=str, default=None, metavar='NAME',
                             help="Apply machine-specific config overrides (or set IOPS_MACHINE env var)")
     run_parser.add_argument('--meline', action='store_true',
