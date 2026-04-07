@@ -1997,6 +1997,14 @@ class IOPSRunner(HasLogger):
                 if not in_flight and not batch:
                     break  # planner exhausted and nothing running
 
+                # If there are open slots and the planner likely has more tests,
+                # loop back to fill slots before blocking on wait
+                if in_flight and len(in_flight) < self.effective_parallel and batch:
+                    continue
+
+                if not in_flight:
+                    continue  # all were cache hits, loop to get more
+
                 # Wait for first completion
                 done, _ = concurrent.futures.wait(
                     in_flight.keys(),
