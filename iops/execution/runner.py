@@ -1952,6 +1952,7 @@ class IOPSRunner(HasLogger):
 
                 # Fill available slots
                 available = self.effective_parallel - len(in_flight)
+                batch = []
                 if available > 0:
                     batch = self.planner.next_tests(available)
                     for test in batch:
@@ -1993,8 +1994,8 @@ class IOPSRunner(HasLogger):
                         future = pool.submit(self._execute_and_cache, test)
                         in_flight[future] = (test, test_count)
 
-                if not in_flight:
-                    break  # nothing running, nothing to schedule
+                if not in_flight and not batch:
+                    break  # planner exhausted and nothing running
 
                 # Wait for first completion
                 done, _ = concurrent.futures.wait(

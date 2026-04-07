@@ -495,6 +495,85 @@ class TestParallelEndToEnd:
             result = int(row["metrics.result"])
             assert result == size
 
+    def test_parallel_with_partial_cache_hits(self, tmp_path):
+        """Parallel run processes all tests even when some are cache hits."""
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        cache_db = tmp_path / "cache.db"
+
+        config_data = {
+            "benchmark": {
+                "name": "Parallel Cache Test",
+                "workdir": str(workdir),
+                "executor": "local",
+                "repetitions": 1,
+                "parallel": 2,
+                "cache_file": str(cache_db),
+            },
+            "vars": {
+                "size": {
+                    "type": "int",
+                    "sweep": {"mode": "list", "values": [1, 2, 3, 4, 5, 6]},
+                }
+            },
+            "command": {"template": "echo size={{ size }}"},
+            "scripts": [
+                {
+                    "name": "run",
+                    "script_template": (
+                        "#!/bin/bash\n"
+                        "echo \"val: {{ size }}\" > {{ execution_dir }}/out.txt\n"
+                    ),
+                    "parser": {
+                        "file": "{{ execution_dir }}/out.txt",
+                        "metrics": [{"name": "val"}],
+                        "parser_script": (
+                            "def parse(fp):\n"
+                            "    with open(fp) as f:\n"
+                            "        return {'val': int(f.read().split(':')[1])}\n"
+                        ),
+                    },
+                }
+            ],
+            "output": {
+                "sink": {
+                    "type": "csv",
+                }
+            },
+        }
+
+        # First run: executes all 6 tests and populates cache
+        config_file = _write_yaml(tmp_path / "cfg.yaml", config_data)
+        config = load_config(config_file)
+        args = _make_args()
+        runner = IOPSRunner(config, args)
+        runner.run()
+
+        # Default CSV path is {{ workdir }}/results.csv (resolved to run dir)
+        first_output = Path(config.benchmark.workdir) / "results.csv"
+        assert first_output.exists(), f"First run CSV not found at {first_output}"
+        with open(first_output) as fh:
+            first_rows = list(csv.DictReader(fh))
+        assert len(first_rows) == 6
+
+        # Second run with --use-cache: all 6 should be cache hits
+        config_data["benchmark"]["workdir"] = str(tmp_path / "workdir2")
+        (tmp_path / "workdir2").mkdir()
+        config_file2 = _write_yaml(tmp_path / "cfg2.yaml", config_data)
+        config2 = load_config(config_file2)
+        args2 = _make_args(use_cache=True)
+        runner2 = IOPSRunner(config2, args2)
+        runner2.run()
+
+        second_output = Path(config2.benchmark.workdir) / "results.csv"
+        assert second_output.exists(), f"Second run CSV not found at {second_output}"
+        with open(second_output) as fh:
+            second_rows = list(csv.DictReader(fh))
+
+        # All 6 tests must be present, not just the first batch of 2
+        assert len(second_rows) == 6
+        assert runner2.cache_hits == 6
+
     def test_parallel_vs_sequential_produce_same_row_count(self, tmp_path):
         """Parallel and sequential executions produce the same number of result rows."""
 
