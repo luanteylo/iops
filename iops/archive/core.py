@@ -338,10 +338,13 @@ class ArchiveWriter(HasLogger):
         if item_name == "__iops_index.json":
             return False
 
-        # Check if this is a result file
-        if item.is_file() and item.suffix.lower() in (".csv", ".parquet", ".db", ".sqlite", ".sqlite3"):
-            if not item_name.startswith("__iops_"):
-                return False
+        # Skip IOPS result files at the run root level (we use filtered versions).
+        # Only applies to direct children of the source path, not files deep
+        # inside execution directories (e.g., application output CSVs).
+        if item.is_file() and item.parent == self.source_path:
+            if item.suffix.lower() in (".csv", ".parquet", ".db", ".sqlite", ".sqlite3"):
+                if not item_name.startswith("__iops_"):
+                    return False
 
         # Check if this is an execution directory
         if item.is_dir() and item_name.startswith("exec_"):
