@@ -11,4 +11,44 @@
   color: #f5f5f5 !important;
   background-color: #1a252f !important;
 }
+
+/* Collapsible sections (details/summary) */
+details {
+  margin: 0.8em 0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fafafa;
+}
+details[open] {
+  background: #fff;
+}
+details summary {
+  padding: 0.6em 1em;
+  cursor: pointer;
+  color: #2c3e50;
+  background: #f0f4f8;
+  border-radius: 4px;
+  list-style: none;
+  position: relative;
+  padding-left: 2em;
+}
+details summary::-webkit-details-marker {
+  display: none;
+}
+details summary::before {
+  content: "\25B6";
+  position: absolute;
+  left: 0.7em;
+  font-size: 0.75em;
+  transition: transform 0.2s;
+}
+details[open] > summary::before {
+  transform: rotate(90deg);
+}
+details summary:hover {
+  background: #e4eaf0;
+}
+details > *:not(summary) {
+  padding: 0 1em;
+}
 </style>
