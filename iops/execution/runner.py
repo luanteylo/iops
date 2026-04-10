@@ -1844,17 +1844,30 @@ class IOPSRunner(HasLogger):
     def _show_progress(self, test_count: int) -> None:
         """Display progress and budget information periodically."""
         progress = self.planner.get_progress()
+        total = progress['total']
+
+        # In parallel mode, planner's attempt_count includes in-flight tests.
+        # Use actual completions (completed_tests + cache hits + skipped) for
+        # an accurate display.
+        if self.effective_parallel > 1:
+            completed = len(self.completed_tests) + self.skipped_cache_only
+        else:
+            completed = progress['completed']
+
+        remaining = max(0, total - completed)
+        percentage = (completed / total * 100) if total > 0 else 0
+
         show_progress = (
             test_count % 10 == 0 or
-            progress['percentage'] in [25, 50, 75] or
-            progress['remaining'] == 0
+            int(percentage) in [25, 50, 75] or
+            remaining == 0
         )
 
-        if show_progress and progress['total'] > 0:
-            progress_bar = self._make_progress_bar(progress['percentage'])
+        if show_progress and total > 0:
+            progress_bar = self._make_progress_bar(percentage)
             self.logger.info("-" * 70)
-            self.logger.info(f"Progress: {progress_bar} {progress['percentage']:.1f}%")
-            self.logger.info(f"  Completed: {progress['completed']}/{progress['total']} tests ({progress['remaining']} remaining)")
+            self.logger.info(f"Progress: {progress_bar} {percentage:.1f}%")
+            self.logger.info(f"  Completed: {completed}/{total} tests ({remaining} remaining)")
 
             if self.max_core_hours is not None:
                 used_pct = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
@@ -1945,6 +1958,10 @@ class IOPSRunner(HasLogger):
         # Map future -> (test, test_number, used_cache)
         in_flight: Dict[concurrent.futures.Future, tuple] = {}
 
+        # Drain-phase flag: set once when the planner is exhausted but
+        # in-flight tests remain. Used to log a clear "waiting" message.
+        drain_logged = False
+
         try:
             while True:
                 if self._budget_exceeded_check():
@@ -2004,6 +2021,19 @@ class IOPSRunner(HasLogger):
 
                 if not in_flight:
                     continue  # all were cache hits, loop to get more
+
+                # Drain phase: planner is exhausted but some tests are still
+                # running. Inform the user once so the runner doesn't appear hung.
+                if not batch and in_flight and not drain_logged:
+                    in_flight_ids = ", ".join(
+                        str(in_flight[f][0].metadata.get("__jobid", "?"))
+                        for f in in_flight
+                    )
+                    self.logger.info(
+                        f"All tests scheduled. Waiting for {len(in_flight)} in-flight "
+                        f"test(s) to finish (job ids: {in_flight_ids})..."
+                    )
+                    drain_logged = True
 
                 # Wait for first completion
                 done, _ = concurrent.futures.wait(
