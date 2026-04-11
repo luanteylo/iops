@@ -15,7 +15,9 @@ All notable changes to IOPS are documented here.
   - Original `benchmark_start_time` in `__iops_run_metadata.json` is preserved; only end time and total runtime are refreshed
   - Original `__iops_config.yaml` is kept intact; the resumed config is archived as `__iops_config_resume_<timestamp>.yaml`
   - Concurrency guarded by `__iops_resume.lock`
-  - Not yet supported with `--dry-run`, adaptive, or Bayesian search methods
+  - Not yet supported with `--dry-run` (dry-run uses `dryrun_NNN/` folders, no execution artifacts to consolidate)
+  - Not yet supported with adaptive search (probe progression state is not persisted in `__iops_index.json`, so resume would restart the probes from their initial value)
+  - Not yet supported with Bayesian optimization (the surrogate model lives only in memory; a resumed run would not know which points it had already explored)
 
 ## [3.5.4] - 2026-04-06
 
