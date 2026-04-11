@@ -51,6 +51,7 @@ Runs the benchmark defined in the configuration file.
 - `--dry-run, -n` - Preview execution plan without running
 - `--use-cache` - Skip tests with cached results
 - `--cache-only` - Only use cached results; skip tests not in cache (requires `cache_file`)
+- `--resume [RUN_ID]` - Reuse an existing run folder instead of creating a new one. Without an argument, picks the latest `run_NNN` under the workdir. Accepts a folder name (`run_002`) or a bare number (`2`). Not supported with `--dry-run`, adaptive, or Bayesian search methods.
 - `--fail-fast` - Stop execution on first test failure
 - `--parallel N` - Max concurrent test executions (overrides `benchmark.parallel` in config)
 - `--machine NAME` - Apply machine-specific config overrides (or set `IOPS_MACHINE` env var)
@@ -76,6 +77,13 @@ iops run benchmark.yaml --use-cache --log-level DEBUG
 
 # Cache-only mode: only use cached results, skip uncached tests
 iops run benchmark.yaml --cache-only
+
+# Resume into the latest run folder (consolidate iterations in one place)
+iops run benchmark.yaml --resume
+
+# Resume into a specific run folder
+iops run benchmark.yaml --resume run_002
+iops run benchmark.yaml --resume 2
 
 # Run 4 tests concurrently
 iops run benchmark.yaml --parallel 4

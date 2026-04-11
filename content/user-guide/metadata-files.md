@@ -43,6 +43,9 @@ Located in `workdir/run_XXX/`:
 |------|---------|
 | `__iops_run_metadata.json` | Report generation (config, timing, variables) |
 | `__iops_index.json` | Fast execution lookup for `iops find` |
+| `__iops_config.yaml` | Copy of the original input config for this run |
+| `__iops_config_resume_<timestamp>.yaml` | Config used for a subsequent `--resume` invocation (one per resume) |
+| `__iops_resume.lock` | Concurrency guard held while an `--resume` invocation is active; removed on exit |
 | `__iops_resource_summary.csv` | Aggregated CPU/memory and GPU metrics |
 | `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
 | `__iops_plots/` | PDF exports of report plots (requires kaleido) |

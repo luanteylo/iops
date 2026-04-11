@@ -10,6 +10,7 @@ weight: 6
 1. [Overview](#overview)
 2. [Configuration](#configuration)
    - [Basic Usage](#basic-usage)
+   - [Consolidating Runs with --resume](#consolidating-runs-with---resume)
    - [Cache-Only Mode](#cache-only-mode)
 3. [Rebuilding the Cache](#rebuilding-the-cache)
 
@@ -49,6 +50,34 @@ iops run config.yaml
 # Second run with --use-cache: reuses cached results
 iops run config.yaml --use-cache
 ```
+
+### Consolidating Runs with `--resume`
+
+By default, every invocation of `iops run` creates a fresh `run_NNN/` folder. When combined with `--use-cache`, this scatters a single study across many folders: each new `run_NNN/results.csv` contains rows for cached executions, but the actual `exec_XXXX/` artifact folders stay in the original run where they first executed. Browsing the study means hopping between `run_002/`, `run_003/`, etc.
+
+The `--resume` flag reuses an existing run folder instead of creating a new one, so new executions land alongside the existing ones:
+
+```bash
+# First run: creates run_001 with exec_0001, exec_0002
+iops run config.yaml
+
+# ... edit config to add a new sweep value ...
+
+# Resume the latest run: adds exec_0003 to run_001 (existing execs untouched)
+iops run config.yaml --resume
+
+# Or resume a specific run folder
+iops run config.yaml --resume run_001
+```
+
+On resume:
+- New `exec_XXXX` ids start strictly above the current max in `runs/`, so folders never collide.
+- Combinations already recorded in `__iops_index.json` are skipped before id assignment. No duplicate rows in `results.csv`, no ghost ids pointing to non-existent folders.
+- The original `benchmark_start_time` in `__iops_run_metadata.json` is preserved; only the end time and total runtime are refreshed.
+- The original `__iops_config.yaml` is kept intact. The new config is archived as `__iops_config_resume_<timestamp>.yaml` for audit.
+- A `__iops_resume.lock` file guards against concurrent resumes into the same folder.
+
+`--resume` is not currently supported with `--dry-run`, adaptive search, or Bayesian optimization.
 
 ### Cache-Only Mode
 
@@ -117,6 +146,8 @@ vars:
 Without exclusion:
 - Run 1: `summary_file=/workdir/run_001/summary.txt` → Cache key: `abc123`
 - Run 2: `summary_file=/workdir/run_002/summary.txt` → Cache key: `def456` **Cache miss!**
+
+(Note: using `--resume` sidesteps this by keeping all executions inside the same `run_NNN/` folder so `execution_dir` stays stable. `cache_exclude_vars` is still the right tool when you need cache hits across distinct run folders, machines, or archives.)
 
 **Solution**: Use `cache_exclude_vars` to exclude path-based variables:
 

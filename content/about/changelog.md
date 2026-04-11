@@ -4,6 +4,19 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [Unreleased]
+
+### Added
+- `iops run --resume [RUN_ID]` flag to reuse an existing `run_NNN/` folder instead of creating a new one
+  - Without an argument, resume picks the latest `run_NNN` under the workdir; with an argument it accepts a folder name (`run_002`) or a bare number (`2`)
+  - Consolidates iterative study workflows into a single browsable folder instead of scattering cached executions across `run_002/`, `run_003/`, etc.
+  - New `exec_XXXX` ids start strictly above the current max so folders never collide with existing ones
+  - Combinations already recorded in `__iops_index.json` are dropped before id assignment, preventing duplicate csv rows or ghost ids
+  - Original `benchmark_start_time` in `__iops_run_metadata.json` is preserved; only end time and total runtime are refreshed
+  - Original `__iops_config.yaml` is kept intact; the resumed config is archived as `__iops_config_resume_<timestamp>.yaml`
+  - Concurrency guarded by `__iops_resume.lock`
+  - Not yet supported with `--dry-run`, adaptive, or Bayesian search methods
+
 ## [3.5.4] - 2026-04-06
 
 ### Added
