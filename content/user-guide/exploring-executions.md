@@ -54,9 +54,7 @@ exec_004       SUCCEEDED   1      8    4096
 
 
 
-{{% notice tip %}}
-If a single study is iterated with `iops run --resume`, all executions stay inside one `run_NNN/` folder instead of being scattered across `run_001/`, `run_002/`, etc. Point `iops find` at that folder to see the whole study in one listing. See [Consolidating Runs with --resume](../caching#consolidating-runs-with---resume) in the caching guide.
-{{% /notice %}}
+**Tip:** If a single study is iterated with `iops run --resume`, all executions stay inside one `run_NNN/` folder instead of being scattered across `run_001/`, `run_002/`, etc. Point `iops find` at that folder to see the whole study in one listing. See [Consolidating Runs with --resume](../caching#consolidating-runs-with---resume) in the caching guide.
 
 ### List Executions from Multiple Runs
 
