@@ -140,6 +140,11 @@ Examples:
                             help="Max concurrent test executions (overrides config)")
     run_parser.add_argument('--machine', type=str, default=None, metavar='NAME',
                             help="Apply machine-specific config overrides (or set IOPS_MACHINE env var)")
+    run_parser.add_argument('--resume', type=str, nargs='?', const='__latest__', default=None,
+                            metavar='RUN_ID',
+                            help="Resume into an existing run folder instead of creating a new one. "
+                                 "Without an argument, uses the latest run_NNN under workdir. "
+                                 "Accepts 'run_002' or '002'.")
     run_parser.add_argument('--meline', action='store_true',
                             help=argparse.SUPPRESS)  # Easter egg: hide banner
     _add_common_args(run_parser)
@@ -856,7 +861,8 @@ def main():
     # ---- run command ----
     if args.command == 'run':
         try:
-            cfg = load_generic_config(args.config_file, logger=logger, dry_run=args.dry_run, machine=args.machine)
+            cfg = load_generic_config(args.config_file, logger=logger, dry_run=args.dry_run,
+                                      machine=args.machine, resume=args.resume)
         except ConfigValidationError as e:
             logger.error(f"Configuration error: {e}")
             if args.verbose:
@@ -872,6 +878,16 @@ def main():
         if getattr(args, 'cache_only', False) and not cfg.benchmark.cache_file:
             logger.error("--cache-only requires benchmark.cache_file to be configured in the YAML file")
             return
+
+        # Resume is not yet supported for adaptive/bayesian search methods
+        if getattr(args, 'resume', None) is not None:
+            sm = (cfg.benchmark.search_method or "exhaustive").lower()
+            if sm in ("adaptive", "bayesian"):
+                logger.error(
+                    f"--resume is not yet supported for search_method='{sm}'. "
+                    f"Supported: exhaustive, random."
+                )
+                return
 
         log_execution_context(cfg, args, logger)
 
@@ -897,6 +913,12 @@ def main():
             if args.verbose:
                 raise
             return
+        finally:
+            # Always release the resume lockfile (no-op if not resuming)
+            try:
+                runner._release_resume_lock()
+            except Exception:
+                pass
 
 
 

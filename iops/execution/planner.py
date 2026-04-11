@@ -620,7 +620,11 @@ class BasePlanner(ABC, HasLogger):
 
         # Build execution matrix
         self.logger.info("Building execution matrix...")
-        kept_instances, skipped_instances = build_execution_matrix(self.cfg)
+        kept_instances, skipped_instances = build_execution_matrix(
+            self.cfg,
+            start_execution_id=getattr(self.cfg.benchmark, "_resume_start_exec_id", 0),
+            skip_param_hashes=getattr(self.cfg.benchmark, "_resume_skip_hashes", None),
+        )
 
         # Store for tracking
         self.execution_matrix = kept_instances
@@ -1434,7 +1438,11 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
         self.current_index = 0
 
         # build_execution_matrix now returns (kept, skipped)
-        kept_instances, skipped_instances = build_execution_matrix(self.cfg)
+        kept_instances, skipped_instances = build_execution_matrix(
+            self.cfg,
+            start_execution_id=getattr(self.cfg.benchmark, "_resume_start_exec_id", 0),
+            skip_param_hashes=getattr(self.cfg.benchmark, "_resume_skip_hashes", None),
+        )
 
         # Store skipped instances for reference
         self.skipped_matrix = skipped_instances
@@ -1743,7 +1751,11 @@ class RandomSamplingPlanner(ExhaustivePlanner):
 
         # Build full matrix, then sample
         # build_execution_matrix now returns (kept, skipped)
-        kept_instances, constraint_skipped = build_execution_matrix(self.cfg)
+        kept_instances, constraint_skipped = build_execution_matrix(
+            self.cfg,
+            start_execution_id=getattr(self.cfg.benchmark, "_resume_start_exec_id", 0),
+            skip_param_hashes=getattr(self.cfg.benchmark, "_resume_skip_hashes", None),
+        )
 
         # Sample from kept instances
         sampled_matrix = self._sample_execution_matrix(kept_instances)

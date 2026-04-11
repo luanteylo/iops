@@ -557,9 +557,162 @@ def _validate_output_field_list(
         )
 
 
-def create_workdir(cfg: GenericBenchmarkConfig, logger, dry_run: bool = False) -> None:
+def _resolve_resume_target(base_workdir: Path, resume: str) -> Path:
     """
-    Creates a new RUN directory under the configured base workdir.
+    Resolve a --resume argument to an existing run_NNN folder.
+
+    Args:
+        base_workdir: Base workdir configured in benchmark.workdir
+        resume: Either '__latest__' (pick latest run_NNN), a folder name
+                ('run_002'), or a bare numeric id ('002' or '2')
+
+    Returns:
+        Path to the resumed run folder
+
+    Raises:
+        ConfigValidationError: If the target cannot be resolved or is not a
+                               valid IOPS run folder
+    """
+    if not base_workdir.exists():
+        raise ConfigValidationError(
+            f"Cannot resume: base workdir does not exist: {base_workdir}"
+        )
+
+    if resume == "__latest__":
+        run_dirs = [
+            d for d in base_workdir.iterdir()
+            if d.is_dir()
+            and d.name.startswith("run_")
+            and d.name.split("_", 1)[1].isdigit()
+        ]
+        if not run_dirs:
+            raise ConfigValidationError(
+                f"Cannot resume: no run_NNN folders found under {base_workdir}"
+            )
+        target = max(run_dirs, key=lambda d: int(d.name.split("_", 1)[1]))
+    else:
+        # Accept 'run_002', '002', or '2'
+        candidate_names = [resume]
+        if resume.isdigit():
+            candidate_names.append(f"run_{int(resume):03d}")
+        target = None
+        for name in candidate_names:
+            p = base_workdir / name
+            if p.is_dir():
+                target = p
+                break
+        if target is None:
+            raise ConfigValidationError(
+                f"Cannot resume: '{resume}' not found under {base_workdir}"
+            )
+
+    # Validate the folder looks like an IOPS run (has metadata or index)
+    has_index = (target / "__iops_index.json").exists()
+    has_config = (target / "__iops_config.yaml").exists()
+    has_metadata = (target / "__iops_run_metadata.json").exists()
+    if not (has_index or has_config or has_metadata):
+        raise ConfigValidationError(
+            f"Cannot resume: {target} does not look like an IOPS run folder "
+            f"(missing __iops_index.json, __iops_config.yaml, and __iops_run_metadata.json)"
+        )
+
+    return target
+
+
+def _collect_resume_state(run_root: Path, cache_exclude_vars: Optional[List[str]]) -> Tuple[int, Set[str]]:
+    """
+    Read an existing run folder and compute the resume offset and skip set.
+
+    Args:
+        run_root: Existing run_NNN folder
+        cache_exclude_vars: Variables to exclude from the param hash (so it
+                            matches what ExecutionCache would compute)
+
+    Returns:
+        (start_exec_id, skip_param_hashes):
+          - start_exec_id: max existing exec_XXXX id + 1 (or 0 if none)
+          - skip_param_hashes: set of param hashes already recorded in __iops_index.json
+    """
+    from iops.cache.execution_cache import hash_params, normalize_params
+    import json as _json
+
+    exclude_set = set(cache_exclude_vars or [])
+
+    # Scan exec_XXXX folders under run_root/runs
+    runs_dir = run_root / "runs"
+    max_id = 0
+    if runs_dir.is_dir():
+        for d in runs_dir.iterdir():
+            if d.is_dir() and d.name.startswith("exec_"):
+                suffix = d.name.split("_", 1)[1]
+                if suffix.isdigit():
+                    max_id = max(max_id, int(suffix))
+    # The builder loop increments exec_id BEFORE assignment, so passing
+    # max_id here yields (max_id + 1) as the first new id.
+    start_exec_id = max_id
+
+    # Build skip set from existing index
+    skip_hashes: Set[str] = set()
+    index_path = run_root / "__iops_index.json"
+    if index_path.exists():
+        try:
+            with open(index_path, "r") as f:
+                index = _json.load(f)
+            for _exec_key, entry in (index.get("executions") or {}).items():
+                params = entry.get("params") or {}
+                skip_hashes.add(hash_params(normalize_params(params, exclude_vars=exclude_set)))
+        except Exception:
+            # Best effort: a malformed index should not block resume entirely.
+            # An empty skip set means everything re-runs, which is safe but not ideal.
+            pass
+
+    return start_exec_id, skip_hashes
+
+
+def _acquire_resume_lock(run_root: Path) -> Path:
+    """
+    Acquire an exclusive lockfile for a resume operation.
+
+    Args:
+        run_root: Existing run folder
+
+    Returns:
+        Path to the lockfile (caller must unlink when done)
+
+    Raises:
+        ConfigValidationError: If the lockfile is already held
+    """
+    lock_path = run_root / "__iops_resume.lock"
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        existing = ""
+        try:
+            existing = lock_path.read_text().strip()
+        except Exception:
+            pass
+        raise ConfigValidationError(
+            f"Run folder is locked by another IOPS process: {lock_path}"
+            + (f" ({existing})" if existing else "")
+            + "\nIf you are sure no process is running, delete the lockfile manually."
+        )
+    try:
+        from datetime import datetime as _dt
+        os.write(fd, f"pid={os.getpid()} started_at={_dt.now().isoformat()}\n".encode())
+    finally:
+        os.close(fd)
+    return lock_path
+
+
+def create_workdir(
+    cfg: GenericBenchmarkConfig,
+    logger,
+    dry_run: bool = False,
+    resume: Optional[str] = None,
+) -> None:
+    """
+    Creates a new RUN directory under the configured base workdir, OR
+    reuses an existing one when ``resume`` is set.
 
     Layout:
       <base_workdir>/run_<id>/       (normal execution)
@@ -567,15 +720,49 @@ def create_workdir(cfg: GenericBenchmarkConfig, logger, dry_run: bool = False) -
         ├── logs/
         └── runs/
 
-    Updates cfg.benchmark.workdir to point to the new run directory.
+    Updates cfg.benchmark.workdir to point to the run directory.
 
     Args:
         cfg: The benchmark configuration
         logger: Logger instance
         dry_run: If True, use 'dryrun_' prefix instead of 'run_'
+        resume: If set, reuse an existing run folder instead of creating a new
+                one. '__latest__' picks the most recent run_NNN; any other
+                value is treated as a folder name or bare numeric id.
     """
     base_workdir = cfg.benchmark.workdir
 
+    # ---------- Resume path ----------
+    if resume is not None:
+        if dry_run:
+            raise ConfigValidationError("--resume cannot be used with --dry-run")
+        run_root = _resolve_resume_target(base_workdir, resume)
+        logger.info(f"Resuming into existing run folder: {run_root}")
+
+        # Ensure standard subfolders exist (defensive; old runs already have them)
+        (run_root / "runs").mkdir(parents=True, exist_ok=True)
+        (run_root / "logs").mkdir(parents=True, exist_ok=True)
+
+        # Acquire concurrency lock
+        lock_path = _acquire_resume_lock(run_root)
+
+        # Collect offset + skip set and stash on the config for planners/runner
+        start_exec_id, skip_hashes = _collect_resume_state(
+            run_root, cfg.benchmark.cache_exclude_vars
+        )
+        cfg.benchmark._resume_active = True
+        cfg.benchmark._resume_start_exec_id = start_exec_id
+        cfg.benchmark._resume_skip_hashes = skip_hashes
+        cfg.benchmark._resume_lock_path = lock_path
+
+        logger.info(
+            f"  Existing executions: {len(skip_hashes)} (new ids will start at exec_{start_exec_id:04d})"
+        )
+
+        cfg.benchmark.workdir = run_root
+        return
+
+    # ---------- Normal path (create new run folder) ----------
     base_workdir.mkdir(parents=True, exist_ok=True)
     logger.debug(f"Base work directory: {base_workdir}")
 
@@ -600,6 +787,12 @@ def create_workdir(cfg: GenericBenchmarkConfig, logger, dry_run: bool = False) -
     (run_root / "logs").mkdir(parents=True, exist_ok=True)
 
     logger.debug(f"Created run root: {run_root}")
+
+    # Default resume runtime attrs (inactive)
+    cfg.benchmark._resume_active = False
+    cfg.benchmark._resume_start_exec_id = 0
+    cfg.benchmark._resume_skip_hashes = set()
+    cfg.benchmark._resume_lock_path = None
 
     # Update cfg.workdir to this run root (stable during execution)
     cfg.benchmark.workdir = run_root
@@ -1313,7 +1506,11 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
 
 def load_generic_config(
-    config_path: Path, logger, dry_run: bool = False, machine: Optional[str] = None
+    config_path: Path,
+    logger,
+    dry_run: bool = False,
+    machine: Optional[str] = None,
+    resume: Optional[str] = None,
 ) -> GenericBenchmarkConfig:
     """
     Load and parse a YAML configuration file into a GenericBenchmarkConfig object.
@@ -1323,13 +1520,15 @@ def load_generic_config(
     2. Applies machine override (if --machine or IOPS_MACHINE)
     3. Parses into config objects
     4. Validates semantics (single source of truth: validate_generic_config)
-    5. Creates workdir
+    5. Creates (or resumes into) a run workdir
 
     Args:
         config_path: Path to the YAML configuration file
         logger: Logger instance for debug messages
         dry_run: If True, create 'dryrun_' folders instead of 'run_' folders
         machine: Machine name for config overrides (or use IOPS_MACHINE env var)
+        resume: If set, reuse an existing run folder instead of creating a
+                new one. Pass '__latest__' to pick the latest run_NNN.
 
     Returns:
         Validated GenericBenchmarkConfig object with workdir created
@@ -1368,8 +1567,8 @@ def load_generic_config(
     # 4. Semantic validation (single source of truth)
     validate_generic_config(cfg)
 
-    # 5. Create workdir (side effect)
-    create_workdir(cfg, logger, dry_run=dry_run)
+    # 5. Create (or resume into) workdir (side effect)
+    create_workdir(cfg, logger, dry_run=dry_run, resume=resume)
 
     return cfg
 

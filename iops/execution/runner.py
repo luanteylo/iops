@@ -1051,6 +1051,28 @@ class IOPSRunner(HasLogger):
     def _save_run_metadata(self, test_count: int = 0, benchmark_start_time: Optional[datetime] = None, benchmark_end_time: Optional[datetime] = None, planner_stats: Optional[Dict[str, Any]] = None, adaptive_results: Optional[Dict[str, Any]] = None):
         """Save runtime metadata for report generation."""
         try:
+            # On resume, preserve the ORIGINAL benchmark_start_time from the
+            # existing metadata file so the run folder reflects cumulative timing
+            # (original start -> latest end), not just the resumed portion.
+            is_resume = getattr(self.cfg.benchmark, "_resume_active", False)
+            existing_metadata: Optional[Dict[str, Any]] = None
+            if is_resume:
+                existing_path = self.cfg.benchmark.workdir / METADATA_FILENAME
+                if existing_path.exists():
+                    try:
+                        with open(existing_path, "r") as _f:
+                            existing_metadata = json.load(_f)
+                        orig_start_iso = (
+                            existing_metadata.get("benchmark", {}).get("benchmark_start_time")
+                        )
+                        if orig_start_iso and benchmark_start_time is not None:
+                            try:
+                                benchmark_start_time = datetime.fromisoformat(orig_start_iso)
+                            except ValueError:
+                                pass  # Malformed timestamp, fall back to new start
+                    except Exception as _e:
+                        self.logger.debug(f"Could not read existing run metadata: {_e}")
+
             # Calculate timing metrics if provided
             timing_metadata = {}
             if benchmark_start_time and benchmark_end_time:
@@ -1171,12 +1193,20 @@ class IOPSRunner(HasLogger):
 
             self.logger.debug(f"Saved runtime metadata to: {metadata_path}")
 
-            # Copy the original input YAML config file to the run folder
+            # Copy the original input YAML config file to the run folder.
+            # On resume, preserve the original config and write the new one
+            # alongside with a timestamp suffix for audit purposes.
             config_file = getattr(self.args, 'config_file', None)
             if config_file and Path(config_file).is_file():
                 config_copy_path = self.cfg.benchmark.workdir / CONFIG_COPY_FILENAME
-                shutil.copy2(config_file, config_copy_path)
-                self.logger.debug(f"Saved config copy to: {config_copy_path}")
+                if is_resume and config_copy_path.exists():
+                    suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    resume_copy = self.cfg.benchmark.workdir / f"__iops_config_resume_{suffix}.yaml"
+                    shutil.copy2(config_file, resume_copy)
+                    self.logger.debug(f"Saved resumed config copy to: {resume_copy}")
+                else:
+                    shutil.copy2(config_file, config_copy_path)
+                    self.logger.debug(f"Saved config copy to: {config_copy_path}")
 
         except Exception as e:
             self.logger.warning(f"Failed to save runtime metadata: {e}")
@@ -2212,3 +2242,17 @@ class IOPSRunner(HasLogger):
 
         # Cleanup: Cancel any remaining SLURM allocations (e.g., single-allocation mode)
         self._cleanup_remaining_jobs()
+
+        # Release the resume lockfile, if any
+        self._release_resume_lock()
+
+    def _release_resume_lock(self) -> None:
+        """Release the resume lockfile if this run holds one. Safe to call multiple times."""
+        lock_path = getattr(self.cfg.benchmark, "_resume_lock_path", None)
+        if lock_path and Path(lock_path).exists():
+            try:
+                Path(lock_path).unlink()
+            except Exception as e:
+                self.logger.debug(f"Failed to release resume lock at {lock_path}: {e}")
+            # Clear so repeated calls are no-ops
+            self.cfg.benchmark._resume_lock_path = None

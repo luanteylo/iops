@@ -870,6 +870,7 @@ def create_execution_instance(
 def build_execution_matrix(
     cfg: GenericBenchmarkConfig,
     start_execution_id: int = 0,
+    skip_param_hashes: Optional[Set[str]] = None,
 ) -> Tuple[List[ExecutionInstance], List[ExecutionInstance]]:
     """
     Build the Cartesian product of swept variables and return lists of
@@ -885,6 +886,10 @@ def build_execution_matrix(
     - Sweep over all vars that have a ``sweep`` defined.
     - Adaptive variables are excluded from the matrix (handled by AdaptivePlanner).
     - repetitions is 1 by default (or benchmark.repetitions if present).
+    - If ``skip_param_hashes`` is provided, combinations whose normalized-params
+      hash (see iops.cache.execution_cache.hash_params) is in that set are
+      silently dropped *before* exec_id assignment. Used by --resume to avoid
+      re-running (and re-numbering) executions already recorded in the run folder.
 
     Returns:
         (kept_instances, skipped_instances):
@@ -1078,6 +1083,25 @@ def build_execution_matrix(
             logger.info(
                 f"Early constraint filtering: {early_skipped_count} combinations skipped "
                 f"before evaluating derived expressions"
+            )
+
+    # ----------------- resume: filter out already-recorded combinations ----------------- #
+
+    if skip_param_hashes:
+        from iops.cache.execution_cache import hash_params as _hash_params, normalize_params as _normalize_params
+        exclude_set = set(cfg.benchmark.cache_exclude_vars or [])
+        filtered: List[Dict[str, Any]] = []
+        resume_skipped = 0
+        for base_vars in combinations:
+            h = _hash_params(_normalize_params(base_vars, exclude_vars=exclude_set))
+            if h in skip_param_hashes:
+                resume_skipped += 1
+                continue
+            filtered.append(base_vars)
+        combinations = filtered
+        if resume_skipped:
+            logger.info(
+                f"Resume: skipped {resume_skipped} combination(s) already recorded in the run folder"
             )
 
     # ----------------- build ExecutionInstance objects ----------------- #
