@@ -133,7 +133,7 @@ class JubeConverter:
         section["name"] = benchmark.name
         if benchmark.comment:
             section["description"] = benchmark.comment
-        section["workdir"] = "./workdir"
+        section["workdir"] = self._derive_workdir(benchmark)
         section["executor"] = self.executor
         section["search_method"] = "exhaustive"
 
@@ -154,6 +154,29 @@ class JubeConverter:
                 )
 
         return section
+
+    def _derive_workdir(self, benchmark):
+        """Derive the IOPS workdir from the JUBE benchmark outpath.
+
+        Translation rule: directories are always emitted as './<name>' so
+        the generated config is relocatable. JUBE resolves outpath relative
+        to the XML file and may embed variable references (e.g.
+        '$BEEOND/out_io500_Jube'); we take the trailing path component,
+        strip any leading JUBE variable tokens, and prepend './'. Falls
+        back to './workdir' when nothing usable can be extracted.
+        """
+        raw = getattr(benchmark, "_outpath", None) or ""
+        # JUBE prepends file_path_ref to outpath; drop it if present.
+        ref = getattr(benchmark, "file_path_ref", None) or ""
+        if ref and raw.startswith(ref):
+            raw = raw[len(ref):].lstrip("/")
+        # Use the trailing path component (handles things like
+        # "$BEEOND/out_io500_Jube" -> "out_io500_Jube").
+        tail = raw.rstrip("/").split("/")[-1] if raw else ""
+        # A bare variable reference ($FOO or ${FOO}) is not a usable dir name.
+        if tail.startswith("$"):
+            tail = ""
+        return f"./{tail}" if tail else "./workdir"
 
     def _convert_parametersets(self, benchmark):
         """Convert JUBE parametersets to IOPS vars."""
