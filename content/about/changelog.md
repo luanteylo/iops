@@ -4,6 +4,15 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [Unreleased]
+
+### Added
+- YAML configuration section in HTML reports, showing the original config in a collapsible block
+- Signal handler registration for all executors (previously SLURM-only)
+
+### Fixed
+- Report generation now works after Ctrl+C interruption. Metadata file is written at the start of execution with static fields and updated with dynamic results in a finally block, so partial runs always produce a usable metadata file.
+
 ## [3.5.4] - 2026-04-06
 
 ### Added
