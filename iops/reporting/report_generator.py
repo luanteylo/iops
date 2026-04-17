@@ -3,6 +3,7 @@ IOPS Report Generator - Creates HTML reports with interactive plots.
 """
 
 import base64
+import html as html_module
 import json
 import numpy as np
 import pandas as pd
@@ -908,6 +909,11 @@ class ReportGenerator:
         # Custom plots defined by user in reporting config
         html_parts.append(self._generate_custom_plots_section(metrics, report_vars))
 
+        # Original YAML configuration (collapsible)
+        config_html = self._generate_config_section()
+        if config_html:
+            html_parts.append(config_html)
+
         html_parts.append(self._generate_footer())
 
         # Combine and save
@@ -1052,6 +1058,17 @@ class ReportGenerator:
         }}
         details .details-content table tr:last-child td {{
             border-bottom: none;
+        }}
+        details .details-content pre {{
+            margin: 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            font-size: 13px;
+            line-height: 1.5;
+            overflow-x: auto;
+            white-space: pre;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            color: #2c3e50;
         }}
         .plot-container {{
             margin: 30px 0;
@@ -3057,6 +3074,31 @@ class ReportGenerator:
             return fig
         except Exception as e:
             return None
+
+    def _generate_config_section(self) -> str:
+        """Generate a collapsible section showing the original YAML configuration."""
+        config_path = self.workdir / "__iops_config.yaml"
+        if not config_path.exists():
+            return ""
+
+        try:
+            config_text = config_path.read_text()
+        except Exception:
+            return ""
+
+        if not config_text.strip():
+            return ""
+
+        escaped = html_module.escape(config_text)
+
+        html = '<h2>Configuration</h2>\n'
+        html += '<details>\n'
+        html += '<summary>YAML Configuration</summary>\n'
+        html += '<div class="details-content">\n'
+        html += f'<pre>{escaped}</pre>\n'
+        html += '</div>\n'
+        html += '</details>\n'
+        return html
 
     def _generate_footer(self) -> str:
         """Generate HTML footer."""
