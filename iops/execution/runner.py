@@ -163,10 +163,8 @@ class IOPSRunner(HasLogger):
         # Track completed tests for resource trace aggregation
         self.completed_tests: List = []
 
-        # TODO check if signal handling is also done when executor=local
-        # Register signal handler for Ctrl+C (SIGINT) if using SLURM executor
-        if cfg.benchmark.executor == "slurm":
-            signal.signal(signal.SIGINT, self._signal_handler)
+        # Register signal handler for Ctrl+C (SIGINT)
+        signal.signal(signal.SIGINT, self._signal_handler)
 
         # Parallel execution setup
         cli_parallel = getattr(args, 'parallel', None)
@@ -786,8 +784,7 @@ class IOPSRunner(HasLogger):
 
         if not jobs_snapshot:
             self.logger.info("No SLURM jobs to cancel")
-            self.logger.info("Exiting...")
-            sys.exit(0)
+            return
 
         self.logger.info(f"Canceling {len(jobs_snapshot)} submitted SLURM job(s)...")
 
@@ -837,8 +834,7 @@ class IOPSRunner(HasLogger):
             self.logger.info(f"\n✓ All {len(jobs_snapshot)} job(s) canceled successfully")
 
         self.logger.info("=" * 70)
-        self.logger.info("Cleanup complete - Exiting")
-        sys.exit(0)
+        self.logger.info("Cleanup complete")
 
     def register_slurm_job(self, job_id: str):
         """Register a submitted SLURM job ID for cleanup on interrupt."""
@@ -1048,36 +1044,32 @@ class IOPSRunner(HasLogger):
 
         return stats if stats else None
 
-    def _save_run_metadata(self, test_count: int = 0, benchmark_start_time: Optional[datetime] = None, benchmark_end_time: Optional[datetime] = None, planner_stats: Optional[Dict[str, Any]] = None, adaptive_results: Optional[Dict[str, Any]] = None):
-        """Save runtime metadata for report generation."""
-        try:
-            # Calculate timing metrics if provided
-            timing_metadata = {}
-            if benchmark_start_time and benchmark_end_time:
-                total_runtime_seconds = (benchmark_end_time - benchmark_start_time).total_seconds()
-                timing_metadata = {
-                    "benchmark_start_time": benchmark_start_time.isoformat(),
-                    "benchmark_end_time": benchmark_end_time.isoformat(),
-                    "total_runtime_seconds": total_runtime_seconds,
-                }
+    def _init_run_metadata(self):
+        """Create the initial metadata file with all static (config-derived) fields.
 
-            # Try to get hostname (best effort - don't fail if unavailable)
+        Called at the start of run() so that a usable metadata file exists even
+        if the process is forcefully terminated mid-execution.
+        """
+        try:
+            # Try to get hostname (best effort)
             hostname = None
             try:
                 hostname = socket.gethostname()
             except Exception:
-                pass  # Hostname unavailable, continue without it
+                pass
 
-            # Build system environment from collected system info
-            system_environment = self._aggregate_system_info()
+            # Render the output path from the config template
+            try:
+                output_template = Template(str(self.cfg.output.sink.path))
+                rendered_output = output_template.render(workdir=str(self.cfg.benchmark.workdir))
+                output_path = Path(rendered_output)
+            except Exception:
+                output_path = Path(self.cfg.output.sink.path)
 
-            # Get relative output path (relative to workdir for portability)
-            output_path = Path(self.actual_output_path or self.cfg.output.sink.path)
             workdir = Path(self.cfg.benchmark.workdir)
             try:
                 relative_output_path = str(output_path.relative_to(workdir))
             except ValueError:
-                # Output path is outside workdir, keep absolute
                 relative_output_path = str(output_path)
 
             metadata = {
@@ -1089,22 +1081,22 @@ class IOPSRunner(HasLogger):
                     "repetitions": self.cfg.benchmark.repetitions,
                     "random_seed": self.cfg.benchmark.random_seed,
                     "timestamp": datetime.now().isoformat(),
-                    "test_count": test_count,
+                    "test_count": 0,
                     "report_vars": self.cfg.benchmark.report_vars,
                     "search_method": self.cfg.benchmark.search_method,
                     "bayesian_config": self.cfg.benchmark.bayesian_config,
                     "cores_expr": self.cfg.benchmark.cores_expr,
                     "max_core_hours": self.cfg.benchmark.max_core_hours,
-                    "hostname": hostname,  # Add hostname if available (best effort)
-                    "planner_stats": planner_stats,  # Search space statistics from planner
-                    **timing_metadata,  # Add timing information if available
+                    "hostname": hostname,
+                    "planner_stats": None,
+                    "benchmark_start_time": self.benchmark_start_time.isoformat(),
                 },
-                "system_environment": system_environment,  # Aggregated system info from compute nodes
+                "system_environment": {},
                 "variables": {},
                 "metrics": [],
                 "output": {
                     "type": self.cfg.output.sink.type,
-                    "path": relative_output_path,  # Relative path for portability
+                    "path": relative_output_path,
                     "table": self.cfg.output.sink.table if self.cfg.output.sink.type == "sqlite" else None,
                 },
                 "command": {
@@ -1113,9 +1105,6 @@ class IOPSRunner(HasLogger):
                 },
                 "reporting": serialize_reporting_config(self.cfg.reporting),
             }
-
-            if adaptive_results:
-                metadata["adaptive_results"] = adaptive_results
 
             # Add variable definitions
             for var_name, var_config in self.cfg.vars.items():
@@ -1164,12 +1153,12 @@ class IOPSRunner(HasLogger):
                             "script": script.name,
                         })
 
-            # Save to file with custom encoder for numpy types
+            # Save to file
             metadata_path = self.cfg.benchmark.workdir / METADATA_FILENAME
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
 
-            self.logger.debug(f"Saved runtime metadata to: {metadata_path}")
+            self.logger.debug(f"Initialized runtime metadata: {metadata_path}")
 
             # Copy the original input YAML config file to the run folder
             config_file = getattr(self.args, 'config_file', None)
@@ -1179,7 +1168,56 @@ class IOPSRunner(HasLogger):
                 self.logger.debug(f"Saved config copy to: {config_copy_path}")
 
         except Exception as e:
-            self.logger.warning(f"Failed to save runtime metadata: {e}")
+            self.logger.warning(f"Failed to initialize runtime metadata: {e}")
+
+    def _update_run_metadata(self, test_count: int = 0, benchmark_end_time: Optional[datetime] = None, planner_stats: Optional[Dict[str, Any]] = None, adaptive_results: Optional[Dict[str, Any]] = None):
+        """Update the metadata file with dynamic execution results.
+
+        Reads the existing metadata file created by _init_run_metadata() and
+        merges in timing, test count, planner stats, system info, and the
+        resolved output path.
+        """
+        try:
+            metadata_path = self.cfg.benchmark.workdir / METADATA_FILENAME
+            if not metadata_path.exists():
+                self.logger.warning("Metadata file not found for update, skipping")
+                return
+
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+
+            # Update timing
+            if benchmark_end_time:
+                total_runtime_seconds = (benchmark_end_time - self.benchmark_start_time).total_seconds()
+                metadata["benchmark"]["benchmark_end_time"] = benchmark_end_time.isoformat()
+                metadata["benchmark"]["total_runtime_seconds"] = total_runtime_seconds
+
+            # Update execution counts and stats
+            metadata["benchmark"]["test_count"] = test_count
+            metadata["benchmark"]["planner_stats"] = planner_stats
+
+            # Update system environment from collected system info
+            metadata["system_environment"] = self._aggregate_system_info()
+
+            # Update output path with the actual resolved path (if available)
+            if self.actual_output_path:
+                output_path = Path(self.actual_output_path)
+                workdir = Path(self.cfg.benchmark.workdir)
+                try:
+                    metadata["output"]["path"] = str(output_path.relative_to(workdir))
+                except ValueError:
+                    metadata["output"]["path"] = str(output_path)
+
+            if adaptive_results:
+                metadata["adaptive_results"] = adaptive_results
+
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
+
+            self.logger.debug(f"Updated runtime metadata: {metadata_path}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to update runtime metadata: {e}")
 
     @staticmethod
     def _json_serialize_helper(obj):
@@ -1678,7 +1716,9 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"✓ Report saved to: {report_path}")
 
         # Save runtime metadata for report generation
-        self._save_run_metadata(test_count=total_executions, planner_stats=self._get_planner_stats())
+        self.benchmark_start_time = datetime.now()
+        self._init_run_metadata()
+        self._update_run_metadata(test_count=total_executions, planner_stats=self._get_planner_stats())
 
         self.logger.info("\n" + "=" * 70)
         self.logger.info("DRY-RUN COMPLETE - Nothing was executed")
@@ -2084,131 +2124,144 @@ class IOPSRunner(HasLogger):
         self.logger.info(f"Benchmark start time: {self.benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info("=" * 70)
 
+        # Write initial metadata file with static config-derived fields so that
+        # a usable file exists even if the process is forcefully killed.
+        self._init_run_metadata()
+
         test_count = 0
-
-        if self.effective_parallel > 1:
-            test_count = self._run_parallel(test_count)
-        else:
-            test_count = self._run_sequential(test_count)
-
-        # Final statistics
-        self.logger.info("=" * 70)
-
-        if self.budget_exceeded:
-            self.logger.info(f"Benchmark stopped: {test_count} tests completed (budget limit reached)")
-        elif self.cache_only and self.skipped_cache_only > 0:
-            self.logger.info(f"Benchmark completed (cache-only mode): {test_count} tests processed")
-            self.logger.info(f"  From cache: {self.cache_hits}")
-            self.logger.info(f"  Skipped (not in cache): {self.skipped_cache_only}")
-        else:
-            self.logger.info(f"Benchmark completed: {test_count} tests total")
-
-        # Core-hours statistics (always show if any core-hours tracked)
-        if self.accumulated_core_hours > 0 or self.saved_core_hours > 0:
-            if self.max_core_hours is not None:
-                utilization = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
-                status_msg = "EXCEEDED" if self.budget_exceeded else "OK"
-                self.logger.info(
-                    f"Budget: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours "
-                    f"({utilization:.1f}% utilized) [{status_msg}]"
-                )
-            else:
-                self.logger.info(f"Core-hours: {self.accumulated_core_hours:.2f}")
-            if self.saved_core_hours > 0:
-                self.logger.info(f"Cache savings: {self.saved_core_hours:.2f} core-hours saved by cache hits")
-
-        if self.cache and self.use_cache_reads:
-            hit_rate = (self.cache_hits / test_count * 100) if test_count > 0 else 0
-            cache_stats = f"Cache statistics: {self.cache_hits} hits, {self.cache_misses} misses ({hit_rate:.1f}% hit rate)"
-            if self.skipped_cache_only > 0:
-                cache_stats += f", {self.skipped_cache_only} skipped (cache-only mode)"
-            self.logger.info(cache_stats)
-        elif self.cache:
-            self.logger.info(f"Cache: {test_count} results written to database")
-
-        # Render output path if it's a template
-        output_path_display = self.actual_output_path
-        if output_path_display is None:
-            # Fallback: render the template manually
-            try:
-                template = Template(str(self.cfg.output.sink.path))
-                output_path_display = template.render(workdir=str(self.cfg.benchmark.workdir))
-            except Exception:
-                output_path_display = self.cfg.output.sink.path
-
-        self.logger.info(f"Results saved to: {output_path_display}")
-        self.logger.info("=" * 70)
-
-        # Record benchmark end time and calculate timing metrics
-        benchmark_end_time = datetime.now()
-        total_runtime = (benchmark_end_time - self.benchmark_start_time).total_seconds()
-
-        # Format runtime for display
-        if total_runtime < 60:
-            runtime_str = f"{total_runtime:.1f}s"
-        elif total_runtime < 3600:
-            runtime_str = f"{total_runtime/60:.1f}m ({total_runtime:.1f}s)"
-        else:
-            runtime_str = f"{total_runtime/3600:.2f}h ({total_runtime/60:.1f}m)"
-
-        # Log timing summary
-        self.logger.info("=" * 70)
-        self.logger.info("BENCHMARK TIMING SUMMARY")
-        self.logger.info("=" * 70)
-        self.logger.info(f"Start time:    {self.benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        self.logger.info(f"End time:      {benchmark_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        self.logger.info(f"Total runtime: {runtime_str}")
-        self.logger.info("=" * 70)
-
-        # Adaptive probing results summary
         adaptive_results = None
-        if hasattr(self.planner, 'get_probe_results'):
-            probe_results = self.planner.get_probe_results()
-            adaptive_var_name = self.planner._adaptive_var_name
+        benchmark_end_time = None
 
-            self.logger.info("")
-            self.logger.info(f"Adaptive probing results for '{adaptive_var_name}':")
-            for label, result in probe_results.items():
-                parts = [f"found={result.found_value}"]
-                if result.failed_value is not None:
-                    parts.append(f"failed={result.failed_value}")
-                parts.append(f"iterations={result.iterations}")
-                parts.append(f"stop_reason={result.stop_reason}")
-                prefix = f"  {label}: " if label else "  "
-                self.logger.info(f"{prefix}{', '.join(parts)}")
-            self.logger.info("")
+        try:
+            if self.effective_parallel > 1:
+                test_count = self._run_parallel(test_count)
+            else:
+                test_count = self._run_sequential(test_count)
 
-            # Serialize for metadata JSON
-            adaptive_results = {
-                adaptive_var_name: {
-                    label: {
-                        "found_value": r.found_value,
-                        "failed_value": r.failed_value,
-                        "iterations": r.iterations,
-                        "stop_reason": r.stop_reason,
+            # Final statistics
+            self.logger.info("=" * 70)
+
+            if self.budget_exceeded:
+                self.logger.info(f"Benchmark stopped: {test_count} tests completed (budget limit reached)")
+            elif self.cache_only and self.skipped_cache_only > 0:
+                self.logger.info(f"Benchmark completed (cache-only mode): {test_count} tests processed")
+                self.logger.info(f"  From cache: {self.cache_hits}")
+                self.logger.info(f"  Skipped (not in cache): {self.skipped_cache_only}")
+            else:
+                self.logger.info(f"Benchmark completed: {test_count} tests total")
+
+            # Core-hours statistics (always show if any core-hours tracked)
+            if self.accumulated_core_hours > 0 or self.saved_core_hours > 0:
+                if self.max_core_hours is not None:
+                    utilization = (self.accumulated_core_hours / self.max_core_hours * 100) if self.max_core_hours > 0 else 0
+                    status_msg = "EXCEEDED" if self.budget_exceeded else "OK"
+                    self.logger.info(
+                        f"Budget: {self.accumulated_core_hours:.2f} / {self.max_core_hours:.2f} core-hours "
+                        f"({utilization:.1f}% utilized) [{status_msg}]"
+                    )
+                else:
+                    self.logger.info(f"Core-hours: {self.accumulated_core_hours:.2f}")
+                if self.saved_core_hours > 0:
+                    self.logger.info(f"Cache savings: {self.saved_core_hours:.2f} core-hours saved by cache hits")
+
+            if self.cache and self.use_cache_reads:
+                hit_rate = (self.cache_hits / test_count * 100) if test_count > 0 else 0
+                cache_stats = f"Cache statistics: {self.cache_hits} hits, {self.cache_misses} misses ({hit_rate:.1f}% hit rate)"
+                if self.skipped_cache_only > 0:
+                    cache_stats += f", {self.skipped_cache_only} skipped (cache-only mode)"
+                self.logger.info(cache_stats)
+            elif self.cache:
+                self.logger.info(f"Cache: {test_count} results written to database")
+
+            # Render output path if it's a template
+            output_path_display = self.actual_output_path
+            if output_path_display is None:
+                # Fallback: render the template manually
+                try:
+                    template = Template(str(self.cfg.output.sink.path))
+                    output_path_display = template.render(workdir=str(self.cfg.benchmark.workdir))
+                except Exception:
+                    output_path_display = self.cfg.output.sink.path
+
+            self.logger.info(f"Results saved to: {output_path_display}")
+            self.logger.info("=" * 70)
+
+            # Record benchmark end time and calculate timing metrics
+            benchmark_end_time = datetime.now()
+            total_runtime = (benchmark_end_time - self.benchmark_start_time).total_seconds()
+
+            # Format runtime for display
+            if total_runtime < 60:
+                runtime_str = f"{total_runtime:.1f}s"
+            elif total_runtime < 3600:
+                runtime_str = f"{total_runtime/60:.1f}m ({total_runtime:.1f}s)"
+            else:
+                runtime_str = f"{total_runtime/3600:.2f}h ({total_runtime/60:.1f}m)"
+
+            # Log timing summary
+            self.logger.info("=" * 70)
+            self.logger.info("BENCHMARK TIMING SUMMARY")
+            self.logger.info("=" * 70)
+            self.logger.info(f"Start time:    {self.benchmark_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.logger.info(f"End time:      {benchmark_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.logger.info(f"Total runtime: {runtime_str}")
+            self.logger.info("=" * 70)
+
+            # Adaptive probing results summary
+            if hasattr(self.planner, 'get_probe_results'):
+                probe_results = self.planner.get_probe_results()
+                adaptive_var_name = self.planner._adaptive_var_name
+
+                self.logger.info("")
+                self.logger.info(f"Adaptive probing results for '{adaptive_var_name}':")
+                for label, result in probe_results.items():
+                    parts = [f"found={result.found_value}"]
+                    if result.failed_value is not None:
+                        parts.append(f"failed={result.failed_value}")
+                    parts.append(f"iterations={result.iterations}")
+                    parts.append(f"stop_reason={result.stop_reason}")
+                    prefix = f"  {label}: " if label else "  "
+                    self.logger.info(f"{prefix}{', '.join(parts)}")
+                self.logger.info("")
+
+                # Serialize for metadata JSON
+                adaptive_results = {
+                    adaptive_var_name: {
+                        label: {
+                            "found_value": r.found_value,
+                            "failed_value": r.failed_value,
+                            "iterations": r.iterations,
+                            "stop_reason": r.stop_reason,
+                        }
+                        for label, r in probe_results.items()
                     }
-                    for label, r in probe_results.items()
                 }
-            }
 
-        # Save runtime metadata for report generation
-        self._save_run_metadata(
-            test_count=test_count,
-            benchmark_start_time=self.benchmark_start_time,
-            benchmark_end_time=benchmark_end_time,
-            planner_stats=self._get_planner_stats(),
-            adaptive_results=adaptive_results,
-        )
+            # Auto-generate report if enabled
+            if self.cfg.reporting and self.cfg.reporting.enabled:
+                self._generate_report()
 
-        # Aggregate resource traces if enabled
-        self._aggregate_resource_traces(self.completed_tests)
+            # Cleanup: Cancel any remaining SLURM allocations (e.g., single-allocation mode)
+            self._cleanup_remaining_jobs()
 
-        # Save report config template for easy regeneration
-        save_report_config_template(self.cfg, logger=self.logger)
+        except KeyboardInterrupt:
+            self.interrupted = True
+            self.logger.info("\n\nExecution interrupted by user (Ctrl+C)")
 
-        # Auto-generate report if enabled
-        if self.cfg.reporting and self.cfg.reporting.enabled:
-            self._generate_report()
+        finally:
+            if benchmark_end_time is None:
+                benchmark_end_time = datetime.now()
 
-        # Cleanup: Cancel any remaining SLURM allocations (e.g., single-allocation mode)
-        self._cleanup_remaining_jobs()
+            # Update metadata with dynamic execution results
+            self._update_run_metadata(
+                test_count=test_count,
+                benchmark_end_time=benchmark_end_time,
+                planner_stats=self._get_planner_stats(),
+                adaptive_results=adaptive_results,
+            )
+
+            # Aggregate resource traces if any tests completed
+            self._aggregate_resource_traces(self.completed_tests)
+
+            # Save report config template for easy regeneration
+            save_report_config_template(self.cfg, logger=self.logger)

@@ -890,7 +890,7 @@ def main():
             else:
                 runner.run()
         except KeyboardInterrupt:
-            logger.info("\n\nExecution interrupted by user (Ctrl+C)")
+            # run() handles metadata saving in its finally block
             return
         except ConfigValidationError as e:
             logger.error(f"Configuration error: {e}")
