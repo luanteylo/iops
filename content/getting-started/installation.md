@@ -8,9 +8,9 @@ title: "Installation"
 
 1. [Prerequisites](#prerequisites)
 2. [Quick Installation (from PyPI)](#quick-installation-from-pypi)
-3. [Installation with Spack (for HPC environments)](#installation-with-spack-for-hpc-environments)
+3. [Installation from Source](#installation-from-source)
 4. [Offline Installation (Wheelhouse)](#offline-installation-wheelhouse)
-5. [Installation from Source](#installation-from-source)
+5. [Installation with Spack (for HPC environments)](#installation-with-spack-for-hpc-environments)
 6. [Verifying Your Installation](#verifying-your-installation)
 
 ---
@@ -23,6 +23,22 @@ Before installing IOPS, ensure you have:
 - For benchmark execution: Required tools in PATH (e.g., `ior`, `mpirun` for I/O benchmarks)
 - For SLURM clusters: Access to a SLURM scheduler
 
+### Virtual environment (recommended)
+
+IOPS works the same way inside a Python virtual environment (`venv`) or a Conda environment. Both are supported, pick whichever you already use on your system. Installing into an isolated environment is recommended so IOPS and its dependencies do not conflict with other Python tools on the machine.
+
+```bash
+# Option 1: venv (standard library)
+python3 -m venv ~/.venvs/iops
+source ~/.venvs/iops/bin/activate
+
+# Option 2: Conda / Mamba
+conda create -n iops python=3.10
+conda activate iops
+```
+
+Once the environment is active, any of the installation methods below can be used.
+
 ## Quick Installation (from PyPI)
 
 Install IOPS directly from PyPI:
@@ -31,38 +47,19 @@ Install IOPS directly from PyPI:
 pip install iops-benchmark
 ```
 
-## Installation with Spack (for HPC environments)
+## Installation from Source
 
-[Spack](https://spack.io/) is a package manager designed for HPC systems. It handles complex dependency chains and integrates well with module systems commonly found on clusters.
+### Basic Installation
 
-### Adding the IOPS Spack Repository
-
-```bash
-# Add the IOPS Spack repository
-spack repo add https://gitlab.inria.fr/lgouveia/iops-spack.git
-```
-
-### Option 1: Standalone Mode
-
-Uses pip to install dependencies from PyPI.
+Clone the repository and install the package:
 
 ```bash
-spack install iops-benchmark+standalone
-```
+# Clone the repository
+git clone https://gitlab.inria.fr/lgouveia/iops.git
+cd iops
 
-### Option 2: Full Spack-Managed Dependencies
-
-Spack builds and manages all dependencies.
-
-```bash
-spack install iops-benchmark
-```
-
-### Loading and Verifying
-
-```bash
-# Load the module
-spack load iops-benchmark
+# Install the package with dependencies
+pip install .
 
 # Verify installation
 iops --version
@@ -106,19 +103,42 @@ pip install --no-index --find-links=/path/to/iops-wheelhouse iops-benchmark
 - Ensure the machine creating the wheelhouse has the same OS and Python version as the cluster
 - For different architectures (e.g., x86_64 vs ARM), create the wheelhouse on a matching system or use `--platform` flag with `pip download`
 
-## Installation from Source
+## Installation with Spack (for HPC environments)
 
-### Basic Installation
+[Spack](https://spack.io/) is a package manager designed for HPC systems. It handles complex dependency chains and integrates well with module systems commonly found on clusters.
 
-Clone the repository and install the package:
+**Warning: Spack installs can take a long time**
+
+When using the full Spack-managed dependency mode, Spack compiles everything from source, including Python itself and scientific libraries such as NumPy, SciPy, and their BLAS backends. On a typical HPC node the first build can take from 30 minutes to several hours, depending on the cluster, the compiler, and how many dependencies are already cached. Prefer the standalone mode (which uses PyPI wheels) if you just want IOPS available quickly, and reserve the full mode for reproducible environments where tight integration with Spack-built dependencies is required.
+
+### Adding the IOPS Spack Repository
 
 ```bash
-# Clone the repository
-git clone https://gitlab.inria.fr/lgouveia/iops.git
-cd iops
+# Add the IOPS Spack repository
+spack repo add https://gitlab.inria.fr/lgouveia/iops-spack.git
+```
 
-# Install the package with dependencies
-pip install .
+### Option 1: Standalone Mode
+
+Uses pip to install dependencies from PyPI.
+
+```bash
+spack install iops-benchmark+standalone
+```
+
+### Option 2: Full Spack-Managed Dependencies
+
+Spack builds and manages all dependencies.
+
+```bash
+spack install iops-benchmark
+```
+
+### Loading and Verifying
+
+```bash
+# Load the module
+spack load iops-benchmark
 
 # Verify installation
 iops --version
@@ -138,4 +158,3 @@ iops generate test_config.yaml
 # Check the configuration
 iops check test_config.yaml
 ```
-
