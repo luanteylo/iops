@@ -218,6 +218,38 @@ class TestPlannerMaxParallel:
         # Verify counts are consistent (both draw from the same pool)
         assert len(batch) >= 1
 
+    def test_next_tests_returns_distinct_instances_across_repetitions(
+        self, tmp_path, sample_config_dict
+    ):
+        """
+        Regression: when the same exec_id is selected twice in one batch
+        (once per repetition), the two returned tests must be independent
+        objects with independent `execution_dir` / `repetition` / `metadata`.
+
+        Before the fix, both entries were aliases of `execution_matrix[idx]`
+        and the second call's `_prepare_execution_artifacts` overwrote the
+        first call's state, so `_run_parallel` submitted two SLURM jobs to
+        the same WorkDir.
+        """
+        sample_config_dict["vars"]["nodes"]["sweep"]["values"] = [1]
+        sample_config_dict["benchmark"]["repetitions"] = 2
+        config_file = _write_yaml(tmp_path / "cfg.yaml", sample_config_dict)
+        config = load_config(config_file)
+        planner = BasePlanner.build(config)
+
+        batch = planner.next_tests(2)
+        assert len(batch) == 2, "Expected 2 tests (1 exec * 2 reps)"
+
+        first, second = batch
+        assert first is not second, "Batch entries must be distinct objects"
+        assert first.execution_dir != second.execution_dir, (
+            f"execution_dir must differ per repetition, got "
+            f"{first.execution_dir} and {second.execution_dir}"
+        )
+        assert first.repetition != second.repetition
+        assert first.metadata is not second.metadata, "metadata dicts must be independent"
+        assert first.metadata.get("repetition") != second.metadata.get("repetition")
+
     def test_adaptive_planner_max_parallel_equals_probe_count(
         self, tmp_path
     ):

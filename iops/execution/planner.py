@@ -209,9 +209,14 @@ RESOURCE_SAMPLER_TEMPLATE = '''#!/bin/bash
 # executed directly via srun (for multi-node sampling).
 
 _IOPS_EXEC_DIR="{execution_dir}"
-_IOPS_TRACE_FILE="${{_IOPS_EXEC_DIR}}/{trace_prefix}$(hostname).csv"
+# Per-attempt id: isolates this invocation from any sibling attempt that SLURM
+# may reschedule into the same exec_dir (e.g. requeue after a node failure).
+# Without this, a second attempt's exit handler would delete the sentinel
+# used by the first attempt's still-running sampler.
+_IOPS_ATTEMPT_ID="${{SLURM_JOB_ID:-$$}}"
+_IOPS_TRACE_FILE="${{_IOPS_EXEC_DIR}}/{trace_prefix}$(hostname)_${{_IOPS_ATTEMPT_ID}}.csv"
 _IOPS_INTERVAL={trace_interval}
-_IOPS_SENTINEL="${{_IOPS_EXEC_DIR}}/{sentinel_filename}"
+_IOPS_SENTINEL="${{_IOPS_EXEC_DIR}}/{sentinel_filename}.${{_IOPS_ATTEMPT_ID}}"
 
 # Previous CPU stats for delta calculation (associative array: cpu_id -> "user nice system idle iowait irq softirq")
 declare -A _iops_prev_cpu
@@ -365,9 +370,13 @@ GPU_SAMPLER_TEMPLATE = '''#!/bin/bash
 # Future: AMD (rocm-smi), Intel (xpu-smi)
 
 _IOPS_GPU_EXEC_DIR="{execution_dir}"
-_IOPS_GPU_TRACE_FILE="${{_IOPS_GPU_EXEC_DIR}}/{gpu_trace_prefix}$(hostname).csv"
+# Per-attempt id: see the note in the CPU sampler. Prevents concurrent SLURM
+# attempts on the same exec_dir from stepping on each other's trace files and
+# sentinel files.
+_IOPS_GPU_ATTEMPT_ID="${{SLURM_JOB_ID:-$$}}"
+_IOPS_GPU_TRACE_FILE="${{_IOPS_GPU_EXEC_DIR}}/{gpu_trace_prefix}$(hostname)_${{_IOPS_GPU_ATTEMPT_ID}}.csv"
 _IOPS_GPU_INTERVAL={gpu_trace_interval}
-_IOPS_GPU_SENTINEL="${{_IOPS_GPU_EXEC_DIR}}/{gpu_sentinel_filename}"
+_IOPS_GPU_SENTINEL="${{_IOPS_GPU_EXEC_DIR}}/{gpu_sentinel_filename}.${{_IOPS_GPU_ATTEMPT_ID}}"
 
 # Detect GPU vendor and set query command
 _IOPS_GPU_VENDOR=""
@@ -533,6 +542,27 @@ class BasePlanner(ABC, HasLogger):
             self.logger.debug(f"  [Planner] Shuffling execution order ({sample_size} tests)")
             items = self.random.sample(items, sample_size)
         return items
+
+    def _clone_matrix_entry(self, idx: int) -> Any:
+        """
+        Return a per-attempt copy of `self.execution_matrix[idx]`.
+
+        `_prepare_execution_artifacts` mutates `execution_dir`, `repetition`,
+        `metadata["repetition"]`, `script_file`, and `post_script_file` on the
+        test object. When the planner is called multiple times for the same
+        matrix index (typically for different repetitions) and those calls
+        end up in the same parallel batch via `next_tests(n)`, the callers
+        would otherwise receive two aliased references to the same instance
+        and both would reflect the last call's state, so two SLURM jobs
+        would be submitted pointing to the same WorkDir.
+
+        A shallow copy with a fresh `metadata` dict is enough: all mutated
+        fields become per-call, while heavier shared fields (base_vars,
+        templates, etc.) stay shared read-only.
+        """
+        test = copy.copy(self.execution_matrix[idx])
+        test.metadata = dict(test.metadata) if getattr(test, "metadata", None) else {}
+        return test
 
     @abstractmethod
     def next_test(self) -> Any:
@@ -1487,7 +1517,7 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
         self._kickoff_index += 1
         self._attempt_count += 1
 
-        test = self.execution_matrix[test_idx]
+        test = self._clone_matrix_entry(test_idx)
 
         # Re-prepare artifacts to ensure test.execution_dir is set correctly
         # (artifacts already exist from prepare_kickoff_mode, this just updates the object)
@@ -1532,7 +1562,7 @@ class ExhaustivePlanner(BasePlanner, HasLogger):
             # At this point we have a valid matrix with remaining attempts
             assert self.execution_matrix is not None, "Execution matrix should be populated"
             idx = self.random.choice(self._active_indices)
-            test = self.execution_matrix[idx]
+            test = self._clone_matrix_entry(idx)
 
             rep_idx = self._next_rep_by_idx[idx]
             self._next_rep_by_idx[idx] += 1

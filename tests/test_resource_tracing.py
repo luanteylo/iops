@@ -207,9 +207,84 @@ sleep 0.3
         except subprocess.TimeoutExpired:
             pytest.fail("pgrep timed out - background processes may be stuck")
 
-        # Verify sentinel file was removed by exit handler
-        sentinel_file = tmp_path / SAMPLER_SENTINEL_FILENAME
-        assert not sentinel_file.exists(), "Sentinel file should be removed by exit handler"
+        # Verify sentinel file was removed by exit handler. The sampler now
+        # suffixes the sentinel with an attempt id (SLURM_JOB_ID or $$), so
+        # match the base name with a glob.
+        remaining = list(tmp_path.glob(f"{SAMPLER_SENTINEL_FILENAME}*"))
+        assert not remaining, (
+            f"Sentinel file should be removed by exit handler, found: {remaining}"
+        )
+
+    def test_concurrent_attempts_do_not_kill_each_others_samplers(self, tmp_path):
+        """
+        Reproduces the bug where a second SLURM attempt on the same exec_dir
+        would delete the shared sentinel on its own exit and stop the first
+        attempt's still-running sampler. With per-attempt sentinel/trace paths,
+        the second attempt's exit must only affect its own sampler.
+        """
+        import subprocess
+        import time
+        from iops.execution.planner import (
+            RESOURCE_SAMPLER_TEMPLATE, EXIT_HANDLER_TEMPLATE,
+            TRACE_FILENAME_PREFIX, SAMPLER_SENTINEL_FILENAME,
+        )
+
+        exit_handler = tmp_path / "__iops_exit_handler.sh"
+        exit_handler.write_text(EXIT_HANDLER_TEMPLATE)
+
+        sampler_script = RESOURCE_SAMPLER_TEMPLATE.format(
+            execution_dir=str(tmp_path),
+            trace_prefix=TRACE_FILENAME_PREFIX,
+            trace_interval=0.05,
+            sentinel_filename=SAMPLER_SENTINEL_FILENAME,
+        )
+        sampler_file = tmp_path / "__iops_runtime_sampler.sh"
+        sampler_file.write_text(sampler_script)
+
+        # "Attempt A" starts and keeps running while "attempt B" comes and goes.
+        # Both source the sampler and exit handler. A stays alive for longer.
+        attempt_a = tmp_path / "attempt_a.sh"
+        attempt_a.write_text(f'''#!/bin/bash
+export SLURM_JOB_ID=11111
+source "{exit_handler}"
+source "{sampler_file}"
+sleep 1.0
+''')
+        attempt_a.chmod(0o755)
+
+        attempt_b = tmp_path / "attempt_b.sh"
+        attempt_b.write_text(f'''#!/bin/bash
+export SLURM_JOB_ID=22222
+source "{exit_handler}"
+source "{sampler_file}"
+sleep 0.2
+''')
+        attempt_b.chmod(0o755)
+
+        proc_a = subprocess.Popen(
+            ["bash", str(attempt_a)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.1)
+        proc_b = subprocess.Popen(
+            ["bash", str(attempt_b)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        proc_b.wait(timeout=5)
+        # A's sentinel must still exist right after B's exit, proving B did
+        # not remove A's sentinel.
+        sentinel_a = tmp_path / f"{SAMPLER_SENTINEL_FILENAME}.11111"
+        sentinel_b = tmp_path / f"{SAMPLER_SENTINEL_FILENAME}.22222"
+        assert sentinel_a.exists(), "Attempt A's sentinel must survive attempt B exiting"
+        assert not sentinel_b.exists(), "Attempt B's own sentinel should have been cleaned up"
+
+        # Let A finish and verify both traces exist and are independent files.
+        proc_a.wait(timeout=5)
+        trace_a_matches = list(tmp_path.glob(f"{TRACE_FILENAME_PREFIX}*_11111.csv"))
+        trace_b_matches = list(tmp_path.glob(f"{TRACE_FILENAME_PREFIX}*_22222.csv"))
+        assert trace_a_matches, "Attempt A trace should exist"
+        assert trace_b_matches, "Attempt B trace should exist"
+        assert trace_a_matches[0] != trace_b_matches[0], "Traces must be separate files"
 
 
 # ============================================================================ #

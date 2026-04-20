@@ -12,6 +12,9 @@ All notable changes to IOPS are documented here.
 
 ### Fixed
 - Report generation now works after Ctrl+C interruption. Metadata file is written at the start of execution with static fields and updated with dynamic results in a finally block, so partial runs always produce a usable metadata file.
+- `ExhaustivePlanner.next_tests(n)` no longer returns aliased `ExecutionInstance` objects when the same matrix entry is picked for different repetitions in the same batch. Each returned test is now a shallow copy with its own `metadata` dict, so `_prepare_execution_artifacts` cannot overwrite an earlier batch entry's `execution_dir` / `repetition` / `script_file`. This prevented duplicate SLURM submissions pointing to the same WorkDir under `benchmark.parallel > 1`.
+- Resource and GPU samplers now isolate concurrent SLURM attempts on the same `exec_dir`. Trace files and the sentinel file are now suffixed with the SLURM job id (or the shell PID when running locally), so a requeued second attempt cannot truncate the first attempt's trace or stop its sampler when it exits.
+- Per-GPU columns in `__iops_resource_summary.csv` now include the hostname when traces span multiple nodes (`node01_gpu0_*`, `node02_gpu0_*`), so same-indexed GPUs on different hosts no longer overwrite each other. Single-node runs keep the original `gpuN_*` naming.
 
 ## [3.5.4] - 2026-04-06
 

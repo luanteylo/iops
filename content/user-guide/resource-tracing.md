@@ -37,9 +37,9 @@ When `probes.resource_sampling: true`, IOPS injects a resource sampler (`__iops_
 
 1. **Runs with low priority** (`renice -n 19`) to minimize interference
 2. **Samples at configurable intervals** from `/proc/stat` and `/proc/meminfo`
-3. **Writes per-node sample files** with hostname in filename (`__iops_trace_<hostname>.csv`)
-4. **Uses a sentinel file** (`__iops_trace_running`) for graceful termination
-5. **Stops automatically** when the exit handler removes the sentinel file
+3. **Writes per-node, per-attempt sample files** with hostname and attempt id in the filename (`__iops_trace_<hostname>_<attempt_id>.csv`, where `attempt_id` is the SLURM job id or the shell PID when running locally)
+4. **Uses a per-attempt sentinel file** (`__iops_trace_running.<attempt_id>`) for graceful termination
+5. **Stops automatically** when the exit handler removes its own sentinel file
 
 ### GPU Sampling
 
@@ -47,9 +47,9 @@ When `probes.gpu_sampling: true`, IOPS injects a GPU sampler (`__iops_runtime_gp
 
 1. **Detects GPU vendor** at runtime (currently supports NVIDIA via `nvidia-smi`, designed for future AMD/Intel support)
 2. **Queries all GPUs** in a single call per sample interval
-3. **Writes per-node GPU sample files** (`__iops_gpu_trace_<hostname>.csv`)
+3. **Writes per-node, per-attempt GPU sample files** (`__iops_gpu_trace_<hostname>_<attempt_id>.csv`)
 4. **Gracefully skips** if no supported GPU is detected (no errors, no empty files)
-5. **Uses its own sentinel file** (`__iops_gpu_trace_running`) independent of the CPU sampler
+5. **Uses its own per-attempt sentinel file** (`__iops_gpu_trace_running.<attempt_id>`) independent of the CPU sampler
 
 Both samplers share the `sampling_interval` setting, run at low priority, and support SLURM multi-node jobs.
 
@@ -59,7 +59,9 @@ Both samplers share the `sampling_interval` setting, run at low priority, and su
 
 Each execution produces one CSV file per node:
 
-**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_trace_<hostname>.csv`
+**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_trace_<hostname>_<attempt_id>.csv`
+
+`attempt_id` is the SLURM job id (or the shell PID when running locally). Including it in the filename prevents a second attempt (e.g. when SLURM requeues the job after a node failure) from truncating the first attempt's trace, and prevents one attempt's exit handler from stopping another attempt's sampler. Post-mortem aggregation picks up every matching file, so if an attempt aborts and leaves a short partial trace on disk, you may want to delete that file before running the report.
 
 **Format:**
 ```csv
@@ -157,6 +159,8 @@ Each GPU gets its own set of columns in the summary CSV, named by device index:
 | `gpuN_mem_peak_mib` | `gpu0_mem_peak_mib` | Peak memory used by GPU N |
 
 These per-GPU columns let you identify which GPUs were active and compare their individual resource profiles.
+
+When traces span multiple nodes (multi-node runs, or a rescheduled job that left a partial trace on a previous host), the hostname is added as a prefix so same-indexed GPUs on different hosts do not collide. For example, two GPUs on `node01` and `node02` become `node01_gpu0_*`, `node01_gpu1_*`, `node02_gpu0_*`, `node02_gpu1_*`. Single-node runs keep the plain `gpuN_*` naming.
 
 #### Aggregate Columns
 

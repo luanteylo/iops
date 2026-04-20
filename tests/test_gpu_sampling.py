@@ -642,6 +642,37 @@ class TestGpuTraceMetrics:
         assert metrics["gpu_mem_peak_mib"] == 40000.0
         assert metrics["gpu_max_temperature_c"] == 70.0
         assert metrics["gpu_max_power_w"] == 300.0
+        # Per-GPU columns are disambiguated by hostname so same-indexed GPUs
+        # on different hosts don't overwrite each other.
+        assert metrics["node01_gpu0_avg_utilization_pct"] == 80.0
+        assert metrics["node02_gpu0_avg_utilization_pct"] == 90.0
+        assert "gpu0_avg_utilization_pct" not in metrics
+
+    def test_multiple_nodes_same_gpu_index_preserved(self, tmp_path):
+        """Multi-node traces must not collapse same-indexed GPUs into one column."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace1 = tmp_path / "__iops_gpu_trace_sirocco22.foo.bar.csv"
+        trace1.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,sirocco22.foo.bar,0,GPU,95.0,40.0,30000,81920,65,240.0,1410,1215\n"
+            + "1001.0,sirocco22.foo.bar,0,GPU,95.0,40.0,30000,81920,65,240.0,1410,1215\n"
+        )
+        trace2 = tmp_path / "__iops_gpu_trace_sirocco25.foo.bar.csv"
+        trace2.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,sirocco25.foo.bar,0,GPU,5.0,1.0,100,81920,35,45.0,210,1215\n"
+            + "1001.0,sirocco25.foo.bar,0,GPU,5.0,1.0,100,81920,35,45.0,210,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace1, trace2])
+
+        assert metrics["gpu_count"] == 2
+        assert metrics["sirocco22_gpu0_avg_utilization_pct"] == 95.0
+        assert metrics["sirocco25_gpu0_avg_utilization_pct"] == 5.0
+        assert metrics["sirocco22_gpu0_avg_power_w"] == 240.0
+        assert metrics["sirocco25_gpu0_avg_power_w"] == 45.0
 
     def test_malformed_rows_skipped(self, tmp_path):
         """Test that malformed rows are skipped gracefully."""

@@ -545,10 +545,19 @@ class IOPSRunner(HasLogger):
         gpu_peak_mems = []
         gpu_energies = []
 
+        # Multi-node traces use different column names so same-indexed GPUs on
+        # different hosts don't overwrite each other.
+        hosts_in_data = {k.split(":")[0] for k in per_gpu_data.keys()}
+        multi_node = len(hosts_in_data) > 1
+
         for gpu_key in sorted(per_gpu_data.keys()):
             d = per_gpu_data[gpu_key]
-            # Extract GPU index for column naming (e.g. "gpu0" from "node01:gpu0")
-            gpu_label = gpu_key.split(":")[-1]  # "gpu0", "gpu1", etc.
+            hostname, gpu_part = gpu_key.split(":", 1)  # e.g. "node01.foo", "gpu0"
+            if multi_node:
+                short_host = hostname.split(".")[0].replace("-", "_")
+                gpu_label = f"{short_host}_{gpu_part}"
+            else:
+                gpu_label = gpu_part
 
             avg_util = sum(d['util_gpu']) / len(d['util_gpu'])
             avg_power = sum(d['power']) / len(d['power'])
