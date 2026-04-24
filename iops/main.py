@@ -285,6 +285,41 @@ Examples:
                                       help='Output database path (default: <source>_rebuilt.db)')
     _add_common_args(cache_rebuild_parser)
 
+    # cache list
+    cache_list_parser = cache_subparsers.add_parser('list', help='List cached entries',
+                                                     description='List cached entries, collapsed per unique parameter set.')
+    cache_list_parser.add_argument('source', type=Path, help='Path to cache database')
+    cache_list_parser.add_argument('filter', type=str, nargs='*', metavar='VAR=VALUE',
+                                    help='Filter entries by variable values (e.g., nodes=4 ppn=8)')
+    cache_list_parser.add_argument('--full', action='store_true',
+                                    help='Show full parameter/metric values without truncation')
+    cache_list_parser.add_argument('--no-metrics', action='store_true',
+                                    help='Hide metric columns')
+    cache_list_parser.add_argument('--limit', type=int, default=None, metavar='N',
+                                    help='Limit output to N most recently cached entries')
+    cache_list_parser.add_argument('--json', action='store_true',
+                                    help='Emit entries as JSON (one array) for scripting')
+    _add_common_args(cache_list_parser)
+
+    # cache show
+    cache_show_parser = cache_subparsers.add_parser('show', help='Show full details of a cached entry',
+                                                     description='Show parameters, metrics, and metadata for one cached entry.')
+    cache_show_parser.add_argument('source', type=Path, help='Path to cache database')
+    cache_show_parser.add_argument('hash', type=str, help='Full hash or git-style prefix')
+    cache_show_parser.add_argument('--full', action='store_true',
+                                    help='Show full values without truncation')
+    cache_show_parser.add_argument('--json', action='store_true',
+                                    help='Emit the entry as JSON for scripting')
+    _add_common_args(cache_show_parser)
+
+    # cache stats
+    cache_stats_parser = cache_subparsers.add_parser('stats', help='Show cache summary statistics',
+                                                      description='Print counts and date range for a cache database.')
+    cache_stats_parser.add_argument('source', type=Path, help='Path to cache database')
+    cache_stats_parser.add_argument('--json', action='store_true',
+                                     help='Emit stats as JSON for scripting')
+    _add_common_args(cache_stats_parser)
+
     # ---- convert command ----
     convert_parser = subparsers.add_parser('convert', help='Convert JUBE XML to IOPS YAML',
                                             description='Convert a JUBE benchmark XML file to IOPS YAML format.')
@@ -811,9 +846,94 @@ def main():
                     raise
             return
 
+        elif args.cache_command == 'list':
+            from iops.cache import list_cache_entries
+            from iops.cache.inspect import display_cache_list
+            import json as _json
+
+            try:
+                param_filters = {}
+                if args.filter:
+                    for f in args.filter:
+                        if '=' not in f:
+                            logger.error(f"Invalid filter format: '{f}' (expected VAR=VALUE)")
+                            return
+                        key, value = f.split('=', 1)
+                        param_filters[key] = value
+
+                entries = list_cache_entries(
+                    db_path=args.source,
+                    param_filters=param_filters or None,
+                    limit=args.limit,
+                )
+
+                if args.json:
+                    print(_json.dumps(entries, indent=2, default=str))
+                else:
+                    display_cache_list(
+                        entries,
+                        show_full=args.full,
+                        hide_metrics=args.no_metrics,
+                    )
+            except FileNotFoundError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error listing cache: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        elif args.cache_command == 'show':
+            from iops.cache import get_cache_entry, HashPrefixError
+            from iops.cache.inspect import display_cache_entry
+            import json as _json
+
+            try:
+                entry = get_cache_entry(args.source, args.hash)
+                if args.json:
+                    print(_json.dumps(entry, indent=2, default=str))
+                else:
+                    display_cache_entry(entry, show_full=args.full)
+            except FileNotFoundError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except HashPrefixError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error showing cache entry: {e}")
+                if args.verbose:
+                    raise
+            return
+
+        elif args.cache_command == 'stats':
+            from iops.cache import get_cache_stats
+            from iops.cache.inspect import display_cache_stats
+            import json as _json
+
+            try:
+                stats = get_cache_stats(args.source)
+                if args.json:
+                    print(_json.dumps(stats, indent=2, default=str))
+                else:
+                    display_cache_stats(stats)
+            except FileNotFoundError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error reading cache stats: {e}")
+                if args.verbose:
+                    raise
+            return
+
         else:
             # No subcommand provided
-            logger.error("No cache subcommand specified. Use 'iops cache rebuild'.")
+            logger.error("No cache subcommand specified. Use 'iops cache list|show|stats|rebuild'.")
             logger.info("Run 'iops cache --help' for more information.")
             return
 

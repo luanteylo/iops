@@ -10,6 +10,13 @@ This module provides:
 
 from .execution_cache import ExecutionCache, normalize_params, hash_params
 from .rebuild import rebuild_cache, RebuildStats
+from .inspect import (
+    HashPrefixError,
+    list_cache_entries,
+    get_cache_entry,
+    get_cache_stats,
+    resolve_hash_prefix,
+)
 
 __all__ = [
     "ExecutionCache",
@@ -17,4 +24,9 @@ __all__ = [
     "hash_params",
     "rebuild_cache",
     "RebuildStats",
+    "HashPrefixError",
+    "list_cache_entries",
+    "get_cache_entry",
+    "get_cache_stats",
+    "resolve_hash_prefix",
 ]
