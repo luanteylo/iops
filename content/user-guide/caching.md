@@ -11,7 +11,8 @@ weight: 6
 2. [Configuration](#configuration)
    - [Basic Usage](#basic-usage)
    - [Cache-Only Mode](#cache-only-mode)
-3. [Rebuilding the Cache](#rebuilding-the-cache)
+3. [Inspecting the Cache](#inspecting-the-cache)
+4. [Rebuilding the Cache](#rebuilding-the-cache)
 
 ---
 
@@ -191,21 +192,137 @@ Since `block_size` hasn't changed, the cache hash remains the same, and you'll g
 - Log files
 
 
-### Inspecting the Cache
+## Inspecting the Cache
+
+IOPS provides three read-only subcommands to explore what is stored in a cache database.
+
+### `iops cache stats`
+
+Print a summary of the cache: total entries, unique parameter sets, and date range.
+
+```bash
+$ iops cache stats cache.db
+
+Cache: cache.db
+--------------------------------------------------
+Total entries:          28
+Unique parameter sets:  14
+Distinct repetitions:   2
+Oldest entry:           2026-04-06T18:58:32.285294
+Newest entry:           2026-04-17T23:53:07.035720
+```
+
+### `iops cache list`
+
+List cached entries, collapsed per unique parameter hash. Each row shows a short (8-character) hash, the parameter values, the number of cached repetitions, and metric averages across repetitions.
+
+```bash
+$ iops cache list cache.db
+
+Hash      dataset       light_conv  Reps  average_epoch_time_sec  peak_gpu_memory_mib  Last Cached
+-----------------------------------------------------------------------------------------------------
+57c77ec3  moving_mnist  tied        2     430.72                  10996.97             2026-04-17T23:53:07
+096cd29f  taasrad19     sqnxt       2     391.29                  11134.85             2026-04-17T12:21:38
+9ec8f1cb  moving_mnist  dws         2     454.16                  11957.98             2026-04-17T11:51:36
+...
+```
+
+Filter by parameter values using the same `VAR=VALUE` syntax as `iops find`:
+
+```bash
+# Only entries where dataset=moving_mnist
+iops cache list cache.db dataset=moving_mnist
+
+# Hide metric columns, keep just params and repetition counts
+iops cache list cache.db --no-metrics
+
+# Show full parameter values without truncation
+iops cache list cache.db --full
+
+# Limit to the 10 most recently cached parameter sets
+iops cache list cache.db --limit 10
+
+# Emit JSON for scripting
+iops cache list cache.db --json
+```
+
+### `iops cache show`
+
+Show full details for a single cached parameter set, including every repetition's metrics and metadata. The hash argument accepts a git-style short prefix:
+
+```bash
+$ iops cache show cache.db 57c77e
+
+Hash: 57c77ec316e9b66f3aa9861227fa1a83
+Short: 57c77ec3
+
+Parameters:
+  dataset: moving_mnist
+  light_conv: tied
+
+Repetitions: 2
+
+  rep=1  cached_at=2026-04-08T08:01:27.580146
+    metrics:
+      average_epoch_time_sec: 428.96
+      min_epoch_gen_loss: -293.98
+      peak_gpu_memory_mib: 10996.97
+      ...
+    metadata:
+      __executor_status: SUCCEEDED
+      __jobid: 4646245
+      ...
+
+  rep=2  cached_at=2026-04-17T23:53:07.035720
+    ...
+```
+
+If the prefix matches multiple hashes, IOPS reports the candidates and asks for a longer prefix:
+
+```bash
+$ iops cache show cache.db 5
+ERROR | Hash prefix '5' is ambiguous: matches 2 entries (57c77ec3, 58abbe6f). Provide a longer prefix.
+```
+
+Use `--full` to disable truncation of long values and `--json` for machine-readable output.
+
+### Python API
+
+The CLI subcommands are thin wrappers around helpers in `iops.cache` that you can call directly:
 
 ```python
-from iops.cache import ExecutionCache
-from pathlib import Path
+from iops.cache import (
+    list_cache_entries,
+    get_cache_entry,
+    get_cache_stats,
+    resolve_hash_prefix,
+    ExecutionCache,
+)
 
-cache = ExecutionCache(Path("/path/to/cache.db"))
-
-# Get statistics
-stats = cache.get_cache_stats()
+# Summary statistics
+stats = get_cache_stats("cache.db")
 print(f"Total entries: {stats['total_entries']}")
 print(f"Unique parameter sets: {stats['unique_parameter_sets']}")
-print(f"Date range: {stats['oldest_entry']} to {stats['newest_entry']}")
 
-# Clear cache if needed
+# List entries, filtered and collapsed per parameter hash
+entries = list_cache_entries(
+    "cache.db",
+    param_filters={"dataset": "moving_mnist"},
+    limit=10,
+)
+for e in entries:
+    print(e["hash"][:8], e["params"], e["rep_count"], e["metrics"])
+
+# Full detail for a single entry (git-style prefix accepted)
+entry = get_cache_entry("cache.db", "57c77e")
+for rep in entry["repetitions"]:
+    print(rep["repetition"], rep["metrics"])
+
+# Resolve a prefix to a full hash (raises HashPrefixError on ambiguity)
+full_hash = resolve_hash_prefix("cache.db", "57c77e")
+
+# Mutating operations still go through ExecutionCache
+cache = ExecutionCache("cache.db")
 cache.clear_cache()
 ```
 

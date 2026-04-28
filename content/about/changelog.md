@@ -9,6 +9,12 @@ All notable changes to IOPS are documented here.
 ### Added
 - YAML configuration section in HTML reports, showing the original config in a collapsible block
 - Signal handler registration for all executors (previously SLURM-only)
+- `iops cache list`, `iops cache show`, and `iops cache stats` subcommands for inspecting cache databases
+  - `list` collapses entries per unique parameter hash, with averaged metrics across repetitions and `VAR=VALUE` filtering (same syntax as `iops find`)
+  - `show` accepts a git-style hash prefix and prints every repetition's metrics and metadata
+  - `stats` prints totals, unique parameter sets, and date range
+  - All three support `--json` for scripting
+- Public helpers in `iops.cache` for programmatic inspection: `list_cache_entries`, `get_cache_entry`, `get_cache_stats`, `resolve_hash_prefix`
 
 ### Fixed
 - Report generation now works after Ctrl+C interruption. Metadata file is written at the start of execution with static fields and updated with dynamic results in a finally block, so partial runs always produce a usable metadata file.
