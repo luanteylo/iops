@@ -677,6 +677,14 @@ scripts:
       ...
       {{ command.template }}
 
+    inputs:                         # Optional: input files generated before script runs
+      - name: string                #   Logical id, referenced as {{ inputs.<name>.path }}
+        template: |                 #   Inline content (Jinja2). Use EITHER template OR file.
+          ...
+        file: string                #   Path to external template file (alternative to `template`)
+        path: string                #   Destination (Jinja2). Default: {{ execution_dir }}/<name>
+        mode: string                #   Optional octal string, e.g. "0644"
+
     post:                           # Optional: post-processing
       script: |
         #!/bin/bash
@@ -731,6 +739,64 @@ scripts:
       module load mpi ior
       mpirun {{ command.template }}
 ```
+
+</details>
+
+<details>
+<summary><strong>inputs</strong> (optional)</summary>
+
+Declarative input files generated before the script runs. Useful when the benchmark reads its parameters from a config file (or hostfile, manifest, etc.) instead of the command line.
+
+Files are rendered with the same Jinja2 context as `script_template` and written to disk at preparation time, alongside `run_*.sh`. Because they're materialized up front, the exact input used for every execution is on disk for inspection even when the script aborts before producing output.
+
+```yaml
+scripts:
+  - name: "ior"
+    inputs:
+      - name: ior_config
+        path: "{{ execution_dir }}/ior.conf"
+        template: |
+          IOR START
+            api = POSIX
+            blockSize = {{ block_size_mb }}m
+            transferSize = {{ transfer_size_kb }}k
+            numTasks = {{ nodes * processes_per_node }}
+          IOR STOP
+      - name: hostfile
+        file: "./templates/hostfile.j2"
+        mode: "0644"
+
+    script_template: |
+      #!/bin/bash
+      ior -f {{ inputs.ior_config.path }} \
+          --hostfile {{ inputs.hostfile.path }}
+```
+
+**Fields per entry:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Identifier used in `{{ inputs.<name>.path }}` references. Must be a valid Python identifier (letters/digits/underscores, no leading digit) and unique within the script. |
+| `template` | One of | Inline content, rendered with the full execution context. |
+| `file` | One of | Path to an external template file (resolved relative to the YAML config, or as an absolute path). The file content replaces `template` at load time. |
+| `path` | No | Destination path on disk, Jinja2-rendered. Defaults to `{{ execution_dir }}/<name>`. |
+| `mode` | No | Octal string (e.g., `"0644"`) applied with chmod after the file is written. |
+
+**Context available in `template` and `path`:**
+- All swept and derived variables (`{{ nodes }}`, `{{ block_size_mb }}`, ...)
+- `{{ execution_dir }}`, `{{ workdir }}`, `{{ execution_id }}`, `{{ repetition }}`, `{{ repetitions }}`
+- `{{ os_env.* }}` for environment variables
+- `{{ inputs.<other>.path }}` to reference another input's resolved path (within the same script)
+
+**Referencing inputs in `script_template`, `command.template`, or `post.script`:**
+
+Use `{{ inputs.<name>.path }}` to get the rendered destination path. The reference works in any of the script-level templates and in the top-level `command.template`.
+
+**Rules:**
+- Exactly one of `template` or `file` must be provided per entry.
+- Input names must be unique within a script.
+- Jinja2 syntax in `template` and `path` is validated at load time (alongside `script_template`).
+- The file is rewritten on every repetition, so each repetition_NNN folder gets its own copy.
 
 </details>
 

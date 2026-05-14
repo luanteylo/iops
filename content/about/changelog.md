@@ -4,6 +4,16 @@ title: "Changelog"
 
 All notable changes to IOPS are documented here.
 
+## [Unreleased]
+
+### Added
+- Declarative input files via `scripts[].inputs` for parameter files that the benchmark reads from disk
+  - Each entry declares a `name`, `template` (inline) or `file` (external path), optional `path` (defaults to `{{ execution_dir }}/<name>`), and optional `mode` (octal string applied with chmod)
+  - Files are rendered with the full execution context (vars, `os_env`, `execution_id`, `repetition`, etc.) and written at preparation time, so the exact input used for each run remains on disk even if the script aborts
+  - Rendered paths are exposed in `script_template`, `command.template`, and `post.script` via `{{ inputs.<name>.path }}`
+  - Names must be valid Python identifiers and unique within a script; Jinja2 syntax in `template` and `path` is validated at load time
+  - Purely additive: existing configs without `inputs:` are unaffected
+
 ## [3.5.4] - 2026-04-28
 
 ### Added
