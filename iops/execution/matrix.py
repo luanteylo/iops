@@ -78,7 +78,34 @@ def _cast_value(type_name: str, value: Any) -> Any:
     return value
 
 
-def _eval_expr(expr: str, vartype: str, context: Dict[str, Any]) -> Any:
+def _cast_with_hint(vartype: str, value: Any, expr: str, var_name: Optional[str]) -> Any:
+    """
+    Cast a rendered value to the declared type, raising a helpful
+    ConfigValidationError if the cast fails.
+    """
+    try:
+        return _cast_value(vartype, value)
+    except (ValueError, TypeError) as e:
+        where = f"var '{var_name}'" if var_name else "derived var"
+        msg = (
+            f"{where} declared 'type: {vartype}' but expr={expr!r} "
+            f"rendered to {value!r}, which cannot be cast to {vartype}: {e}"
+        )
+        if vartype == "int" and isinstance(value, str) and "." in value:
+            msg += (
+                "\n  HINT: Jinja '/' is float division. "
+                "Use '//' for integer division, '| int' to truncate, "
+                "or change the var to 'type: float'."
+            )
+        raise ConfigValidationError(msg) from e
+
+
+def _eval_expr(
+    expr: str,
+    vartype: str,
+    context: Dict[str, Any],
+    var_name: Optional[str] = None,
+) -> Any:
     """
     Evaluate a derived variable expression.
 
@@ -92,7 +119,7 @@ def _eval_expr(expr: str, vartype: str, context: Dict[str, Any]) -> Any:
     # Jinja-style expression or string var
     if "{{" in expr or "}}" in expr or vartype == "str":
         rendered = _render_template(expr, context)
-        return _cast_value(vartype, rendered)
+        return _cast_with_hint(vartype, rendered, expr, var_name)
 
     # Arithmetic-style expression
     # Restrict builtins for safety
@@ -111,7 +138,7 @@ def _eval_expr(expr: str, vartype: str, context: Dict[str, Any]) -> Any:
     except Exception as e:
         raise ConfigValidationError(f"Error evaluating expr='{expr}': {e}") from e
 
-    return _cast_value(vartype, val)
+    return _cast_with_hint(vartype, val, expr, var_name)
 
 
 # ----------------- sweep helpers ----------------- #
@@ -388,7 +415,7 @@ class ExecutionInstance:
         # derived_var_cfgs preserves insertion order (from build_execution_matrix)
         # Note: expr validation is handled by loader.py's validate_generic_config()
         for name, (expr, vartype) in self.derived_var_cfgs.items():
-            val = _eval_expr(expr, vartype, {**ctx0, **all_vars})
+            val = _eval_expr(expr, vartype, {**ctx0, **all_vars}, var_name=name)
             all_vars[name] = val
 
         return all_vars
