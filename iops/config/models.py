@@ -334,11 +334,42 @@ class ParserConfig:
 
 
 @dataclass
+class InputFileConfig:
+    """
+    Declarative input file generated before script execution.
+
+    Inputs are rendered with the same Jinja2 context as scripts (vars, os_env,
+    execution_id, repetition, etc.) and written to disk at test preparation
+    time, so the file is always present for debugging even if the script
+    aborts. The rendered path is exposed in script templates and the command
+    via ``{{ inputs.<name>.path }}``.
+
+    Exactly one of ``template`` (inline content) or ``file`` (path to a
+    template file relative to the YAML, resolved via the same mechanism as
+    ``script_template``) must be provided.
+
+    Attributes:
+        name: Logical identifier, used in ``{{ inputs.<name>.path }}`` references.
+        template: Inline file content (Jinja2-rendered). Mutually exclusive with ``file``.
+        file: Path to an external template file. Mutually exclusive with ``template``.
+        path: Destination path on disk (Jinja2-rendered). Defaults to
+            ``{{ execution_dir }}/<name>`` if omitted.
+        mode: Optional octal string (e.g. ``"0644"``) applied with chmod after write.
+    """
+    name: str
+    template: Optional[str] = None
+    file: Optional[str] = None
+    path: Optional[str] = None
+    mode: Optional[str] = None
+
+
+@dataclass
 class ScriptConfig:
     name: str
     script_template: str
     post: Optional[PostConfig] = None      # optional
     parser: Optional[ParserConfig] = None  # optional
+    inputs: List[InputFileConfig] = field(default_factory=list)  # optional input files
 
 
 @dataclass

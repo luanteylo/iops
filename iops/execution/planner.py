@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from collections import defaultdict
 import logging
+import os
 import random
 import json
 import sys
@@ -986,6 +987,10 @@ class BasePlanner(ABC, HasLogger):
             # In upfront mode: update params file with resolved values (execution_dir now known)
             self._write_params_file(test, exec_parent_dir)
 
+        # Write declared input files first so {{ inputs.<name>.path }} references
+        # in the script point at real, on-disk files even if the script aborts.
+        self._write_input_files(test)
+
         # Get the rendered script text
         script_text = test.script_text
 
@@ -1007,6 +1012,37 @@ class BasePlanner(ABC, HasLogger):
             script_info += f", post={test.post_script_file.name}"
 
         self.logger.debug(f"  [Prepare] Scripts written: {script_info}")
+
+    def _write_input_files(self, test) -> None:
+        """
+        Render and write user-declared input files for one test execution.
+
+        Each file is written to its rendered ``path`` (defaulting to
+        ``<execution_dir>/<name>`` when no path was provided). Parent
+        directories are created as needed. If a ``mode`` was declared, it is
+        applied with ``chmod`` after the write.
+        """
+        input_files = test.input_files
+        if not input_files:
+            return
+
+        written: List[str] = []
+        for entry in input_files:
+            dest = Path(entry["path"])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest, "w") as f:
+                f.write(entry["content"])
+            if entry.get("mode"):
+                try:
+                    os.chmod(dest, int(str(entry["mode"]), 8))
+                except (ValueError, OSError) as e:
+                    self.logger.warning(
+                        f"  [Prepare] Could not chmod input '{entry['name']}' "
+                        f"({dest}) to {entry['mode']}: {e}"
+                    )
+            written.append(f"{entry['name']}={dest.name}")
+
+        self.logger.debug(f"  [Prepare] Inputs written: {', '.join(written)}")
 
     def _inject_iops_scripts(self, script_text: str, exec_dir: Path) -> str:
         """

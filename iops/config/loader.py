@@ -45,6 +45,7 @@ from iops.config.models import (
     PostConfig,
     ParserConfig,
     MetricConfig,
+    InputFileConfig,
     OutputConfig,
     OutputSinkConfig,
     ReportingConfig,
@@ -85,10 +86,11 @@ ALLOWED_ADAPTIVE_KEYS = {"initial", "factor", "increment", "step_expr", "stop_wh
 
 ALLOWED_COMMAND_KEYS = {"template", "metadata", "labels", "env"}
 
-ALLOWED_SCRIPT_KEYS = {"name", "script_template", "submit", "post", "parser", "mpi"}
+ALLOWED_SCRIPT_KEYS = {"name", "script_template", "submit", "post", "parser", "mpi", "inputs"}
 ALLOWED_PARSER_KEYS = {"file", "metrics", "parser_script"}
 ALLOWED_POST_KEYS = {"script"}
 ALLOWED_METRIC_KEYS = {"name", "type", "path"}
+ALLOWED_INPUT_KEYS = {"name", "template", "file", "path", "mode"}
 
 ALLOWED_OUTPUT_KEYS = {"sink"}
 ALLOWED_OUTPUT_SINK_KEYS = {"type", "path", "exclude", "include", "table", "mode"}
@@ -1223,12 +1225,73 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 parser_script=parser_script,
             )
 
+        # optional inputs: list of files generated before script execution
+        inputs_cfg: List[InputFileConfig] = []
+        inputs_block = s.get("inputs")
+        if inputs_block is not None:
+            if not isinstance(inputs_block, list):
+                raise ConfigValidationError(
+                    f"scripts[{idx}] ({script_name}).inputs must be a list, got {type(inputs_block).__name__}"
+                )
+            for in_idx, inp in enumerate(inputs_block):
+                if not isinstance(inp, dict):
+                    raise ConfigValidationError(
+                        f"scripts[{idx}] ({script_name}).inputs[{in_idx}] must be a mapping"
+                    )
+                key_errors = _validate_allowed_keys(
+                    inp, ALLOWED_INPUT_KEYS, f"scripts[{idx}] ({script_name}).inputs[{in_idx}]"
+                )
+                if key_errors:
+                    raise ConfigValidationError("\n".join(key_errors))
+
+                # Load template content (inline) or read from external file
+                template_content = inp.get("template")
+                file_ref = inp.get("file")
+                if template_content is not None and file_ref is not None:
+                    raise ConfigValidationError(
+                        f"scripts[{idx}] ({script_name}).inputs[{in_idx}] must specify "
+                        f"exactly one of 'template' or 'file', not both"
+                    )
+                if template_content is None and file_ref is None:
+                    raise ConfigValidationError(
+                        f"scripts[{idx}] ({script_name}).inputs[{in_idx}] must specify "
+                        f"either 'template' (inline content) or 'file' (path to template file)"
+                    )
+
+                if file_ref is not None:
+                    # 'file' is an explicit declaration that the value is a path,
+                    # so always read it (bypassing _load_script_content's heuristic).
+                    rel = config_dir / file_ref
+                    abs_path = Path(file_ref).expanduser()
+                    if rel.is_file():
+                        template_content = rel.read_text(encoding="utf-8")
+                    elif abs_path.is_file():
+                        template_content = abs_path.read_text(encoding="utf-8")
+                    else:
+                        raise ConfigValidationError(
+                            f"scripts[{idx}] ({script_name}).inputs[{in_idx}].file "
+                            f"not found: '{file_ref}'\n"
+                            f"  Searched: {rel}\n"
+                            f"  Searched: {abs_path}"
+                        )
+
+                inputs_cfg.append(
+                    InputFileConfig(
+                        name=inp.get("name"),
+                        template=template_content,
+                        file=None,  # always materialized into `template` after load
+                        path=inp.get("path"),
+                        mode=inp.get("mode"),
+                    )
+                )
+
         scripts.append(
             ScriptConfig(
                 name=s["name"],
                 script_template=script_template,
                 post=post_cfg,
                 parser=parser_cfg,
+                inputs=inputs_cfg,
             )
         )
 
@@ -2158,6 +2221,62 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                         f"a built-in stop_when variable. "
                         f"Reserved names: {sorted(_RESERVED_STOP_WHEN_VARS)}"
                     )
+
+        # inputs validation (optional)
+        if s.inputs:
+            seen_names: Set[str] = set()
+            for in_idx, inp in enumerate(s.inputs):
+                ctx_prefix = f"script '{s.name}' inputs[{in_idx}]"
+                if not inp.name or not str(inp.name).strip():
+                    raise ConfigValidationError(f"{ctx_prefix} must have a non-empty 'name'")
+                if inp.name in seen_names:
+                    raise ConfigValidationError(
+                        f"script '{s.name}' has duplicate input name '{inp.name}'"
+                    )
+                seen_names.add(inp.name)
+
+                # Name must be a valid identifier so {{ inputs.<name>.path }} resolves
+                if not inp.name.isidentifier():
+                    raise ConfigValidationError(
+                        f"{ctx_prefix} name '{inp.name}' is not a valid identifier "
+                        f"(letters, digits, underscores; must not start with a digit)"
+                    )
+
+                if inp.template is None or not str(inp.template).strip():
+                    raise ConfigValidationError(
+                        f"{ctx_prefix} ('{inp.name}') has empty content; "
+                        f"provide non-empty 'template' or a 'file' that is not empty"
+                    )
+
+                # Validate Jinja2 syntax in template body and (optional) path
+                ok, err = _validate_jinja_template(
+                    inp.template, f"scripts['{s.name}'].inputs['{inp.name}'].template"
+                )
+                if not ok:
+                    raise ConfigValidationError(err)
+
+                if inp.path is not None:
+                    if not str(inp.path).strip():
+                        raise ConfigValidationError(
+                            f"{ctx_prefix} ('{inp.name}') has empty 'path'; "
+                            f"omit it to default to {{{{ execution_dir }}}}/{inp.name}"
+                        )
+                    ok, err = _validate_jinja_template(
+                        inp.path, f"scripts['{s.name}'].inputs['{inp.name}'].path"
+                    )
+                    if not ok:
+                        raise ConfigValidationError(err)
+
+                if inp.mode is not None:
+                    # Accept "0644" / "644" / "0o644" — must be parseable as octal
+                    mode_str = str(inp.mode).strip()
+                    try:
+                        int(mode_str, 8)
+                    except ValueError:
+                        raise ConfigValidationError(
+                            f"{ctx_prefix} ('{inp.name}') has invalid mode '{inp.mode}'; "
+                            f"expected octal string like '0644'"
+                        )
 
     # ---- output ----
     sink = cfg.output.sink

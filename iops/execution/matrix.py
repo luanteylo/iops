@@ -17,6 +17,7 @@ from iops.config.models import (
     VarConfig,
     ParserConfig,
     MetricConfig,
+    InputFileConfig,
     ConfigValidationError,
 )
 from iops.execution.constraints import (
@@ -322,6 +323,9 @@ class ExecutionInstance:
     post_script_template: str | None = None
     post_script_file : Optional[Path] = None
 
+    # Input file templates (rendered to disk before script execution)
+    input_file_templates: List[InputFileConfig] = field(default_factory=list)
+
     # Parser template (with possibly templated .file)
     parser_template: ParserConfig | None = None
 
@@ -443,6 +447,61 @@ class ExecutionInstance:
 
     # ---------- Lazy-rendered properties ---------- #
 
+    def _render_input_paths(self, ctx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """
+        Render only the destination *paths* for declared inputs.
+
+        Done in a first pass so {{ inputs.<name>.path }} can be referenced
+        inside the script, command, post script, and even other input file
+        contents during the second rendering pass.
+        """
+        rendered: Dict[str, Dict[str, Any]] = {}
+        if not self.input_file_templates:
+            return rendered
+
+        exec_dir = ctx.get("execution_dir", "")
+        for inp in self.input_file_templates:
+            if inp.path is None or not str(inp.path).strip():
+                path_str = f"{exec_dir}/{inp.name}" if exec_dir else inp.name
+            else:
+                path_str = _render_template(inp.path, ctx)
+            rendered[inp.name] = {
+                "path": path_str,
+                "name": inp.name,
+                "mode": inp.mode,
+            }
+        return rendered
+
+    @property
+    def input_files(self) -> List[Dict[str, Any]]:
+        """
+        Render input files (path + content) for this execution.
+
+        Returns a list of dicts ordered the same as the YAML declaration:
+            [{"name": str, "path": str, "content": str, "mode": Optional[str]}, ...]
+
+        Templates are rendered with the full execution context plus an
+        ``inputs`` mapping (so an input can reference another input's path).
+        """
+        if not self.input_file_templates:
+            return []
+
+        base_ctx = self._render_context()
+        inputs_ctx = self._render_input_paths(base_ctx)
+
+        results: List[Dict[str, Any]] = []
+        for inp in self.input_file_templates:
+            content_ctx = {**base_ctx, "inputs": inputs_ctx}
+            content = _render_template(inp.template or "", content_ctx)
+            entry = inputs_ctx[inp.name]
+            results.append({
+                "name": inp.name,
+                "path": entry["path"],
+                "content": content,
+                "mode": entry["mode"],
+            })
+        return results
+
     @property
     def command(self) -> str:
         """
@@ -451,6 +510,7 @@ class ExecutionInstance:
         if not self.command_template:
             return ""
         ctx = self._render_context()
+        ctx["inputs"] = self._render_input_paths(ctx)
         return _render_template(self.command_template, ctx)
 
     @property
@@ -520,6 +580,7 @@ class ExecutionInstance:
             "command": command_obj,
             "command_env": self.env,
             "command_labels": self.command_labels,
+            "inputs": self._render_input_paths(base_ctx),
         }
 
         return _render_template(self.script_template, script_ctx)
@@ -543,6 +604,7 @@ class ExecutionInstance:
             "command": command_obj,
             "command_env": self.env,
             "command_labels": self.command_labels,
+            "inputs": self._render_input_paths(base_ctx),
         }
 
         return _render_template(self.post_script_template, script_ctx)
@@ -830,6 +892,9 @@ def create_execution_instance(
             parser_script=script_cfg.parser.parser_script,
         )
 
+    # Copy input templates by reference (immutable from runner's perspective)
+    input_file_templates = list(script_cfg.inputs or [])
+
     instance = ExecutionInstance(
         execution_id=execution_id,
         repetition=0,  # planner will set metadata["repetition"] per run
@@ -850,6 +915,7 @@ def create_execution_instance(
         script_name=script_cfg.name,
         script_template=script_template,
         post_script_template=post_script_template,
+        input_file_templates=input_file_templates,
         parser_template=parser_template,
         output_path_template=output_path_template,
         output_type=output_type,
