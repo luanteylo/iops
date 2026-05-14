@@ -246,8 +246,15 @@ def _validate_jinja_template(
         (True, None) if valid
         (False, error_message) if invalid with helpful guidance
     """
-    if not template or not isinstance(template, str):
-        return True, None  # Empty templates are handled elsewhere
+    if template is None or template == "":
+        return True, None  # Optional/empty fields handled elsewhere
+
+    if not isinstance(template, str):
+        actual_type = type(template).__name__
+        return False, (
+            f"'{field_name}' must be a string, got {actual_type} ({template!r}). "
+            f"Quote the value in YAML, e.g. '{field_name}: \"{template}\"'."
+        )
 
     try:
         _jinja_env.parse(template)
