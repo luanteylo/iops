@@ -37,7 +37,9 @@ def test_inputs_optional_when_omitted(sample_config_file):
 
 def test_inputs_inline_template_parsed(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "ior_config", "template": "blockSize = {{ nodes }}m\n"}
+        {"name": "ior_config",
+         "path": "{{ execution_dir }}/ior.conf",
+         "template": "blockSize = {{ nodes }}m\n"}
     ])
     config_file = _write_config(tmp_path, cfg)
     config = load_config(config_file)
@@ -46,7 +48,7 @@ def test_inputs_inline_template_parsed(tmp_path, sample_config_dict):
     assert len(inputs) == 1
     assert inputs[0].name == "ior_config"
     assert "{{ nodes }}" in inputs[0].template
-    assert inputs[0].path is None  # default path applied at render time
+    assert inputs[0].path == "{{ execution_dir }}/ior.conf"
 
 
 def test_inputs_external_file_loaded(tmp_path, sample_config_dict):
@@ -54,7 +56,9 @@ def test_inputs_external_file_loaded(tmp_path, sample_config_dict):
     template_file.write_text("blockSize = {{ nodes }}m\n")
 
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "ior_config", "file": "ior.tpl"}
+        {"name": "ior_config",
+         "path": "{{ execution_dir }}/ior.conf",
+         "file": "ior.tpl"}
     ])
     config_file = _write_config(tmp_path, cfg)
     config = load_config(config_file)
@@ -68,7 +72,8 @@ def test_inputs_external_file_loaded(tmp_path, sample_config_dict):
 
 def test_inputs_reject_both_template_and_file(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "a", "template": "x", "file": "./missing.tpl"}
+        {"name": "a", "path": "{{ execution_dir }}/a",
+         "template": "x", "file": "./missing.tpl"}
     ])
     config_file = _write_config(tmp_path, cfg)
 
@@ -88,8 +93,8 @@ def test_inputs_reject_neither_template_nor_file(tmp_path, sample_config_dict):
 
 def test_inputs_reject_duplicate_name(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "shared", "template": "a"},
-        {"name": "shared", "template": "b"},
+        {"name": "shared", "path": "{{ execution_dir }}/a", "template": "a"},
+        {"name": "shared", "path": "{{ execution_dir }}/b", "template": "b"},
     ])
     config_file = _write_config(tmp_path, cfg)
 
@@ -99,7 +104,7 @@ def test_inputs_reject_duplicate_name(tmp_path, sample_config_dict):
 
 def test_inputs_reject_unknown_key(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "a", "template": "x", "bogus": "no"}
+        {"name": "a", "path": "{{ execution_dir }}/a", "template": "x", "bogus": "no"}
     ])
     config_file = _write_config(tmp_path, cfg)
 
@@ -109,7 +114,7 @@ def test_inputs_reject_unknown_key(tmp_path, sample_config_dict):
 
 def test_inputs_reject_non_identifier_name(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "1bad-name", "template": "x"}
+        {"name": "1bad-name", "path": "{{ execution_dir }}/x", "template": "x"}
     ])
     config_file = _write_config(tmp_path, cfg)
 
@@ -119,7 +124,8 @@ def test_inputs_reject_non_identifier_name(tmp_path, sample_config_dict):
 
 def test_inputs_reject_bad_jinja_in_template(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "broken", "template": "{% if no_endif %}"}
+        {"name": "broken", "path": "{{ execution_dir }}/x",
+         "template": "{% if no_endif %}"}
     ])
     config_file = _write_config(tmp_path, cfg)
 
@@ -129,7 +135,8 @@ def test_inputs_reject_bad_jinja_in_template(tmp_path, sample_config_dict):
 
 def test_inputs_reject_bad_mode(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
-        {"name": "a", "template": "x", "mode": "not-octal"}
+        {"name": "a", "path": "{{ execution_dir }}/a",
+         "template": "x", "mode": "not-octal"}
     ])
     config_file = _write_config(tmp_path, cfg)
 
@@ -140,9 +147,30 @@ def test_inputs_reject_bad_mode(tmp_path, sample_config_dict):
 # ----------------- Rendering ----------------- #
 
 
+def test_inputs_reject_missing_path(tmp_path, sample_config_dict):
+    cfg = _add_inputs(sample_config_dict, [
+        {"name": "ior_config", "template": "x"}
+    ])
+    config_file = _write_config(tmp_path, cfg)
+
+    with pytest.raises(ConfigValidationError, match="must specify a non-empty 'path'"):
+        load_config(config_file)
+
+
+def test_inputs_reject_empty_path(tmp_path, sample_config_dict):
+    cfg = _add_inputs(sample_config_dict, [
+        {"name": "ior_config", "path": "   ", "template": "x"}
+    ])
+    config_file = _write_config(tmp_path, cfg)
+
+    with pytest.raises(ConfigValidationError, match="must specify a non-empty 'path'"):
+        load_config(config_file)
+
+
 def test_input_files_rendered_with_vars(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
         {"name": "ior_config",
+         "path": "{{ execution_dir }}/ior.conf",
          "template": "nodes = {{ nodes }}\nppn = {{ ppn }}\n"}
     ])
     config_file = _write_config(tmp_path, cfg)
@@ -152,13 +180,13 @@ def test_input_files_rendered_with_vars(tmp_path, sample_config_dict):
     assert kept, "matrix should produce at least one instance"
 
     instance = kept[0]
-    instance.execution_dir = tmp_path / "execdir"  # path-only render uses this
+    instance.execution_dir = tmp_path / "execdir"
     files = instance.input_files
 
     assert len(files) == 1
     entry = files[0]
     assert entry["name"] == "ior_config"
-    assert entry["path"].endswith("/ior_config")  # default path
+    assert entry["path"] == f"{instance.execution_dir}/ior.conf"
     assert "nodes = " in entry["content"]
     assert "ppn = " in entry["content"]
 
@@ -185,7 +213,9 @@ def test_inputs_path_available_in_script(tmp_path, sample_config_dict):
     """{{ inputs.<name>.path }} must resolve when rendering script_template."""
     cfg = copy.deepcopy(sample_config_dict)
     cfg["scripts"][0]["inputs"] = [
-        {"name": "ior_config", "template": "x={{ nodes }}\n"}
+        {"name": "ior_config",
+         "path": "{{ execution_dir }}/ior.conf",
+         "template": "x={{ nodes }}\n"}
     ]
     cfg["scripts"][0]["script_template"] = (
         "#!/bin/bash\nior -f {{ inputs.ior_config.path }}\n"
@@ -199,7 +229,7 @@ def test_inputs_path_available_in_script(tmp_path, sample_config_dict):
     instance.execution_dir = tmp_path / "execdir"
     script = instance.script_text
 
-    expected_path = f"{instance.execution_dir}/ior_config"
+    expected_path = f"{instance.execution_dir}/ior.conf"
     assert f"ior -f {expected_path}" in script
 
 
@@ -214,6 +244,7 @@ def _make_runner(config):
 def test_input_files_written_to_disk(tmp_path, sample_config_dict):
     cfg = _add_inputs(sample_config_dict, [
         {"name": "ior_config",
+         "path": "{{ execution_dir }}/ior.conf",
          "template": "nodes = {{ nodes }}\n",
          "mode": "0644"},
     ])
@@ -228,7 +259,7 @@ def test_input_files_written_to_disk(tmp_path, sample_config_dict):
     planner = _make_runner(config)
     planner._write_input_files(instance)
 
-    written = instance.execution_dir / "ior_config"
+    written = instance.execution_dir / "ior.conf"
     assert written.is_file()
     content = written.read_text()
     assert content.startswith(f"nodes = {instance.vars['nodes']}")

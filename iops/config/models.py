@@ -352,14 +352,13 @@ class InputFileConfig:
         name: Logical identifier, used in ``{{ inputs.<name>.path }}`` references.
         template: Inline file content (Jinja2-rendered). Mutually exclusive with ``file``.
         file: Path to an external template file. Mutually exclusive with ``template``.
-        path: Destination path on disk (Jinja2-rendered). Defaults to
-            ``{{ execution_dir }}/<name>`` if omitted.
+        path: Destination path on disk (Jinja2-rendered). Required.
         mode: Optional octal string (e.g. ``"0644"``) applied with chmod after write.
     """
     name: str
     template: Optional[str] = None
     file: Optional[str] = None
-    path: Optional[str] = None
+    path: Optional[str] = None  # required at config time; Optional here only because dataclass parsing happens before validation
     mode: Optional[str] = None
 
 

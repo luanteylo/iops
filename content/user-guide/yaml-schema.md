@@ -678,11 +678,11 @@ scripts:
       {{ command.template }}
 
     inputs:                         # Optional: input files generated before script runs
-      - name: string                #   Logical id, referenced as {{ inputs.<name>.path }}
+      - name: string                #   Required: logical id, referenced as {{ inputs.<name>.path }}
+        path: string                #   Required: destination path on disk (Jinja2)
         template: |                 #   Inline content (Jinja2). Use EITHER template OR file.
           ...
         file: string                #   Path to external template file (alternative to `template`)
-        path: string                #   Destination (Jinja2). Default: {{ execution_dir }}/<name>
         mode: string                #   Optional octal string, e.g. "0644"
 
     post:                           # Optional: post-processing
@@ -777,9 +777,9 @@ scripts:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Identifier used in `{{ inputs.<name>.path }}` references. Must be a valid Python identifier (letters/digits/underscores, no leading digit) and unique within the script. |
+| `path` | Yes | Destination path on disk, Jinja2-rendered (e.g. `"{{ execution_dir }}/ior.conf"`). |
 | `template` | One of | Inline content, rendered with the full execution context. |
 | `file` | One of | Path to an external template file (resolved relative to the YAML config, or as an absolute path). The file content replaces `template` at load time. |
-| `path` | No | Destination path on disk, Jinja2-rendered. Defaults to `{{ execution_dir }}/<name>`. |
 | `mode` | No | Octal string (e.g., `"0644"`) applied with chmod after the file is written. |
 
 **Context available in `template` and `path`:**
@@ -793,6 +793,7 @@ scripts:
 Use `{{ inputs.<name>.path }}` to get the rendered destination path. The reference works in any of the script-level templates and in the top-level `command.template`.
 
 **Rules:**
+- `name` and `path` are required for every entry.
 - Exactly one of `template` or `file` must be provided per entry.
 - Input names must be unique within a script.
 - Jinja2 syntax in `template` and `path` is validated at load time (alongside `script_template`).

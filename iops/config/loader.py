@@ -2262,17 +2262,16 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 if not ok:
                     raise ConfigValidationError(err)
 
-                if inp.path is not None:
-                    if not str(inp.path).strip():
-                        raise ConfigValidationError(
-                            f"{ctx_prefix} ('{inp.name}') has empty 'path'; "
-                            f"omit it to default to {{{{ execution_dir }}}}/{inp.name}"
-                        )
-                    ok, err = _validate_jinja_template(
-                        inp.path, f"scripts['{s.name}'].inputs['{inp.name}'].path"
+                if inp.path is None or not str(inp.path).strip():
+                    raise ConfigValidationError(
+                        f"{ctx_prefix} ('{inp.name}') must specify a non-empty 'path' "
+                        f"(e.g. \"{{{{ execution_dir }}}}/{inp.name}.conf\")"
                     )
-                    if not ok:
-                        raise ConfigValidationError(err)
+                ok, err = _validate_jinja_template(
+                    inp.path, f"scripts['{s.name}'].inputs['{inp.name}'].path"
+                )
+                if not ok:
+                    raise ConfigValidationError(err)
 
                 if inp.mode is not None:
                     # Accept "0644" / "644" / "0o644" — must be parseable as octal

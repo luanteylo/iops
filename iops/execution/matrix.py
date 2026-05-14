@@ -481,19 +481,14 @@ class ExecutionInstance:
         Done in a first pass so {{ inputs.<name>.path }} can be referenced
         inside the script, command, post script, and even other input file
         contents during the second rendering pass.
+
+        `inp.path` is required (enforced by loader.py validation), so no
+        fallback is applied here.
         """
         rendered: Dict[str, Dict[str, Any]] = {}
-        if not self.input_file_templates:
-            return rendered
-
-        exec_dir = ctx.get("execution_dir", "")
         for inp in self.input_file_templates:
-            if inp.path is None or not str(inp.path).strip():
-                path_str = f"{exec_dir}/{inp.name}" if exec_dir else inp.name
-            else:
-                path_str = _render_template(inp.path, ctx)
             rendered[inp.name] = {
-                "path": path_str,
+                "path": _render_template(inp.path, ctx),
                 "name": inp.name,
                 "mode": inp.mode,
             }

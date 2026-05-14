@@ -552,11 +552,12 @@ scripts:
     # they remain available for debugging even if the script aborts.
     #
     # Each entry needs:
-    #   name      Logical id, referenced as {{ inputs.<name>.path }}
+    #   name      Logical id, referenced as {{ inputs.<name>.path }}.
+    #             Must be a valid identifier (letters/digits/underscores,
+    #             no leading digit), unique within the script.
+    #   path      Destination path (required, Jinja2-rendered)
     #   template  Inline content (Jinja2-rendered)        }  pick one
     #   file      Path to an external template file        }  of these
-    #   path      (optional) Destination path; defaults to
-    #             {{ execution_dir }}/<name>
     #   mode      (optional) Octal string, e.g. "0644"
     # ---------------------------------------------------------------------------
     # inputs:
@@ -570,6 +571,7 @@ scripts:
     #         numTasks = {{ nodes * processes_per_node }}
     #       IOR STOP
     #   - name: hostfile
+    #     path: "{{ execution_dir }}/hosts.txt"
     #     file: "./templates/hostfile.j2"
 
     # ---------------------------------------------------------------------------
