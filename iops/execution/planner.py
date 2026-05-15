@@ -157,17 +157,23 @@ _iops_collect_sysinfo() {{
       echo "  \\"ib_devices\\": \\"$(ls /sys/class/infiniband/ 2>/dev/null | tr '\\n' ',' | sed 's/,$//' || echo '')\\","
       echo "  \\"filesystems\\": \\"$(_iops_detect_pfs)\\","
 
-      # GPU detection (vendor-agnostic, NVIDIA first)
+      # GPU detection (vendor-agnostic, NVIDIA first).
+      # Probe with `nvidia-smi -L` before querying: on CPU-only nodes the binary
+      # may exist but fail to reach the driver, in which case nvidia-smi prints
+      # the error to stdout and the query output corrupts the sysinfo JSON.
       _gpu_count=0
       _gpu_model=""
       _gpu_driver=""
       _gpu_memory_mib=0
-      if command -v nvidia-smi >/dev/null 2>&1; then
-        _gpu_count=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || echo 0)
-        _gpu_model=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | sed 's/"/\\\\"/g' || echo "")
-        _gpu_driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ' || echo "")
-        _gpu_memory_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || echo 0)
+      if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+        _gpu_count=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' \\n')
+        _gpu_model=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | tr -d '\\n' | sed 's/"/\\\\"/g')
+        _gpu_driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d ' \\n')
+        _gpu_memory_mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' \\n')
       fi
+      # Defensive: integer fields must be digits-only or JSON becomes invalid.
+      case "$_gpu_count" in (''|*[!0-9]*) _gpu_count=0 ;; esac
+      case "$_gpu_memory_mib" in (''|*[!0-9]*) _gpu_memory_mib=0 ;; esac
       echo "  \\"gpu_count\\": $_gpu_count,"
       echo "  \\"gpu_model\\": \\"$_gpu_model\\","
       echo "  \\"gpu_driver\\": \\"$_gpu_driver\\","
