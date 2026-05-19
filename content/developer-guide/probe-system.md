@@ -47,26 +47,15 @@ The exit handler provides a centralized EXIT trap that other IOPS features regis
 
 ### 1. Script Injection
 
-When preparing execution artifacts, the planner writes all IOPS helper scripts and injects source lines into the user script:
+When preparing execution artifacts, `BasePlanner._inject_iops_scripts()` in
+`iops/execution/planner.py` performs three steps:
 
-```python
-# iops/execution/planner.py
-def _inject_iops_scripts(self, script_text: str, exec_dir: Path) -> str:
-    # 1. Write exit handler (always needed)
-    handler_file = exec_dir / EXIT_HANDLER_FILENAME
-    with open(handler_file, "w") as f:
-        f.write(EXIT_HANDLER_TEMPLATE)
-
-    # 2. Write sysinfo script (if enabled)
-    if collect_system_info:
-        probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
-        probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
-        with open(probe_file, "w") as f:
-            f.write(probe_script)
-
-    # 3. Inject source lines after shebang/#SBATCH
-    # ... insertion logic ...
-```
+1. Write the exit handler bash file (`__iops_exit_handler.sh`) into the
+   execution directory. This file is always written when any probe is active.
+2. Write each enabled probe script (e.g., `__iops_atexit_sysinfo.sh`) using
+   the corresponding template constant from `planner.py`.
+3. Insert `source` lines for each script into the user's script, right after
+   the shebang and any `#SBATCH` directives.
 
 ### 2. Exit Handler Mechanism
 
@@ -124,20 +113,10 @@ _iops_collect_sysinfo() {
 
 ### 4. Data Retrieval
 
-After execution, the executor reads the sysinfo and stores it in test metadata:
-
-```python
-# iops/execution/executors.py
-def _collect_system_info(self, test: ExecutionInstance) -> Optional[Dict]:
-    sysinfo_path = Path(test.execution_dir) / SYSINFO_FILENAME
-    with open(sysinfo_path, 'r') as f:
-        return json.load(f)
-
-# Called after test completion
-sysinfo = self._collect_system_info(test)
-if sysinfo:
-    test.metadata["__sysinfo"] = sysinfo
-```
+After execution, `BaseExecutor._collect_system_info()` in
+`iops/execution/executors.py` reads `__iops_sysinfo.json` from the execution
+directory and stores the parsed dict in `test.metadata["__sysinfo"]`. This
+runs in `wait_and_collect()` after the script exits.
 
 ## Collected Fields
 

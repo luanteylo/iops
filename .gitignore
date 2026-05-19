@@ -23,3 +23,6 @@ public/
 .hugo_build.lock
 resources/_gen/
 go.sum
+
+# Generated API reference (rebuilt by scripts/build_api_docs.sh)
+static/api/

@@ -45,43 +45,16 @@ The execution loop follows a **pull-based** design where the Runner requests tes
 
 ### Main Loop (`IOPSRunner.run()`)
 
-```python
-def run(self):
-    while True:
-        # 1. Check budget
-        if budget_exceeded:
-            break
+Each iteration of the loop performs these steps for one test:
 
-        # 2. Get next test from planner
-        test = self.planner.next_test()
-        if test is None:
-            break  # No more tests
+1. **Budget check.** If `accumulated_core_hours` has crossed `max_core_hours`, stop.
+2. **Pull next test.** Call `self.planner.next_test()`. A `None` return means the plan is exhausted.
+3. **Cache lookup.** If a cache is configured and `--use-cache` is set, look up the test by its parameter hash. A hit populates `test.metadata` from the cached row.
+4. **Execute on miss.** Call `self.executor.submit(test)`, then `self.executor.wait_and_collect(test)`. The executor updates `test.metadata` in place with status, timing, and metrics.
+5. **Persist.** Save the result row via `save_test_execution(test)` and write the per-execution status file.
+6. **Notify planner.** Call `self.planner.record_completed_test(test)` so adaptive and Bayesian planners can update their state.
 
-        # 3. Check cache
-        if self.cache and self.use_cache_reads:
-            cached_result = self.cache.get_cached_result(test.vars, test.repetition)
-            if cached_result:
-                # Use cached result, skip execution
-                test.metadata.update(cached_result)
-                test.metadata['__cached'] = True
-
-        # 4. Execute if not cached
-        if not used_cache:
-            self._write_status_file(test, status="RUNNING")
-            self.executor.submit(test)
-            self.executor.wait_and_collect(test)
-
-            # Store in cache if succeeded
-            if succeeded:
-                self.cache.store_result(...)
-
-        # 5. Write status and results
-        self._write_status_file(test)
-        save_test_execution(test)
-
-        # 6. Notify planner of completion
-        self.planner.record_completed_test(test)
-```
+The real implementation also handles parallel execution (`_run_parallel`), kickoff mode, fail-fast, and signal handling. See `IOPSRunner.run()` and `_process_completed()` in `iops/execution/runner.py`.
 
 ### Sequence Diagram
 
@@ -171,47 +144,23 @@ planner = BasePlanner.build(cfg)  # Uses cfg.benchmark.search_method
 
 ### Execution Matrix
 
-The planner builds an execution matrix from config:
-
-```python
-def _build_execution_matrix(self):
-    # Build parameter combinations
-    kept_instances, skipped_instances = build_execution_matrix(self.cfg)
-
-    # Store skipped for reference
-    self.skipped_matrix = skipped_instances
-
-    # Shuffle for random execution order
-    self.execution_matrix = self.random_sample(kept_instances)
-
-    # Initialize folders upfront if configured
-    if cfg.benchmark.create_folders_upfront:
-        self._initialize_all_folders(kept_instances, skipped_instances)
-```
+`BasePlanner._build_execution_matrix()` delegates to
+`build_execution_matrix()` in `iops/execution/matrix.py`, which expands the
+parameter sweeps into `ExecutionInstance` objects, evaluates derived
+variables and constraints, and returns two lists: kept and skipped
+instances. The planner shuffles the kept list (seeded by
+`benchmark.random_seed`) and optionally creates all execution folders
+upfront when `create_folders_upfront` is set.
 
 ### Repetition Interleaving
 
-The ExhaustivePlanner uses random interleaving to avoid running all repetitions of one test before moving to the next:
-
-```python
-def next_test(self):
-    # Randomly pick from active tests (those with remaining repetitions)
-    idx = self.random.choice(self._active_indices)
-    test = self.execution_matrix[idx]
-
-    # Track which repetition this is
-    rep_idx = self._next_rep_by_idx[idx]
-    self._next_rep_by_idx[idx] += 1
-
-    # Remove from active pool when all reps done
-    if self._next_rep_by_idx[idx] >= self._total_reps_by_idx[idx]:
-        self._active_indices.remove(idx)
-
-    # Prepare artifacts for this repetition
-    self._prepare_execution_artifacts(test, repetition=rep_idx + 1)
-
-    return test
-```
+The `ExhaustivePlanner` does not run all repetitions of one test back to
+back. Instead, on each `next_test()` call it picks a random test from the
+set of tests that still have repetitions left, returns the next repetition
+of that test, and removes it from the active pool once all repetitions are
+done. This spreads transient system noise across the matrix instead of
+concentrating it on one parameter combination. See `ExhaustivePlanner` in
+`iops/execution/planner.py`.
 
 ## Executor Architecture
 
@@ -256,88 +205,15 @@ executor = BaseExecutor.build(cfg)  # Uses cfg.benchmark.executor
 
 ### LocalExecutor
 
-Runs benchmarks via subprocess:
+`submit()` runs the script synchronously with `subprocess.run(["bash", test.script_file])`, captures stdout/stderr to files in the execution directory, and sets `__executor_status` to `SUCCEEDED` or `FAILED` based on the return code. Because there is no queue, `__submission_time` and `__job_start` are both set to the same instant.
 
-```python
-def submit(self, test):
-    self._init_execution_metadata(test)
-
-    now = timestamp
-    test.metadata["__submission_time"] = now
-    test.metadata["__job_start"] = now  # No queue for local
-    result = subprocess.run(
-        ["bash", str(test.script_file)],
-        cwd=test.execution_dir,
-        capture_output=True,
-    )
-    test.metadata["__end"] = timestamp
-
-    # Write stdout/stderr to files
-    stdout_path.write_text(result.stdout)
-    stderr_path.write_text(result.stderr)
-
-    # Set status based on return code
-    if result.returncode != 0:
-        test.metadata["__executor_status"] = self.STATUS_FAILED
-    else:
-        test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
-
-def wait_and_collect(self, test):
-    # Parse metrics if succeeded
-    if test.metadata["__executor_status"] == self.STATUS_SUCCEEDED:
-        metrics = parse_metrics_from_execution(test)
-        test.metadata["metrics"] = metrics
-
-    # Collect system info from probe
-    self._store_system_info(test)
-```
+`wait_and_collect()` calls `parse_metrics_from_execution(test)` to run the user's parser script on succeeded tests, then collects sysinfo from the probe output.
 
 ### SlurmExecutor
 
-Submits to SLURM and polls for completion:
+`submit()` calls `sbatch` via subprocess, parses the returned job ID from stdout, and stores it in `test.metadata["__jobid"]`. The job ID is also added to `runner.submitted_job_ids` so the runner can cancel pending jobs on interrupt.
 
-```python
-def submit(self, test):
-    self._init_execution_metadata(test)
-
-    # Submit via sbatch
-    result = subprocess.run(submit_cmd, capture_output=True)
-    job_id = parse_job_id(result.stdout)
-
-    test.metadata["__jobid"] = job_id
-    test.metadata["__submission_time"] = timestamp
-
-    # Track for cleanup on interrupt
-    if self.runner:
-        self.runner.submitted_job_ids.add(job_id)
-
-def wait_and_collect(self, test):
-    job_id = test.metadata["__jobid"]
-
-    # Poll until job leaves queue
-    while True:
-        state = get_job_state(job_id)
-        if state == "RUNNING" and not test.metadata.get("__job_start"):
-            test.metadata["__job_start"] = timestamp  # Job started running
-        if state not in SLURM_ACTIVE_STATES:
-            break
-        time.sleep(poll_interval)
-
-    test.metadata["__end"] = timestamp
-
-    # Determine final status
-    if state in SLURM_FAIL_STATES:
-        test.metadata["__executor_status"] = self.STATUS_FAILED
-    else:
-        test.metadata["__executor_status"] = self.STATUS_SUCCEEDED
-
-    # Parse metrics and collect sysinfo
-    if succeeded:
-        metrics = parse_metrics_from_execution(test)
-        test.metadata["metrics"] = metrics
-
-    self._store_system_info(test)
-```
+`wait_and_collect()` polls `sacct`/`squeue` until the job leaves an active state. The first time it sees the job in `RUNNING`, it records `__job_start` (so queue time can be separated from execution time). Final status is mapped from the SLURM state to `SUCCEEDED` or `FAILED`. Then it parses metrics and collects sysinfo the same way as `LocalExecutor`.
 
 ## ExecutionInstance
 
@@ -413,64 +289,21 @@ class ExecutionInstance:
 
 ### Cache Key
 
-Results are cached by:
-- Parameter values (excluding `cache_exclude_vars`)
-- Repetition number
-
-```python
-cache_key = hash(
-    frozenset({k: v for k, v in params.items() if k not in exclude_vars}.items()),
-    repetition
-)
-```
+The cache key is derived from the parameter values (with any variables in
+`cache_exclude_vars` removed) plus the repetition number. The exact hashing
+is in `ExecutionCache` in `iops/cache/`.
 
 ## Budget Tracking
 
-The runner tracks core-hour usage:
-
-```python
-# After each test
-if not used_cache:
-    cores = evaluate(cores_expr, test.vars)  # e.g., "nodes * ppn"
-    duration_hours = test.metadata["__sysinfo"]["duration_seconds"] / 3600
-    core_hours = cores * duration_hours
-
-    self.accumulated_core_hours += core_hours
-
-    if self.accumulated_core_hours >= self.max_core_hours:
-        self.budget_exceeded = True
-        break
-```
+After each non-cached test, the runner computes `core_hours = cores * duration_hours`, where `cores` is evaluated from `benchmark.cores_expr` (e.g., `"nodes * ppn"`) against the test's variables, and `duration_hours` comes from `test.metadata["__sysinfo"]["duration_seconds"]`. The accumulated value is checked against `max_core_hours`, and when exceeded the loop stops on the next iteration. See `IOPSRunner._compute_core_hours()` and `_budget_exceeded_check()` in `iops/execution/runner.py`.
 
 ## Status File Writing
 
-The runner writes status files for monitoring:
-
-```python
-def _write_status_file(self, test, status=None):
-    if not execution_index:  # From probes config
-        return
-
-    # Determine status
-    if status is None:
-        status = test.metadata.get("__executor_status", "UNKNOWN")
-
-    # Get duration from sysinfo
-    sysinfo = test.metadata.get("__sysinfo")
-    duration = sysinfo.get("duration_seconds") if sysinfo else None
-
-    status_data = {
-        "status": status,
-        "error": test.metadata.get("__error"),
-        "end_time": test.metadata.get("__end"),
-        "cached": test.metadata.get("__cached", False),
-        "duration_seconds": duration,
-    }
-
-    # Write to repetition folder
-    status_file = test.execution_dir / "__iops_status.json"
-    status_file.write_text(json.dumps(status_data))
-```
+`IOPSRunner._write_status_file()` writes `__iops_status.json` into the
+execution directory after each test, capturing status, error, end time,
+cache flag, and duration. The file is gated on `probes.execution_index`
+being enabled. This is the file consumed by `iops find` and `iops find
+--watch`. See [Data Sources]({{< relref "data-sources" >}}) for the field-level mapping.
 
 ## Source Code References
 

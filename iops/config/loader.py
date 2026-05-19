@@ -900,7 +900,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     if key_errors:
         raise ConfigValidationError("\n".join(key_errors))
 
-    # Handle deprecated fields (see CLAUDE.md for deprecation schedule)
+    # Handle deprecated fields
     _handle_deprecated_field(b, "executor_options", "slurm_options", "benchmark")
 
     # Parse slurm_options if present
