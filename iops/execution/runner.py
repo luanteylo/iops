@@ -2,6 +2,7 @@
 from iops.logger import HasLogger
 from iops.execution.planner import BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX, GPU_TRACE_FILENAME_PREFIX
 from iops.execution.executors import BaseExecutor
+from iops.execution.memprofile import MemProfiler
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
@@ -198,6 +199,10 @@ class IOPSRunner(HasLogger):
 
         # Thread pool (created in run(), stored for signal handler access)
         self._thread_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
+
+        # Optional memory profiler (no-op unless IOPS_MEMPROFILE=1)
+        self.memprofiler = MemProfiler()
+        self.memprofiler.announce(self.logger)
 
     def _is_kickoff_mode(self) -> bool:
         """
@@ -1888,6 +1893,8 @@ class IOPSRunner(HasLogger):
             else:
                 self.accumulated_core_hours += core_hours_used
 
+        self.memprofiler.tick(test_number, self.logger)
+
         return False  # continue
 
     def _show_progress(self, test_count: int) -> None:
@@ -2274,3 +2281,6 @@ class IOPSRunner(HasLogger):
 
             # Save report config template for easy regeneration
             save_report_config_template(self.cfg, logger=self.logger)
+
+            # Memory profile summary (no-op unless IOPS_MEMPROFILE is set)
+            self.memprofiler.report(self.logger)
