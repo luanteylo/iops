@@ -48,7 +48,7 @@ class IOPSRunner(HasLogger):
         self.args = args
         self.planner = BasePlanner.build(cfg=self.cfg)
 
-        # Initialize cache if cache_file is configured (always populate, use only with --use_cache)
+        # Initialize cache if cache_file is configured (always populate, use only with --use-cache)
         self.cache: Optional[ExecutionCache] = None
         self.use_cache_reads = args.use_cache  # Flag to control reading from cache
 
@@ -77,10 +77,10 @@ class IOPSRunner(HasLogger):
                     f"({stats['total_entries']} entries, {stats['unique_parameter_sets']} unique parameter sets)"
                 )
             else:
-                self.logger.info("Cache: WRITE-ONLY mode (use --use_cache to enable reads)")
+                self.logger.info("Cache: WRITE-ONLY mode (use --use-cache to enable reads)")
         elif args.use_cache:
             self.logger.warning(
-                "Cache requested (--use_cache) but benchmark.cache_file not configured. "
+                "Cache requested (--use-cache) but benchmark.cache_file not configured. "
                 "Cache disabled."
             )
 

@@ -15,7 +15,7 @@
 # Usage:
 #   Normal run:  python -m iops.main example_random.yaml
 #   Dry-run:     python -m iops.main example_random.yaml --dry-run
-#   With cache:  python -m iops.main example_random.yaml --use_cache
+#   With cache:  python -m iops.main example_random.yaml --use-cache
 #
 
 benchmark:

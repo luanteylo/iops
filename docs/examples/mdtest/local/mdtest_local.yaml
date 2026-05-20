@@ -31,7 +31,7 @@ benchmark:
   workdir: "/tmp/iops_mdtest_workdir"
 
   # Optional: SQLite database for caching execution results
-  # When --use_cache is specified, results are reused if parameters match
+  # When --use-cache is specified, results are reused if parameters match
   cache_file: "/tmp/iops_mdtest_cache.db"
 
   # Optional: Number of repetitions for each test case (default: 1)
