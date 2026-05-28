@@ -14,6 +14,9 @@ All notable changes to IOPS are documented here.
   - Names must be valid Python identifiers and unique within a script; Jinja2 syntax in `template` and `path` is validated at load time
   - Purely additive: existing configs without `inputs:` are unaffected
 
+### Fixed
+- Ctrl+C no longer submits a new SLURM job during shutdown. The SIGINT handler set `self.interrupted` and canceled the in-flight job, but neither `_run_sequential` nor `_run_parallel` checked that flag, so the loop fetched the next test from the planner and submitted it before exiting. Both loops now guard at the top of the iteration and again right before `_execute_and_cache` / `pool.submit`, closing the race window between `next_test()` and submission. A single Ctrl+C is now sufficient to stop the run cleanly.
+
 ## [3.5.4] - 2026-04-28
 
 ### Added
