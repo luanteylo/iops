@@ -1950,6 +1950,9 @@ class IOPSRunner(HasLogger):
     def _run_sequential(self, test_count: int) -> int:
         """Run tests one at a time (original behavior)."""
         while True:
+            if self.interrupted:
+                break
+
             if self._budget_exceeded_check():
                 break
 
@@ -1983,6 +1986,11 @@ class IOPSRunner(HasLogger):
                     self.planner.record_completed_test(test)
                     continue
 
+                # An interrupt may have landed between next_test() and here;
+                # do not submit a new job if we are shutting down.
+                if self.interrupted:
+                    break
+
                 self._execute_and_cache(test)
 
             should_stop = self._process_completed(test, test_count, used_cache)
@@ -2013,13 +2021,16 @@ class IOPSRunner(HasLogger):
 
         try:
             while True:
+                if self.interrupted:
+                    break
+
                 if self._budget_exceeded_check():
                     break
 
                 # Fill available slots
                 available = self.effective_parallel - len(in_flight)
                 batch = []
-                if available > 0:
+                if available > 0 and not self.interrupted:
                     batch = self.planner.next_tests(available)
                     for test in batch:
                         test_count += 1
@@ -2055,6 +2066,11 @@ class IOPSRunner(HasLogger):
                                 self._write_status_file(test, status='SKIPPED')
                             self.planner.record_completed_test(test)
                             continue
+
+                        # An interrupt may have landed mid-batch; stop
+                        # submitting new jobs once we are shutting down.
+                        if self.interrupted:
+                            break
 
                         # Submit to thread pool
                         future = pool.submit(self._execute_and_cache, test)

@@ -439,6 +439,61 @@ class TestRunnerExecutionPaths:
 
 
 # --------------------------------------------------------------------------- #
+# Interrupt handling: no new jobs submitted after Ctrl+C
+# --------------------------------------------------------------------------- #
+
+class TestInterruptStopsSubmission:
+    """Regression tests: once interrupted, the run loops must not submit
+    any further jobs.
+
+    Previously the sequential loop kept calling next_test()/_execute_and_cache
+    after the SIGINT handler had set self.interrupted (and already canceled the
+    in-flight job), submitting a brand-new SLURM job during shutdown.
+    """
+
+    def test_sequential_stops_after_interrupt(self, sample_config_file):
+        """An interrupt during a test must stop the next submission."""
+        config = load_config(sample_config_file)
+        runner = IOPSRunner(config, _make_args())
+        assert runner.effective_parallel == 1
+
+        executed = []
+
+        def fake_execute(test):
+            executed.append(test)
+            # Simulate the SIGINT handler firing while this job runs.
+            runner.interrupted = True
+
+        with patch.object(runner, "_execute_and_cache", side_effect=fake_execute), \
+             patch.object(runner, "_process_completed", return_value=False), \
+             patch.object(runner, "_show_progress"):
+            runner._run_sequential(0)
+
+        # Only the first (already in-flight) test runs; the loop must break
+        # before submitting another job even though tests remain.
+        assert len(executed) == 1
+
+    def test_parallel_stops_when_already_interrupted(
+        self, tmp_path, sample_config_dict
+    ):
+        """A loop entered while interrupted must not submit any jobs."""
+        sample_config_dict["benchmark"]["parallel"] = 2
+        config_file = _write_yaml(tmp_path / "cfg.yaml", sample_config_dict)
+        config = load_config(config_file)
+        runner = IOPSRunner(config, _make_args())
+        assert runner.effective_parallel == 2
+
+        runner.interrupted = True  # interrupt already received before the loop
+
+        with patch.object(runner, "_execute_and_cache") as exec_mock, \
+             patch.object(runner, "_process_completed", return_value=False), \
+             patch.object(runner, "_show_progress"):
+            runner._run_parallel(0)
+
+        exec_mock.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
 # End-to-end parallel execution tests (real subprocess execution)
 # --------------------------------------------------------------------------- #
 
