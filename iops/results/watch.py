@@ -760,9 +760,14 @@ def _build_table(
     existing_ids = set(tests_by_id.keys())
     max_id = max(existing_ids) if existing_ids else 0
 
-    # If we know total expected, use that; otherwise use max existing
-    if total_expected_configs > 0:
-        all_ids = range(1, total_expected_configs + 1)
+    # Display every existing test, plus queued placeholders up to the expected
+    # total. The range must never fall below the highest existing exec ID: the
+    # planner's total_expected is only an estimate, and campaigns can generate
+    # more executions than estimated (e.g. adaptive/bayesian probing). Bounding
+    # the range by the estimate alone would silently hide real executions.
+    upper = max(total_expected_configs, max_id)
+    if upper > 0:
+        all_ids = range(1, upper + 1)
     else:
         all_ids = sorted(existing_ids)
 

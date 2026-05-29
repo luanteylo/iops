@@ -362,6 +362,41 @@ class TestBuildTable:
         # Should have hidden 1 row
         assert sum(hidden_by_status.values()) == 1
 
+    def test_build_table_shows_tests_beyond_expected_estimate(self):
+        """Tests with exec IDs above total_expected_configs must not be hidden.
+
+        The planner's total_expected is only an estimate; campaigns can produce
+        more executions than estimated. The display range must cover the highest
+        existing exec ID rather than being capped by the estimate.
+        """
+        from iops.results.watch import _build_table
+
+        # Estimate said 2 configs, but the campaign actually produced 4
+        # (exec_0001..exec_0004). exec_0003 and exec_0004 exceed the estimate.
+        tests = [
+            {
+                "exec_key": f"exec_{i:04d}",
+                "rel_path": f"runs/exec_{i:04d}",
+                "params": {"nodes": i},
+                "command": "run",
+                "rep_statuses": ["SUCCEEDED"],
+                "avg_time": None,
+                "total_time": None,
+                "metrics": None,
+                "folders_exist": True,
+            }
+            for i in range(1, 5)
+        ]
+
+        table, shown, total, _, _, _ = _build_table(
+            tests, show_command=False, show_full=False, hide_columns=set(),
+            total_repetitions=1, total_expected_configs=2
+        )
+
+        # All 4 existing tests must be displayed, not just the first 2
+        assert table.row_count == 4
+        assert shown == 4
+
     def test_build_table_max_rows_prioritizes_running(self, mock_run_dir_with_reps):
         """Test that row limiting prioritizes RUNNING tests over PENDING."""
         from iops.results.watch import _load_index, _collect_execution_data, _build_table
