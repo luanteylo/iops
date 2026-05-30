@@ -15,6 +15,7 @@ All notable changes to IOPS are documented here.
   - Purely additive: existing configs without `inputs:` are unaffected
 
 ### Fixed
+- Best Configurations table in HTML reports now shows the exact command recorded for each execution. It previously re-rendered the command template from the swept variables alone, so templates referencing runtime-only values such as `{{ inputs.<name>.path }}` could not be reconstructed and rendered as `[Error rendering command: ...]`. The command is now looked up from `__iops_index.json` by execution id (normalized so the integer id in the results dataframe matches the zero-padded id in the index), falling back to template rendering only when no index is available.
 - Ctrl+C no longer submits a new SLURM job during shutdown. The SIGINT handler set `self.interrupted` and canceled the in-flight job, but neither `_run_sequential` nor `_run_parallel` checked that flag, so the loop fetched the next test from the planner and submitted it before exiting. Both loops now guard at the top of the iteration and again right before `_execute_and_cache` / `pool.submit`, closing the race window between `next_test()` and submission. A single Ctrl+C is now sufficient to stop the run cleanly.
 
 ## [3.5.4] - 2026-04-28
