@@ -5,6 +5,7 @@ IOPS Report Generator - Creates HTML reports with interactive plots.
 import base64
 import html as html_module
 import json
+import re
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -215,6 +216,7 @@ class ReportGenerator:
         self.plot_format: str = plot_format
         self.plots_dir: Optional[Path] = None
         self._plot_counter: int = 0
+        self._command_index: Optional[Dict[Any, str]] = None
 
     def load_metadata(self):
         """Load runtime metadata and reporting configuration."""
@@ -565,6 +567,63 @@ class ReportGenerator:
             return rendered.strip()
         except Exception as e:
             return f"[Error rendering command: {e}]"
+
+    @staticmethod
+    def _execution_id_to_int(execution_id: Any) -> Optional[int]:
+        """Extract the numeric execution number from an execution id.
+
+        Handles both raw integers (e.g. 17, as stored in the results dataframe)
+        and zero-padded folder-style ids (e.g. "exec_0017", as used in the
+        index). Returns None when no number can be parsed.
+        """
+        if isinstance(execution_id, (int,)) and not isinstance(execution_id, bool):
+            return int(execution_id)
+        text = str(execution_id)
+        match = re.search(r'(\d+)\s*$', text)
+        return int(match.group(1)) if match else None
+
+    def _load_command_index(self) -> Dict[Any, str]:
+        """Load and cache the per-execution commands from __iops_index.json.
+
+        The index stores the exact command that was generated for each
+        execution, including runtime-only references such as
+        ``{{ inputs.<name>.path }}`` that cannot be reconstructed from the
+        swept variables alone. Returns a mapping keyed by both the raw id
+        (``"exec_0017"``) and the normalized integer (``17``) so it can be
+        matched against either representation.
+        """
+        if self._command_index is not None:
+            return self._command_index
+
+        index: Dict[Any, str] = {}
+        index_path = self.workdir / "__iops_index.json"
+        if index_path.exists():
+            try:
+                with open(index_path, 'r') as f:
+                    data = json.load(f)
+                for execution_id, entry in (data.get('executions') or {}).items():
+                    command = entry.get('command')
+                    if not command:
+                        continue
+                    index[execution_id] = command
+                    num = self._execution_id_to_int(execution_id)
+                    if num is not None:
+                        index.setdefault(num, command)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        self._command_index = index
+        return self._command_index
+
+    def _command_for_execution_id(self, execution_id: Any) -> Optional[str]:
+        """Return the recorded command for an execution id, or None."""
+        index = self._load_command_index()
+        if execution_id in index:
+            return index[execution_id]
+        num = self._execution_id_to_int(execution_id)
+        if num is not None and num in index:
+            return index[num]
+        return None
 
     def _deserialize_reporting_config(self, data: Dict[str, Any]) -> ReportingConfig:
         """Deserialize reporting config from metadata JSON."""
@@ -1506,22 +1565,35 @@ class ReportGenerator:
             html += f"<th>{metric} (mean)</th><th>Std Dev</th><th>Samples</th></tr>\n"
 
             for idx, (i, row) in enumerate(df_top.iterrows(), 1):
-                # Get all variable values from the results dataframe
-                var_values = {}
-                for var_name in self.metadata['variables'].keys():
-                    var_col = self._get_var_column(var_name)
-                    if var_col in self.df.columns:
-                        # Find a matching row in the original dataframe
-                        mask = True
-                        for report_var in report_vars:
-                            col = self._get_var_column(report_var)
-                            mask = mask & (self.df[col] == row[report_var])
-                        matching_rows = self.df[mask]
-                        if len(matching_rows) > 0:
-                            var_values[var_name] = matching_rows.iloc[0][var_col]
+                # Find the executions matching this parameter combination.
+                mask = True
+                for report_var in report_vars:
+                    col = self._get_var_column(report_var)
+                    mask = mask & (self.df[col] == row[report_var])
+                matching_rows = self.df[mask]
 
-                # Render command with all variables
-                rendered_command = self._render_command(var_values)
+                rendered_command = None
+
+                # Prefer the exact command recorded for this execution in the
+                # index. It captures runtime-only references such as
+                # {{ inputs.<name>.path }} that cannot be reconstructed from the
+                # swept variables alone.
+                if len(matching_rows) > 0 and 'execution.execution_id' in self.df.columns:
+                    rendered_command = self._command_for_execution_id(
+                        matching_rows.iloc[0]['execution.execution_id']
+                    )
+
+                # Fall back to re-rendering the command template from the
+                # variable values (used when no index is available).
+                if rendered_command is None:
+                    var_values = {}
+                    for var_name in self.metadata['variables'].keys():
+                        var_col = self._get_var_column(var_name)
+                        if var_col in self.df.columns and len(matching_rows) > 0:
+                            var_values[var_name] = matching_rows.iloc[0][var_col]
+                    rendered_command = self._render_command(var_values)
+
+                rendered_command = html_module.escape(str(rendered_command))
 
                 html += f"<tr><td rowspan='2'>{idx}</td>"
                 for var in report_vars:
