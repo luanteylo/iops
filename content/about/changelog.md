@@ -6,6 +6,15 @@ All notable changes to IOPS are documented here.
 
 ## [Unreleased]
 
+## [3.5.5] - 2026-05-30
+
+This release introduces declarative input files, letting benchmarks that read
+parameters from disk (configuration files, problem decks, job descriptions)
+generate those files from the execution context instead of relying on the
+command template alone. It also gathers a set of reliability fixes around
+interruption handling, report accuracy, system probing, and live monitoring,
+making long campaigns on shared clusters more robust.
+
 ### Added
 - Declarative input files via `scripts[].inputs` for parameter files that the benchmark reads from disk
   - Each entry declares a required `name`, required `path` (Jinja2-rendered destination), `template` (inline) or `file` (external path), and optional `mode` (octal string applied with chmod)
@@ -17,6 +26,8 @@ All notable changes to IOPS are documented here.
 ### Fixed
 - Best Configurations table in HTML reports now shows the exact command recorded for each execution. It previously re-rendered the command template from the swept variables alone, so templates referencing runtime-only values such as `{{ inputs.<name>.path }}` could not be reconstructed and rendered as `[Error rendering command: ...]`. The command is now looked up from `__iops_index.json` by execution id (normalized so the integer id in the results dataframe matches the zero-padded id in the index), falling back to template rendering only when no index is available.
 - Ctrl+C no longer submits a new SLURM job during shutdown. The SIGINT handler set `self.interrupted` and canceled the in-flight job, but neither `_run_sequential` nor `_run_parallel` checked that flag, so the loop fetched the next test from the planner and submitted it before exiting. Both loops now guard at the top of the iteration and again right before `_execute_and_cache` / `pool.submit`, closing the race window between `next_test()` and submission. A single Ctrl+C is now sufficient to stop the run cleanly.
+- System probe no longer emits invalid `__iops_sysinfo.json` on CPU-only nodes. The GPU detection block trusted `command -v nvidia-smi` alone, but on nodes where the binary exists yet cannot reach a driver, `nvidia-smi` printed an error into the integer GPU fields, corrupting the JSON and triggering a parse warning during result collection. The probe now checks `nvidia-smi -L` first, strips newlines from all GPU fields, and validates that `gpu_count` and `gpu_memory_mib` are digits before emitting them.
+- Watch mode no longer hides executions beyond the planner's estimate. In dynamic mode the live table bounded its display range by `total_expected`, so when a campaign produced more executions than estimated (common with adaptive and Bayesian probing) the extra executions existed in the data but were never rendered. The display range now extends to cover the highest existing execution id, while queued placeholders still fill up to the estimate when it is higher.
 
 ## [3.5.4] - 2026-04-28
 
