@@ -1,12 +1,11 @@
 ---
 title: "Measuring the runtime overhead of an I/O interception library"
-date: 2024-11-20
+date: 2026-05-30
 tags: ["overhead-analysis", "resource-tracing", "slurm", "ld-preload"]
-draft: true
-hidden: false
-date: 2026-01-25
 author: "Luan Teylo, INRIA"
 ---
+
+> This study is part of our paper **"TOTO: Transparent I/O Tuning for HPC Applications"**, accepted at **ICS 2026** (International Conference on Supercomputing, Belfast, July 2026). The overhead measurements below were produced with IOPS.
 
 When you intercept I/O system calls to analyze application behavior, how much overhead do you actually add? That's the question we needed to answer for [TOTO](https://gitlab.inria.fr/hpc_io/toto) (Transparent and Online Tool for I/O), a library that hooks into I/O calls via `LD_PRELOAD` to provide runtime analysis of parallel file system access patterns.
 
@@ -71,39 +70,27 @@ mpirun ... {% if with_toto %} env LD_PRELOAD=/path/to/toto.so {% endif %} {{ com
 
 ---
 
-## Some Results
+## Results
 
-The resource tracing data lets us visualize overhead in different ways. Here are some plots from the study:
+To isolate the cost of the interception and analysis machinery, we ran TOTO with its stripe-count tuning **disabled**: every component stays active (calls are intercepted, statistics are kept, the analysis thread still communicates), but TOTO cannot improve performance, so only its negative impact shows up. We picked the largest-scale experiments on each platform (256 processes on PlaFRIM, 8192 on Irene), repeated each configuration 5 times, and swept request size (1, 8, 32 MiB), spatiality (contiguous, random), file strategy (shared-file, file-per-process), and the analysis period (250–2000 ms).
 
-### Bandwidth Slowdown
+### Bandwidth overhead on PlaFRIM
 
-Bandwidth slowdown of TOTO compared with baseline execution (without TOTO):
+The heatmap below reports the bandwidth slowdown of TOTO versus the baseline, per access pattern and analysis period. Overhead is **low in general (median 1%) and never exceeds 8%**, staying below 5% for most cases. The worst case is **random access to a shared file**, where the slowdown reaches up to 8% for short analysis periods (250–500 ms): shorter periods mean more frequent analysis communication, the random pattern triggers more `seek` calls, and the shared file forces the master rank to combine per-process statistics. (Negative values are an artifact of run-to-run variability.)
 
-![Combined Overhead Heatmap](../../images/blog/overhead_heatmap_combined.png)
+![TOTO overhead on PlaFRIM](../../images/blog/toto_overhead_heatmap_plafrim.png)
 
-### CPU Overhead
+### At scale, overhead disappears into the noise (Irene)
 
-How TOTO's CPU overhead scales with process count and analysis period:
+On Irene, with 8192 processes, run-to-run variability dominates: the medians even suggest TOTO is *faster* in some cases. None of these differences are statistically significant (Mann-Whitney U test, 5% confidence), so we conclude the overhead is negligible at scale.
 
-![CPU Overhead Heatmap](../../images/blog/cpu_overhead_heatmap.png)
+![TOTO overhead on Irene](../../images/blog/toto_overhead_irene.png)
 
-### Memory Overhead
+### Where the cost comes from: CPU vs. the analysis period
 
-Memory footprint comparison between baseline and instrumented runs:
+Resource tracing tells us *why*. Peak memory per node sits on the diagonal (no measurable overhead), but **average CPU usage is driven by the analysis period**: at 250 ms the analysis thread communicates so often that CPU usage climbs from 5–8% to ~30%, while at 1000–2000 ms it falls back near the baseline. The analysis period is therefore a trade-off between adaptation speed and CPU cost, and a value of 500 ms or above keeps both performance and resource overhead low.
 
-![Memory Overhead Heatmap](../../images/blog/memory_overhead_heatmap.png)
-
-### Resource Correlation
-
-Scatter plot showing the relationship between CPU and memory overhead:
-
-![Resource Correlation](../../images/blog/resource_correlation_scatter.png)
-
-### Resource Scaling by Analysis Period
-
-How TOTO's resource consumption changes with different analysis frequencies:
-
-![Resource Scaling](../../images/blog/resource_scaling_by_period.png)
+![TOTO resource overhead on PlaFRIM](../../images/blog/toto_overhead_resources_plafrim.png)
 
 ---
 

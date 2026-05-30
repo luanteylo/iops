@@ -34,10 +34,17 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 
 Check out our [blog]({{< ref "/blog" >}}) for tutorials and use cases:
 
+- [Measuring the runtime overhead of an I/O interception library]({{< ref "/blog/toto-overhead-analysis" >}}) - Quantifying TOTO's overhead with conditional variables and resource tracing
+- [Testing IOPS's Bayesian search against random sampling]({{< ref "/blog/bayesian-optimization-study" >}}) - How guided search reaches the optimum with far fewer evaluations
 - [Using IOPS on Grid'5000]({{< ref "/blog/grid500" >}}) - Run IOPS with OAR scheduler on Grid'5000
+
+## Slides
+
+New to IOPS? The [overview presentation (PDF)](slides/iops_presentation.pdf) walks through the YAML configuration, search strategies, parsers and reports, with a running IOR example.
 
 ## Links
 
+- **Slides**: [IOPS overview (PDF)](slides/iops_presentation.pdf)
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)
 - **Issues**: [Issue Tracker](https://gitlab.inria.fr/lgouveia/iops/-/issues)
 - **PyPI**: [iops-benchmark](https://pypi.org/project/iops-benchmark/)
