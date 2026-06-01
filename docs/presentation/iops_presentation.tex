@@ -141,7 +141,7 @@
 % ---- Title metadata --------------------------------------------------------
 \title{IOPS}
 \subtitle{Reproducible benchmarking, from one YAML to a report}
-\date{June 2026 \quad\textperiodcentered\quad IOPS v3.5.6}
+\date{June 2026 \quad\textperiodcentered\quad IOPS v3.5.5}
 \author{Luan Teylo}
 \institute{Integrated Orchestration for Parametric Studies}
 \titlegraphic{\hfill\includegraphics[height=2.4cm]{logo.png}}
@@ -214,37 +214,7 @@
   \end{center}
 \end{frame}
 
-\begin{frame}{The pipeline: one config, five stages}
-  \centering
-  \resizebox{\textwidth}{!}{%
-  \begin{tikzpicture}[
-      node distance=6mm,
-      box/.style={rounded corners=3pt, draw=iopsNavy, line width=0.8pt,
-        fill=white, text width=2.0cm, align=center, minimum height=1.5cm,
-        font=\small},
-      lab/.style={font=\scriptsize\itshape, color=iopsGrey},
-      arr/.style={-{Stealth[length=3mm]}, line width=1pt, color=iopsCyan}]
-    \node[box, fill=iopsCyan!12] (cfg) {\textbf{YAML}\\config};
-    \node[box, right=of cfg] (plan) {\textbf{Planner}\\search space};
-    \node[box, right=of plan] (exec) {\textbf{Executor}\\local / SLURM};
-    \node[box, right=of exec] (parse) {\textbf{Parser}\\metrics};
-    \node[box, right=of parse, fill=iopsGreen!15] (out) {\textbf{Results}\\CSV + report};
-    \draw[arr] (cfg) -- (plan);
-    \draw[arr] (plan) -- (exec);
-    \draw[arr] (exec) -- (parse);
-    \draw[arr] (parse) -- (out);
-    \node[lab, below=1mm of plan] {what to run};
-    \node[lab, below=1mm of exec] {run it};
-    \node[lab, below=1mm of parse] {read it};
-    \node[lab, below=1mm of out] {explore it};
-  \end{tikzpicture}}
 
-  \vspace{0.9em}
-  \begin{keybox}
-    The \hl{cache} sits underneath all of this: a result, once computed, is
-    never computed again, and can be \emph{reused} when the study grows.
-  \end{keybox}
-\end{frame}
 
 % =============================================================================
 \section{The config file}
@@ -406,6 +376,92 @@ constraints:
 \section{Exploring the space}
 % =============================================================================
 
+\begin{frame}[fragile]{Adaptive: probe for a limit}
+  When the question is \emph{``how far can we push it?''} rather than
+  \emph{``which is best?''}:
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6}{7.1}\selectfont,columns=fixed]
+benchmark:
+  search_method: "adaptive"
+vars:
+  nodes:                          # swept as usual
+    type: int
+    sweep: { mode: list, values: [1, 2, 4] }
+  problem_size:
+    type: int
+    adaptive:
+      initial: 1000
+      factor: 2                     # double each step
+      stop_when: "exit_code != 0"   # until it breaks
+      max_iterations: 15            # safety net
+\end{lstlisting}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \textbf{What \code{stop\_when} can find:}
+      \begin{itemize}
+        \item \hl{max problem size} before it crashes\\
+          {\footnotesize\code{"exit\_code != 0"}}
+        \item a \hl{performance cliff}\\
+          {\footnotesize\code{"gflops < 50"}}
+        \item a \hl{time budget} limit\\
+          {\footnotesize\code{"execution\_time > 300"}}
+      \end{itemize}
+    \end{column}
+  \end{columns}
+  \begin{keybox}
+    \faArrowsAltH~Steps (double, add, or a custom expression) until the
+    condition is met. One independent probe per swept combination.
+  \end{keybox}
+\end{frame}
+
+\begin{frame}{Swept vars $+$ adaptive: one probe per combination}
+  With swept variables \emph{and} an adaptive one, IOPS runs \hl{one independent
+  probe} per swept combination. Example: \code{nodes: [1, 2, 4]} $+$ adaptive
+  \code{problem\_size}.
+  \vspace{0.8em}
+  \begin{center}
+  \begin{tikzpicture}[
+      v/.style={rounded corners=2pt, draw=iopsNavy, fill=iopsSky,
+        minimum width=1.0cm, minimum height=0.55cm, font=\footnotesize},
+      a/.style={-{Stealth[length=2mm]}, color=iopsBlue, line width=0.8pt},
+      lbl/.style={font=\footnotesize, color=iopsNavy, anchor=east},
+      xx/.style={font=\large\bfseries, color=iopsPink}]
+    % row 1: nodes=1
+    \node[lbl] (l1) at (0,0) {probe \code{nodes=1}:};
+    \node[v, right=5mm of l1] (a1) {1000};
+    \node[v, right=5mm of a1] (a2) {2000};
+    \node[v, right=5mm of a2] (a3) {4000};
+    \node[xx, right=4mm of a3] (ax) {$\times$};
+    \draw[a] (a1)--(a2); \draw[a] (a2)--(a3); \draw[a] (a3)--(ax);
+    % row 2: nodes=2
+    \node[lbl] (l2) at (0,-1) {probe \code{nodes=2}:};
+    \node[v, right=5mm of l2] (b1) {1000};
+    \node[v, right=5mm of b1] (b2) {2000};
+    \node[xx, right=4mm of b2] (bx) {$\times$};
+    \draw[a] (b1)--(b2); \draw[a] (b2)--(bx);
+    % row 3: nodes=4
+    \node[lbl] (l3) at (0,-2) {probe \code{nodes=4}:};
+    \node[v, right=5mm of l3] (c1) {1000};
+    \node[xx, right=4mm of c1] (cx) {$\times$};
+    \draw[a] (c1)--(cx);
+    % brace: one probe per nodes value
+    \draw[decorate, decoration={brace, amplitude=6pt}, color=iopsBlue, line width=1pt]
+      ($(l1.north west)+(-2mm,2mm)$) -- ($(l3.south west)+(-2mm,-2mm)$)
+      node[midway, left=6pt, align=center, font=\scriptsize\bfseries, color=iopsBlue]
+      {one probe\\per value};
+    % step annotation
+    \node[font=\scriptsize\itshape, color=iopsGrey, anchor=west] at ($(ax)+(6mm,0)$)
+      {double until it breaks};
+  \end{tikzpicture}
+  \end{center}
+  \vspace{0.4em}
+  \begin{keybox}
+    \faInfoCircle~Each probe steps its adaptive value independently until its
+    \code{stop\_when} fires, finding the limit \emph{for that combination}.
+  \end{keybox}
+\end{frame}
+
 \begin{frame}{You do not always want the full cross-product}
   \begin{center}
   \begin{tabular}{@{}lllc@{}}
@@ -455,9 +511,11 @@ benchmark:
       \shotW{\linewidth}{figures/node_selection.png}
 
       \vspace{3pt}
-      {\footnotesize\color{iopsGrey} Bayesian (centre/right) quickly concentrates
-      on \code{nodes=64} (green = fast configs); random (left) keeps sampling
-      everywhere.}
+      {\tiny\color{iopsGrey} Bayesian (centre/right) quickly concentrates
+      on {\ttfamily nodes=64} (green = fast configs); random (left) keeps sampling
+      everywhere.\\[2pt]
+      EI = Expected Improvement (acquisition); RF = Random Forest, ET = Extra
+      Trees (surrogate models).}
     \end{column}
   \end{columns}
 \end{frame}
@@ -823,7 +881,39 @@ iops cache list   cache.db nodes=8
 \section{Backup}
 % =============================================================================
 
-\divider{}{Extra}{parallel execution \textperiodcentered\ adaptive \textperiodcentered\ growing the search space \textperiodcentered\ multi-machine \textperiodcentered\ SLURM \textperiodcentered\ CI/CD \textperiodcentered\ archive}
+\divider{}{Extra}{pipeline \textperiodcentered\ parallel execution \textperiodcentered\ growing the search space \textperiodcentered\ multi-machine \textperiodcentered\ SLURM \textperiodcentered\ CI/CD \textperiodcentered\ archive}
+
+\begin{frame}{The pipeline: one config, five stages}
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[
+      node distance=6mm,
+      box/.style={rounded corners=3pt, draw=iopsNavy, line width=0.8pt,
+        fill=white, text width=2.0cm, align=center, minimum height=1.5cm,
+        font=\small},
+      lab/.style={font=\scriptsize\itshape, color=iopsGrey},
+      arr/.style={-{Stealth[length=3mm]}, line width=1pt, color=iopsCyan}]
+    \node[box, fill=iopsCyan!12] (cfg) {\textbf{YAML}\\config};
+    \node[box, right=of cfg] (plan) {\textbf{Planner}\\search space};
+    \node[box, right=of plan] (exec) {\textbf{Executor}\\local / SLURM};
+    \node[box, right=of exec] (parse) {\textbf{Parser}\\metrics};
+    \node[box, right=of parse, fill=iopsGreen!15] (out) {\textbf{Results}\\CSV + report};
+    \draw[arr] (cfg) -- (plan);
+    \draw[arr] (plan) -- (exec);
+    \draw[arr] (exec) -- (parse);
+    \draw[arr] (parse) -- (out);
+    \node[lab, below=1mm of plan] {what to run};
+    \node[lab, below=1mm of exec] {run it};
+    \node[lab, below=1mm of parse] {read it};
+    \node[lab, below=1mm of out] {explore it};
+  \end{tikzpicture}}
+
+  \vspace{0.9em}
+  \begin{keybox}
+    The \hl{cache} sits underneath all of this: a result, once computed, is
+    never computed again, and can be \emph{reused} when the study grows.
+  \end{keybox}
+\end{frame}
 
 \begin{frame}[fragile]{Parallel execution}
   By default tests run one at a time. One setting changes that:
@@ -1036,90 +1126,6 @@ iops run config.yaml --machine grid5000    # run on Grid'5000
 \end{lstlisting}
 \end{frame}
 
-\begin{frame}[fragile]{Adaptive: probe for a limit}
-  When the question is \emph{``how far can we push it?''} rather than
-  \emph{``which is best?''}:
-  \begin{columns}[T]
-    \begin{column}{0.54\textwidth}
-\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6}{7.1}\selectfont,columns=fixed]
-benchmark:
-  search_method: "adaptive"
-vars:
-  nodes:                          # swept as usual
-    type: int
-    sweep: { mode: list, values: [1, 2, 4] }
-  problem_size:
-    type: int
-    adaptive:
-      initial: 1000
-      factor: 2                     # double each step
-      stop_when: "exit_code != 0"   # until it breaks
-      max_iterations: 15            # safety net
-\end{lstlisting}
-    \end{column}
-    \begin{column}{0.46\textwidth}
-      \textbf{What \code{stop\_when} can find:}
-      \begin{itemize}
-        \item \hl{max problem size} before it crashes\\
-          {\footnotesize\code{"exit\_code != 0"}}
-        \item a \hl{performance cliff}\\
-          {\footnotesize\code{"gflops < 50"}}
-        \item a \hl{time budget} limit\\
-          {\footnotesize\code{"execution\_time > 300"}}
-      \end{itemize}
-    \end{column}
-  \end{columns}
-  \begin{keybox}
-    \faArrowsAltH~Steps (double, add, or a custom expression) until the
-    condition is met. One independent probe per swept combination.
-  \end{keybox}
-\end{frame}
 
-\begin{frame}{Swept vars $+$ adaptive: one probe per combination}
-  With swept variables \emph{and} an adaptive one, IOPS runs \hl{one independent
-  probe} per swept combination. Example: \code{nodes: [1, 2, 4]} $+$ adaptive
-  \code{problem\_size}.
-  \vspace{0.8em}
-  \begin{center}
-  \begin{tikzpicture}[
-      v/.style={rounded corners=2pt, draw=iopsNavy, fill=iopsSky,
-        minimum width=1.0cm, minimum height=0.55cm, font=\footnotesize},
-      a/.style={-{Stealth[length=2mm]}, color=iopsBlue, line width=0.8pt},
-      lbl/.style={font=\footnotesize, color=iopsNavy, anchor=east},
-      xx/.style={font=\large\bfseries, color=iopsPink}]
-    % row 1: nodes=1
-    \node[lbl] (l1) at (0,0) {probe \code{nodes=1}:};
-    \node[v, right=5mm of l1] (a1) {1000};
-    \node[v, right=5mm of a1] (a2) {2000};
-    \node[v, right=5mm of a2] (a3) {4000};
-    \node[xx, right=4mm of a3] (ax) {$\times$};
-    \draw[a] (a1)--(a2); \draw[a] (a2)--(a3); \draw[a] (a3)--(ax);
-    % row 2: nodes=2
-    \node[lbl] (l2) at (0,-1) {probe \code{nodes=2}:};
-    \node[v, right=5mm of l2] (b1) {1000};
-    \node[v, right=5mm of b1] (b2) {2000};
-    \node[xx, right=4mm of b2] (bx) {$\times$};
-    \draw[a] (b1)--(b2); \draw[a] (b2)--(bx);
-    % row 3: nodes=4
-    \node[lbl] (l3) at (0,-2) {probe \code{nodes=4}:};
-    \node[v, right=5mm of l3] (c1) {1000};
-    \node[xx, right=4mm of c1] (cx) {$\times$};
-    \draw[a] (c1)--(cx);
-    % brace: one probe per nodes value
-    \draw[decorate, decoration={brace, amplitude=6pt}, color=iopsBlue, line width=1pt]
-      ($(l1.north west)+(-2mm,2mm)$) -- ($(l3.south west)+(-2mm,-2mm)$)
-      node[midway, left=6pt, align=center, font=\scriptsize\bfseries, color=iopsBlue]
-      {one probe\\per value};
-    % step annotation
-    \node[font=\scriptsize\itshape, color=iopsGrey, anchor=west] at ($(ax)+(6mm,0)$)
-      {double until it breaks};
-  \end{tikzpicture}
-  \end{center}
-  \vspace{0.4em}
-  \begin{keybox}
-    \faInfoCircle~Each probe steps its adaptive value independently until its
-    \code{stop\_when} fires, finding the limit \emph{for that combination}.
-  \end{keybox}
-\end{frame}
 
 \end{document}
