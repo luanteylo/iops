@@ -216,6 +216,38 @@
 
 
 
+\begin{frame}{The pipeline: one config, five stages}
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[
+      node distance=6mm,
+      box/.style={rounded corners=3pt, draw=iopsNavy, line width=0.8pt,
+        fill=white, text width=2.0cm, align=center, minimum height=1.5cm,
+        font=\small},
+      lab/.style={font=\scriptsize\itshape, color=iopsGrey},
+      arr/.style={-{Stealth[length=3mm]}, line width=1pt, color=iopsCyan}]
+    \node[box, fill=iopsCyan!12] (cfg) {\textbf{YAML}\\config};
+    \node[box, right=of cfg] (plan) {\textbf{Planner}\\search space};
+    \node[box, right=of plan] (exec) {\textbf{Executor}\\local / SLURM};
+    \node[box, right=of exec] (parse) {\textbf{Parser}\\metrics};
+    \node[box, right=of parse, fill=iopsGreen!15] (out) {\textbf{Results}\\CSV + report};
+    \draw[arr] (cfg) -- (plan);
+    \draw[arr] (plan) -- (exec);
+    \draw[arr] (exec) -- (parse);
+    \draw[arr] (parse) -- (out);
+    \node[lab, below=1mm of plan] {what to run};
+    \node[lab, below=1mm of exec] {run it};
+    \node[lab, below=1mm of parse] {read it};
+    \node[lab, below=1mm of out] {explore it};
+  \end{tikzpicture}}
+
+  \vspace{0.9em}
+  \begin{keybox}
+    The \hl{cache} sits underneath all of this: a result, once computed, is
+    never computed again, and can be \emph{reused} when the study grows.
+  \end{keybox}
+\end{frame}
+
 % =============================================================================
 \section{The config file}
 % =============================================================================
@@ -591,6 +623,69 @@ parser:
 
 
 % =============================================================================
+\section{Where it runs}
+% =============================================================================
+
+\begin{frame}[fragile]{The SLURM backend (and beyond)}
+  \begin{columns}[T]
+    \begin{column}{0.58\textwidth}
+\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6.8}{8}\selectfont,columns=fixed]
+benchmark:
+  executor: "slurm"
+  cores_expr: "{{ nodes * ppn }}"
+  max_core_hours: 1000          # budget guard
+  slurm_options:
+    commands:                   # override the defaults
+      submit: "sbatch"
+      status: "squeue -j {job_id} --format=%T"
+      info:   "scontrol show job {job_id}"
+      cancel: "scancel {job_id}"
+    poll_interval: 30           # seconds
+\end{lstlisting}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      IOPS handles the lifecycle:
+      \begin{itemize}
+        \item submit, poll, status
+        \item per-job status tracking
+        \item core-hour budget
+      \end{itemize}
+      \vspace{0.3em}
+      \begin{keybox}[colback=iopsGreen!10, colframe=iopsGreen]
+        \faSlidersH~Swap these for \emph{any} scheduler or wrapper (the
+        \code{\{job\_id\}} placeholder is filled at runtime). Not tied to SLURM.
+      \end{keybox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Parallel execution}
+  By default tests run one at a time. One setting changes that:
+\begin{lstlisting}[style=yaml]
+benchmark:
+  parallel: 4        # up to 4 tests concurrently
+\end{lstlisting}
+  \code{iops run cfg.yaml -{}-parallel 4}\quad (CLI overrides YAML)
+  \vspace{0.5em}
+  \begin{center}
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    \textbf{Method} & \textbf{Max parallelism} & \textbf{Why} \\
+    \midrule
+    \code{exhaustive} / \code{random} & unlimited & tests are independent \\
+    \code{bayesian}  & 1 & each result feeds the next suggestion \\
+    \code{adaptive}  & \#probes & probes independent, steps sequential \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.4em}
+  \begin{keybox}
+    Works with \emph{both} backends: parallel subprocesses locally, or many
+    SLURM jobs submitted and polled at once. Budget tracking stays accurate.
+  \end{keybox}
+\end{frame}
+
+% =============================================================================
 \section{output: the results}
 % =============================================================================
 
@@ -736,7 +831,7 @@ reporting:
 \section{Resource probes}
 % =============================================================================
 
-\divider{Part 3}{Going further}{probes \textperiodcentered\ caching}
+\divider{Part 3}{Going further}{probes \textperiodcentered\ caching \textperiodcentered\ machines \textperiodcentered\ CI/CD}
 
 \begin{frame}[fragile]{Resource probes: CPU, memory, GPU}
   \begin{columns}[T]
@@ -808,139 +903,6 @@ iops cache list   cache.db nodes=8
 
 
 
-% =============================================================================
-\section{Wrap-up}
-% =============================================================================
-
-\begin{frame}{Not only I/O}
-  IOPS \textbf{started as an I/O benchmarking tool} (IOR, MDTEST, IO500), then we
-  made the engine \hl{generic}. It is a working, fully documented tool with
-  \hl{growing adoption} beyond its original scope:
-
-  \vspace{0.5em}
-  \begin{columns}[t]
-    \begin{column}{0.32\textwidth}
-      \begin{keybox}[equal height group=adopt]
-        {\color{iopsBlue}\faServer~\textbf{CEA \textperiodcentered\ NUMPEX}}\\[4pt]
-        {\footnotesize Parametric performance studies on production HPC systems.}
-      \end{keybox}
-    \end{column}
-    \begin{column}{0.32\textwidth}
-      \begin{keybox}[equal height group=adopt]
-        {\color{iopsBlue}\faTrophy~\textbf{IO500 collaboration}}\\[4pt]
-        {\footnotesize INRIA, JGU, Sandia, and the IO500 community: smart
-        parameter-space search to optimize IO500 scores.}
-      \end{keybox}
-    \end{column}
-    \begin{column}{0.32\textwidth}
-      \begin{keybox}[equal height group=adopt]
-        {\color{iopsBlue}\faIndustry~\textbf{INRIA (Concace) \textperiodcentered\ Airbus}}\\[4pt]
-        {\footnotesize Under evaluation for industrial HPC performance studies.}
-      \end{keybox}
-    \end{column}
-  \end{columns}
-
-  \vspace{0.5em}
-  \begin{keybox}[colback=white]
-    \faLightbulb~If it runs from a script and prints a number, IOPS can sweep it,
-    schedule it, cache it, and plot it, whatever the domain.
-  \end{keybox}
-\end{frame}
-
-\begin{frame}{Get involved}
-  \centering
-  \begin{keybox}[width=0.95\textwidth, top=2pt, bottom=2pt]
-    \centering
-    {\footnotesize IOPS is an open-source project created at \textbf{TADaaM} (Inria).}\\[2pt]
-    {\scriptsize\faGlobe~\href{https://iops.gitlabpages.inria.fr/}{iops.gitlabpages.inria.fr}
-    \;\textbar\;
-    \faGitlab~\href{https://gitlab.inria.fr/lgouveia/iops}{gitlab.inria.fr/lgouveia/iops}
-    \;\textbar\;
-    \faBox~{\ttfamily pip install iops-benchmark}}\\[2pt]
-    {\footnotesize Want to use, contribute, or share ideas? Email
-    \href{mailto:luan.teylo@inria.fr}{luan.teylo@inria.fr} or open an issue.}
-  \end{keybox}
-
-  \vspace{1pt}
-  {\footnotesize\color{iopsGrey}\textbf{Contributors}}\par
-  \vspace{1pt}
-  \person{luan_teylo.png}{Luan Teylo}{Inria}{height=1.4cm}\hfill
-  \person{francieli_boito.png}{Francieli Boito}{Inria}{width=1.4cm}\hfill
-  \person{Abdraman_mahamat.png}{Abdraman Mahamat}{Inria}{height=1.4cm}\hfill
-  \person{mihail_popov.jpeg}{Mihail Popov}{Inria}{width=1.4cm}\par
-  \vspace{1pt}
-  \person{meline_trochon.png}{M\'eline Trochon}{Inria/DDN}{height=1.4cm}\hfill
-  \person{jerome_charousset.png}{J\'er\^ome Charousset}{CEA}{height=1.4cm}\hfill
-  \person{alexandre_lou-poueyou.png}{Alexandre Lou-Poueyou}{Inria}{height=1.4cm}\hfill
-  \person{almousa_mohamad.png}{Mohamad Almousa}{Inria}{height=1.4cm}
-\end{frame}
-
-\appendix
-
-% =============================================================================
-\section{Backup}
-% =============================================================================
-
-\divider{}{Extra}{pipeline \textperiodcentered\ parallel execution \textperiodcentered\ growing the search space \textperiodcentered\ multi-machine \textperiodcentered\ SLURM \textperiodcentered\ CI/CD \textperiodcentered\ archive}
-
-\begin{frame}{The pipeline: one config, five stages}
-  \centering
-  \resizebox{\textwidth}{!}{%
-  \begin{tikzpicture}[
-      node distance=6mm,
-      box/.style={rounded corners=3pt, draw=iopsNavy, line width=0.8pt,
-        fill=white, text width=2.0cm, align=center, minimum height=1.5cm,
-        font=\small},
-      lab/.style={font=\scriptsize\itshape, color=iopsGrey},
-      arr/.style={-{Stealth[length=3mm]}, line width=1pt, color=iopsCyan}]
-    \node[box, fill=iopsCyan!12] (cfg) {\textbf{YAML}\\config};
-    \node[box, right=of cfg] (plan) {\textbf{Planner}\\search space};
-    \node[box, right=of plan] (exec) {\textbf{Executor}\\local / SLURM};
-    \node[box, right=of exec] (parse) {\textbf{Parser}\\metrics};
-    \node[box, right=of parse, fill=iopsGreen!15] (out) {\textbf{Results}\\CSV + report};
-    \draw[arr] (cfg) -- (plan);
-    \draw[arr] (plan) -- (exec);
-    \draw[arr] (exec) -- (parse);
-    \draw[arr] (parse) -- (out);
-    \node[lab, below=1mm of plan] {what to run};
-    \node[lab, below=1mm of exec] {run it};
-    \node[lab, below=1mm of parse] {read it};
-    \node[lab, below=1mm of out] {explore it};
-  \end{tikzpicture}}
-
-  \vspace{0.9em}
-  \begin{keybox}
-    The \hl{cache} sits underneath all of this: a result, once computed, is
-    never computed again, and can be \emph{reused} when the study grows.
-  \end{keybox}
-\end{frame}
-
-\begin{frame}[fragile]{Parallel execution}
-  By default tests run one at a time. One setting changes that:
-\begin{lstlisting}[style=yaml]
-benchmark:
-  parallel: 4        # up to 4 tests concurrently
-\end{lstlisting}
-  \code{iops run cfg.yaml -{}-parallel 4}\quad (CLI overrides YAML)
-  \vspace{0.5em}
-  \begin{center}
-  \begin{tabular}{@{}lll@{}}
-    \toprule
-    \textbf{Method} & \textbf{Max parallelism} & \textbf{Why} \\
-    \midrule
-    \code{exhaustive} / \code{random} & unlimited & tests are independent \\
-    \code{bayesian}  & 1 & each result feeds the next suggestion \\
-    \code{adaptive}  & \#probes & probes independent, steps sequential \\
-    \bottomrule
-  \end{tabular}
-  \end{center}
-  \vspace{0.4em}
-  \begin{keybox}
-    Works with \emph{both} backends: parallel subprocesses locally, or many
-    SLURM jobs submitted and polled at once. Budget tracking stays accurate.
-  \end{keybox}
-\end{frame}
-
 \begin{frame}[fragile]{Growing the parameter space without re-running}
   You ran a full sweep. Now you want to add a \emph{new} axis,
   \code{compression}, but keep the old results for \code{compression=off}.
@@ -959,6 +921,76 @@ vars:
     \code{compression=true} half. The old runs are reused, not repeated.
   \end{keybox}
 \end{frame}
+
+\begin{frame}[fragile]{Multi-machine support}
+  The \hl{same experiment} on different clusters, in \hl{one file}: override only
+  the site-specific setup.
+  \begin{columns}[c]
+    \begin{column}{0.4\textwidth}
+\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6.4}{7.6}\selectfont,columns=fixed]
+# Base: the experiment,
+# shared by every machine
+benchmark:
+  workdir: "./workdir"
+  repetitions: 5
+vars:
+  nodes:
+    sweep: { values: [1,2,4,8] }
+  ppn:
+    sweep: { values: [16,32] }
+command:
+  template: "ior -w -b 1g -t 2m"
+\end{lstlisting}
+    \end{column}
+    \begin{column}{0.05\textwidth}
+      \centering
+      {\Large\color{iopsBlue}$\cdots$}\\[2pt]
+      {\tiny\color{iopsGrey}same\\file}
+    \end{column}
+    \begin{column}{0.55\textwidth}
+\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6.3}{7.6}\selectfont,columns=fixed]
+machines:            # only the site-specific setup differs
+  plafrim:
+    benchmark: { workdir: "/scratch/$USER/b" }
+    scripts:
+      - name: run
+        script_template: |
+          #SBATCH --partition=bora
+          module load openmpi
+          srun {{ command.template }}
+  grid5000:                            # OAR, not SLURM
+    benchmark: { workdir: "/home/$USER/b" }
+    scripts:
+      - name: run
+        script_template: |
+          #OAR -l nodes={{ nodes }},walltime=1:00:00
+          module load openmpi
+          mpirun {{ command.template }}
+\end{lstlisting}
+    \end{column}
+  \end{columns}
+\begin{lstlisting}[style=sh,basicstyle=\ttfamily\scriptsize]
+iops run config.yaml --machine plafrim     # run on PlaFRIM
+iops run config.yaml --machine grid5000    # run on Grid'5000
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]{Archiving a run}
+  Bundle a whole run into one portable, checksummed archive to share or back up:
+\begin{lstlisting}[style=sh]
+iops archive create ./workdir/run_001 -o study.tar.gz  # pack a run
+iops archive extract study.tar.gz -o ./extracted       # unpack it
+iops find study.tar.gz                                  # inspect, no extract
+\end{lstlisting}
+  \begin{keybox}
+    \faBoxOpen~The archive carries a \hl{manifest} and \hl{checksums}, so a study
+    stays self-contained and verifiable when moved between machines.
+  \end{keybox}
+\end{frame}
+
+% =============================================================================
+\section{Benchmarks in CI/CD}
+% =============================================================================
 
 \begin{frame}{Catch regressions when commits land}
   \begin{center}
@@ -1027,105 +1059,71 @@ io-benchmark:
   \end{keybox}
 \end{frame}
 
-\begin{frame}[fragile]{The SLURM backend (and beyond)}
-  \begin{columns}[T]
-    \begin{column}{0.58\textwidth}
-\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6.8}{8}\selectfont,columns=fixed]
-benchmark:
-  executor: "slurm"
-  cores_expr: "{{ nodes * ppn }}"
-  max_core_hours: 1000          # budget guard
-  slurm_options:
-    commands:                   # override the defaults
-      submit: "sbatch"
-      status: "squeue -j {job_id} --format=%T"
-      info:   "scontrol show job {job_id}"
-      cancel: "scancel {job_id}"
-    poll_interval: 30           # seconds
-\end{lstlisting}
+% =============================================================================
+\section{Wrap-up}
+% =============================================================================
+
+\begin{frame}{Not only I/O}
+  IOPS \textbf{started as an I/O benchmarking tool} (IOR, MDTEST, IO500), then we
+  made the engine \hl{generic}. It is a working, fully documented tool with
+  \hl{growing adoption} beyond its original scope:
+
+  \vspace{0.5em}
+  \begin{columns}[t]
+    \begin{column}{0.32\textwidth}
+      \begin{keybox}[equal height group=adopt]
+        {\color{iopsBlue}\faServer~\textbf{CEA \textperiodcentered\ NUMPEX}}\\[4pt]
+        {\footnotesize Parametric performance studies on production HPC systems.}
+      \end{keybox}
     \end{column}
-    \begin{column}{0.42\textwidth}
-      IOPS handles the lifecycle:
-      \begin{itemize}
-        \item submit, poll, status
-        \item per-job status tracking
-        \item core-hour budget
-      \end{itemize}
-      \vspace{0.3em}
-      \begin{keybox}[colback=iopsGreen!10, colframe=iopsGreen]
-        \faSlidersH~Swap these for \emph{any} scheduler or wrapper (the
-        \code{\{job\_id\}} placeholder is filled at runtime). Not tied to SLURM.
+    \begin{column}{0.32\textwidth}
+      \begin{keybox}[equal height group=adopt]
+        {\color{iopsBlue}\faTrophy~\textbf{IO500 collaboration}}\\[4pt]
+        {\footnotesize INRIA, JGU, Sandia, and the IO500 community: smart
+        parameter-space search to optimize IO500 scores.}
+      \end{keybox}
+    \end{column}
+    \begin{column}{0.32\textwidth}
+      \begin{keybox}[equal height group=adopt]
+        {\color{iopsBlue}\faIndustry~\textbf{INRIA (Concace) \textperiodcentered\ Airbus}}\\[4pt]
+        {\footnotesize Under evaluation for industrial HPC performance studies.}
       \end{keybox}
     \end{column}
   \end{columns}
-\end{frame}
 
-\begin{frame}[fragile]{Archiving a run}
-  Bundle a whole run into one portable, checksummed archive to share or back up:
-\begin{lstlisting}[style=sh]
-iops archive create ./workdir/run_001 -o study.tar.gz  # pack a run
-iops archive extract study.tar.gz -o ./extracted       # unpack it
-iops find study.tar.gz                                  # inspect, no extract
-\end{lstlisting}
-  \begin{keybox}
-    \faBoxOpen~The archive carries a \hl{manifest} and \hl{checksums}, so a study
-    stays self-contained and verifiable when moved between machines.
+  \vspace{0.5em}
+  \begin{keybox}[colback=white]
+    \faLightbulb~If it runs from a script and prints a number, IOPS can sweep it,
+    schedule it, cache it, and plot it, whatever the domain.
   \end{keybox}
 \end{frame}
 
-\begin{frame}[fragile]{Multi-machine support}
-  The \hl{same experiment} on different clusters, in \hl{one file}: override only
-  the site-specific setup.
-  \begin{columns}[c]
-    \begin{column}{0.4\textwidth}
-\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6.4}{7.6}\selectfont,columns=fixed]
-# Base: the experiment,
-# shared by every machine
-benchmark:
-  workdir: "./workdir"
-  repetitions: 5
-vars:
-  nodes:
-    sweep: { values: [1,2,4,8] }
-  ppn:
-    sweep: { values: [16,32] }
-command:
-  template: "ior -w -b 1g -t 2m"
-\end{lstlisting}
-    \end{column}
-    \begin{column}{0.05\textwidth}
-      \centering
-      {\Large\color{iopsBlue}$\cdots$}\\[2pt]
-      {\tiny\color{iopsGrey}same\\file}
-    \end{column}
-    \begin{column}{0.55\textwidth}
-\begin{lstlisting}[style=yaml,basicstyle=\ttfamily\fontsize{6.3}{7.6}\selectfont,columns=fixed]
-machines:            # only the site-specific setup differs
-  plafrim:
-    benchmark: { workdir: "/scratch/$USER/b" }
-    scripts:
-      - name: run
-        script_template: |
-          #SBATCH --partition=bora
-          module load openmpi
-          srun {{ command.template }}
-  grid5000:                            # OAR, not SLURM
-    benchmark: { workdir: "/home/$USER/b" }
-    scripts:
-      - name: run
-        script_template: |
-          #OAR -l nodes={{ nodes }},walltime=1:00:00
-          module load openmpi
-          mpirun {{ command.template }}
-\end{lstlisting}
-    \end{column}
-  \end{columns}
-\begin{lstlisting}[style=sh,basicstyle=\ttfamily\scriptsize]
-iops run config.yaml --machine plafrim     # run on PlaFRIM
-iops run config.yaml --machine grid5000    # run on Grid'5000
-\end{lstlisting}
+\begin{frame}{Get involved}
+  \centering
+  \begin{keybox}[width=0.95\textwidth, top=2pt, bottom=2pt]
+    \centering
+    {\footnotesize IOPS is an open-source project created at \textbf{TADaaM} (Inria).}\\[2pt]
+    {\scriptsize\faGlobe~\href{https://iops.gitlabpages.inria.fr/}{iops.gitlabpages.inria.fr}
+    \;\textbar\;
+    \faGitlab~\href{https://gitlab.inria.fr/lgouveia/iops}{gitlab.inria.fr/lgouveia/iops}
+    \;\textbar\;
+    \faBox~{\ttfamily pip install iops-benchmark}}\\[2pt]
+    {\footnotesize Want to use, contribute, or share ideas? Email
+    \href{mailto:luan.teylo@inria.fr}{luan.teylo@inria.fr} or open an issue.}
+  \end{keybox}
+
+  \vspace{1pt}
+  {\footnotesize\color{iopsGrey}\textbf{Contributors}}\par
+  \vspace{1pt}
+  \person{luan_teylo.png}{Luan Teylo}{Inria}{height=1.4cm}\hfill
+  \person{francieli_boito.png}{Francieli Boito}{Inria}{width=1.4cm}\hfill
+  \person{Abdraman_mahamat.png}{Abdraman Mahamat}{Inria}{height=1.4cm}\hfill
+  \person{mihail_popov.jpeg}{Mihail Popov}{Inria}{width=1.4cm}\par
+  \vspace{1pt}
+  \person{meline_trochon.png}{M\'eline Trochon}{Inria/DDN}{height=1.4cm}\hfill
+  \person{jerome_charousset.png}{J\'er\^ome Charousset}{CEA}{height=1.4cm}\hfill
+  \person{alexandre_lou-poueyou.png}{Alexandre Lou-Poueyou}{Inria}{height=1.4cm}\hfill
+  \person{almousa_mohamad.png}{Mohamad Almousa}{Inria}{height=1.4cm}
 \end{frame}
-
-
 
 \end{document}
