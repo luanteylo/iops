@@ -435,6 +435,39 @@ Archives include:
 
 Manage IOPS execution cache databases.
 
+#### cache create
+
+Build a cache database from a CSV file, mapping columns to parameters and metrics. This is useful for importing results gathered outside IOPS (or from an older run) so they can be reused with `iops run --use-cache`:
+
+```bash
+iops cache create <csv_file> --params COL1,COL2 --metrics COL1,COL2 [options]
+```
+
+**Options:**
+- `--params COL1,COL2` - Comma-separated CSV columns to treat as parameters (the cache key). Required.
+- `--metrics COL1,COL2` - Comma-separated CSV columns to treat as metrics. Required.
+- `--repetition-column COL` - CSV column holding the repetition number. If omitted, repetitions are auto-numbered (1, 2, 3, ...) per unique parameter set.
+- `--delimiter CHAR` - CSV field delimiter (default: `,`).
+- `-o, --output PATH` - Output cache database path (default: `<csv_stem>_cache.db`).
+
+Each CSV row becomes one cached execution. Cell values are coerced to int, float, or bool where possible so they match how IOPS normalizes parameters at run time (for example, `8` and `"8"` hash to the same entry). Imported entries are stored with a `SUCCEEDED` status.
+
+**Examples:**
+
+```bash
+# Import results, auto-numbering repetitions per parameter set
+iops cache create results.csv --params nodes,ppn,block_size --metrics throughput,latency
+
+# Use an existing column as the repetition number and choose the output path
+iops cache create results.csv --params nodes,ppn --metrics throughput \
+    --repetition-column rep -o study_cache.db
+
+# Tab-separated input
+iops cache create results.tsv --params nodes --metrics bw --delimiter $'\t'
+```
+
+The resulting database works with the other `cache` subcommands (`list`, `show`, `stats`) and with `iops run --use-cache` (the run's variables must hash to the same parameter set).
+
 #### cache rebuild
 
 Rebuild a cache database with modified variables:

@@ -273,6 +273,24 @@ Examples:
     cache_subparsers = cache_parser.add_subparsers(dest='cache_command', title='cache commands',
                                                     metavar='<cache-command>')
 
+    # cache create
+    cache_create_parser = cache_subparsers.add_parser('create', help='Create a cache from a CSV file',
+                                                      description='Build an IOPS execution cache from a CSV file, '
+                                                                  'mapping columns to parameters and metrics.')
+    cache_create_parser.add_argument('csv_file', type=Path, help='Path to the input CSV file')
+    cache_create_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                                     help='Output cache database path (default: <csv_stem>_cache.db)')
+    cache_create_parser.add_argument('--params', type=str, required=True, metavar='COL1,COL2',
+                                     help='Comma-separated CSV columns to treat as parameters (the cache key)')
+    cache_create_parser.add_argument('--metrics', type=str, required=True, metavar='COL1,COL2',
+                                     help='Comma-separated CSV columns to treat as metrics')
+    cache_create_parser.add_argument('--repetition-column', type=str, default=None, metavar='COL',
+                                     help='CSV column holding the repetition number '
+                                          '(default: auto-number per unique parameter set)')
+    cache_create_parser.add_argument('--delimiter', type=str, default=',', metavar='CHAR',
+                                     help="CSV field delimiter (default: ',')")
+    _add_common_args(cache_create_parser)
+
     # cache rebuild
     cache_rebuild_parser = cache_subparsers.add_parser('rebuild', help='Rebuild cache with modified variables',
                                                         description='Rebuild a cache database with excluded or added variables.')
@@ -751,6 +769,54 @@ def main():
     if args.command == 'cache':
         from iops.cache import rebuild_cache
 
+        if args.cache_command == 'create':
+            from iops.cache import create_cache_from_csv
+
+            try:
+                param_columns = [c.strip() for c in args.params.split(',') if c.strip()]
+                metric_columns = [c.strip() for c in args.metrics.split(',') if c.strip()]
+
+                if not param_columns:
+                    logger.error("--params must list at least one column")
+                    return
+                if not metric_columns:
+                    logger.error("--metrics must list at least one column")
+                    return
+
+                # Determine output path
+                if args.output:
+                    output_path = args.output
+                else:
+                    output_path = args.csv_file.parent / f"{args.csv_file.stem}_cache.db"
+
+                stats = create_cache_from_csv(
+                    csv_file=args.csv_file,
+                    output_db=output_path,
+                    param_columns=param_columns,
+                    metric_columns=metric_columns,
+                    repetition_column=args.repetition_column,
+                    delimiter=args.delimiter,
+                    logger=logger,
+                )
+
+                logger.info("")
+                logger.info(stats.summary())
+                logger.info(f"Cache created: {output_path}")
+
+            except FileNotFoundError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except ValueError as e:
+                logger.error(str(e))
+                if args.verbose:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error creating cache: {e}")
+                if args.verbose:
+                    raise
+            return
+
         if args.cache_command == 'rebuild':
             try:
                 # Parse exclude vars
@@ -933,7 +999,7 @@ def main():
 
         else:
             # No subcommand provided
-            logger.error("No cache subcommand specified. Use 'iops cache list|show|stats|rebuild'.")
+            logger.error("No cache subcommand specified. Use 'iops cache create|list|show|stats|rebuild'.")
             logger.info("Run 'iops cache --help' for more information.")
             return
 

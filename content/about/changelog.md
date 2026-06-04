@@ -6,6 +6,13 @@ All notable changes to IOPS are documented here.
 
 ## [Unreleased]
 
+### Added
+- `iops cache create` subcommand to build a cache database from a CSV file
+  - `--params` and `--metrics` map CSV columns to parameters (the cache key) and metrics; each row becomes one cached execution
+  - Cell values are coerced to int/float/bool where possible so they hash the same way IOPS normalizes parameters at run time
+  - `--repetition-column` uses an existing column as the repetition number; otherwise repetitions are auto-numbered per unique parameter set
+  - Imported entries are stored with `SUCCEEDED` status and work with `cache list|show|stats` and `iops run --use-cache`
+
 ## [3.5.5] - 2026-05-30
 
 This release introduces declarative input files, letting benchmarks that read

@@ -686,3 +686,149 @@ def test_rebuild_add_vars_bool_matches_yaml_config(tmp_path):
 
     # The hashes should match - both have nodes=2, use_feature=True (bool)
     assert original_hash == rebuilt_hash
+
+
+# ---- create_cache_from_csv tests ----
+
+from iops.cache import create_cache_from_csv, CreateFromCsvStats
+
+
+def _write_csv(path: Path, content: str):
+    path.write_text(content.lstrip("\n"))
+
+
+def test_create_from_csv_basic(tmp_path):
+    """CSV rows are stored and retrievable with coerced parameter types."""
+    csv_file = tmp_path / "results.csv"
+    _write_csv(csv_file, """
+nodes,ppn,throughput,latency
+1,4,100.5,2.1
+2,8,250.0,1.5
+""")
+    output_db = tmp_path / "cache.db"
+
+    stats = create_cache_from_csv(
+        csv_file=csv_file,
+        output_db=output_db,
+        param_columns=["nodes", "ppn"],
+        metric_columns=["throughput", "latency"],
+    )
+
+    assert isinstance(stats, CreateFromCsvStats)
+    assert stats.source_rows == 2
+    assert stats.stored_entries == 2
+    assert stats.unique_parameter_sets == 2
+
+    # Retrieve with native (int) types
+    cache = ExecutionCache(output_db)
+    result = cache.get_cached_result({"nodes": 1, "ppn": 4}, repetition=1)
+    assert result is not None
+    assert result["metrics"] == {"throughput": 100.5, "latency": 2.1}
+
+
+def test_create_from_csv_hash_matches_runtime_params(tmp_path):
+    """A cache built from CSV hits when queried with string params (as a run would)."""
+    csv_file = tmp_path / "results.csv"
+    _write_csv(csv_file, """
+nodes,block_size,bw
+4,512,480.0
+""")
+    output_db = tmp_path / "cache.db"
+    create_cache_from_csv(
+        csv_file=csv_file,
+        output_db=output_db,
+        param_columns=["nodes", "block_size"],
+        metric_columns=["bw"],
+    )
+
+    cache = ExecutionCache(output_db)
+    # Query with string-typed params: normalization should make hashes match
+    result = cache.get_cached_result({"nodes": "4", "block_size": "512"}, repetition=1)
+    assert result is not None
+    assert result["metrics"] == {"bw": 480.0}
+
+
+def test_create_from_csv_auto_numbered_repetitions(tmp_path):
+    """Repeated parameter sets are auto-numbered 1, 2, 3 when no rep column given."""
+    csv_file = tmp_path / "results.csv"
+    _write_csv(csv_file, """
+nodes,ppn,bw
+1,4,100
+1,4,110
+1,4,120
+""")
+    output_db = tmp_path / "cache.db"
+    stats = create_cache_from_csv(
+        csv_file=csv_file,
+        output_db=output_db,
+        param_columns=["nodes", "ppn"],
+        metric_columns=["bw"],
+    )
+
+    assert stats.stored_entries == 3
+    assert stats.unique_parameter_sets == 1
+
+    cache = ExecutionCache(output_db)
+    assert cache.get_cached_repetitions_count({"nodes": 1, "ppn": 4}) == 3
+    assert cache.get_cached_result({"nodes": 1, "ppn": 4}, repetition=2)["metrics"] == {"bw": 110}
+
+
+def test_create_from_csv_explicit_repetition_column(tmp_path):
+    """An explicit repetition column is honored."""
+    csv_file = tmp_path / "results.csv"
+    _write_csv(csv_file, """
+nodes,bw,rep
+1,100,1
+1,200,5
+""")
+    output_db = tmp_path / "cache.db"
+    create_cache_from_csv(
+        csv_file=csv_file,
+        output_db=output_db,
+        param_columns=["nodes"],
+        metric_columns=["bw"],
+        repetition_column="rep",
+    )
+
+    cache = ExecutionCache(output_db)
+    assert cache.get_cached_result({"nodes": 1}, repetition=5)["metrics"] == {"bw": 200}
+    assert cache.get_cached_result({"nodes": 1}, repetition=1)["metrics"] == {"bw": 100}
+
+
+def test_create_from_csv_missing_column_raises(tmp_path):
+    """Requesting a column absent from the header raises ValueError."""
+    csv_file = tmp_path / "results.csv"
+    _write_csv(csv_file, "nodes,bw\n1,100\n")
+    with pytest.raises(ValueError, match="Columns not found"):
+        create_cache_from_csv(
+            csv_file=csv_file,
+            output_db=tmp_path / "cache.db",
+            param_columns=["nodes", "ppn"],
+            metric_columns=["bw"],
+        )
+
+
+def test_create_from_csv_missing_file_raises(tmp_path):
+    """A missing CSV file raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        create_cache_from_csv(
+            csv_file=tmp_path / "nope.csv",
+            output_db=tmp_path / "cache.db",
+            param_columns=["nodes"],
+            metric_columns=["bw"],
+        )
+
+
+def test_create_from_csv_existing_output_raises(tmp_path):
+    """Refuses to overwrite an existing output database."""
+    csv_file = tmp_path / "results.csv"
+    _write_csv(csv_file, "nodes,bw\n1,100\n")
+    output_db = tmp_path / "cache.db"
+    output_db.write_text("")  # pre-existing file
+    with pytest.raises(ValueError, match="already exists"):
+        create_cache_from_csv(
+            csv_file=csv_file,
+            output_db=output_db,
+            param_columns=["nodes"],
+            metric_columns=["bw"],
+        )
