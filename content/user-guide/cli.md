@@ -448,6 +448,7 @@ iops cache create <csv_file> --params COL1,COL2 --metrics COL1,COL2 [options]
 - `--metrics COL1,COL2` - Comma-separated CSV columns to treat as metrics. Required.
 - `--repetition-column COL` - CSV column holding the repetition number. If omitted, repetitions are auto-numbered (1, 2, 3, ...) per unique parameter set.
 - `--delimiter CHAR` - CSV field delimiter (default: `,`).
+- `--no-progress` - Disable the progress bar (shown while writing entries; requires the `watch` extra for `rich`).
 - `-o, --output PATH` - Output cache database path (default: `<csv_stem>_cache.db`).
 
 Each CSV row becomes one cached execution. Cell values are coerced to int, float, or bool where possible so they match how IOPS normalizes parameters at run time (for example, `8` and `"8"` hash to the same entry). Imported entries are stored with a `SUCCEEDED` status.

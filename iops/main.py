@@ -289,6 +289,8 @@ Examples:
                                           '(default: auto-number per unique parameter set)')
     cache_create_parser.add_argument('--delimiter', type=str, default=',', metavar='CHAR',
                                      help="CSV field delimiter (default: ',')")
+    cache_create_parser.add_argument('--no-progress', action='store_true',
+                                     help='Disable progress bar')
     _add_common_args(cache_create_parser)
 
     # cache rebuild
@@ -796,6 +798,7 @@ def main():
                     metric_columns=metric_columns,
                     repetition_column=args.repetition_column,
                     delimiter=args.delimiter,
+                    show_progress=not args.no_progress,
                     logger=logger,
                 )
 

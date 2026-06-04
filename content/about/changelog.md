@@ -11,6 +11,7 @@ All notable changes to IOPS are documented here.
   - `--params` and `--metrics` map CSV columns to parameters (the cache key) and metrics; each row becomes one cached execution
   - Cell values are coerced to int/float/bool where possible so they hash the same way IOPS normalizes parameters at run time
   - `--repetition-column` uses an existing column as the repetition number; otherwise repetitions are auto-numbered per unique parameter set
+  - Shows a progress bar while writing entries (requires the `watch` extra for `rich`); disable with `--no-progress`
   - Imported entries are stored with `SUCCEEDED` status and work with `cache list|show|stats` and `iops run --use-cache`
 
 ## [3.5.5] - 2026-05-30

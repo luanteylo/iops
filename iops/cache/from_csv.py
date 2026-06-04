@@ -11,11 +11,41 @@ from __future__ import annotations
 
 import csv
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .execution_cache import ExecutionCache
+
+# Try to import rich for progress bars (optional dependency)
+try:
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+
+@contextmanager
+def _progress_context(show_progress: bool, description: str, total: int):
+    """Yield a (progress, task_id) pair, or (None, None) when unavailable.
+
+    Falls back to a no-op tracker when rich is not installed, progress is
+    disabled, or there is nothing to track.
+    """
+    if show_progress and RICH_AVAILABLE and total > 0:
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("[dim]{task.completed}/{task.total}"),
+        )
+        with progress:
+            task = progress.add_task(description, total=total)
+            yield progress, task
+    else:
+        yield None, None
 
 
 @dataclass
@@ -78,6 +108,7 @@ def create_cache_from_csv(
     metric_columns: List[str],
     repetition_column: Optional[str] = None,
     delimiter: str = ",",
+    show_progress: bool = True,
     logger: Optional[logging.Logger] = None,
 ) -> CreateFromCsvStats:
     """
@@ -96,6 +127,7 @@ def create_cache_from_csv(
         repetition_column: CSV column holding the repetition number. If None,
             repetitions are auto-numbered per unique parameter set (from 1).
         delimiter: CSV field delimiter (default: ',').
+        show_progress: Whether to display a progress bar (requires rich).
         logger: Optional logger for progress messages.
 
     Returns:
@@ -151,13 +183,18 @@ def create_cache_from_csv(
                 f"Available columns: {sorted(header)}"
             )
 
-        cache = ExecutionCache(db_path=output_db)
+        # Materialize rows so the progress bar has a known total. Cache CSVs
+        # are benchmark result tables, small enough to hold in memory.
+        rows = list(reader)
 
-        # Track per-parameter-set repetition counts for auto-numbering.
-        rep_counter: Dict[str, int] = {}
+    stats.source_rows = len(rows)
+    cache = ExecutionCache(db_path=output_db)
 
-        for line_no, row in enumerate(reader, start=2):  # header is line 1
-            stats.source_rows += 1
+    # Track per-parameter-set repetition counts for auto-numbering.
+    rep_counter: Dict[str, int] = {}
+
+    with _progress_context(show_progress, "Writing cache", len(rows)) as (progress, task):
+        for row_num, row in enumerate(rows, start=2):  # header is row 1
             params = {col: _coerce(row[col]) for col in param_columns}
             metrics = {col: _coerce(row[col]) for col in metric_columns}
 
@@ -165,7 +202,7 @@ def create_cache_from_csv(
                 rep_raw = _coerce(row[repetition_column])
                 if not isinstance(rep_raw, int) or isinstance(rep_raw, bool):
                     logger.warning(
-                        f"Line {line_no}: repetition value "
+                        f"Row {row_num}: repetition value "
                         f"{row[repetition_column]!r} is not an integer; defaulting to 1"
                     )
                     repetition = 1
@@ -183,6 +220,9 @@ def create_cache_from_csv(
                 metadata={"status": "SUCCEEDED", "__source": "csv"},
             )
             stats.stored_entries += 1
+
+            if progress is not None:
+                progress.update(task, advance=1)
 
     cache_stats = cache.get_cache_stats()
     stats.unique_parameter_sets = cache_stats["unique_parameter_sets"]
