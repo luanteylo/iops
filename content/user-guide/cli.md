@@ -396,9 +396,11 @@ iops archive extract <archive> [options]
 ```
 
 **Options:**
-- `-o, --output PATH` - Output directory (default: current directory)
+- `-o, --output PATH` - Output directory (default: a folder named after the archive)
 - `--no-verify` - Skip integrity verification
 - `--no-progress` - Disable progress bar
+
+When `-o` is omitted, IOPS extracts into a folder named after the archive (for example, `study.tar.gz` extracts into `./study/`) instead of scattering files into the current directory.
 
 By default, IOPS verifies the integrity of extracted files using SHA256 checksums stored in the archive manifest. Use `--no-verify` to skip this check.
 
@@ -407,7 +409,7 @@ Progress bars are shown by default when the `rich` library is installed. Use `--
 **Examples:**
 
 ```bash
-# Extract to current directory
+# Extract into a folder named after the archive (./study/)
 iops archive extract study.tar.gz
 
 # Extract to specific directory

@@ -77,6 +77,29 @@ COMPRESSION_EXTENSIONS = {
     "none": ".tar",
 }
 
+
+def archive_extract_dirname(archive: Path) -> str:
+    """
+    Derive a directory name from an archive filename.
+
+    Strips known archive extensions (.tar.gz, .tar.bz2, .tar.xz, .tar) so that
+    extracting without an explicit destination lands in a self-named folder
+    instead of scattering files into the current directory.
+
+    Args:
+        archive: Path to the archive file.
+
+    Returns:
+        The base name with its archive extension removed (e.g. "study.tar.gz"
+        -> "study"). Falls back to the stem if no known extension matches.
+    """
+    name = Path(archive).name
+    # Longest extensions first so ".tar.gz" wins over ".tar".
+    for ext in sorted(COMPRESSION_EXTENSIONS.values(), key=len, reverse=True):
+        if name.endswith(ext):
+            return name[: -len(ext)]
+    return Path(name).stem
+
 # Critical IOPS metadata files to checksum
 CRITICAL_METADATA_PATTERNS = [
     "__iops_index.json",

@@ -512,7 +512,7 @@ iops archive extract study.tar.gz -o ./restored --no-progress
 Use `iops archive extract` to restore an archive:
 
 ```bash
-# Extract to current directory
+# Extract into a folder named after the archive (./study/)
 iops archive extract study.tar.gz
 
 # Extract to specific location

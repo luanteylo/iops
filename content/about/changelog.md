@@ -14,6 +14,9 @@ All notable changes to IOPS are documented here.
   - Shows a progress bar while writing entries (requires the `watch` extra for `rich`); disable with `--no-progress`
   - Imported entries are stored with `SUCCEEDED` status and work with `cache list|show|stats` and `iops run --use-cache`
 
+### Changed
+- `iops archive extract` without `-o` now extracts into a folder named after the archive (e.g. `study.tar.gz` -> `./study/`) instead of scattering files into the current directory. Pass `-o PATH` to choose a different destination.
+
 ## [3.5.5] - 2026-05-30
 
 This release introduces declarative input files, letting benchmarks that read

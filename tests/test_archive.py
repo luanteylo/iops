@@ -509,6 +509,21 @@ class TestConvenienceFunctions:
         assert result == extract_dir
         assert (extract_dir / "__iops_index.json").exists()
 
+    def test_archive_extract_dirname(self):
+        """Derived directory name strips known archive extensions."""
+        from iops.archive.core import archive_extract_dirname
+
+        assert archive_extract_dirname(Path("study.tar.gz")) == "study"
+        assert archive_extract_dirname(Path("study.tar.bz2")) == "study"
+        assert archive_extract_dirname(Path("study.tar.xz")) == "study"
+        assert archive_extract_dirname(Path("study.tar")) == "study"
+        # Longest extension wins (.tar.gz over .tar)
+        assert archive_extract_dirname(Path("run_001-partial.tar.gz")) == "run_001-partial"
+        # Path components are ignored; only the filename is used
+        assert archive_extract_dirname(Path("/abs/path/big.study.tar.gz")) == "big.study"
+        # Unknown extension falls back to the stem
+        assert archive_extract_dirname(Path("weird.zip")) == "weird"
+
     def test_round_trip(self, sample_run_dir, tmp_path):
         """Test complete round-trip: archive then extract."""
         archive_path = tmp_path / "test.tar.gz"

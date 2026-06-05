@@ -260,7 +260,7 @@ Examples:
                                                             description='Extract an IOPS archive to a directory.')
     archive_extract_parser.add_argument('archive', type=Path, help='Path to archive file')
     archive_extract_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
-                                        help='Output directory (default: current directory)')
+                                        help='Output directory (default: a folder named after the archive)')
     archive_extract_parser.add_argument('--no-verify', action='store_true',
                                         help='Skip integrity verification')
     archive_extract_parser.add_argument('--no-progress', action='store_true',
@@ -743,7 +743,13 @@ def main():
 
         elif args.archive_command == 'extract':
             try:
-                dest = args.output or Path.cwd()
+                # Default to a self-named folder derived from the archive name
+                # so files are not scattered into the current directory.
+                if args.output:
+                    dest = args.output
+                else:
+                    from iops.archive.core import archive_extract_dirname
+                    dest = Path.cwd() / archive_extract_dirname(args.archive)
                 extracted_path = extract_archive(args.archive, dest, verify=not args.no_verify,
                                                  show_progress=not args.no_progress)
                 logger.info(f"Extracted to: {extracted_path}")
