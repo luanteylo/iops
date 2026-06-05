@@ -14,6 +14,8 @@ All notable changes to IOPS are documented here.
   - Shows a progress bar while writing entries (requires the `watch` extra for `rich`); disable with `--no-progress`
   - Imported entries are stored with `SUCCEEDED` status and work with `cache list|show|stats` and `iops run --use-cache`
 
+- Execution Status breakdown in HTML reports, showing the count and percentage of executions by status (SUCCEEDED, FAILED, ERROR, SKIPPED, RUNNING, PENDING). Counts come from the run index and per-execution status files, so failures and skips are reported even though the results table only contains successful executions. A success-rate summary is also shown in the Execution Overview when not every execution succeeded.
+
 ### Changed
 - `iops archive extract` without `-o` now extracts into a folder named after the archive (e.g. `study.tar.gz` -> `./study/`) instead of scattering files into the current directory. Pass `-o PATH` to choose a different destination.
 

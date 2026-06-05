@@ -1070,6 +1070,10 @@ class ReportGenerator:
         tr:hover {{
             background-color: #f5f5f5;
         }}
+        .status-succeeded {{ color: #27ae60; font-weight: bold; }}
+        .status-failed, .status-error {{ color: #e74c3c; font-weight: bold; }}
+        .status-skipped {{ color: #f39c12; font-weight: bold; }}
+        .status-pending, .status-running, .status-unknown {{ color: #7f8c8d; font-weight: bold; }}
         .section-header td {{
             background-color: transparent;
             border-bottom: 2px solid #3498db;
@@ -1226,6 +1230,41 @@ class ReportGenerator:
     </div>
 """
 
+    def _gather_execution_status_counts(self) -> "Counter":
+        """Count execution statuses from the run index and per-execution status files.
+
+        Reads ``__iops_index.json`` and resolves each execution's status with the
+        same logic used by ``iops find`` (the single source of truth for status).
+        This is independent of the results DataFrame, which is filtered to
+        SUCCEEDED rows at load time, so failed/skipped/pending executions are
+        only visible here.
+
+        Returns:
+            A Counter keyed by status (SUCCEEDED, FAILED, ERROR, SKIPPED,
+            RUNNING, PENDING, UNKNOWN). Empty when no index is available
+            (e.g. the execution_index probe was disabled for the run).
+        """
+        from collections import Counter
+        from iops.results.find import _read_status
+
+        counts: Counter = Counter()
+        index_path = self.workdir / "__iops_index.json"
+        if not index_path.exists():
+            return counts
+
+        try:
+            with open(index_path, 'r') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return counts
+
+        for entry in (data.get('executions') or {}).values():
+            exec_path = self.workdir / entry.get('path', '')
+            status_info = _read_status(exec_path)
+            counts[status_info.get('status', 'UNKNOWN')] += 1
+
+        return counts
+
     def _generate_summary_section(self, report_vars: List[str], metrics: List[str]) -> str:
         """Generate summary statistics section."""
         html = "<h2>Summary Statistics</h2>\n"
@@ -1282,17 +1321,39 @@ class ReportGenerator:
                 runtime_str = f"{total_runtime/3600:.2f}h"
             html += f"<tr><td><strong>Total Runtime</strong></td><td>{runtime_str}</td></tr>\n"
 
-        # Success rate (essential if there are failures)
-        if 'metadata.__executor_status' in self.df.columns:
-            status_counts = self.df['metadata.__executor_status'].value_counts()
-            succeeded = status_counts.get('SUCCEEDED', 0)
-            failed = status_counts.get('FAILED', 0)
+        # Execution status counts (from the run index + status files, since the
+        # results DataFrame is filtered to SUCCEEDED rows at load time).
+        status_counts = self._gather_execution_status_counts()
+        total_executions = sum(status_counts.values())
+        succeeded = status_counts.get('SUCCEEDED', 0)
 
-            if failed > 0 or succeeded != total_rows:
-                success_rate = (succeeded / total_rows * 100) if total_rows > 0 else 0
-                html += f"<tr><td><strong>Success Rate</strong></td><td>{succeeded}/{total_rows} ({success_rate:.1f}%)</td></tr>\n"
+        # Success rate in the overview when not everything succeeded.
+        if total_executions > 0 and succeeded != total_executions:
+            success_rate = succeeded / total_executions * 100
+            html += (f"<tr><td><strong>Success Rate</strong></td>"
+                     f"<td>{succeeded}/{total_executions} ({success_rate:.1f}%)</td></tr>\n")
 
         html += "</table>\n"
+
+        # ========== EXECUTION STATUS (always visible when available) ==========
+        if total_executions > 0:
+            # Display statuses in a meaningful order, then any unexpected ones.
+            status_order = ['SUCCEEDED', 'FAILED', 'ERROR', 'SKIPPED',
+                            'RUNNING', 'PENDING', 'UNKNOWN']
+            ordered = [s for s in status_order if status_counts.get(s)]
+            ordered += [s for s in status_counts if s not in status_order]
+
+            html += "<h3>Execution Status</h3>\n<table>\n"
+            html += "<tr><th>Status</th><th>Count</th><th>Percentage</th></tr>\n"
+            for status in ordered:
+                count = status_counts[status]
+                pct = count / total_executions * 100
+                css_class = f"status-{status.lower()}"
+                html += (f"<tr><td><span class=\"{css_class}\">{status}</span></td>"
+                         f"<td>{count}</td><td>{pct:.1f}%</td></tr>\n")
+            html += (f"<tr><td><strong>Total</strong></td>"
+                     f"<td><strong>{total_executions}</strong></td><td>100.0%</td></tr>\n")
+            html += "</table>\n"
 
         # ========== METRICS OVERVIEW (always visible) ==========
         html += "<h3>Metrics Overview</h3>\n<table>\n"
