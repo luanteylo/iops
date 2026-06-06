@@ -23,7 +23,7 @@
 benchmark:
   name: "Gallery and Versions Example"
   description: "Per-test thumbnails and software version capture"
-  workdir: "./workdir_gallery"
+  workdir: "./"
   executor: local
   search_method: exhaustive
   repetitions: 1
@@ -32,6 +32,7 @@ benchmark:
     # Record software versions once per execution. Captured after the script body
     # via the exit handler, so any modules the benchmark loads are in scope.
     versions:
+      iops: "iops --version"
       python: "python3 --version"
       numpy: "python3 -c 'import numpy; print(numpy.__version__)'"
       matplotlib: "python3 -c 'import matplotlib; print(matplotlib.__version__)'"
@@ -106,6 +107,9 @@ reporting:
     # folder defaults to "images"; shown here for clarity.
     folder: images
     pattern: "*.png"
-    max_width: 512
+    # max_width is the resolution of the embedded image, used for both the thumbnail
+    # and the click-to-enlarge view. Set it generously so the enlarged image is crisp;
+    # omit it entirely to embed images at their original resolution.
+    max_width: 1000
     caption_vars: [frequency, resolution]
     title: "Field thumbnails"

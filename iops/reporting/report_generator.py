@@ -1229,9 +1229,15 @@ class ReportGenerator:
             display: flex;
         }}
         .iops-lightbox img {{
-            max-width: 92vw;
-            max-height: 92vh;
+            /* Fill most of the viewport while preserving aspect ratio. Using a sized
+               box with object-fit (rather than only max-width/height) makes the image
+               scale UP to fill the screen, so "enlarge" is always clearly larger than
+               the thumbnail even when the source image is small. */
+            width: 90vw;
+            height: 90vh;
+            object-fit: contain;
             border-radius: 4px;
+            cursor: zoom-out;
         }}
         /* Version drift warning */
         .version-drift {{

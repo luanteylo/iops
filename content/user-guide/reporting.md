@@ -763,7 +763,7 @@ reporting:
 | `folder` | `"images"` | Convention folder scanned per execution directory |
 | `sources` | none | Explicit Jinja2-templated paths resolved per execution |
 | `pattern` | `"*.png"` | Glob pattern used when scanning the convention folder |
-| `max_width` | none | Maximum image width in pixels (requires Pillow; degrades gracefully without it) |
+| `max_width` | none | Maximum width in pixels of the embedded image (requires Pillow; degrades gracefully without it). This is the resolution used both for the thumbnail and for the click-to-enlarge view, so set it generously (e.g. 800 to 1200) for a crisp enlarged image; the grid thumbnail is shrunk to fit its card regardless. Omit it to embed images at their original resolution. |
 | `caption_vars` | report_vars | Variable names shown as the caption under each execution's cards |
 | `title` | `"Image Gallery"` | Heading for the gallery section |
 
