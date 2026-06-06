@@ -362,6 +362,42 @@ class TestBuildTable:
         # Should have hidden 1 row
         assert sum(hidden_by_status.values()) == 1
 
+    def test_build_table_highlights_running_row(self, mock_run_dir):
+        """The actively running row gets a background highlight; others do not."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        tests, _ = _collect_execution_data(
+            mock_run_dir, executions, {}, None, set()
+        )
+
+        table, *_ = _build_table(tests, show_command=False, show_full=False,
+                                 hide_columns=set(), total_repetitions=repetitions)
+
+        # Rows are ordered by exec id: exec_0001 (SUCCEEDED), exec_0002
+        # (RUNNING), exec_0003 (PENDING). Only the running row is highlighted.
+        styles = [row.style for row in table.rows]
+        assert styles[0] is None
+        assert styles[1] == "on grey23"
+        # The trailing PENDING row is not the most-recent-pending here.
+        assert styles[2] is None
+
+    def test_build_table_highlight_survives_hidden_path(self, mock_run_dir):
+        """The running row is still highlighted even when the path column is hidden."""
+        from iops.results.watch import _load_index, _collect_execution_data, _build_table
+
+        _, executions, _, repetitions, _, _, _ = _load_index(mock_run_dir / "__iops_index.json")
+        tests, _ = _collect_execution_data(
+            mock_run_dir, executions, {}, None, set()
+        )
+
+        table, *_ = _build_table(tests, show_command=False, show_full=False,
+                                 hide_columns={"path"}, total_repetitions=repetitions)
+
+        # exec_0002 is RUNNING (second row); highlight is independent of the
+        # path column since it is applied to the whole row.
+        assert table.rows[1].style == "on grey23"
+
     def test_build_table_shows_tests_beyond_expected_estimate(self):
         """Tests with exec IDs above total_expected_configs must not be hidden.
 

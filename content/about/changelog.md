@@ -18,6 +18,8 @@ All notable changes to IOPS are documented here.
 
 - Log the execution id and repetition before each submission (e.g. `Submitting 684 (rep 1/3)`), so the execution can be correlated with the executor's submission output such as the SLURM job id.
 
+- Highlight the actively running row in `iops find --watch` with a background color (in addition to the existing `▶` marker), making the in-progress execution easier to spot.
+
 ### Changed
 - `iops archive extract` without `-o` now extracts into a folder named after the archive (e.g. `study.tar.gz` -> `./study/`) instead of scattering files into the current directory. Pass `-o PATH` to choose a different destination.
 

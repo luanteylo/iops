@@ -897,14 +897,16 @@ def _build_table(
             params = test.get("params", {})
             overall_status = _get_test_overall_status(rep_statuses)
 
+            # An "active" row is one that is actively RUNNING, or the most
+            # recently submitted PENDING test (handles jobs that complete so
+            # fast we never observe a RUNNING status). Active rows get a ▶
+            # marker and a highlighted background so they are easy to spot.
+            exec_key = test.get("exec_key")
+            is_active = (overall_status == "RUNNING" or
+                        (overall_status == "PENDING" and exec_key == most_recent_pending_key))
+
             if "path" not in hide_columns:
                 path_display = Path(rel_path).name if rel_path else rel_path
-                # Show signal for:
-                # - Tests that are actively RUNNING
-                # - The most recently submitted PENDING test (handles fast jobs)
-                exec_key = test.get("exec_key")
-                is_active = (overall_status == "RUNNING" or
-                            (overall_status == "PENDING" and exec_key == most_recent_pending_key))
                 if is_active:
                     path_text = Text()
                     path_text.append("▶ ", style="yellow bold")
@@ -987,7 +989,10 @@ def _build_table(
             if show_command and "command" not in hide_columns:
                 row.append(display_val(command))
 
-        table.add_row(*row)
+        # Highlight the active (running) row so it is easy to read at a glance.
+        # The background style layers under the per-cell foreground colors.
+        row_style = "on grey23" if (not is_queued and is_active) else None
+        table.add_row(*row, style=row_style)
 
     total_count = total_expected_configs if total_expected_configs > 0 else len(tests)
     return table, len(display_items), total_count, hidden_vars_count, hidden_by_status, total_display_items
