@@ -439,6 +439,56 @@ class TestRunnerExecutionPaths:
 
 
 # --------------------------------------------------------------------------- #
+# Submission announcement: execution id logged before submit
+# --------------------------------------------------------------------------- #
+
+class TestSubmitAnnouncement:
+    """The execution id should be logged before the executor submits, so the
+    user can correlate it with the submission output (e.g. a SLURM job id)."""
+
+    def _make_test(self):
+        test = Mock()
+        test.execution_id = 684
+        test.repetition = 1
+        test.repetitions = 3
+        test.vars = {"n": 1}
+        test.metadata = {}
+        return test
+
+    def test_logs_execution_id_before_submit(self, sample_config_file, caplog):
+        config = load_config(sample_config_file)
+        runner = IOPSRunner(config, _make_args())
+
+        # Capture whether the announcement was already logged at submit time.
+        announced_at_submit = {}
+
+        def record_submit(_test):
+            announced_at_submit["value"] = any(
+                "Submitting 684 (rep 1/3)" in r.getMessage() for r in caplog.records
+            )
+
+        executor = Mock()
+        executor.INITIAL_STATUS = "PENDING"
+        executor.STATUS_SUCCEEDED = "SUCCEEDED"
+        executor.submit.side_effect = record_submit
+        runner.executor = executor
+        runner.cache = None  # skip cache storage
+
+        test = self._make_test()
+
+        with patch.object(runner, "_write_status_file"), \
+             caplog.at_level(logging.INFO, logger="iops.IOPSRunner"):
+            runner._execute_and_cache(test)
+
+        # The announcement names the execution id and repetition...
+        assert any(
+            "Submitting 684 (rep 1/3)" in r.getMessage() for r in caplog.records
+        )
+        # ...and it was already logged by the time the executor submitted.
+        assert announced_at_submit.get("value") is True
+
+
+# --------------------------------------------------------------------------- #
 # Interrupt handling: no new jobs submitted after Ctrl+C
 # --------------------------------------------------------------------------- #
 

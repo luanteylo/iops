@@ -16,6 +16,8 @@ All notable changes to IOPS are documented here.
 
 - Execution Status breakdown in HTML reports, showing the count and percentage of executions by status (SUCCEEDED, FAILED, ERROR, SKIPPED, RUNNING, PENDING). Counts come from the run index and per-execution status files, so failures and skips are reported even though the results table only contains successful executions. A success-rate summary is also shown in the Execution Overview when not every execution succeeded.
 
+- Log the execution id and repetition before each submission (e.g. `Submitting 684 (rep 1/3)`), so the execution can be correlated with the executor's submission output such as the SLURM job id.
+
 ### Changed
 - `iops archive extract` without `-o` now extracts into a folder named after the archive (e.g. `study.tar.gz` -> `./study/`) instead of scattering files into the current directory. Pass `-o PATH` to choose a different destination.
 

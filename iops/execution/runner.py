@@ -1800,6 +1800,12 @@ class IOPSRunner(HasLogger):
         if execution_index:
             self._write_status_file(test, status=self.executor.INITIAL_STATUS)
 
+        # Announce the execution before submission so the user can correlate it
+        # with the executor's submission output (e.g. the SLURM job id).
+        self.logger.info(
+            f"Submitting {test.execution_id} (rep {test.repetition}/{test.repetitions})"
+        )
+
         self.executor.submit(test)
         self.executor.wait_and_collect(test)
 
