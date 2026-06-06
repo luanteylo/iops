@@ -86,6 +86,8 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 | `__iops_exit_handler.sh` | Centralized EXIT trap coordinator |
 | `__iops_atexit_sysinfo.sh` | System info collection script |
 | `__iops_sysinfo.json` | Hardware/environment info (generated at exit) |
+| `__iops_atexit_versions.sh` | Software version capture script (versions probe) |
+| `__iops_versions.json` | Captured software/library versions (generated at script start) |
 
 ### Resource Tracing Files
 
@@ -426,6 +428,51 @@ This approach ensures system info is collected even if the benchmark fails, and 
 **Detected parallel filesystems:** Lustre, GPFS, BeeGFS, CephFS, PanFS, WekaFS, PVFS2, OrangeFS, GlusterFS
 
 **Controlled by:** `benchmark.probes.system_snapshot`
+
+---
+
+### `__iops_atexit_versions.sh`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_atexit_versions.sh`
+
+**Written:** When the repetition folder is created, before the test runs
+
+**Purpose:** A shell script that captures software and library versions for the execution. Capture is registered with the exit handler and runs after the benchmark body (so tools loaded by the benchmark's own `module load` commands are in scope). Results are written to `__iops_versions.json` in the same directory.
+
+**How it works:**
+1. IOPS writes `__iops_atexit_versions.sh` to the repetition folder when `benchmark.probes.versions` is configured.
+2. The generated benchmark script sources this file, which registers the capture function with the centralized exit handler.
+3. On exit (after the benchmark body), the capture function runs each configured command, captures stdout (up to 4000 bytes), and writes `__iops_versions.json`.
+4. All capture is best-effort: a failing command records an empty string rather than aborting the run.
+
+**Controlled by:** `benchmark.probes.versions`
+
+---
+
+### `__iops_versions.json`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_versions.json`
+
+**Written:** On script exit, after the benchmark body has run (via the exit handler)
+
+**Purpose:** Contains software and library versions captured by the version probe. The HTML report reads these files to render the Software Versions section and to detect version drift across executions.
+
+**Structure:**
+```json
+{
+  "app": "myapp 2.3.1",
+  "mpi": "OpenMPI 4.1.5",
+  "compiler": "gcc (GCC) 11.3.0"
+}
+```
+
+Each key is the component name defined in `benchmark.probes.versions`. The value is the trimmed stdout of the configured command, or an empty string if the command failed.
+
+**Fields:** Component names are user-defined (matching `benchmark.probes.versions` keys).
+
+**Drift detection:** When the HTML report is generated, IOPS compares the version strings across all executions. Components with more than one distinct value trigger a drift warning in the Software Versions section (indicating the study may mix results from different software environments or cached results from an older run).
+
+**Controlled by:** `benchmark.probes.versions`
 
 ---
 

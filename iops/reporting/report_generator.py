@@ -38,6 +38,7 @@ from iops.config.models import (
     SectionConfig,
     BestResultsConfig,
     PlotDefaultsConfig,
+    GalleryConfig,
 )
 
 
@@ -671,6 +672,19 @@ class ReportGenerator:
             bayesian_parameter_evolution=data.get('sections', {}).get('bayesian_parameter_evolution', False),
             resource_sampling=data.get('sections', {}).get('resource_sampling', True),
             custom_plots=data.get('sections', {}).get('custom_plots', True),
+            gallery=data.get('sections', {}).get('gallery', True),
+            versions=data.get('sections', {}).get('versions', True),
+        )
+
+        gallery_data = data.get('gallery') or {}
+        gallery = GalleryConfig(
+            enabled=gallery_data.get('enabled', False),
+            folder=gallery_data.get('folder', 'images'),
+            sources=gallery_data.get('sources'),
+            pattern=gallery_data.get('pattern', '*.png'),
+            max_width=gallery_data.get('max_width'),
+            caption_vars=gallery_data.get('caption_vars'),
+            title=gallery_data.get('title', 'Image Gallery'),
         )
 
         best_results = BestResultsConfig(
@@ -706,6 +720,7 @@ class ReportGenerator:
             metrics=metrics,
             default_plots=default_plots,
             plot_defaults=plot_defaults,
+            gallery=gallery,
         )
 
     def _create_legacy_defaults(self) -> ReportingConfig:
@@ -942,6 +957,11 @@ class ReportGenerator:
         if sys_env_html:
             html_parts.append(sys_env_html)
 
+        # Captured software versions (if the version probe ran)
+        versions_html = self._generate_versions_section()
+        if versions_html:
+            html_parts.append(versions_html)
+
         # Best configurations immediately after summary
         html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
@@ -967,6 +987,11 @@ class ReportGenerator:
 
         # Custom plots defined by user in reporting config
         html_parts.append(self._generate_custom_plots_section(metrics, report_vars))
+
+        # Per-test image gallery (e.g. simulation thumbnails) defined in reporting.gallery
+        gallery_html = self._generate_gallery_section(report_vars)
+        if gallery_html:
+            html_parts.append(gallery_html)
 
         # Original YAML configuration (collapsible)
         config_html = self._generate_config_section()
@@ -1154,6 +1179,75 @@ class ReportGenerator:
             padding: 10px;
             margin: 10px 0;
             color: #c33;
+        }}
+        /* Image gallery styles */
+        .iops-gallery {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 18px;
+            margin: 20px 0;
+        }}
+        .iops-gallery-card {{
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 12px;
+            background-color: #fff;
+        }}
+        .iops-gallery-card h4 {{
+            margin: 0 0 10px 0;
+            color: #34495e;
+            font-size: 0.95em;
+        }}
+        .iops-gallery-thumbs {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }}
+        .iops-gallery-thumbs img {{
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #eee;
+            border-radius: 4px;
+            cursor: zoom-in;
+        }}
+        .iops-gallery-card .caption {{
+            color: #7f8c8d;
+            font-size: 0.82em;
+            margin: 8px 0 0 0;
+            word-break: break-word;
+        }}
+        .iops-lightbox {{
+            display: none;
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0,0,0,0.85);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+        }}
+        .iops-lightbox.active {{
+            display: flex;
+        }}
+        .iops-lightbox img {{
+            max-width: 92vw;
+            max-height: 92vh;
+            border-radius: 4px;
+        }}
+        /* Version drift warning */
+        .version-drift {{
+            background-color: #fff8e1;
+            border: 1px solid #f1c40f;
+            border-radius: 4px;
+            padding: 12px 15px;
+            margin: 15px 0;
+            color: #8a6d00;
+        }}
+        .version-drift strong {{
+            color: #b8860b;
+        }}
+        td.version-mismatch {{
+            background-color: #fdecea;
+            font-weight: bold;
         }}
         /* Fullscreen overlay styles */
         .fullscreen-overlay {{
@@ -1582,6 +1676,327 @@ class ReportGenerator:
             html += "<h3>Interconnect</h3>\n"
             html += f"<p><strong>InfiniBand Devices:</strong> {', '.join(interconnect)}</p>\n"
 
+        return html
+
+    # Image formats supported by the gallery (suffix -> MIME type).
+    _IMAGE_MIME = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+        ".svg": "image/svg+xml",
+    }
+    # Raster formats Pillow can downscale.
+    _RASTER_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif"}
+    # Skip embedding files larger than this (raw bytes) to keep reports sane.
+    _MAX_IMAGE_BYTES = 25 * 1024 * 1024
+    _VERSIONS_FILENAME = "__iops_versions.json"
+
+    def _iter_executions(self) -> List[tuple]:
+        """
+        Yield (exec_key, exec_dir, params) for each execution in __iops_index.json.
+
+        exec_dir is an absolute Path to the exec_XXXX folder; params is the dict of
+        swept variable values recorded for that execution. Returns [] when no index
+        is available (e.g. execution_index probe disabled).
+        """
+        index_path = self.workdir / "__iops_index.json"
+        if not index_path.exists():
+            return []
+        try:
+            with open(index_path, "r") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
+
+        executions = []
+        for exec_key, entry in (data.get("executions") or {}).items():
+            rel_path = entry.get("path")
+            if not rel_path:
+                continue
+            executions.append((exec_key, self.workdir / rel_path, entry.get("params") or {}))
+        executions.sort(key=lambda t: (self._execution_id_to_int(t[0]) or 0, t[0]))
+        return executions
+
+    def _execution_search_dirs(self, exec_dir: Path) -> List[Path]:
+        """Return the exec folder plus its repetition_* subfolders (where probes write)."""
+        dirs = [exec_dir]
+        if exec_dir.is_dir():
+            dirs.extend(sorted(p for p in exec_dir.glob("repetition_*") if p.is_dir()))
+        return dirs
+
+    def _render_gallery_source(self, source: str, params: Dict[str, Any], exec_dir: Path) -> str:
+        """Render an explicit gallery source template with this execution's context."""
+        try:
+            return Template(source).render(execution_dir=str(exec_dir), **params)
+        except Exception:
+            return source
+
+    def _collect_execution_images(self, exec_dir: Path, gallery, params: Dict[str, Any]) -> List[Path]:
+        """Collect image files for one execution from the convention folder and explicit sources."""
+        found: List[Path] = []
+        search_dirs = self._execution_search_dirs(exec_dir)
+
+        # 1. Convention folder (auto-discovered) inside the exec/repetition dirs.
+        for base in search_dirs:
+            folder = base / gallery.folder
+            if folder.is_dir():
+                found.extend(sorted(folder.glob(gallery.pattern)))
+
+        # 2. Explicit templated sources, resolved per execution. Absolute paths are
+        #    used as-is; relative paths are resolved against the exec/repetition dirs.
+        #    Glob characters in the resolved path are honored.
+        for source in (gallery.sources or []):
+            rendered = self._render_gallery_source(source, params, exec_dir).strip()
+            if not rendered:
+                continue
+            candidate = Path(rendered)
+            if candidate.is_absolute():
+                parent, name = candidate.parent, candidate.name
+                found.extend(sorted(parent.glob(name)) if any(c in name for c in "*?[") else
+                             ([candidate] if candidate.is_file() else []))
+            else:
+                for base in search_dirs:
+                    found.extend(sorted(base.glob(rendered)))
+
+        # Deduplicate by resolved path, preserve order, keep only real files.
+        seen, unique = set(), []
+        for path in found:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved not in seen and path.is_file():
+                seen.add(resolved)
+                unique.append(path)
+        return unique
+
+    def _maybe_downscale_image(self, data: bytes, max_width: Optional[int], suffix: str, mime: str) -> tuple:
+        """Downscale a raster image to max_width if Pillow is available; return (bytes, mime)."""
+        if not max_width or suffix not in self._RASTER_SUFFIXES:
+            return data, mime
+        try:
+            import io
+            from PIL import Image
+        except ImportError:
+            if not getattr(self, "_pillow_warned", False):
+                logging.getLogger(__name__).warning(
+                    "reporting.gallery.max_width is set but Pillow is not installed; "
+                    "embedding images at full size. Install 'pillow' to enable downscaling."
+                )
+                self._pillow_warned = True
+            return data, mime
+        try:
+            img = Image.open(io.BytesIO(data))
+            if img.width <= max_width:
+                return data, mime
+            new_height = max(1, round(img.height * (max_width / float(img.width))))
+            img = img.resize((max_width, new_height), Image.LANCZOS)
+            out_fmt = "JPEG" if suffix in {".jpg", ".jpeg"} else "PNG"
+            if out_fmt == "JPEG" and img.mode in ("RGBA", "P", "LA"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format=out_fmt)
+            return buf.getvalue(), ("image/jpeg" if out_fmt == "JPEG" else "image/png")
+        except Exception:
+            return data, mime
+
+    def _image_to_data_uri(self, path: Path, max_width: Optional[int]) -> Optional[str]:
+        """Read an image, optionally downscale, and return a base64 data URI (or None)."""
+        suffix = path.suffix.lower()
+        mime = self._IMAGE_MIME.get(suffix)
+        if mime is None:
+            return None
+        try:
+            if path.stat().st_size > self._MAX_IMAGE_BYTES:
+                logging.getLogger(__name__).warning(
+                    "Skipping gallery image %s: exceeds %d MB.", path, self._MAX_IMAGE_BYTES // (1024 * 1024)
+                )
+                return None
+            data = path.read_bytes()
+        except OSError:
+            return None
+        data, mime = self._maybe_downscale_image(data, max_width, suffix, mime)
+        encoded = base64.b64encode(data).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+
+    def _generate_gallery_section(self, report_vars: List[str]) -> str:
+        """
+        Generate the per-execution image gallery section.
+
+        Embeds images discovered per execution (convention folder + explicit sources)
+        as a thumbnail grid, grouped by execution, with selected parameters as captions.
+        Returns an empty string when disabled or when no images are found.
+        """
+        gallery = getattr(self.report_config, "gallery", None)
+        if not gallery or not gallery.enabled:
+            return ""
+        if self.report_config.sections and not self.report_config.sections.gallery:
+            return ""
+
+        caption_vars = gallery.caption_vars if gallery.caption_vars is not None else report_vars
+
+        cards = []
+        for exec_key, exec_dir, params in self._iter_executions():
+            images = self._collect_execution_images(exec_dir, gallery, params)
+            if not images:
+                continue
+            thumbs = []
+            for img_path in images:
+                data_uri = self._image_to_data_uri(img_path, gallery.max_width)
+                if data_uri is None:
+                    continue
+                alt = html_module.escape(img_path.name)
+                thumbs.append(
+                    f'<img src="{data_uri}" alt="{alt}" title="{alt}" '
+                    f'onclick="iopsLightbox(this.src)">'
+                )
+            if not thumbs:
+                continue
+
+            caption_bits = [
+                f"{html_module.escape(str(v))}={html_module.escape(str(params[v]))}"
+                for v in caption_vars if v in params
+            ]
+            caption_html = (
+                f'<p class="caption">{", ".join(caption_bits)}</p>' if caption_bits else ""
+            )
+            cards.append(
+                f'<div class="iops-gallery-card">\n'
+                f"  <h4>{html_module.escape(exec_key)}</h4>\n"
+                f'  <div class="iops-gallery-thumbs">{"".join(thumbs)}</div>\n'
+                f"  {caption_html}\n"
+                f"</div>"
+            )
+
+        if not cards:
+            return ""
+
+        title = html_module.escape(gallery.title or "Image Gallery")
+        html = f"<h2>{title}</h2>\n"
+        html += (
+            "<p>Per-test images collected from each execution. "
+            "Click a thumbnail to enlarge.</p>\n"
+        )
+        html += f'<div class="iops-gallery">\n{chr(10).join(cards)}\n</div>\n'
+        # Shared lightbox overlay + handler (rendered once with the gallery).
+        html += (
+            '<div id="iops-lightbox" class="iops-lightbox" '
+            "onclick=\"this.classList.remove('active')\">"
+            '<img id="iops-lightbox-img" src="" alt="enlarged image"></div>\n'
+            "<script>\n"
+            "function iopsLightbox(src) {\n"
+            "  var lb = document.getElementById('iops-lightbox');\n"
+            "  document.getElementById('iops-lightbox-img').src = src;\n"
+            "  lb.classList.add('active');\n"
+            "}\n"
+            "</script>\n"
+        )
+        return html
+
+    def _load_execution_versions(self) -> List[tuple]:
+        """
+        Load captured software versions per execution.
+
+        Returns a list of (exec_key, params, versions_dict) for executions that have a
+        __iops_versions.json (written by the version probe). Reads the first such file
+        found in the exec folder or its repetition subfolders.
+        """
+        results = []
+        for exec_key, exec_dir, params in self._iter_executions():
+            versions = None
+            for base in self._execution_search_dirs(exec_dir):
+                vpath = base / self._VERSIONS_FILENAME
+                if vpath.is_file():
+                    try:
+                        with open(vpath, "r") as f:
+                            versions = json.load(f)
+                        break
+                    except (json.JSONDecodeError, OSError):
+                        continue
+            if versions:
+                results.append((exec_key, params, versions))
+        return results
+
+    def _generate_versions_section(self) -> str:
+        """
+        Generate the software versions section with a cross-execution drift warning.
+
+        Renders a table of captured versions per execution. When a component reports
+        more than one distinct value across executions, a prominent warning is shown
+        (this is the cache-mixing detector: results produced by different software
+        versions sitting in the same study).
+        """
+        if self.report_config.sections and not self.report_config.sections.versions:
+            return ""
+
+        records = self._load_execution_versions()
+        if not records:
+            return ""
+
+        # Stable, first-seen ordering of components across all executions.
+        components = []
+        for _, _, versions in records:
+            for name in versions:
+                if name not in components:
+                    components.append(name)
+        if not components:
+            return ""
+
+        # Detect drift: a component with >1 distinct value across executions.
+        modal_value = {}
+        drifted = []
+        for component in components:
+            values = [v.get(component, "") for _, _, v in records]
+            distinct = {val for val in values}
+            # Most common value (used to highlight the outliers).
+            modal_value[component] = max(distinct, key=lambda val: values.count(val))
+            if len(distinct) > 1:
+                drifted.append((component, sorted(distinct)))
+
+        html = "<h2>Software Versions</h2>\n"
+
+        if drifted:
+            warn_items = "".join(
+                f"<li><strong>{html_module.escape(comp)}</strong>: "
+                f"{', '.join(html_module.escape(str(v)) for v in vals if v)}"
+                + (" <em>(some executions reported no version)</em>"
+                   if any(not v for v in vals) else "")
+                + "</li>"
+                for comp, vals in drifted
+            )
+            html += (
+                '<div class="version-drift">\n'
+                "<strong>Warning: software version drift detected.</strong>\n"
+                "<p>The following components differ across executions. Results produced "
+                "by different versions may not be comparable (this often happens when a "
+                "study mixes freshly executed tests with older cached results):</p>\n"
+                f"<ul>{warn_items}</ul>\n"
+                "</div>\n"
+            )
+
+        # Versions table: one row per execution, one column per component.
+        html += "<details open>\n<summary>Versions per execution</summary>\n"
+        html += '<div class="details-content">\n<table>\n'
+        html += "<tr><th>Execution</th>"
+        for component in components:
+            html += f"<th>{html_module.escape(component)}</th>"
+        html += "</tr>\n"
+
+        for exec_key, _, versions in records:
+            html += f"<tr><td><strong>{html_module.escape(exec_key)}</strong></td>"
+            for component in components:
+                value = versions.get(component, "")
+                display = html_module.escape(str(value)) if value else "<em>n/a</em>"
+                cell_class = ""
+                if len(records) > 1 and value != modal_value.get(component, value):
+                    cell_class = ' class="version-mismatch"'
+                html += f"<td{cell_class}>{display}</td>"
+            html += "</tr>\n"
+
+        html += "</table>\n</div>\n</details>\n"
         return html
 
     def _generate_best_configs_section(self, metrics: List[str], report_vars: List[str]) -> str:

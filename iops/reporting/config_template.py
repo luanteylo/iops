@@ -88,6 +88,8 @@ def serialize_reporting_config(reporting: "ReportingConfig") -> Optional[Dict[st
             "parallel_coordinates": reporting.sections.parallel_coordinates,
             "bayesian_evolution": reporting.sections.bayesian_evolution,
             "custom_plots": reporting.sections.custom_plots,
+            "gallery": reporting.sections.gallery,
+            "versions": reporting.sections.versions,
         },
         "best_results": {
             "top_n": reporting.best_results.top_n,
@@ -105,6 +107,15 @@ def serialize_reporting_config(reporting: "ReportingConfig") -> Optional[Dict[st
             for metric_name, metric_plots in reporting.metrics.items()
         },
         "default_plots": [_serialize_plot_config(p) for p in reporting.default_plots],
+        "gallery": {
+            "enabled": reporting.gallery.enabled,
+            "folder": reporting.gallery.folder,
+            "sources": reporting.gallery.sources,
+            "pattern": reporting.gallery.pattern,
+            "max_width": reporting.gallery.max_width,
+            "caption_vars": reporting.gallery.caption_vars,
+            "title": reporting.gallery.title,
+        },
     }
 
 
@@ -220,6 +231,23 @@ def _create_clean_report_config(
                 plot_dict["show_error_bars"] = plot_cfg.show_error_bars
             default_plots.append(plot_dict)
         config["default_plots"] = default_plots
+
+    # Image gallery (only include if enabled)
+    if reporting.gallery and reporting.gallery.enabled:
+        gallery = {"enabled": True}
+        if reporting.gallery.folder != "images":
+            gallery["folder"] = reporting.gallery.folder
+        if reporting.gallery.sources:
+            gallery["sources"] = reporting.gallery.sources
+        if reporting.gallery.pattern != "*.png":
+            gallery["pattern"] = reporting.gallery.pattern
+        if reporting.gallery.max_width is not None:
+            gallery["max_width"] = reporting.gallery.max_width
+        if reporting.gallery.caption_vars:
+            gallery["caption_vars"] = reporting.gallery.caption_vars
+        if reporting.gallery.title != "Image Gallery":
+            gallery["title"] = reporting.gallery.title
+        config["gallery"] = gallery
 
     return config
 

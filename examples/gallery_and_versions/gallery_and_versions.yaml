@@ -1,0 +1,111 @@
+# IOPS Image Gallery + Version Capture Example
+#
+# Demonstrates two reporting features:
+#   1. Per-test image gallery (reporting.gallery): each execution renders a small
+#      synthetic field image into the {{ artifacts_dir }} folder, and the HTML report
+#      embeds them as a thumbnail grid (click to enlarge). This mirrors the real use
+#      case of capturing a simulation's final-state thumbnail as a visual sanity check.
+#   2. Software version capture (benchmark.probes.versions): the versions of python,
+#      numpy and matplotlib are recorded per execution. The report shows a version
+#      table and warns if versions drift across executions (cache-mixing detector).
+#
+# Prerequisites:
+#   - matplotlib and numpy (used by the script to generate the example images):
+#       pip install matplotlib numpy
+#   - Pillow is optional; it enables reporting.gallery.max_width downscaling.
+#
+# Usage:
+#   iops run examples/gallery_and_versions/gallery_and_versions.yaml
+#   iops run examples/gallery_and_versions/gallery_and_versions.yaml --dry-run
+#
+# Then open: workdir_gallery/run_001/analysis_report.html
+
+benchmark:
+  name: "Gallery and Versions Example"
+  description: "Per-test thumbnails and software version capture"
+  workdir: "./workdir_gallery"
+  executor: local
+  search_method: exhaustive
+  repetitions: 1
+  probes:
+    system_snapshot: false
+    # Record software versions once per execution. Captured after the script body
+    # via the exit handler, so any modules the benchmark loads are in scope.
+    versions:
+      python: "python3 --version"
+      numpy: "python3 -c 'import numpy; print(numpy.__version__)'"
+      matplotlib: "python3 -c 'import matplotlib; print(matplotlib.__version__)'"
+
+vars:
+  frequency:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4]
+  resolution:
+    type: int
+    sweep:
+      mode: list
+      values: [64, 128]
+
+command:
+  template: "echo 'rendering field freq={{ frequency }} res={{ resolution }}'"
+
+scripts:
+  - name: render
+    submit: bash
+    script_template: |
+      #!/bin/bash
+      {{ command.template }}
+
+      # Write the per-test image into the gallery folder. {{ artifacts_dir }} is a
+      # built-in that resolves to <execution_dir>/<reporting.gallery.folder>, so the
+      # script never has to hardcode the folder name.
+      mkdir -p {{ artifacts_dir }}
+
+      python3 - <<'PY'
+      import numpy as np
+      import matplotlib
+      matplotlib.use("Agg")
+      import matplotlib.pyplot as plt
+
+      n = {{ resolution }}
+      x = np.linspace(-3, 3, n)
+      X, Y = np.meshgrid(x, x)
+      Z = np.sin(X * {{ frequency }}) * np.cos(Y * {{ frequency }})
+
+      plt.figure(figsize=(3, 3))
+      plt.imshow(Z, cmap="coolwarm")
+      plt.axis("off")
+      plt.savefig("{{ artifacts_dir }}/final_state.png", bbox_inches="tight", dpi=90)
+      PY
+
+      # Emit a metric so the report has something to plot alongside the gallery.
+      python3 -c "print('{\"energy\": ' + str({{ frequency }} * {{ resolution }}) + '}')" \
+        > {{ execution_dir }}/out.json
+
+    parser:
+      file: "{{ execution_dir }}/out.json"
+      metrics:
+        - name: energy
+      parser_script: |
+        import json
+        def parse(file_path):
+            with open(file_path) as f:
+                return {"energy": json.load(f)["energy"]}
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+
+reporting:
+  enabled: true
+  gallery:
+    enabled: true
+    # folder defaults to "images"; shown here for clarity.
+    folder: images
+    pattern: "*.png"
+    max_width: 512
+    caption_vars: [frequency, resolution]
+    title: "Field thumbnails"

@@ -250,13 +250,86 @@ Note: The exit handler (`__iops_exit_handler.sh`) is still written if other feat
 | Cache duration | Available | Not available |
 
 
+## Version Probe
+
+The version probe captures software and library versions once per execution. This is metadata, not a measured metric. It is the cache-mixing detector: the HTML report warns when a component reports more than one distinct version across executions (catching the case where a study mixes freshly executed results with older cached results from a different software environment).
+
+### How It Works
+
+1. When `benchmark.probes.versions` is configured, `_inject_iops_scripts()` calls `_build_version_probe_script()` and writes the resulting script to `__iops_atexit_versions.sh` in the repetition folder.
+2. The generated benchmark script sources `__iops_atexit_versions.sh` after the shebang/`#SBATCH` header. The script defines `_iops_capture_versions()` and registers it with the centralized exit handler via `_iops_register_exit` (falling back to immediate execution when no handler is present, e.g. standalone runs).
+3. Capture therefore runs **after the benchmark body** via the `EXIT` trap, in the same shell. This is deliberate: version tools are frequently only on `PATH` after the benchmark runs its own `module load` commands, and the trap sees that modified environment.
+4. `_iops_capture_versions()` runs each configured command, captures its stdout (up to 4000 bytes), JSON-escapes the output, and writes `__iops_versions.json`.
+5. All capture is best-effort: a failing command yields an empty string and does not abort the run.
+
+```yaml
+benchmark:
+  probes:
+    versions:
+      app: "myapp --version"
+      mpi: "mpirun --version | head -1"
+      compiler: "gcc --version | head -1"
+```
+
+### Version Probe Script Structure
+
+```bash
+#!/bin/bash
+# IOPS Version Probe - captures software/library versions once per execution.
+_iops_capture_versions() {
+  (
+    _iops_versions_file="/path/to/exec/repetition_1/__iops_versions.json"
+    _iops_json_escape() { ... }
+    {
+      echo "{"
+      _iops_vraw=$( { myapp --version ; } 2>/dev/null | head -c 4000 )
+      _iops_vesc=$(printf "%s" "$_iops_vraw" | _iops_json_escape)
+      printf '  %s: "%s"\n' '"app"' "$_iops_vesc"
+      echo "}"
+    } > "$_iops_versions_file" 2>/dev/null
+  ) 2>/dev/null || true
+}
+_iops_capture_versions
+```
+
+### Output File
+
+`__iops_versions.json` is written to each repetition directory:
+
+```json
+{
+  "app": "myapp 2.3.1",
+  "mpi": "OpenMPI 4.1.5",
+  "compiler": "gcc (GCC) 11.3.0"
+}
+```
+
+### Key Constants
+
+```python
+# iops/execution/planner.py
+ATEXIT_VERSION_FILENAME = "__iops_atexit_versions.sh"
+VERSIONS_FILENAME = "__iops_versions.json"
+```
+
+### Key Function
+
+| Function | Location | Purpose |
+|----------|----------|---------|
+| `_build_version_probe_script()` | planner.py | Builds the version capture shell script |
+| `_generate_versions_section()` | report_generator.py | Renders the Software Versions HTML section with drift detection |
+| `_load_execution_versions()` | report_generator.py | Reads all `__iops_versions.json` files for a run |
+
+---
+
 ## Source Code References
 
 | File | Purpose |
 |------|---------|
-| `iops/execution/planner.py` | Exit handler, probe template, and injection |
+| `iops/execution/planner.py` | Exit handler, probe templates, and script injection |
 | `iops/execution/executors.py` | Sysinfo collection after execution |
 | `iops/execution/runner.py` | Stores sysinfo in status file |
+| `iops/reporting/report_generator.py` | Gallery and Software Versions HTML sections |
 
 ### Key Constants
 
@@ -266,6 +339,8 @@ EXIT_HANDLER_FILENAME = "__iops_exit_handler.sh"
 ATEXIT_SYSINFO_FILENAME = "__iops_atexit_sysinfo.sh"
 EXIT_HANDLER_TEMPLATE = '''...'''
 SYSTEM_PROBE_TEMPLATE = '''...'''
+ATEXIT_VERSION_FILENAME = "__iops_atexit_versions.sh"
+VERSIONS_FILENAME = "__iops_versions.json"
 
 # iops/execution/executors.py
 SYSINFO_FILENAME = "__iops_sysinfo.json"
@@ -276,9 +351,11 @@ SYSINFO_FILENAME = "__iops_sysinfo.json"
 | Function | Location | Purpose |
 |----------|----------|---------|
 | `_inject_iops_scripts()` | planner.py | Writes all IOPS scripts and modifies user script |
+| `_build_version_probe_script()` | planner.py | Builds the version capture shell script |
 | `_collect_system_info()` | executors.py | Reads sysinfo after execution |
 | `_iops_register_exit()` | exit handler | Registers cleanup action |
 | `_iops_run_exit_actions()` | exit handler | Executes all registered actions |
 | `_iops_collect_sysinfo()` | sysinfo script | Bash function that collects data |
 | `_iops_detect_pfs()` | sysinfo script | Detects parallel filesystems |
+| `_iops_capture_versions()` | version probe script | Bash function that captures software versions |
 

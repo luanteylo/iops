@@ -22,6 +22,7 @@ import logging
 import os
 import random
 import json
+import shlex
 import sys
 import warnings
 import copy
@@ -342,6 +343,76 @@ else
     fi
 fi
 '''
+
+# Filename for the version probe script.
+# Naming convention: __iops_atexit_* for scripts that run via the EXIT trap.
+ATEXIT_VERSION_FILENAME = "__iops_atexit_versions.sh"
+
+# Filename for the captured versions output (written by the version probe)
+VERSIONS_FILENAME = "__iops_versions.json"
+
+
+def _build_version_probe_script(versions: Dict[str, str], exec_dir: str) -> str:
+    """
+    Build the version probe script for a single execution.
+
+    The script defines a capture function that runs each configured command once,
+    captures its (trimmed) stdout, and writes a JSON object {name: version_string}
+    to __iops_versions.json. All capture is best-effort: a failing command yields an
+    empty string rather than aborting the run.
+
+    Capture is registered with the centralized EXIT handler so it runs AFTER the user
+    script body. This is important on HPC systems where the version tools only become
+    available once the benchmark has run its ``module load`` commands. The EXIT trap
+    fires in the same shell, so the modified PATH/LD_LIBRARY_PATH are in effect. When
+    the exit handler is not present (e.g. the script is executed standalone, as in
+    tests), capture runs immediately as a fallback.
+
+    Commands are user-provided shell snippets. Output is JSON-escaped in bash and
+    truncated to a sane length to keep the metadata file small.
+    """
+    lines = [
+        "#!/bin/bash",
+        "# IOPS Version Probe - captures software/library versions once per execution.",
+        "# Auto-generated and sourced by the main script. Writes __iops_versions.json.",
+        "_iops_capture_versions() {",
+        "  (",
+        f'    _iops_versions_file="{exec_dir}/{VERSIONS_FILENAME}"',
+        "    _iops_json_escape() {",
+        "      # Escape backslash, double-quote, then collapse newlines/tabs for JSON.",
+        r"""      sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g;s/\t/\\t/g;s/\r//g'""",
+        "    }",
+        "    {",
+        '      echo "{"',
+    ]
+
+    items = list(versions.items())
+    for idx, (name, command) in enumerate(items):
+        trailing_comma = "" if idx == len(items) - 1 else ","
+        key_arg = shlex.quote(json.dumps(name))
+        lines.append(f"      _iops_vraw=$( {{ {command} ; }} 2>/dev/null | head -c 4000 )")
+        lines.append('      _iops_vesc=$(printf "%s" "$_iops_vraw" | _iops_json_escape)')
+        lines.append(
+            f"      printf '  %s: \"%s\"{trailing_comma}\\n' {key_arg} \"$_iops_vesc\""
+        )
+
+    lines.extend([
+        '      echo "}"',
+        '    } > "$_iops_versions_file" 2>/dev/null',
+        "  ) 2>/dev/null || true",
+        "}",
+        "# Capture after the user script body (via the EXIT handler) so any modules the",
+        "# benchmark loads are in scope. Fall back to immediate capture when no exit",
+        "# handler is present (e.g. standalone execution).",
+        "if declare -F _iops_register_exit >/dev/null 2>&1; then",
+        '  _iops_register_exit "_iops_capture_versions"',
+        "else",
+        "  _iops_capture_versions",
+        "fi",
+        "",
+    ])
+    return "\n".join(lines)
+
 
 # Filename for the GPU sampler script - runs during execution to collect GPU metrics
 # Naming convention: __iops_runtime_* for scripts that run during benchmark execution
@@ -1085,9 +1156,10 @@ class BasePlanner(ABC, HasLogger):
         resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
         gpu_sampling = probes.gpu_sampling if probes else False
         system_snapshot = probes.system_snapshot if probes else self.cfg.benchmark.collect_system_info
+        version_probe = probes.versions if probes else None
 
         # If no features enabled, return script unchanged
-        if not resource_sampling and not gpu_sampling and not system_snapshot:
+        if not resource_sampling and not gpu_sampling and not system_snapshot and not version_probe:
             return script_text
 
         # Build list of source lines to inject
@@ -1139,6 +1211,15 @@ class BasePlanner(ABC, HasLogger):
             with open(probe_file, "w") as f:
                 f.write(probe_script)
             source_lines.append(f'source "{probe_file}"  # disable: probes.system_snapshot: false')
+
+        if version_probe:
+            # Sourced here but registered with the EXIT handler so it captures versions
+            # AFTER the user's module loads. To disable: remove probes.versions from config.
+            version_script = _build_version_probe_script(version_probe, str(exec_dir))
+            version_file = exec_dir / ATEXIT_VERSION_FILENAME
+            with open(version_file, "w") as f:
+                f.write(version_script)
+            source_lines.append(f'source "{version_file}"  # disable: remove probes.versions')
 
         source_lines.append('# ===== IOPS INJECTION END =====')
 

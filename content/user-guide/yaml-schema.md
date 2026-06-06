@@ -91,6 +91,8 @@ benchmark:
     resource_sampling: boolean      #   Enable CPU/memory sampling (default: false)
     gpu_sampling: boolean           #   Enable GPU metrics tracing (default: false)
     sampling_interval: float        #   Sampling interval in seconds (default: 1.0)
+    versions:                       #   Optional: capture software/library versions
+      component_name: string        #   name -> shell command (e.g. "myapp --version")
 
   parallel: integer                 # Optional: max concurrent tests (default: 1)
 
@@ -253,6 +255,7 @@ benchmark:
 | `resource_sampling` | `false` | Enable CPU and memory sampling during execution. See [Resource Sampling](../resource-tracing) |
 | `gpu_sampling` | `false` | Enable GPU metrics sampling (utilization, power, temperature, memory, clocks). Supports NVIDIA GPUs via nvidia-smi. See [Resource Sampling](../resource-tracing) |
 | `sampling_interval` | `1.0` | Sampling interval in seconds for resource and GPU sampling |
+| `versions` | none | Capture software/library versions per execution. Mapping of component name to shell command. Captured after the benchmark body (via the exit handler, so tools loaded by the benchmark's own `module load` commands are in scope) into `__iops_versions.json`. The HTML report shows a drift warning when versions differ across executions. |
 
 </details>
 
@@ -439,6 +442,7 @@ Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, 
 | `repetitions` | int | Total repetitions for this test |
 | `workdir` | str | Base working directory |
 | `execution_dir` | str | Per-execution directory |
+| `artifacts_dir` | str | Per-execution artifacts folder (`<execution_dir>/<gallery.folder>`). Use this in `script_template` to write gallery images without hardcoding the folder name. |
 | `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
 
 </details>
@@ -950,6 +954,17 @@ reporting:
     bayesian_parameter_evolution: boolean #   (default: false)
     resource_sampling: boolean  #   (default: true)
     custom_plots: boolean       #   (default: true)
+    gallery: boolean            #   (default: true; auto-enabled when gallery images exist)
+    versions: boolean           #   (default: true; auto-enabled when version probe data exists)
+
+  gallery:                      # Optional: per-execution image gallery
+    enabled: boolean            #   Enable the gallery section (default: false)
+    folder: string              #   Convention folder per execution dir (default: "images")
+    sources: list               #   OPTIONAL: Jinja2-templated paths resolved per execution
+    pattern: string             #   Glob for convention folder (default: "*.png")
+    max_width: integer          #   OPTIONAL: downscale cap in pixels (requires Pillow)
+    caption_vars: list          #   OPTIONAL: variable names shown under each card
+    title: string               #   Gallery section heading (default: "Image Gallery")
 
   best_results:                 # Optional: best results configuration
     top_n: integer              #   Number of top configs (default: 5)
@@ -1016,6 +1031,8 @@ reporting:
     bayesian_parameter_evolution: false  # Parameter exploration (default: false)
     resource_sampling: true    # Resource metrics summary table
     custom_plots: true         # User-defined plots
+    gallery: true              # Per-execution image gallery (auto-enabled when images exist)
+    versions: true             # Software versions table (auto-enabled when probe data exists)
 ```
 
 </details>

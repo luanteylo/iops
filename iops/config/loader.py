@@ -55,6 +55,7 @@ from iops.config.models import (
     SectionConfig,
     BestResultsConfig,
     PlotDefaultsConfig,
+    GalleryConfig,
 )
 
 # ----------------- Allowed Keys for Config Validation ----------------- #
@@ -74,7 +75,7 @@ ALLOWED_BENCHMARK_KEYS = {
     "parallel",
 }
 
-ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "sampling_interval"}
+ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "sampling_interval", "versions"}
 
 ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
@@ -108,12 +109,16 @@ ALLOWED_MACHINE_OVERRIDE_KEYS = {"benchmark", "vars", "command", "scripts", "out
 
 ALLOWED_REPORTING_KEYS = {
     "enabled", "output_dir", "output_filename", "theme", "sections",
-    "best_results", "metrics", "default_plots", "plot_defaults",
+    "best_results", "metrics", "default_plots", "plot_defaults", "gallery",
 }
 ALLOWED_THEME_KEYS = {"style", "colors", "font_family"}
 ALLOWED_SECTIONS_KEYS = {
     "test_summary", "best_results", "variable_impact", "parallel_coordinates",
     "bayesian_evolution", "bayesian_parameter_evolution", "resource_sampling", "custom_plots",
+    "gallery", "versions",
+}
+ALLOWED_GALLERY_KEYS = {
+    "enabled", "folder", "sources", "pattern", "max_width", "caption_vars", "title",
 }
 ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
 ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
@@ -1009,6 +1014,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             resource_sampling=probes_data.get("resource_sampling", False),
             gpu_sampling=probes_data.get("gpu_sampling", False),
             sampling_interval=probes_data.get("sampling_interval", 1.0),
+            versions=_parse_version_probe(probes_data.get("versions")),
         )
 
         # Warn if old fields are also present (new takes precedence)
@@ -1444,6 +1450,80 @@ def load_generic_config(
     return cfg
 
 
+def _parse_version_probe(versions_data: Any) -> Optional[Dict[str, str]]:
+    """
+    Validate and normalize the ``benchmark.probes.versions`` mapping.
+
+    Expects a mapping of component name -> shell command that prints a version.
+    Returns None when no versions are configured.
+    """
+    if versions_data is None:
+        return None
+    if not isinstance(versions_data, dict):
+        raise ConfigValidationError(
+            "benchmark.probes.versions must be a mapping of component name to a shell "
+            f"command string (got {type(versions_data).__name__})."
+        )
+    parsed: Dict[str, str] = {}
+    for name, command in versions_data.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigValidationError(
+                "benchmark.probes.versions keys must be non-empty strings (component names)."
+            )
+        if not isinstance(command, str) or not command.strip():
+            raise ConfigValidationError(
+                f"benchmark.probes.versions['{name}'] must be a non-empty shell command string."
+            )
+        parsed[name] = command
+    return parsed
+
+
+def _parse_gallery_config(data: Any) -> GalleryConfig:
+    """Parse and validate the ``reporting.gallery`` section."""
+    if not isinstance(data, dict):
+        raise ConfigValidationError("reporting.gallery must be a mapping.")
+
+    key_errors = _validate_allowed_keys(data, ALLOWED_GALLERY_KEYS, "reporting.gallery")
+    if key_errors:
+        raise ConfigValidationError("\n".join(key_errors))
+
+    sources = data.get("sources")
+    if sources is not None and (
+        not isinstance(sources, list)
+        or not all(isinstance(s, str) and s.strip() for s in sources)
+    ):
+        raise ConfigValidationError(
+            "reporting.gallery.sources must be a list of non-empty path templates."
+        )
+
+    caption_vars = data.get("caption_vars")
+    if caption_vars is not None and (
+        not isinstance(caption_vars, list)
+        or not all(isinstance(v, str) for v in caption_vars)
+    ):
+        raise ConfigValidationError(
+            "reporting.gallery.caption_vars must be a list of variable names."
+        )
+
+    max_width = data.get("max_width")
+    if max_width is not None and (
+        not isinstance(max_width, int) or isinstance(max_width, bool) or max_width <= 0
+    ):
+        raise ConfigValidationError(
+            "reporting.gallery.max_width must be a positive integer (pixels)."
+        )
+
+    return GalleryConfig(
+        enabled=data.get("enabled", False),
+        folder=data.get("folder", "images"),
+        sources=sources,
+        pattern=data.get("pattern", "*.png"),
+        max_width=max_width,
+        caption_vars=caption_vars,
+        title=data.get("title", "Image Gallery"),
+    )
+
+
 def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     """
     Parse reporting configuration dictionary into ReportingConfig dataclass.
@@ -1493,6 +1573,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
             bayesian_parameter_evolution=sections_data.get("bayesian_parameter_evolution", False),
             resource_sampling=sections_data.get("resource_sampling", True),
             custom_plots=sections_data.get("custom_plots", True),
+            gallery=sections_data.get("gallery", True),
+            versions=sections_data.get("versions", True),
         )
 
     # Parse best_results config (optional)
@@ -1606,6 +1688,11 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
             )
             default_plots.append(plot_cfg)
 
+    # Parse gallery (optional)
+    gallery_cfg = GalleryConfig()
+    if "gallery" in data and data["gallery"] is not None:
+        gallery_cfg = _parse_gallery_config(data["gallery"])
+
     # Parse output_dir (optional)
     output_dir = None
     if "output_dir" in data and data["output_dir"] is not None:
@@ -1621,6 +1708,7 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
         metrics=metrics_cfg,
         default_plots=default_plots,
         plot_defaults=plot_defaults_cfg,
+        gallery=gallery_cfg,
     )
 
 
@@ -2322,6 +2410,15 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if invalid_vars:
             raise ConfigValidationError(
                 f"benchmark.report_vars contains undefined variables: {invalid_vars}. "
+                f"Available variables: {sorted(cfg.vars.keys())}"
+            )
+
+    # ---- gallery caption_vars validation ----
+    if cfg.reporting and cfg.reporting.gallery and cfg.reporting.gallery.caption_vars:
+        invalid_vars = [v for v in cfg.reporting.gallery.caption_vars if v not in cfg.vars]
+        if invalid_vars:
+            raise ConfigValidationError(
+                f"reporting.gallery.caption_vars contains undefined variables: {invalid_vars}. "
                 f"Available variables: {sorted(cfg.vars.keys())}"
             )
 

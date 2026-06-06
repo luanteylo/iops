@@ -12,12 +12,14 @@ IOPS includes a comprehensive reporting system that generates interactive HTML r
 2. [Basic Usage](#basic-usage)
 3. [Report Sections](#report-sections)
 4. [Controlling Sections](#controlling-sections)
-5. [Custom Plots](#custom-plots)
-6. [Default Plots](#default-plots)
-7. [Themes and Styling](#themes-and-styling)
-8. [Plot Sizing and Defaults](#plot-sizing-and-defaults)
-9. [Output Configuration](#output-configuration)
-10. [Examples](#examples)
+5. [Per-Test Image Gallery](#per-test-image-gallery)
+6. [Software Version Capture Probe](#software-version-capture-probe)
+7. [Custom Plots](#custom-plots)
+8. [Default Plots](#default-plots)
+9. [Themes and Styling](#themes-and-styling)
+10. [Plot Sizing and Defaults](#plot-sizing-and-defaults)
+11. [Output Configuration](#output-configuration)
+12. [Examples](#examples)
 
 ---
 
@@ -92,6 +94,18 @@ reporting:
 ## Report Sections
 
 Generated reports include the following sections (all enabled by default):
+
+### Image Gallery
+
+Embeds per-execution images into the HTML report as a thumbnail grid grouped by execution, with click-to-enlarge. This is useful for visual sanity checks: confirm that a simulation "looks right" before trusting its metrics.
+
+Images are base64-embedded so the HTML report remains fully self-contained. The section appears automatically when `reporting.gallery.enabled: true` and at least one image is found. See [Per-Test Image Gallery](#per-test-image-gallery) below for configuration details.
+
+### Software Versions
+
+Renders a table of captured software and library versions per execution. When a component reports more than one distinct version across executions, a prominent drift warning is shown. This warning is the cache-mixing detector: it catches the case where a study mixes freshly executed results with older cached results that were produced by a different software version. Outlier cells are highlighted.
+
+The section appears automatically when `benchmark.probes.versions` is configured and at least one `__iops_versions.json` file is present. See [Software Version Capture](#software-version-capture-probe) below for configuration details.
 
 ### Test Summary
 
@@ -204,6 +218,8 @@ reporting:
     bayesian_parameter_evolution: false  # Parameter exploration (default: false)
     resource_sampling: true      # Resource metrics summary table
     custom_plots: true           # User-defined plots
+    gallery: true                # Per-execution image gallery (auto-enabled when images exist)
+    versions: true               # Software versions table (auto-enabled when probe data exists)
 ```
 
 ---
@@ -653,6 +669,160 @@ workdir/run_001/
 Files are numbered in the order they appear in the report, with descriptive names based on the plot type and metric.
 
 **Note:** Plot export is opt-in. Without the `--export-plots` flag, only the HTML report is generated. If `kaleido` is not installed and `--export-plots` is used, a warning is displayed.
+
+---
+
+## Per-Test Image Gallery
+
+The gallery feature embeds per-execution images into the HTML report as a thumbnail grid grouped by execution, with click-to-enlarge. It is useful for visual sanity checks: confirm that a simulation, rendering, or analysis output "looks right" before trusting the numeric metrics.
+
+Images are base64-embedded so the HTML report is fully self-contained. Pillow is an optional dependency for downscaling; without it, images are embedded at full size.
+
+### Enabling the Gallery
+
+Add `reporting.gallery` to your config and set `enabled: true`:
+
+```yaml
+reporting:
+  enabled: true
+  gallery:
+    enabled: true
+```
+
+With this minimal configuration, IOPS automatically scans `<execution_dir>/images/` for `*.png` files.
+
+### Image Discovery
+
+IOPS supports two discovery methods that can be combined:
+
+**1. Convention folder (zero-config beyond enabling)**
+
+Any file matching `pattern` inside `folder` (relative to each execution directory or its `repetition_*` subdirectories) is discovered automatically:
+
+```yaml
+reporting:
+  gallery:
+    enabled: true
+    folder: images       # default; scans <execution_dir>/images/
+    pattern: "*.png"     # default glob pattern
+```
+
+**2. Explicit sources**
+
+Provide a list of Jinja2-templated paths resolved per execution. Glob characters are honored. Absolute paths are used as-is; relative paths are resolved against the execution or repetition directories:
+
+```yaml
+reporting:
+  gallery:
+    enabled: true
+    sources:
+      - "{{ execution_dir }}/final_state.png"
+      - "{{ execution_dir }}/plots/*.png"
+```
+
+Both methods can be combined. IOPS deduplicates results by resolved path.
+
+### Writing Images from Scripts
+
+Use the `{{ artifacts_dir }}` built-in variable in `script_template` to place images in the gallery folder without hardcoding the folder name:
+
+```yaml
+scripts:
+  - name: "sim"
+    script_template: |
+      #!/bin/bash
+      {{ command.template }}
+      mkdir -p {{ artifacts_dir }}
+      cp final_state.png {{ artifacts_dir }}/
+      cp slice_xy.png {{ artifacts_dir }}/
+```
+
+`{{ artifacts_dir }}` resolves to `<execution_dir>/<gallery.folder>` (default: `<execution_dir>/images`). When you change `gallery.folder`, `{{ artifacts_dir }}` updates automatically.
+
+### Full Gallery Configuration
+
+```yaml
+reporting:
+  enabled: true
+  gallery:
+    enabled: true                       # default: false
+    folder: images                      # default "images"; convention folder per execution
+    sources:                            # OPTIONAL explicit list of Jinja2-templated paths
+      - "{{ execution_dir }}/final_state.png"
+    pattern: "*.png"                    # default "*.png"; glob used when scanning folder
+    max_width: 512                      # OPTIONAL: downscale wider images (requires Pillow)
+    caption_vars: [nodes, ppn]          # OPTIONAL: params shown under each card (defaults to report_vars)
+    title: "Simulation thumbnails"      # default "Image Gallery"
+```
+
+### Gallery Options
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `false` | Enable the gallery section |
+| `folder` | `"images"` | Convention folder scanned per execution directory |
+| `sources` | none | Explicit Jinja2-templated paths resolved per execution |
+| `pattern` | `"*.png"` | Glob pattern used when scanning the convention folder |
+| `max_width` | none | Maximum image width in pixels (requires Pillow; degrades gracefully without it) |
+| `caption_vars` | report_vars | Variable names shown as the caption under each execution's cards |
+| `title` | `"Image Gallery"` | Heading for the gallery section |
+
+To hide the gallery from the report without disabling image collection, use the section toggle:
+
+```yaml
+reporting:
+  sections:
+    gallery: false
+```
+
+---
+
+## Software Version Capture Probe
+
+The versions probe captures software and library versions once per execution. This is metadata, not a measured metric. It is most useful for detecting version drift across a study: when a study mixes freshly executed results with older cached results produced by a different software version, the HTML report shows a prominent warning.
+
+### Configuration
+
+Add `benchmark.probes.versions` with a mapping of component name to a shell command that prints the version:
+
+```yaml
+benchmark:
+  probes:
+    versions:
+      app: "myapp --version"
+      mpi: "mpirun --version | head -1"
+      compiler: "gcc --version | head -1"
+```
+
+Each value is a shell snippet. IOPS injects a probe script (`__iops_atexit_versions.sh`) that captures versions once per execution and writes `__iops_versions.json` to the execution's repetition directory. Failing commands record an empty string rather than aborting the run.
+
+### How It Works
+
+1. IOPS writes `__iops_atexit_versions.sh` to each repetition folder and sources it from the generated benchmark script (after the shebang/`#SBATCH` header).
+2. The capture function is registered with the centralized exit handler, so it runs **after the benchmark body** via the `EXIT` trap. This matters on HPC systems: the version tools (`mpirun`, your application, compilers) are often only on `PATH` once the benchmark has run its own `module load` commands. Because the trap fires in the same shell, the modified environment is in scope.
+3. The probe executes each configured command, captures stdout (first 4000 bytes), and writes `__iops_versions.json`.
+4. When generating the HTML report, IOPS reads all `__iops_versions.json` files and renders the Software Versions section.
+
+> **Note:** Capturing at exit means versions reflect the environment the benchmark actually ran in. If the benchmark crashes before loading its modules, the affected commands record an empty string.
+
+### Report Output
+
+The HTML report includes:
+
+- A table with one row per execution and one column per component showing the captured version string.
+- A drift warning when any component reports more than one distinct value across executions. Outlier cells are highlighted.
+
+The drift warning reads: "Warning: software version drift detected. The following components differ across executions. Results produced by different versions may not be comparable (this often happens when a study mixes freshly executed tests with older cached results)."
+
+### Controlling the Section
+
+To hide the Software Versions section from the report:
+
+```yaml
+reporting:
+  sections:
+    versions: false
+```
 
 ---
 

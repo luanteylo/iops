@@ -55,6 +55,7 @@ These variables are available in all Jinja2 templates:
 | `workdir` | str | Base working directory |
 | `log_dir` | str | Logs directory path (`workdir/logs`) |
 | `execution_dir` | str | Per-execution directory path |
+| `artifacts_dir` | str | Per-execution artifacts folder path (`<execution_dir>/<gallery.folder>`, default `<execution_dir>/images`). Use this in `script_template` to write gallery images without hardcoding the folder name. Tracks `reporting.gallery.folder` automatically. |
 | `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
 | All user `vars` | varies | All swept and derived variables by name |
 

@@ -212,12 +212,18 @@ class ProbesConfig:
             designed for future extension to other vendors.
         sampling_interval: Sampling interval in seconds for resource tracing and GPU sampling.
             Corresponds to deprecated field: trace_interval
+        versions: Optional mapping of component name to a shell command that prints its
+            version (e.g., {"app": "myapp --version"}). Captured once per execution into
+            __iops_versions.json. This is metadata, not a measured metric. The report
+            renders a version table and warns when a component's version differs across
+            executions (catches cache-mixing of results from different software versions).
     """
     system_snapshot: bool = True      # Was: collect_system_info
     execution_index: bool = True      # Was: track_executions
     resource_sampling: bool = False   # Was: trace_resources
     gpu_sampling: bool = False        # GPU metrics (power, utilization, temperature, etc.)
     sampling_interval: float = 1.0    # Was: trace_interval
+    versions: Optional[Dict[str, str]] = None  # name -> shell command capturing a software/library version
 
 
 @dataclass
@@ -456,6 +462,8 @@ class SectionConfig:
     bayesian_parameter_evolution: bool = False  # Disabled by default (verbose with many params)
     resource_sampling: bool = True              # Auto-enabled when resource summary CSV exists
     custom_plots: bool = True
+    gallery: bool = True                        # Auto-enabled when gallery is configured and images exist
+    versions: bool = True                       # Auto-enabled when version probe data exists
 
 
 @dataclass
@@ -475,6 +483,39 @@ class PlotDefaultsConfig:
 
 
 @dataclass
+class GalleryConfig:
+    """Configuration for the per-execution image gallery section.
+
+    The gallery embeds per-test images (e.g., CFD thumbnails) into the HTML report
+    so users can eyeball whether a run "looks right" before trusting its metrics.
+
+    Images are discovered two ways (both can be combined):
+      1. Convention: any file matching ``pattern`` inside ``folder`` within each
+         execution directory is picked up automatically (zero config beyond enabling).
+      2. Explicit: each entry in ``sources`` is a Jinja2 template resolved per
+         execution (context: execution vars + built-ins like execution_dir).
+
+    Attributes:
+        enabled: Whether to render the gallery section.
+        folder: Convention folder (relative to each execution dir) scanned for images.
+        sources: Explicit list of templated image paths, resolved per execution.
+        pattern: Glob used when scanning the convention folder.
+        max_width: If set, downscale wider images to this width in pixels (requires
+            Pillow; without Pillow the original image is embedded and a warning is logged).
+        caption_vars: Variable names shown as the caption under each execution's images
+            (defaults to the report's report_vars when omitted).
+        title: Heading for the gallery section.
+    """
+    enabled: bool = False
+    folder: str = "images"
+    sources: Optional[List[str]] = None
+    pattern: str = "*.png"
+    max_width: Optional[int] = None
+    caption_vars: Optional[List[str]] = None
+    title: str = "Image Gallery"
+
+
+@dataclass
 class ReportingConfig:
     """Complete reporting configuration."""
     enabled: bool = False
@@ -489,6 +530,7 @@ class ReportingConfig:
     default_plots: List[PlotConfig] = field(default_factory=list)
 
     plot_defaults: PlotDefaultsConfig = field(default_factory=PlotDefaultsConfig)
+    gallery: GalleryConfig = field(default_factory=GalleryConfig)
 
 
 @dataclass

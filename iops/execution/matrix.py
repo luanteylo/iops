@@ -317,6 +317,11 @@ class ExecutionInstance:
     workdir: Optional[Path] = None
     log_dir: Optional[Path] = None
 
+    # Name of the per-execution artifacts folder (exposed as the {{ artifacts_dir }}
+    # built-in). Matches reporting.gallery.folder so user scripts can drop images
+    # there without hardcoding the folder name.
+    artifacts_folder: str = "images"
+
     # Variables:
     #   - base_vars: swept and fixed scalar vars (no expr).
     #   - derived_var_cfgs: name -> (expr, vartype) for derived vars.
@@ -382,6 +387,10 @@ class ExecutionInstance:
             "workdir": str(self.workdir),
             "log_dir": str(self.log_dir) if self.log_dir else None,
             "execution_dir": str(self.execution_dir),
+            "artifacts_dir": (
+                str(Path(self.execution_dir) / self.artifacts_folder)
+                if self.execution_dir is not None else None
+            ),
             "execution_id": self.execution_id,
             "repetitions": self.repetitions,
             "os_env": dict(os.environ),
@@ -925,6 +934,11 @@ def create_execution_instance(
         benchmark_description=cfg.benchmark.description,
         workdir=cfg.benchmark.workdir,
         log_dir=cfg.benchmark.workdir / "logs" if cfg.benchmark.workdir else None,
+        artifacts_folder=(
+            cfg.reporting.gallery.folder
+            if getattr(cfg, "reporting", None) and cfg.reporting.gallery
+            else "images"
+        ),
         cache_file=getattr(cfg.benchmark, "cache_file", None),
         base_vars=base_vars,
         derived_var_cfgs=derived_var_cfgs,
