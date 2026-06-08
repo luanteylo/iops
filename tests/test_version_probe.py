@@ -10,6 +10,7 @@ Covers:
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -209,3 +210,45 @@ def test_versions_section_disabled_by_section_toggle(tmp_path):
     gen = _report_stub(run_dir)
     gen.report_config.sections.versions = False
     assert gen._generate_versions_section() == ""
+
+
+# ============================================================================ #
+# Versions surfaced as version.* columns in the results sink
+# ============================================================================ #
+
+def _fake_test(execution_dir):
+    """Minimal stand-in for an ExecutionInstance, enough for build_output_row."""
+    return SimpleNamespace(
+        benchmark_name="T",
+        benchmark_description=None,
+        execution_id=1,
+        repetition=1,
+        repetitions=1,
+        workdir=execution_dir.parent,
+        execution_dir=execution_dir,
+        vars={"nodes": 1},
+        metadata={"metrics": {"throughput": 5.0}},
+    )
+
+
+def test_build_output_row_includes_version_columns(tmp_path):
+    from iops.results.writer import build_output_row
+
+    exec_dir = tmp_path / "exec_0001" / "repetition_001"
+    exec_dir.mkdir(parents=True)
+    (exec_dir / VERSIONS_FILENAME).write_text(json.dumps({"app": "1.2.3", "mpi": "4.1"}))
+
+    row = build_output_row(_fake_test(exec_dir))
+    assert row["version.app"] == "1.2.3"
+    assert row["version.mpi"] == "4.1"
+    assert row["metrics.throughput"] == 5.0   # existing columns still present
+
+
+def test_build_output_row_no_version_columns_when_absent(tmp_path):
+    from iops.results.writer import build_output_row
+
+    exec_dir = tmp_path / "exec_0001" / "repetition_001"
+    exec_dir.mkdir(parents=True)
+
+    row = build_output_row(_fake_test(exec_dir))
+    assert not any(k.startswith("version.") for k in row)

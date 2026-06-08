@@ -255,7 +255,7 @@ benchmark:
 | `resource_sampling` | `false` | Enable CPU and memory sampling during execution. See [Resource Sampling](../resource-tracing) |
 | `gpu_sampling` | `false` | Enable GPU metrics sampling (utilization, power, temperature, memory, clocks). Supports NVIDIA GPUs via nvidia-smi. See [Resource Sampling](../resource-tracing) |
 | `sampling_interval` | `1.0` | Sampling interval in seconds for resource and GPU sampling |
-| `versions` | none | Capture software/library versions per execution. Mapping of component name to shell command. Captured after the benchmark body (via the exit handler, so tools loaded by the benchmark's own `module load` commands are in scope) into `__iops_versions.json`. The HTML report shows a drift warning when versions differ across executions. |
+| `versions` | none | Capture software/library versions per execution. Mapping of component name to shell command. Captured after the benchmark body (via the exit handler, so tools loaded by the benchmark's own `module load` commands are in scope) into `__iops_versions.json`, and also written to the results sink as `version.<component>` columns. The HTML report shows a drift warning when versions differ across executions. |
 
 </details>
 

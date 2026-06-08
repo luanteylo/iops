@@ -105,6 +105,25 @@ def _jsonify_if_needed(v: Any) -> Any:
 # Build one output row
 # -------------------------
 
+# Per-execution versions captured by the version probe (benchmark.probes.versions).
+# Written at-exit into the execution directory; surfaced here as version.* columns so
+# old benchmarks can be reanalyzed programmatically (e.g. filter results by app version).
+VERSIONS_FILENAME = "__iops_versions.json"
+
+
+def _read_versions(execution_dir: Path) -> Dict[str, Any]:
+    """Read captured software versions for an execution, or {} if absent/unreadable."""
+    versions_path = execution_dir / VERSIONS_FILENAME
+    if not versions_path.is_file():
+        return {}
+    try:
+        with open(versions_path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def build_output_row(test) -> Dict[str, Any]:
     row: Dict[str, Any] = {}
 
@@ -157,6 +176,12 @@ def build_output_row(test) -> Dict[str, Any]:
 
     # metrics (safe even if missing)
     _flatten("metrics", metrics_obj or {}, row)
+
+    # versions: captured by the version probe, surfaced as version.* columns
+    if execution_dir:
+        versions = _read_versions(Path(execution_dir))
+        if versions:
+            _flatten("version", versions, row)
 
     # normalize
     row = {k: _jsonify_if_needed(v) for k, v in row.items()}

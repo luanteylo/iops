@@ -802,6 +802,7 @@ Each value is a shell snippet. IOPS injects a probe script (`__iops_atexit_versi
 2. The capture function is registered with the centralized exit handler, so it runs **after the benchmark body** via the `EXIT` trap. This matters on HPC systems: the version tools (`mpirun`, your application, compilers) are often only on `PATH` once the benchmark has run its own `module load` commands. Because the trap fires in the same shell, the modified environment is in scope.
 3. The probe executes each configured command, captures stdout (first 4000 bytes), and writes `__iops_versions.json`.
 4. When generating the HTML report, IOPS reads all `__iops_versions.json` files and renders the Software Versions section.
+5. The captured versions are also written to the results sink (CSV/Parquet/SQLite) as `version.<component>` columns (e.g. `version.app`, `version.mpi`), one per row. This makes versions queryable alongside the metrics, which is useful for reanalyzing old runs ("which build produced these numbers?"). To omit them, add `version.*` to `output.sink.exclude`.
 
 > **Note:** Capturing at exit means versions reflect the environment the benchmark actually ran in. If the benchmark crashes before loading its modules, the affected commands record an empty string.
 

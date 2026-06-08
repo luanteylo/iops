@@ -455,7 +455,7 @@ This approach ensures system info is collected even if the benchmark fails, and 
 
 **Written:** On script exit, after the benchmark body has run (via the exit handler)
 
-**Purpose:** Contains software and library versions captured by the version probe. The HTML report reads these files to render the Software Versions section and to detect version drift across executions.
+**Purpose:** Contains software and library versions captured by the version probe. The HTML report reads these files to render the Software Versions section and to detect version drift across executions. The same values are also written to the results sink as `version.<component>` columns, so versions can be queried alongside the metrics.
 
 **Structure:**
 ```json

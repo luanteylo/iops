@@ -18,7 +18,7 @@ All notable changes to IOPS are documented here.
 - Software version capture probe (`benchmark.probes.versions`) for recording software and library versions as metadata once per execution
   - Mapping of component name to shell command (e.g. `app: "myapp --version"`); IOPS injects `__iops_atexit_versions.sh` and captures versions after the benchmark body via the exit handler, so version tools made available by the benchmark's own `module load` commands are in scope
   - Failing commands record an empty string rather than aborting the run
-  - Writes `__iops_versions.json` to each repetition directory
+  - Writes `__iops_versions.json` to each repetition directory, and surfaces the captured versions as `version.<component>` columns in the results sink (CSV/Parquet/SQLite) so they can be queried alongside metrics; exclude with `output.sink.exclude: [version.*]`
   - HTML report renders a Software Versions section with a per-execution table; a prominent drift warning is shown when any component reports more than one distinct value across executions (this is the cache-mixing detector: it catches studies that mix freshly executed results with older cached results from a different software environment)
   - Controlled by `reporting.sections.versions` (default `true`); section auto-enables when version data is present
 
