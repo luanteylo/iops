@@ -846,6 +846,44 @@ class TestResourceSamplingSection:
         # Should NOT have plot containers (plots are now via custom metrics)
         assert "plot-container" not in html
 
+    def test_merge_with_integer_execution_id(self, temp_workdir):
+        """Resource metrics merge when results use integer execution ids.
+
+        Regression: results CSV stores ``execution.execution_id`` as integers
+        (e.g. 2) while the resource summary stores folder-style strings
+        (e.g. ``exec_0002``). Merging directly raised "You are trying to merge
+        on int64 and object columns". The join keys must be normalized first.
+        """
+        import pandas as pd
+
+        summary_path = temp_workdir / "__iops_resource_summary.csv"
+        summary_path.write_text(
+            "execution_id,repetition,nodes,cpu_avg_pct,mem_peak_gb\n"
+            "exec_0001,1,1,45.0,8.5\n"
+            "exec_0002,2,2,78.0,16.2\n"
+        )
+
+        generator = self._create_generator(temp_workdir)
+        # Mimic a results DataFrame loaded from CSV: integer execution ids.
+        generator.df = pd.DataFrame(
+            {
+                "execution.execution_id": [1, 2],
+                "execution.repetition": [1, 2],
+                "vars.nodes": [1, 2],
+                "metrics.bandwidth": [10.0, 20.0],
+            }
+        )
+
+        generator._merge_resource_metrics()
+
+        # Resource metrics should be merged in (not all NaN) and aligned by id.
+        assert "metrics.cpu_avg_pct" in generator.df.columns
+        assert "metrics.mem_peak_gb" in generator.df.columns
+        row1 = generator.df[generator.df["execution.execution_id"] == 1].iloc[0]
+        row2 = generator.df[generator.df["execution.execution_id"] == 2].iloc[0]
+        assert row1["metrics.cpu_avg_pct"] == 45.0
+        assert row2["metrics.cpu_avg_pct"] == 78.0
+
     def test_section_config_default_true(self):
         """Test that resource_sampling defaults to True in SectionConfig."""
         config = SectionConfig()

@@ -371,6 +371,15 @@ class ReportGenerator:
         if not actual_join_cols:
             return
 
+        # Normalize the execution-id join key to a common representation.
+        # The resource summary stores zero-padded folder-style ids ("exec_0002"),
+        # while the results DataFrame stores raw integers (2). Merging directly
+        # raises "trying to merge on int64 and object columns". Coerce both sides
+        # to the numeric execution number so the join keys are comparable.
+        if join_key in actual_join_cols:
+            self.df[join_key] = self.df[join_key].map(self._execution_id_to_int)
+            resource_subset[join_key] = resource_subset[join_key].map(self._execution_id_to_int)
+
         # Merge (left join to preserve all results rows)
         self.df = self.df.merge(resource_subset, on=actual_join_cols, how='left')
 
