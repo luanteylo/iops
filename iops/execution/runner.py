@@ -29,6 +29,10 @@ METADATA_FILENAME = "__iops_run_metadata.json"
 # Resource trace summary filename
 RESOURCE_SUMMARY_FILENAME = "__iops_resource_summary.csv"
 
+# Sentinel used as the "script" of resource sampling metrics in run metadata, so
+# the report can tell them apart from benchmark metrics produced by parser scripts.
+RESOURCE_SAMPLING_SCRIPT = "__iops_resource_sampling"
+
 # Copy of the input YAML configuration file
 CONFIG_COPY_FILENAME = "__iops_config.yaml"
 
@@ -742,7 +746,7 @@ class IOPSRunner(HasLogger):
                     continue
                 metadata['metrics'].append({
                     "name": col,
-                    "script": "__iops_resource_sampling",
+                    "script": RESOURCE_SAMPLING_SCRIPT,
                 })
 
             with open(metadata_path, 'w') as f:

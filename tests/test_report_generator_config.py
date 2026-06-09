@@ -884,6 +884,27 @@ class TestResourceSamplingSection:
         assert row1["metrics.cpu_avg_pct"] == 45.0
         assert row2["metrics.cpu_avg_pct"] == 78.0
 
+    def test_resource_metrics_excluded_from_benchmark_metrics(self, temp_workdir):
+        """Resource sampling metrics must not be treated as benchmark metrics.
+
+        Regression: the runner registers resource metrics in run metadata so
+        they stay available for custom plots, but they were then surfaced in the
+        standard metric sections (summary, best configs, variable analysis) as
+        if they were benchmark metrics. _get_metrics() must drop entries marked
+        with the resource sampling sentinel script.
+        """
+        generator = self._create_generator(temp_workdir)
+        generator.metadata = {
+            "metrics": [
+                {"name": "bandwidth", "script": "my_benchmark"},
+                {"name": "time_total", "script": "my_benchmark"},
+                {"name": "cpu_avg_pct", "script": "__iops_resource_sampling"},
+                {"name": "mem_peak_gb", "script": "__iops_resource_sampling"},
+            ]
+        }
+
+        assert generator._get_metrics() == ["bandwidth", "time_total"]
+
     def test_section_config_default_true(self):
         """Test that resource_sampling defaults to True in SectionConfig."""
         config = SectionConfig()

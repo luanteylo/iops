@@ -478,8 +478,23 @@ class ReportGenerator:
         return numeric_vars
 
     def _get_metrics(self) -> List[str]:
-        """Get list of metrics."""
-        return [m['name'] for m in self.metadata['metrics']]
+        """Get the benchmark metrics produced by parser scripts.
+
+        Resource sampling metrics (cpu_avg_pct, mem_peak_gb, etc.) are recorded
+        in the metadata so they remain available for custom plots, but they are
+        not benchmark metrics and must not appear in the standard metric sections
+        (summary, best configurations, search evolution, variable analysis).
+        They have their own dedicated Resource Sampling section. Filter them out
+        here using the sentinel script set by the runner.
+        """
+        return [
+            m['name'] for m in self.metadata['metrics']
+            if m.get('script') != self._RESOURCE_SAMPLING_SCRIPT
+        ]
+
+    # Sentinel script marking resource sampling metrics in run metadata.
+    # Kept in sync with iops.execution.runner.RESOURCE_SAMPLING_SCRIPT.
+    _RESOURCE_SAMPLING_SCRIPT = "__iops_resource_sampling"
 
     def _get_var_column(self, var_name: str) -> str:
         """Get the column name for a variable in the dataframe."""
@@ -2737,9 +2752,17 @@ class ReportGenerator:
         """Generate custom plots section based on user-defined reporting config."""
         from iops.reporting.plots import create_plot
 
+        # Custom plots are driven by report_config.metrics. Resource sampling
+        # metrics are excluded from the benchmark `metrics` list but remain
+        # plottable here, so include any configured metric (benchmark metrics
+        # first to preserve their order, then extras such as resource metrics).
+        plot_metrics = list(metrics) + [
+            m for m in self.report_config.metrics if m not in metrics
+        ]
+
         # Check if any custom plots are defined
         has_any_plots = False
-        for metric in metrics:
+        for metric in plot_metrics:
             if metric in self.report_config.metrics and len(self.report_config.metrics[metric].plots) > 0:
                 has_any_plots = True
                 break
@@ -2751,7 +2774,7 @@ class ReportGenerator:
         html += "<h2>Custom Metric Plots</h2>\n"
         html += "<p>User-defined plots from the reporting configuration.</p>\n"
 
-        for metric in metrics:
+        for metric in plot_metrics:
             if metric not in self.report_config.metrics:
                 continue
 
