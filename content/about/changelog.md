@@ -6,6 +6,8 @@ All notable changes to IOPS are documented here.
 
 ## [Unreleased]
 
+## [3.5.6] - 2026-06-09
+
 ### Added
 - Per-execution image gallery (`reporting.gallery`) for embedding simulation thumbnails and other per-test images into the self-contained HTML report
   - Thumbnail grid grouped by execution with click-to-enlarge; images are base64-embedded so the report has no external file dependencies
@@ -37,6 +39,9 @@ All notable changes to IOPS are documented here.
 
 ### Changed
 - `iops archive extract` without `-o` now extracts into a folder named after the archive (e.g. `study.tar.gz` -> `./study/`) instead of scattering files into the current directory. Pass `-o PATH` to choose a different destination.
+
+### Fixed
+- Report generation no longer fails when merging resource sampling metrics for runs that use integer execution ids. The results dataframe stores `execution.execution_id` as integers while `__iops_resource_summary.csv` stores zero-padded folder-style ids (`exec_0002`), so the join raised "You are trying to merge on int64 and object columns". Both join keys are now normalized to the numeric execution id before merging.
 
 ## [3.5.5] - 2026-05-30
 
