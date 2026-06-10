@@ -527,6 +527,14 @@ class ExecutionInstance:
             try:
                 content = _render_template(inp.template or "", content_ctx)
             except UndefinedError as exc:
+                m = re.search(r"'dict object' has no attribute '([^']+)'", str(exc))
+                if m:
+                    var_name = m.group(1)
+                    raise ConfigValidationError(
+                        f"Undefined environment variable in input file template '{inp.name}': "
+                        f"'{var_name}' is not set in the environment.\n"
+                        f"Set it before running IOPS: export {var_name}=<value>"
+                    ) from exc
                 available = sorted(base_ctx.keys())
                 raise ConfigValidationError(
                     f"Undefined variable in input file template '{inp.name}': {exc}\n"
