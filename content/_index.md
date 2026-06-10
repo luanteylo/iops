@@ -3,7 +3,7 @@ title: "IOPS"
 weight: 1
 ---
 
-# IOPS
+## IOPS
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
 
@@ -15,7 +15,7 @@ IOPS automates the generation, execution, and analysis of benchmark experiments.
 
 Originally designed for I/O performance studies (see [our 2022 paper](https://inria.hal.science/hal-03753813/)), IOPS has evolved into a generic framework for any parametric benchmark workflow.
 
-## Key Features
+### Key Features
 
 - **Parameter Sweeping**: Generate and execute tests for all parameter combinations
 - **Search Strategies**: Exhaustive, Bayesian optimization, or random sampling
@@ -26,7 +26,7 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 - **Reports**: Interactive HTML reports with plots and statistical analysis
 - **Output**: Export results to CSV, Parquet, or SQLite
 
-## Blog
+### Blog
 
 Tutorials and use cases on the [blog]({{< ref "/blog" >}}):
 
@@ -34,7 +34,7 @@ Tutorials and use cases on the [blog]({{< ref "/blog" >}}):
 - [Testing IOPS's Bayesian search against random sampling]({{< ref "/blog/bayesian-optimization-study" >}}) - How guided search reaches the optimum with far fewer evaluations
 - [Using IOPS on Grid'5000]({{< ref "/blog/grid500" >}}) - Run IOPS with OAR scheduler on Grid'5000
 
-## Links
+### Links
 
 - **Slides**: [IOPS overview (PDF)](slides/iops_presentation.pdf) - YAML configuration, search strategies, parsers, and reports, with a running IOR example
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)

@@ -7,9 +7,9 @@
         {{ partial "docs_sidebar.html" . }}
       </div>
       <div class="col-md-9 col-lg-10 docs-content">
-        {{ with .Content }}
-          {{ . }}
-        {{ end }}
+        <article role="main" class="blog-post">
+          {{ .Content }}
+        </article>
       </div>
     </div>
   </div>

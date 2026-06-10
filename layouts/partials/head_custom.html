@@ -52,6 +52,30 @@ details > *:not(summary) {
   padding: 0 1em;
 }
 
+/* Uniform page title size: the theme styles .page-heading (80px) and
+   .post-heading (50px) but leaves section types unstyled, so the title
+   size jumped between pages. All content sections share one size now;
+   the home page keeps its hero banner. */
+.intro-header .getting-started-heading h1,
+.intro-header .user-guide-heading h1,
+.intro-header .developer-guide-heading h1,
+.intro-header .about-heading h1,
+.intro-header .reports-heading h1,
+.intro-header .search-heading h1 {
+  margin-top: 0;
+  font-size: 36px;
+}
+@media only screen and (min-width: 768px) {
+  .intro-header .getting-started-heading h1,
+  .intro-header .user-guide-heading h1,
+  .intro-header .developer-guide-heading h1,
+  .intro-header .about-heading h1,
+  .intro-header .reports-heading h1,
+  .intro-header .search-heading h1 {
+    font-size: 36px;
+  }
+}
+
 /* Documentation sidebar layout */
 .docs-container {
   padding-left: 0;
