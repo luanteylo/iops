@@ -49,11 +49,13 @@ def _count_completed_repetitions(exec_path: Path) -> Tuple[int, int, Set[int]]:
     completed_indices: Set[int] = set()
 
     for rep_dir in rep_dirs:
-        # Extract repetition index from folder name (e.g., "repetition_001" -> 0)
+        # Extract repetition number from folder name (e.g., "repetition_001" -> 1).
+        # Repetitions are 1-based everywhere (folder names, results files), so
+        # keep the folder number as-is to match execution.repetition values.
         try:
-            rep_idx = int(rep_dir.name.split("_")[1]) - 1
+            rep_idx = int(rep_dir.name.split("_")[1])
         except (IndexError, ValueError):
-            rep_idx = 0
+            rep_idx = None
 
         status_file = rep_dir / STATUS_FILENAME
         if status_file.exists():
@@ -63,7 +65,8 @@ def _count_completed_repetitions(exec_path: Path) -> Tuple[int, int, Set[int]]:
                     status = status_data.get("status", "UNKNOWN")
                     if status in ("SUCCEEDED", "FAILED"):
                         completed_count += 1
-                        completed_indices.add(rep_idx)
+                        if rep_idx is not None:
+                            completed_indices.add(rep_idx)
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -243,15 +246,23 @@ def _filter_dataframe(
     if exec_col not in df.columns:
         return df
 
-    # Filter by execution_id
-    df = df[df[exec_col].astype(int).isin(execution_ids)]
+    # Filter by execution_id. Ids may be stored as non-numeric strings
+    # (e.g. "exec_0001"), so extract the numeric part instead of crashing
+    # on astype(int).
+    exec_num = pd.to_numeric(
+        df[exec_col].astype(str).str.extract(r"(\d+)", expand=False),
+        errors="coerce",
+    )
+    df = df[exec_num.isin(execution_ids)]
+    exec_num = exec_num.loc[df.index]
 
-    # Filter by repetition if map provided
+    # Filter by repetition if map provided (both 1-based)
     if completed_reps_map is not None and rep_col in df.columns:
-        mask = df.apply(
-            lambda row: int(row[rep_col]) in completed_reps_map.get(int(row[exec_col]), set()),
-            axis=1
-        )
+        rep_num = pd.to_numeric(df[rep_col], errors="coerce")
+        mask = [
+            pd.notna(e) and pd.notna(r) and int(r) in completed_reps_map.get(int(e), set())
+            for e, r in zip(exec_num, rep_num)
+        ]
         df = df[mask]
 
     return df
