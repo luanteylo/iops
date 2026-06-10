@@ -5,7 +5,7 @@
 */ -}}
 {{ $current := . }}
 <nav class="docs-sidebar" aria-label="Documentation">
-  {{ range $sec := slice "getting-started" "user-guide" "developer-guide" "about" }}
+  {{ range $sec := slice "getting-started" "user-guide" "developer-guide" }}
     {{ with $.Site.GetPage (printf "/%s" $sec) }}
       <details class="docs-nav-section"{{ if eq $current.Section $sec }} open{{ end }}>
         <summary class="docs-section-title">{{ .Title }}</summary>

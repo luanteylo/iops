@@ -1,5 +1,5 @@
 {{ define "main" }}
-  {{ $docsSections := slice "getting-started" "user-guide" "developer-guide" "about" }}
+  {{ $docsSections := slice "getting-started" "user-guide" "developer-guide" }}
   {{ if in $docsSections .Section }}
   <div class="container-fluid docs-container" role="main">
     <div class="row">
