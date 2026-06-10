@@ -53,38 +53,75 @@ details > *:not(summary) {
 }
 
 /* Documentation sidebar layout */
+.docs-container {
+  padding-left: 0;
+}
+.docs-sidebar-col {
+  padding-left: 0;
+  padding-right: 0;
+}
 .docs-sidebar {
   position: sticky;
   top: 70px;
-  max-height: calc(100vh - 90px);
+  max-height: calc(100vh - 80px);
   overflow-y: auto;
-  padding: 10px 10px 30px 0;
+  padding: 14px 8px 30px 12px;
   font-size: 14px;
+  background: #fafbfc;
+  border-right: 1px solid #eee;
+  min-height: calc(100vh - 80px);
 }
-.docs-sidebar .docs-section-title {
+/* Collapsible sections: undo the generic content <details> styling */
+.docs-sidebar details.docs-nav-section,
+.docs-sidebar details.docs-nav-section[open] {
+  border: none;
+  background: none;
+  border-radius: 0;
+  margin: 2px 0;
+}
+.docs-sidebar details.docs-nav-section > *:not(summary) {
+  padding: 0;
+}
+.docs-sidebar summary.docs-section-title {
   display: block;
   font-weight: 700;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #2c3e50;
-  margin: 16px 0 4px;
-  text-decoration: none;
+  background: none;
+  padding: 6px 4px 6px 1.2em;
+  margin: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  list-style: none;
+  position: relative;
 }
-.docs-sidebar .docs-section-title:hover,
-.docs-sidebar .docs-section-title.active {
+.docs-sidebar summary.docs-section-title::before {
+  content: "\25B6";
+  position: absolute;
+  left: 0.2em;
+  top: 0.85em;
+  font-size: 0.7em;
+  transition: transform 0.2s;
+}
+.docs-sidebar details[open] > summary.docs-section-title::before {
+  transform: rotate(90deg);
+}
+.docs-sidebar summary.docs-section-title:hover {
   color: #0085a1;
+  background: #f0f4f8;
 }
 .docs-sidebar ul {
   list-style: none;
-  padding-left: 0;
-  margin: 0;
+  padding-left: 12px;
+  margin: 2px 0 6px;
 }
 .docs-sidebar li a {
   display: block;
-  padding: 3px 10px;
+  padding: 3px 8px;
   color: #555;
-  border-left: 2px solid #e8e8e8;
+  border-left: 2px solid #e3e3e3;
   text-decoration: none;
   line-height: 1.45;
 }
@@ -96,23 +133,29 @@ details > *:not(summary) {
   color: #0085a1;
   font-weight: 600;
   border-left-color: #0085a1;
-  background: #f5fafb;
+  background: #eef6f8;
 }
 .docs-content {
-  border-left: 1px solid #eee;
-  padding-left: 30px;
+  padding-left: 35px;
+  padding-right: 30px;
   min-height: 70vh;
+}
+.docs-content > article,
+.docs-content > div {
+  max-width: 980px;
 }
 @media (max-width: 991px) {
   .docs-sidebar {
     position: static;
     max-height: none;
+    min-height: 0;
+    border-right: none;
     border-bottom: 1px solid #eee;
     margin-bottom: 20px;
   }
   .docs-content {
-    border-left: none;
     padding-left: 15px;
+    padding-right: 15px;
   }
 }
 </style>

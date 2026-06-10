@@ -1,17 +1,21 @@
 {{- /*
   Left navigation for documentation pages.
-  Lists every docs section with its pages; highlights the current page.
+  Each section is collapsible; only the section containing the current
+  page starts expanded. The section landing page is the first entry.
 */ -}}
 {{ $current := . }}
 <nav class="docs-sidebar" aria-label="Documentation">
   {{ range $sec := slice "getting-started" "user-guide" "developer-guide" "about" }}
     {{ with $.Site.GetPage (printf "/%s" $sec) }}
-      <a class="docs-section-title{{ if eq $current . }} active{{ end }}" href="{{ .RelPermalink }}">{{ .Title }}</a>
-      <ul>
-        {{ range .RegularPages }}
-          <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
-        {{ end }}
-      </ul>
+      <details class="docs-nav-section"{{ if eq $current.Section $sec }} open{{ end }}>
+        <summary class="docs-section-title">{{ .Title }}</summary>
+        <ul>
+          <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">Overview</a></li>
+          {{ range .RegularPages }}
+            <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
+          {{ end }}
+        </ul>
+      </details>
     {{ end }}
   {{ end }}
 </nav>
