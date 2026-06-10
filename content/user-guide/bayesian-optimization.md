@@ -242,6 +242,20 @@ INFO: Requested n_iterations=50 >= total_space=32. Using full exhaustive search
 
 When `fallback_to_exhaustive: false`, IOPS clamps `n_iterations` to the space size and runs the optimizer normally.
 
+## Thread usage on the orchestrator node
+
+The Bayesian planner fits a surrogate model (Gaussian Process or tree ensemble) on every iteration. That fit calls into numpy/BLAS, which by default starts one compute thread per core. On a many-core machine, and especially on a shared login node, a single `iops` process then shows dozens of threads (visible as green rows in `htop`). The fits are tiny and gain nothing from those threads, so IOPS caps them to a single thread for the duration of the surrogate math.
+
+This is purely a threading change: the suggested configurations are identical regardless of the cap. To raise or disable it, set `IOPS_BLAS_THREADS` before launching:
+
+```bash
+export IOPS_BLAS_THREADS=4   # allow up to 4 BLAS threads for the fit
+export IOPS_BLAS_THREADS=0   # disable the cap (use the library default)
+iops run config.yaml --use-cache
+```
+
+Note that this only affects the orchestrator process where `iops` runs. The benchmark itself (ior, mdtest, your MPI program) runs on the compute nodes via the executor and is unaffected.
+
 ## Configuration Reference
 
 All fields below go under `benchmark.bayesian_config`:

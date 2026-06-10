@@ -27,6 +27,8 @@ import shlex
 import sys
 import warnings
 import copy
+import contextlib
+import functools
 
 # Try to import rich for progress bars
 try:
@@ -34,6 +36,41 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+
+def _blas_thread_limit():
+    """
+    Context manager that caps BLAS/OpenMP threads for the Bayesian GP math.
+
+    scikit-optimize fits a Gaussian Process surrogate by calling into
+    numpy/BLAS, which defaults to one thread per core. On a many-core (and
+    often shared login) node that spawns dozens of threads of pure overhead:
+    the GP fits are tiny, gain nothing from the extra threads, and the
+    suggestions are identical regardless of thread count. The cap defaults to 1
+    and can be overridden with the IOPS_BLAS_THREADS environment variable (set
+    it to 0 to disable the cap). Falls back to a no-op when threadpoolctl (a
+    scikit-learn dependency) is unavailable.
+    """
+    try:
+        n = int(os.environ.get("IOPS_BLAS_THREADS", "1"))
+    except (TypeError, ValueError):
+        n = 1
+    if n <= 0:
+        return contextlib.nullcontext()
+    try:
+        from threadpoolctl import threadpool_limits
+        return threadpool_limits(limits=n)
+    except Exception:
+        return contextlib.nullcontext()
+
+
+def _limit_blas_threads(func):
+    """Decorator: run ``func`` with BLAS/OpenMP threads capped (see _blas_thread_limit)."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _blas_thread_limit():
+            return func(*args, **kwargs)
+    return wrapper
 
 
 # ============================================================================ #
@@ -2124,15 +2161,17 @@ class BayesianPlanner(BasePlanner, HasLogger):
         elif self.acquisition_func == 'LCB':
             acq_func_kwargs['kappa'] = self.kappa
 
-        # Initialize Bayesian optimizer with Random Forest (better for categorical/mixed spaces)
-        self.optimizer = Optimizer(
-            dimensions=self.search_space,
-            base_estimator=self.base_estimator,
-            n_initial_points=self.n_initial_points,
-            acq_func=self.acquisition_func,
-            acq_func_kwargs=acq_func_kwargs,
-            random_state=self.cfg.benchmark.random_seed,
-        )
+        # Initialize Bayesian optimizer with Random Forest (better for categorical/mixed spaces).
+        # Cap BLAS threads so the surrogate fit does not spawn one thread per core.
+        with _blas_thread_limit():
+            self.optimizer = Optimizer(
+                dimensions=self.search_space,
+                base_estimator=self.base_estimator,
+                n_initial_points=self.n_initial_points,
+                acq_func=self.acquisition_func,
+                acq_func_kwargs=acq_func_kwargs,
+                random_state=self.cfg.benchmark.random_seed,
+            )
 
         # Execution tracking
         self.iteration = 0
@@ -2587,6 +2626,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
     def max_parallel(self) -> int:
         return 1
 
+    @_limit_blas_threads
     def next_test(self) -> Optional[ExecutionInstance]:
         """
         Return the next test to execute.
@@ -2889,6 +2929,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         return test
 
+    @_limit_blas_threads
     def record_completed_test(self, test: ExecutionInstance) -> None:
         """
         Record a completed test and update the Bayesian model.
