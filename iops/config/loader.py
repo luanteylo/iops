@@ -11,7 +11,8 @@ import re
 import yaml
 import os
 
-from jinja2 import Environment, TemplateSyntaxError
+from jinja2 import Environment, StrictUndefined, TemplateSyntaxError
+from jinja2.exceptions import UndefinedError
 
 # Optional pyarrow for parquet support
 try:
@@ -138,11 +139,41 @@ def _expand_path(p: str) -> Path:
     return Path(os.path.expandvars(p)).expanduser().resolve()
 
 
+def _type_label(value: Any) -> str:
+    """Human-friendly type name for error messages ('null' for None)."""
+    return "null" if value is None else type(value).__name__
+
+
+def _ensure_mapping(value: Any, field: str) -> None:
+    """Raise ConfigValidationError if value is not a dict (mapping)."""
+    if not isinstance(value, dict):
+        raise ConfigValidationError(
+            f"{field} must be a mapping (got {_type_label(value)})"
+        )
+
+
+def _ensure_list(value: Any, field: str) -> None:
+    """Raise ConfigValidationError if value is not a list."""
+    if not isinstance(value, list):
+        raise ConfigValidationError(
+            f"{field} must be a list (got {_type_label(value)})"
+        )
+
+
 def _render_cache_file_path(raw_path: str, benchmark_name: str, workdir: Path) -> Path:
     """Render cache_file path with Jinja2 templating, then expand to absolute path.
 
     Available template context: os_env, workdir, benchmark.name.
+
+    Plain paths (no Jinja2 markers) are used as-is. Templated paths are
+    rendered in strict mode so typos like '{{ benchmark.nam }}' fail loudly
+    instead of silently rendering to an empty string.
     """
+    # Plain path without templates: skip rendering so paths containing
+    # literal braces (e.g. shell ${VAR}) keep working.
+    if "{{" not in raw_path and "{%" not in raw_path:
+        return _expand_path(raw_path)
+
     context = {
         "os_env": dict(os.environ),
         "workdir": str(workdir),
@@ -150,9 +181,21 @@ def _render_cache_file_path(raw_path: str, benchmark_name: str, workdir: Path) -
     }
     try:
         rendered = _jinja_env.from_string(raw_path).render(**context)
-    except Exception:
-        # If rendering fails, fall back to raw path (plain string without templates)
-        rendered = raw_path
+    except TemplateSyntaxError as e:
+        raise ConfigValidationError(
+            f"benchmark.cache_file has invalid Jinja2 syntax: {e.message} "
+            f"(value: {raw_path!r})"
+        )
+    except UndefinedError as e:
+        raise ConfigValidationError(
+            f"benchmark.cache_file references an undefined template variable: {e.message} "
+            f"(value: {raw_path!r}). "
+            f"Available context: os_env, workdir, benchmark.name"
+        )
+    if not rendered.strip():
+        raise ConfigValidationError(
+            f"benchmark.cache_file rendered to an empty string (value: {raw_path!r})"
+        )
     return _expand_path(rendered)
 
 
@@ -233,6 +276,7 @@ _jinja_env = Environment(
     autoescape=False,
     trim_blocks=True,
     lstrip_blocks=True,
+    undefined=StrictUndefined,
 )
 
 
@@ -400,6 +444,12 @@ def _looks_like_file_path(content: str) -> bool:
 
     content = content.strip()
 
+    # Jinja2 template markers mean inline content. Templated paths cannot be
+    # resolved at load time (templates render later, per execution), so a
+    # one-liner like "bash {{ workdir }}/run.sh" must be treated as inline.
+    if "{{" in content or "{%" in content:
+        return False
+
     # Common script file extensions
     script_extensions = (".sh", ".py", ".bash", ".pl", ".rb", ".zsh", ".fish")
     if content.endswith(script_extensions):
@@ -409,10 +459,6 @@ def _looks_like_file_path(content: str) -> bool:
     path_prefixes = ("./", "../", "/", "~/")
     if content.startswith(path_prefixes):
         return True
-
-    # If it has many Jinja2 braces, it's likely inline content
-    if content.count("{") >= 3:
-        return False
 
     # Single word without spaces and special chars could be a filename
     # but we'll be conservative and only flag obvious paths
@@ -795,6 +841,13 @@ def _apply_machine_override(data: Dict[str, Any], machine_name: str) -> Dict[str
             for k in _var_type_keys:
                 if k not in override_type_keys and k in merged_var:
                     merged_var.pop(k)
+            # 'when' and 'default' are only valid together with 'sweep'.
+            # When the override replaces sweep with expr or adaptive, clear
+            # any inherited when/default that the override did not set.
+            if "sweep" not in override_type_keys:
+                for k in ("when", "default"):
+                    if k not in override_var and k in merged_var:
+                        merged_var.pop(k)
 
     return merged
 
@@ -899,6 +952,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     """
     # ---- benchmark ----
     b = data["benchmark"]
+    _ensure_mapping(b, "benchmark")
 
     # Validate benchmark keys
     key_errors = _validate_allowed_keys(b, ALLOWED_BENCHMARK_KEYS, "benchmark")
@@ -958,9 +1012,19 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             raise ConfigValidationError("\n".join(key_errors))
 
         percentage = rc.get("percentage")
-        # Clamp percentage > 1.0 to 1.0
-        if percentage is not None and percentage > 1.0:
-            percentage = 1.0
+        if percentage is not None:
+            if isinstance(percentage, bool) or not isinstance(percentage, (int, float)):
+                raise ConfigValidationError(
+                    f"benchmark.random_config.percentage must be a number between 0 and 1 "
+                    f"(got {_type_label(percentage)}: {percentage!r}). "
+                    f"Remove the quotes if the value is quoted in YAML."
+                )
+            if percentage > 1.0:
+                raise ConfigValidationError(
+                    f"benchmark.random_config.percentage must be a fraction between 0 and 1 "
+                    f"(got {percentage}). For example, use 0.5 to sample 50% of the parameter "
+                    f"space, or use 'n_samples' to specify an absolute number of samples."
+                )
         random_config = RandomSamplingConfig(
             n_samples=rc.get("n_samples"),
             percentage=percentage,
@@ -1060,12 +1124,28 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
     workdir = _expand_path(b["workdir"])
 
+    # cache_file: null is treated as "not set"; empty or non-string values are rejected
+    cache_file = None
+    cache_file_raw = b.get("cache_file")
+    if cache_file_raw is not None:
+        if not isinstance(cache_file_raw, str):
+            raise ConfigValidationError(
+                f"benchmark.cache_file must be a path string "
+                f"(got {_type_label(cache_file_raw)}: {cache_file_raw!r})"
+            )
+        if not cache_file_raw.strip():
+            raise ConfigValidationError(
+                "benchmark.cache_file must not be an empty string. "
+                "Remove the field to disable caching or provide a file path."
+            )
+        cache_file = _render_cache_file_path(cache_file_raw, b["name"], workdir)
+
     benchmark = BenchmarkConfig(
         name=b["name"],
         description=b.get("description"),
         workdir=workdir,
         repetitions=b.get("repetitions", 1),
-        cache_file=_render_cache_file_path(b["cache_file"], b["name"], workdir) if "cache_file" in b else None,
+        cache_file=cache_file,
         search_method=search_method,
         executor=b.get("executor", "slurm"),
         slurm_options=slurm_options,
@@ -1089,10 +1169,19 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     )
 
     # ---- vars ----
+    vars_data = data.get("vars")
+    if vars_data is None:
+        # 'vars:' with empty body; validate_generic_config reports the
+        # "at least one variable" error with full context
+        vars_data = {}
+    _ensure_mapping(vars_data, "vars")
+
     vars_cfg: Dict[str, VarConfig] = {}
-    for name, cfg in data.get("vars", {}).items():
+    for name, cfg in vars_data.items():
         if not isinstance(cfg, dict):
-            continue
+            raise ConfigValidationError(
+                f"vars.{name} must be a mapping (got {_type_label(cfg)})"
+            )
 
         # Validate var keys
         key_errors = _validate_allowed_keys(cfg, ALLOWED_VAR_KEYS, f"vars.{name}")
@@ -1102,11 +1191,12 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         sweep_cfg = None
         if "sweep" in cfg:
             s = cfg["sweep"]
-            if isinstance(s, dict):
-                # Validate sweep keys
-                key_errors = _validate_allowed_keys(s, ALLOWED_SWEEP_KEYS, f"vars.{name}.sweep")
-                if key_errors:
-                    raise ConfigValidationError("\n".join(key_errors))
+            _ensure_mapping(s, f"vars.{name}.sweep")
+
+            # Validate sweep keys
+            key_errors = _validate_allowed_keys(s, ALLOWED_SWEEP_KEYS, f"vars.{name}.sweep")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
 
             # Normalize scalar values to a list (user-friendly: values: 2 -> values: [2])
             values = s.get("values")
@@ -1122,11 +1212,12 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         adaptive_cfg = None
         if "adaptive" in cfg:
             s = cfg["adaptive"]
-            if isinstance(s, dict):
-                # Validate adaptive keys
-                key_errors = _validate_allowed_keys(s, ALLOWED_ADAPTIVE_KEYS, f"vars.{name}.adaptive")
-                if key_errors:
-                    raise ConfigValidationError("\n".join(key_errors))
+            _ensure_mapping(s, f"vars.{name}.adaptive")
+
+            # Validate adaptive keys
+            key_errors = _validate_allowed_keys(s, ALLOWED_ADAPTIVE_KEYS, f"vars.{name}.adaptive")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
 
             adaptive_cfg = AdaptiveConfig(
                 initial=s.get("initial"),
@@ -1148,6 +1239,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
     # ---- command ----
     c = data["command"]
+    _ensure_mapping(c, "command")
 
     # Validate command keys
     key_errors = _validate_allowed_keys(c, ALLOWED_COMMAND_KEYS, "command")
@@ -1161,9 +1253,24 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     )
 
     # ---- scripts ----
+    scripts_data = data.get("scripts")
+    if scripts_data is None:
+        scripts_data = []
+    _ensure_list(scripts_data, "scripts")
+
     scripts: List[ScriptConfig] = []
-    for idx, s in enumerate(data.get("scripts", [])):
-        script_name = s.get("name", f"script_{idx}")
+    for idx, s in enumerate(scripts_data):
+        if not isinstance(s, dict):
+            raise ConfigValidationError(
+                f"scripts[{idx}] must be a mapping (got {_type_label(s)})"
+            )
+
+        script_name = s.get("name")
+        if not isinstance(script_name, str) or not script_name.strip():
+            raise ConfigValidationError(
+                f"scripts[{idx}].name is required and must be a non-empty string "
+                f"(got {_type_label(script_name)})"
+            )
 
         # Validate script keys
         key_errors = _validate_allowed_keys(s, ALLOWED_SCRIPT_KEYS, f"scripts[{idx}] ({script_name})")
@@ -1187,11 +1294,12 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         post_block = s.get("post")
         post_cfg = None
         if post_block is not None:
-            if isinstance(post_block, dict):
-                # Validate post keys
-                key_errors = _validate_allowed_keys(post_block, ALLOWED_POST_KEYS, f"scripts[{idx}].post")
-                if key_errors:
-                    raise ConfigValidationError("\n".join(key_errors))
+            _ensure_mapping(post_block, f"scripts[{idx}].post")
+
+            # Validate post keys
+            key_errors = _validate_allowed_keys(post_block, ALLOWED_POST_KEYS, f"scripts[{idx}].post")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
 
             # YAML: post: { script: "..." }  OR post: \n  script: |
             post_script = post_block.get("script")
@@ -1205,25 +1313,31 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         parser_block = s.get("parser")
         parser_cfg = None
         if parser_block is not None:
-            if isinstance(parser_block, dict):
-                # Validate parser keys
-                key_errors = _validate_allowed_keys(parser_block, ALLOWED_PARSER_KEYS, f"scripts[{idx}].parser")
+            _ensure_mapping(parser_block, f"scripts[{idx}].parser")
+
+            # Validate parser keys
+            key_errors = _validate_allowed_keys(parser_block, ALLOWED_PARSER_KEYS, f"scripts[{idx}].parser")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
+
+            metrics_data = parser_block.get("metrics")
+            if metrics_data is None:
+                metrics_data = []
+            _ensure_list(metrics_data, f"scripts[{idx}].parser.metrics")
+
+            # Validate metric keys
+            for m_idx, m in enumerate(metrics_data):
+                _ensure_mapping(m, f"scripts[{idx}].parser.metrics[{m_idx}]")
+                key_errors = _validate_allowed_keys(m, ALLOWED_METRIC_KEYS, f"scripts[{idx}].parser.metrics[{m_idx}]")
                 if key_errors:
                     raise ConfigValidationError("\n".join(key_errors))
-
-                # Validate metric keys
-                for m_idx, m in enumerate(parser_block.get("metrics", [])):
-                    if isinstance(m, dict):
-                        key_errors = _validate_allowed_keys(m, ALLOWED_METRIC_KEYS, f"scripts[{idx}].parser.metrics[{m_idx}]")
-                        if key_errors:
-                            raise ConfigValidationError("\n".join(key_errors))
 
             metrics_cfg = [
                 MetricConfig(
                     name=m["name"],
                     path=m.get("path"),
                 )
-                for m in parser_block.get("metrics", [])
+                for m in metrics_data
             ]
             # Load parser_script (inline or from file)
             parser_script = parser_block.get("parser_script")
@@ -1300,7 +1414,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
         scripts.append(
             ScriptConfig(
-                name=s["name"],
+                name=script_name,
                 script_template=script_template,
                 post=post_cfg,
                 parser=parser_cfg,
@@ -1310,6 +1424,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
 
     # ---- output ----
     output_data = data["output"]
+    _ensure_mapping(output_data, "output")
 
     # Validate output keys
     key_errors = _validate_allowed_keys(output_data, ALLOWED_OUTPUT_KEYS, "output")
@@ -1317,6 +1432,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         raise ConfigValidationError("\n".join(key_errors))
 
     out = output_data["sink"]
+    _ensure_mapping(out, "output.sink")
 
     # Handle deprecated output.sink.mode field
     if "mode" in out and out["mode"] is not None:
@@ -1333,6 +1449,17 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     key_errors = _validate_allowed_keys(out, ALLOWED_OUTPUT_SINK_KEYS, "output.sink")
     if key_errors:
         raise ConfigValidationError("\n".join(key_errors))
+
+    # output.sink.include is accepted for backwards compatibility but never
+    # implemented; warn so users do not silently rely on it
+    if "include" in out and out["include"] is not None:
+        import warnings
+        warnings.warn(
+            "output.sink.include is not supported and will be ignored. "
+            "All fields are written by default; use output.sink.exclude to remove fields.",
+            UserWarning,
+            stacklevel=4
+        )
 
     output_type = out["type"]
 
@@ -1354,11 +1481,17 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     )
 
     # Parse constraints (optional section)
-    constraints_data = data.get("constraints", [])
+    constraints_data = data.get("constraints")
+    if constraints_data is None:
+        constraints_data = []
+    _ensure_list(constraints_data, "constraints")
+
     constraints = []
     for idx, c_data in enumerate(constraints_data):
         if not isinstance(c_data, dict):
-            raise ConfigValidationError(f"constraints[{idx}] must be a dictionary")
+            raise ConfigValidationError(
+                f"constraints[{idx}] must be a mapping (got {_type_label(c_data)})"
+            )
 
         # Validate constraint keys
         key_errors = _validate_allowed_keys(c_data, ALLOWED_CONSTRAINT_KEYS, f"constraints[{idx}]")
@@ -1423,6 +1556,12 @@ def load_generic_config(
     has_machines = "machines" in data and isinstance(data.get("machines"), dict) and data["machines"]
 
     if machine_name:
+        if not has_machines:
+            # Same friendly error as _apply_machine_override (covers missing
+            # and null/empty machines sections)
+            raise ConfigValidationError(
+                f"--machine '{machine_name}' was specified but no 'machines' section found in config"
+            )
         available = sorted(data["machines"].keys())
         logger.info(f"Machine profile: '{machine_name}' (available: {', '.join(available)})")
         data = _apply_machine_override(data, machine_name)
@@ -1537,6 +1676,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     Raises:
         ConfigValidationError: If configuration is invalid
     """
+    _ensure_mapping(data, "reporting")
+
     # Validate top-level reporting keys
     key_errors = _validate_allowed_keys(data, ALLOWED_REPORTING_KEYS, "reporting")
     if key_errors:
@@ -1546,10 +1687,10 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     theme_cfg = ReportThemeConfig()
     if "theme" in data and data["theme"] is not None:
         theme_data = data["theme"]
-        if isinstance(theme_data, dict):
-            key_errors = _validate_allowed_keys(theme_data, ALLOWED_THEME_KEYS, "reporting.theme")
-            if key_errors:
-                raise ConfigValidationError("\n".join(key_errors))
+        _ensure_mapping(theme_data, "reporting.theme")
+        key_errors = _validate_allowed_keys(theme_data, ALLOWED_THEME_KEYS, "reporting.theme")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
         theme_cfg = ReportThemeConfig(
             style=theme_data.get("style", "plotly_white"),
             colors=theme_data.get("colors"),
@@ -1560,10 +1701,10 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     sections_cfg = SectionConfig()
     if "sections" in data and data["sections"] is not None:
         sections_data = data["sections"]
-        if isinstance(sections_data, dict):
-            key_errors = _validate_allowed_keys(sections_data, ALLOWED_SECTIONS_KEYS, "reporting.sections")
-            if key_errors:
-                raise ConfigValidationError("\n".join(key_errors))
+        _ensure_mapping(sections_data, "reporting.sections")
+        key_errors = _validate_allowed_keys(sections_data, ALLOWED_SECTIONS_KEYS, "reporting.sections")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
         sections_cfg = SectionConfig(
             test_summary=sections_data.get("test_summary", True),
             best_results=sections_data.get("best_results", True),
@@ -1581,10 +1722,10 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     best_results_cfg = BestResultsConfig()
     if "best_results" in data and data["best_results"] is not None:
         br_data = data["best_results"]
-        if isinstance(br_data, dict):
-            key_errors = _validate_allowed_keys(br_data, ALLOWED_BEST_RESULTS_KEYS, "reporting.best_results")
-            if key_errors:
-                raise ConfigValidationError("\n".join(key_errors))
+        _ensure_mapping(br_data, "reporting.best_results")
+        key_errors = _validate_allowed_keys(br_data, ALLOWED_BEST_RESULTS_KEYS, "reporting.best_results")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
         best_results_cfg = BestResultsConfig(
             top_n=br_data.get("top_n", 5),
             show_command=br_data.get("show_command", True),
@@ -1595,10 +1736,10 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     plot_defaults_cfg = PlotDefaultsConfig()
     if "plot_defaults" in data and data["plot_defaults"] is not None:
         pd_data = data["plot_defaults"]
-        if isinstance(pd_data, dict):
-            key_errors = _validate_allowed_keys(pd_data, ALLOWED_PLOT_DEFAULTS_KEYS, "reporting.plot_defaults")
-            if key_errors:
-                raise ConfigValidationError("\n".join(key_errors))
+        _ensure_mapping(pd_data, "reporting.plot_defaults")
+        key_errors = _validate_allowed_keys(pd_data, ALLOWED_PLOT_DEFAULTS_KEYS, "reporting.plot_defaults")
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
         plot_defaults_cfg = PlotDefaultsConfig(
             height=pd_data.get("height", 500),
             width=pd_data.get("width"),
@@ -1608,18 +1749,23 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     # Parse per-metric plots (optional)
     metrics_cfg: Dict[str, MetricPlotsConfig] = {}
     if "metrics" in data and data["metrics"] is not None:
+        _ensure_mapping(data["metrics"], "reporting.metrics")
         for metric_name, metric_data in data["metrics"].items():
-            if metric_data is None or "plots" not in metric_data:
+            if metric_data is None:
                 continue
+            _ensure_mapping(metric_data, f"reporting.metrics.{metric_name}")
+            if "plots" not in metric_data or metric_data["plots"] is None:
+                continue
+            _ensure_list(metric_data["plots"], f"reporting.metrics.{metric_name}.plots")
 
             plots = []
             for plot_idx, plot_data in enumerate(metric_data["plots"]):
-                if isinstance(plot_data, dict):
-                    key_errors = _validate_allowed_keys(
-                        plot_data, ALLOWED_PLOT_KEYS, f"reporting.metrics.{metric_name}.plots[{plot_idx}]"
-                    )
-                    if key_errors:
-                        raise ConfigValidationError("\n".join(key_errors))
+                _ensure_mapping(plot_data, f"reporting.metrics.{metric_name}.plots[{plot_idx}]")
+                key_errors = _validate_allowed_keys(
+                    plot_data, ALLOWED_PLOT_KEYS, f"reporting.metrics.{metric_name}.plots[{plot_idx}]"
+                )
+                if key_errors:
+                    raise ConfigValidationError("\n".join(key_errors))
                 plot_cfg = PlotConfig(
                     type=plot_data["type"],
                     x_var=plot_data.get("x_var"),
@@ -1653,13 +1799,14 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     # Parse default_plots (optional)
     default_plots = []
     if "default_plots" in data and data["default_plots"] is not None:
+        _ensure_list(data["default_plots"], "reporting.default_plots")
         for plot_idx, plot_data in enumerate(data["default_plots"]):
-            if isinstance(plot_data, dict):
-                key_errors = _validate_allowed_keys(
-                    plot_data, ALLOWED_PLOT_KEYS, f"reporting.default_plots[{plot_idx}]"
-                )
-                if key_errors:
-                    raise ConfigValidationError("\n".join(key_errors))
+            _ensure_mapping(plot_data, f"reporting.default_plots[{plot_idx}]")
+            key_errors = _validate_allowed_keys(
+                plot_data, ALLOWED_PLOT_KEYS, f"reporting.default_plots[{plot_idx}]"
+            )
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
             plot_cfg = PlotConfig(
                 type=plot_data["type"],
                 x_var=plot_data.get("x_var"),
@@ -1869,12 +2016,13 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     Raises ConfigValidationError if any validation check fails.
     """
     # ---- benchmark ----
-    if not cfg.benchmark.workdir.exists():
+    # A missing workdir is fine: create_workdir() creates it with
+    # mkdir(parents=True) on first run. Only reject paths that exist
+    # but are not directories (e.g. a regular file).
+    if cfg.benchmark.workdir.exists() and not cfg.benchmark.workdir.is_dir():
         raise ConfigValidationError(
-            f"benchmark.workdir does not exist: {cfg.benchmark.workdir}"
+            f"benchmark.workdir exists but is not a directory: {cfg.benchmark.workdir}"
         )
-    if not cfg.benchmark.workdir.is_dir():
-        raise ConfigValidationError("benchmark.workdir must be a directory")
     if cfg.benchmark.repetitions is not None and cfg.benchmark.repetitions < 1:
         raise ConfigValidationError("benchmark.repetitions must be >= 1")
     if cfg.benchmark.parallel < 1:
@@ -1936,6 +2084,15 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                     "allocation.mode='single' is incompatible with search_method='bayesian'. "
                     "Single-allocation mode pre-generates all tests upfront, which prevents Bayesian optimization "
                     "from adapting based on results. Use mode='per-test' for Bayesian optimization."
+                )
+
+            # Single-allocation mode is incompatible with adaptive probing
+            # (each step depends on the previous result, no feedback loop)
+            if cfg.benchmark.search_method == "adaptive":
+                raise ConfigValidationError(
+                    "allocation.mode='single' is incompatible with search_method='adaptive'. "
+                    "Single-allocation mode pre-generates all tests upfront, which prevents adaptive probing "
+                    "from stepping based on previous results. Use mode='per-test' for adaptive search."
                 )
 
     # sampling_interval validation (probes config)
@@ -2251,28 +2408,30 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             )
 
     # ---- command ----
-    if not cfg.command.template.strip():
-        raise ConfigValidationError("command.template must not be empty")
-
-    # Validate Jinja2 syntax in command.template
+    # Validate Jinja2 syntax first: it produces a curated message for
+    # non-string values, which .strip() would crash on
     ok, err = _validate_jinja_template(cfg.command.template, "command.template")
     if not ok:
         raise ConfigValidationError(err)
+
+    if cfg.command.template is None or not str(cfg.command.template).strip():
+        raise ConfigValidationError("command.template must not be empty")
 
     # ---- scripts ----
     if not cfg.scripts:
         raise ConfigValidationError("At least one script must be defined in 'scripts'")
 
     for s in cfg.scripts:
-        if not s.script_template.strip():
-            raise ConfigValidationError(
-                f"script '{s.name}' must have a non-empty script_template"
-            )
-
-        # Validate Jinja2 syntax in script_template
+        # Validate Jinja2 syntax first: it produces a curated message for
+        # non-string values, which .strip() would crash on
         ok, err = _validate_jinja_template(s.script_template, f"scripts['{s.name}'].script_template")
         if not ok:
             raise ConfigValidationError(err)
+
+        if s.script_template is None or not str(s.script_template).strip():
+            raise ConfigValidationError(
+                f"script '{s.name}' must have a non-empty script_template"
+            )
 
         # post is OPTIONAL – only validate if present
         if s.post is not None:
