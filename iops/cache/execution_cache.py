@@ -194,6 +194,7 @@ class ExecutionCache(HasLogger):
 
         last_error = None
         for attempt in range(MAX_RETRIES):
+            conn = None
             try:
                 if self._nfs_mode:
                     # NFS-compatible mode: disable Python's transaction handling
@@ -211,6 +212,14 @@ class ExecutionCache(HasLogger):
                     conn.execute(f"PRAGMA busy_timeout = {self.timeout * 1000}")
                 return conn
             except sqlite3.OperationalError as e:
+                # The PRAGMA statements can fail after connect() succeeded
+                # (journal_mode requires a lock); close to avoid leaking a
+                # connection, and its file descriptor, per retry attempt
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
                 last_error = e
                 error_msg = str(e).lower()
                 # Retry on lock-related errors
@@ -335,6 +344,7 @@ class ExecutionCache(HasLogger):
                     SELECT metrics_json, metadata_json, created_at
                     FROM cached_executions
                     WHERE param_hash = ? AND repetition = ?
+                    ORDER BY created_at ASC
                 """, (param_hash, repetition))
 
                 rows = cursor.fetchall()
@@ -502,8 +512,11 @@ class ExecutionCache(HasLogger):
         try:
             cursor = conn.cursor()
 
+            # DISTINCT: caches rebuilt with iops cache rebuild have no
+            # UNIQUE(param_hash, repetition) constraint and may legitimately
+            # hold several rows per repetition; COUNT(*) would over-count.
             cursor.execute("""
-                SELECT COUNT(*) FROM cached_executions
+                SELECT COUNT(DISTINCT repetition) FROM cached_executions
                 WHERE param_hash = ?
             """, (param_hash,))
 

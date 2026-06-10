@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 import sqlite3
+from contextlib import closing
 import json
 import logging
 
@@ -129,7 +130,7 @@ def rebuild_cache(
     # Create output database (without UNIQUE constraint to allow all entries)
     output_db.parent.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(str(output_db)) as out_conn:
+    with closing(sqlite3.connect(str(output_db))) as out_conn, out_conn:
         out_conn.execute("""
             CREATE TABLE cached_executions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
