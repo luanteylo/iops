@@ -97,6 +97,13 @@ details > *:not(summary) {
   border-bottom: 1px solid #eee;
 }
 .docs-container {
+  /* The theme's body is a flex column and Bootstrap gives
+     container-fluid auto side margins; on a flex item those absorb the
+     free space and shrink-center the box. Force full width instead. */
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+  flex: 1 0 auto;
   padding-left: 0;
   padding-right: 0;
 }
