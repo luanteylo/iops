@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Dict, Any
 
 from iops.logger import HasLogger
+from iops.fileutils import atomic_write_json
 from iops.config.models import GenericBenchmarkConfig
 from iops.execution.matrix import ExecutionInstance
 from iops.execution.parser import parse_metrics_from_execution, ParserError
@@ -166,8 +167,7 @@ class BaseExecutor(ABC, HasLogger):
         }
 
         try:
-            with open(status_file, "w") as f:
-                json.dump(status_data, f, indent=2, default=str)
+            atomic_write_json(status_file, status_data, indent=2, default=str)
             self.logger.debug(f"  [{self._LOG_PREFIX}] Status update: {status}")
         except Exception as e:
             self.logger.debug(f"  [{self._LOG_PREFIX}] Failed to write status update: {e}")
@@ -334,6 +334,17 @@ class BaseExecutor(ABC, HasLogger):
     # Post-processing and output helpers
     # ------------------------------------------------------------------ #
 
+    def _read_file_tail(self, path: Path, max_bytes: int = 8192) -> str:
+        """Read at most the last max_bytes of a text file (for previews)."""
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - max_bytes))
+                return f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
     def _truncate_output(self, text: str, max_lines: int = 10) -> str:
         """Truncate output to first and last N/2 lines."""
         if not text:
@@ -482,27 +493,25 @@ class LocalExecutor(BaseExecutor):
             now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             test.metadata["__submission_time"] = now
             test.metadata["__job_start"] = now
-            result = subprocess.run(
-                cmd,
-                cwd=test.execution_dir,
-                capture_output=True,
-                text=True,
-            )
+            # Stream stdout/stderr directly to files instead of buffering in
+            # memory: verbose benchmarks could exhaust RAM, and an interrupt
+            # would lose all output captured so far.
+            with open(stdout_path, "w", encoding="utf-8", errors="replace") as out_f, \
+                 open(stderr_path, "w", encoding="utf-8", errors="replace") as err_f:
+                result = subprocess.run(
+                    cmd,
+                    cwd=test.execution_dir,
+                    stdout=out_f,
+                    stderr=err_f,
+                )
             test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-
-            # Always persist outputs
-            stdout_path.write_text(result.stdout or "", encoding="utf-8", errors="replace")
-            stderr_path.write_text(result.stderr or "", encoding="utf-8", errors="replace")
 
             test.metadata["__jobid"] = "local"
             test.metadata["__returncode"] = result.returncode
 
-            # Log completion
-            stdout_lines = len(result.stdout.splitlines()) if result.stdout else 0
-            stderr_lines = len(result.stderr.splitlines()) if result.stderr else 0
             self.logger.debug(
                 f"  [LocalExec] Completed: returncode={result.returncode} "
-                f"stdout={stdout_lines} lines, stderr={stderr_lines} lines"
+                f"(output streamed to {stdout_path.name}/{stderr_path.name})"
             )
 
             if result.returncode != 0:
@@ -513,9 +522,11 @@ class LocalExecutor(BaseExecutor):
                 )
                 self.logger.error(f"  [LocalExec] FAILED: {msg}")
 
-                # Show first/last lines of stderr for debugging
-                if result.stderr:
-                    stderr_preview = self._truncate_output(result.stderr, max_lines=10)
+                # Show the tail of stderr for debugging (avoid re-reading a
+                # potentially huge file into memory)
+                stderr_tail = self._read_file_tail(stderr_path)
+                if stderr_tail:
+                    stderr_preview = self._truncate_output(stderr_tail, max_lines=10)
                     self.logger.debug(f"  [LocalExec] stderr preview:\n{stderr_preview}")
 
                 test.metadata["__executor_status"] = self.STATUS_FAILED

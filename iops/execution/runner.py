@@ -5,11 +5,13 @@ from iops.execution.executors import BaseExecutor
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
+from iops.fileutils import atomic_write_json
 from iops.reporting.config_template import serialize_reporting_config, save_report_config_template
 
 from typing import Optional, List, Set, Dict, Any
 from pathlib import Path
-from jinja2 import Template
+from jinja2 import Template, StrictUndefined
+from jinja2.exceptions import UndefinedError
 from datetime import datetime
 import concurrent.futures
 import json
@@ -131,7 +133,7 @@ class IOPSRunner(HasLogger):
 
         # Prepare cores expression template (defaults to 1 if not specified)
         self.cores_expr = cfg.benchmark.cores_expr or "1"
-        self.cores_template = Template(self.cores_expr)
+        self.cores_template = Template(self.cores_expr, undefined=StrictUndefined)
 
         if self.max_core_hours is not None:
             self.logger.info(f"Budget: {self.max_core_hours} core-hours (cores expr: {self.cores_expr})")
@@ -749,8 +751,7 @@ class IOPSRunner(HasLogger):
                     "script": RESOURCE_SAMPLING_SCRIPT,
                 })
 
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
+            atomic_write_json(metadata_path, metadata, indent=2, default=self._json_serialize_helper)
 
             self.logger.debug("Registered resource metrics in run metadata")
 
@@ -791,9 +792,16 @@ class IOPSRunner(HasLogger):
         if self._thread_pool is not None:
             self._thread_pool.shutdown(wait=False, cancel_futures=True)
 
-        # Snapshot job IDs under lock to avoid races with executor threads
-        with self._jobs_lock:
+        # Snapshot job IDs. Do not block on the lock: this handler runs on
+        # the main thread and may have interrupted a frame that already holds
+        # it (register_slurm_job), which would deadlock. A set snapshot
+        # without the lock is safe under the GIL.
+        acquired = self._jobs_lock.acquire(blocking=False)
+        try:
             jobs_snapshot = list(self.submitted_job_ids)
+        finally:
+            if acquired:
+                self._jobs_lock.release()
 
         if not jobs_snapshot:
             self.logger.info("No SLURM jobs to cancel")
@@ -884,12 +892,23 @@ class IOPSRunner(HasLogger):
 
     def _compute_cores(self, test) -> int:
         """Compute the number of cores for a test using cores_expr."""
+        return self._compute_cores_from_vars(test.vars, test.execution_id)
+
+    def _compute_cores_from_vars(self, vars_dict, execution_id=None) -> int:
+        """Compute the number of cores from a vars dict using cores_expr."""
         try:
-            cores_str = self.cores_template.render(**test.vars)
-            cores = int(eval(cores_str))
+            cores_str = self.cores_template.render(**vars_dict)
+            cores = int(eval(cores_str, {"__builtins__": {}}, {}))
             return max(1, cores)  # Ensure at least 1 core
+        except UndefinedError as e:
+            # A typo in cores_expr would otherwise silently degrade every
+            # test to 1 core and neuter max_core_hours budget enforcement
+            raise ValueError(
+                f"cores_expr '{self.cores_expr}' references an undefined "
+                f"variable: {e}. Budget accounting depends on this expression."
+            ) from e
         except Exception as e:
-            self.logger.warning(f"Failed to compute cores for test {test.execution_id}: {e}. Defaulting to 1.")
+            self.logger.warning(f"Failed to compute cores for test {execution_id}: {e}. Defaulting to 1.")
             return 1
 
     def _compute_core_hours(self, test) -> float:
@@ -1014,8 +1033,7 @@ class IOPSRunner(HasLogger):
         }
 
         try:
-            with open(status_file, "w") as f:
-                json.dump(status_data, f, indent=2, default=str)
+            atomic_write_json(status_file, status_data, indent=2, default=str)
             self.logger.debug(f"  [Status] Wrote status file: {status_file} (status={final_status})")
         except Exception as e:
             self.logger.warning(f"Failed to write status file {status_file}: {e}")
@@ -1168,8 +1186,7 @@ class IOPSRunner(HasLogger):
 
             # Save to file
             metadata_path = self.cfg.benchmark.workdir / METADATA_FILENAME
-            with open(metadata_path, "w") as f:
-                json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
+            atomic_write_json(metadata_path, metadata, indent=2, default=self._json_serialize_helper)
 
             self.logger.debug(f"Initialized runtime metadata: {metadata_path}")
 
@@ -1224,8 +1241,7 @@ class IOPSRunner(HasLogger):
             if adaptive_results:
                 metadata["adaptive_results"] = adaptive_results
 
-            with open(metadata_path, "w") as f:
-                json.dump(metadata, f, indent=2, default=self._json_serialize_helper)
+            atomic_write_json(metadata_path, metadata, indent=2, default=self._json_serialize_helper)
 
             self.logger.debug(f"Updated runtime metadata: {metadata_path}")
 
@@ -1377,13 +1393,14 @@ class IOPSRunner(HasLogger):
             test = self.planner.next_test()
             if test is None:
                 break
-            # Capture current state: repetition and vars snapshot
-            # (test object will be reused with different repetition values)
-            all_executions.append((test, test.repetition, dict(test.vars)))
+            # Capture current state: id, repetition and vars snapshot
+            # (planners may reuse and mutate the same test object across
+            # repetitions and iterations)
+            all_executions.append((test.execution_id, test.repetition, dict(test.vars)))
 
         total_executions = len(all_executions)
         # Count unique tests (unique execution_ids)
-        unique_test_ids = set(t.execution_id for t, _, _ in all_executions)
+        unique_test_ids = set(eid for eid, _, _ in all_executions)
         num_unique_tests = len(unique_test_ids)
         repetitions = self.cfg.benchmark.repetitions
 
@@ -1396,13 +1413,13 @@ class IOPSRunner(HasLogger):
         cached_results = {}  # Dict of (execution_id, repetition) -> cached_result
         if self.cache and self.use_cache_reads:
             self.logger.info("Checking cache for existing results...")
-            for test, repetition, vars_snapshot in all_executions:
+            for execution_id, repetition, vars_snapshot in all_executions:
                 cached_result = self.cache.get_cached_result(
                     params=vars_snapshot,
                     repetition=repetition,
                 )
                 if cached_result and self._validate_cached_metrics(cached_result['metrics']):
-                    cached_results[(test.execution_id, repetition)] = cached_result
+                    cached_results[(execution_id, repetition)] = cached_result
 
             cached_count = len(cached_results)
             # Count how many unique tests have all repetitions cached
@@ -1426,10 +1443,10 @@ class IOPSRunner(HasLogger):
         cached_core_hours_list = []
         execution_details = []
 
-        for test, repetition, vars_snapshot in all_executions:
-            cores = self._compute_cores(test)
+        for execution_id, repetition, vars_snapshot in all_executions:
+            cores = self._compute_cores_from_vars(vars_snapshot, execution_id)
             cores_list.append(cores)
-            cache_key = (test.execution_id, repetition)
+            cache_key = (execution_id, repetition)
             cached_result = cached_results.get(cache_key)
             is_cached = cached_result is not None
 
@@ -1473,7 +1490,7 @@ class IOPSRunner(HasLogger):
                 exec_cores_list.append(cores)
 
             execution_details.append({
-                'execution_id': test.execution_id,
+                'execution_id': execution_id,
                 'repetition': repetition,
                 'cores': cores,
                 'vars': vars_snapshot,
@@ -2082,8 +2099,13 @@ class IOPSRunner(HasLogger):
                         if self.interrupted:
                             break
 
-                        # Submit to thread pool
-                        future = pool.submit(self._execute_and_cache, test)
+                        # Submit to thread pool. The SIGINT handler shuts
+                        # the pool down asynchronously, so submit can raise
+                        # even right after the interrupted check above.
+                        try:
+                            future = pool.submit(self._execute_and_cache, test)
+                        except RuntimeError:
+                            break
                         in_flight[future] = (test, test_count)
 
                 if not in_flight and not batch:
