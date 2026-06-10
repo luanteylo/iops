@@ -77,6 +77,25 @@ details > *:not(summary) {
 }
 
 /* Documentation sidebar layout */
+/* Spacer replacing the hero banner on docs pages: clears the fixed
+   navbar so the sidebar and content start right below it. */
+.docs-header-spacer {
+  height: 95px;
+}
+@media (max-width: 767px) {
+  .docs-header-spacer {
+    height: 60px;
+  }
+}
+/* Page title inside the content column: one fixed size on every page */
+.docs-page-title {
+  font-size: 30px;
+  font-weight: 700;
+  color: #2c3e50;
+  margin: 0 0 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
+}
 .docs-container {
   padding-left: 0;
   padding-right: 0;
