@@ -3,11 +3,11 @@ title: "Data Sources"
 weight: 10
 ---
 
-This page documents where IOPS CLI commands retrieve their data from. Understanding these data sources is essential for developers working on the codebase.
+This page documents where IOPS CLI commands read their data.
 
 ## Overview
 
-IOPS commands read from metadata files generated during benchmark execution and from result files. Metadata files have the `__iops_` prefix and are documented in the [Metadata Files]({{< relref "/user-guide/metadata-files" >}}) user guide.
+IOPS commands read from result files and from metadata files generated during execution. Metadata files have the `__iops_` prefix and are documented in the [Metadata Files]({{< relref "/user-guide/metadata-files" >}}) user guide.
 
 
 ## Data Sources by Command

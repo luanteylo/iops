@@ -2,7 +2,7 @@
 title: "Quick Start"
 ---
 
-This guide will walk you through running your first benchmark with IOPS in just a few minutes.
+Run your first benchmark with IOPS in a few minutes.
 
 ---
 
@@ -23,17 +23,12 @@ Generate a YAML configuration template:
 
 ```bash
 iops generate my_config.yaml
-```
 
-For a fully-documented template with all options:
-
-```bash
+# Fully-documented template with all options
 iops generate my_config.yaml --full
 ```
 
 ## Step 2: Preview Your Benchmark
-
-Before running, it's good practice to preview what will be executed:
 
 ```bash
 # Dry-run to see what will be executed
@@ -44,18 +39,11 @@ iops run my_config.yaml -n
 iops check my_config.yaml
 ```
 
-The dry-run will show you:
-
-- How many test instances will be generated
-- What parameter combinations will be tested
-- Estimated resource usage (for SLURM)
+The dry-run shows how many test instances will be generated, the parameter combinations, and estimated resource usage (for SLURM).
 
 ## Step 3: Run the Benchmark
 
-Run your benchmark with the basic command:
-
 ```bash
-# Basic execution
 iops run my_config.yaml
 ```
 
@@ -84,7 +72,7 @@ iops run my_config.yaml --no-log-terminal
 
 ## Step 4: Explore Executions
 
-You can explore and filter your benchmark executions using the `find` command:
+Use the `find` command to explore and filter executions, inspect execution folders, or locate failed tests:
 
 ```bash
 # List all executions with their parameters
@@ -97,27 +85,13 @@ iops find /path/to/workdir/run_001 size=1000
 iops find /path/to/workdir/run_001/exec_023
 ```
 
-This is useful for:
-- Finding specific parameter combinations
-- Inspecting execution folders
-- Locating failed tests
-- Exploring large parameter sweeps
-
 ## Step 5: Analyze Results
 
-After your benchmark completes, generate an interactive HTML report:
+After the benchmark completes, generate an HTML report with interactive plots, statistical analysis, parameter correlations, and performance summaries:
 
 ```bash
-# Generate HTML report with interactive plots
 iops report /path/to/workdir/run_001
 ```
-
-The report includes:
-
-- Interactive plots of your metrics
-- Statistical analysis
-- Parameter correlations
-- Performance summaries
 
 ## Understanding the Output
 
@@ -148,13 +122,5 @@ workdir/
 
 ### IOPS Metadata Files
 
-IOPS creates metadata files with the `__iops_` prefix to enable execution tracking and exploration:
-
-- `__iops_index.json` - Index of all executions in the run root
-- `__iops_run_metadata.json` - Run metadata used for HTML reports
-- `__iops_params.json` - Parameter values for each execution folder
-- `__iops_status.json` - Execution status (SUCCEEDED, FAILED, ERROR)
-- `__iops_sysinfo.json` - System information (if system probe is enabled)
-
-These files enable the `find` command to quickly locate and filter executions by their parameters.
+The `__iops_*` files annotated in the tree above let the `find` command locate and filter executions by their parameters. See [Metadata Files]({{< relref "/user-guide/metadata-files" >}}) for their structure and how to disable them.
 

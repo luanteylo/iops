@@ -3,7 +3,7 @@ title: "Contributing to IOPS"
 ---
 
 
-Thank you for your interest in contributing to IOPS! This document provides guidelines for contributing to the project.
+Guidelines for contributing to IOPS.
 
 ## Getting Started
 
@@ -25,10 +25,8 @@ Thank you for your interest in contributing to IOPS! This document provides guid
 
    # Install development dependencies
    pip install -r requirements-dev.txt
-   ```
 
-3. **Run Tests**
-   ```bash
+   # Verify the setup
    pytest tests/
    ```
 
@@ -48,10 +46,9 @@ Thank you for your interest in contributing to IOPS! This document provides guid
 
 3. **Run Tests**
    ```bash
-   # Run all tests
    pytest tests/
 
-   # Run with coverage
+   # With coverage
    pytest --cov=iops tests/
    ```
 
@@ -76,21 +73,18 @@ Thank you for your interest in contributing to IOPS! This document provides guid
 
 ## Testing
 
-- Write unit tests for new functionality
+- Write unit tests for new functionality, and integration tests for major features
 - Ensure existing tests pass
 - Test with both local and SLURM executors when relevant
-- Include integration tests for major features
 
 ## Documentation
 
-- Update documentation for new features
-- Add examples for complex functionality
+- Update documentation and add examples for new features
 - Keep the YAML format reference up to date
-- Include docstrings in code
 
 ## Reporting Issues
 
-When reporting issues, please include:
+Please include:
 
 - IOPS version (`iops --version`)
 - Python version
@@ -102,12 +96,7 @@ When reporting issues, please include:
 
 ## Feature Requests
 
-We welcome feature requests! Please:
-
-- Check existing issues first
-- Describe the use case clearly
-- Explain the expected behavior
-- Consider providing a proof-of-concept if possible
+Check existing issues first, then describe the use case and expected behavior clearly. A proof-of-concept helps if possible.
 
 ## Questions and Support
 

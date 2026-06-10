@@ -12,19 +12,17 @@ Convert existing [JUBE](https://github.com/FZJ-JSC/JUBE) benchmark configuration
 
 ## Overview
 
-JUBE (Juelich Benchmarking Environment) is an HPC benchmarking framework that uses XML configurations. If you already have JUBE benchmarks, `iops convert` provides a best-effort translation to IOPS YAML format, saving you from rewriting configurations manually.
-
-The converter uses JUBE's own Python library to parse the XML, ensuring accurate interpretation of all JUBE-specific syntax. The output includes TODO markers for features that require manual adjustment.
+JUBE (Juelich Benchmarking Environment) is an HPC benchmarking framework that uses XML configurations. `iops convert` provides a best-effort translation of JUBE benchmarks to IOPS YAML, using JUBE's own Python library to parse the XML for accurate interpretation of JUBE-specific syntax. The output includes TODO markers for features that require manual adjustment.
 
 ### Prerequisites
 
-The JUBE Python library must be installed:
+The JUBE Python library must be installed (JUBE is not available on PyPI):
 
 ```bash
 pip install git+https://github.com/FZJ-JSC/JUBE.git
 ```
 
-JUBE is not available on PyPI. If `iops convert` is run without JUBE installed, it will display installation instructions.
+If `iops convert` is run without JUBE installed, it displays installation instructions.
 
 ---
 
@@ -51,14 +49,8 @@ iops convert <input.xml> [options]
 # Basic conversion
 iops convert benchmark.xml
 
-# Specify output path
-iops convert benchmark.xml -o my_config.yaml
-
-# Convert for SLURM execution
-iops convert benchmark.xml --executor slurm
-
-# Preview output without writing a file
-iops convert benchmark.xml --dry-run
+# SLURM target, custom output path, preview only
+iops convert benchmark.xml -o my_config.yaml --executor slurm --dry-run
 
 # Select specific benchmark from multi-benchmark XML
 iops convert multi.xml --benchmark ior_bench
@@ -192,19 +184,19 @@ output:
 
 ## Limitations and Manual Adjustments
 
-The following JUBE features cannot be automatically converted and will produce TODO markers or warnings:
+The following JUBE features cannot be automatically converted and produce TODO markers or warnings:
 
 **Parameters:**
-- **Shell-mode parameters** (`mode="shell"`) execute shell commands to compute values. These must be manually replaced with IOPS expressions or pre-computed values.
+- **Shell-mode parameters** (`mode="shell"`) execute shell commands to compute values. Replace manually with IOPS expressions or pre-computed values.
 - **Perl-mode parameters** are not supported.
 
 **Workflow:**
-- **Multi-step DAG workflows** are flattened. JUBE allows defining step dependencies as a directed acyclic graph, while IOPS uses a flat script model. Steps are concatenated in dependency order but may need restructuring.
+- **Multi-step DAG workflows** are flattened. JUBE allows step dependencies as a directed acyclic graph; IOPS uses a flat script model. Steps are concatenated in dependency order but may need restructuring.
 - **Step cycles** (`cycles` attribute) have no direct equivalent. Consider increasing `repetitions` or restructuring the workflow.
 - **Shared directories** between workpackages are not supported in IOPS.
 
 **Execution:**
-- **Async operations** (checking for completion files) are handled by IOPS executors differently. Remove async-related operations from the script template.
+- **Async operations** (checking for completion files) are handled differently by IOPS executors. Remove async-related operations from the script template.
 - **Substitutesets** targeting external files (not the script template) are not converted. Add file manipulation to the script preamble if needed.
 
 **Other:**
@@ -215,17 +207,12 @@ The following JUBE features cannot be automatically converted and will produce T
 
 ## Post-Conversion Validation
 
-After converting, always validate and preview before running:
+Always validate and preview before running:
 
 ```bash
-# Validate the generated configuration
-iops check io_bench_iops.yaml
-
-# Preview the execution plan
-iops run io_bench_iops.yaml --dry-run
-
-# Run the benchmark
-iops run io_bench_iops.yaml
+iops check io_bench_iops.yaml       # Validate the generated configuration
+iops run io_bench_iops.yaml --dry-run  # Preview the execution plan
+iops run io_bench_iops.yaml         # Run the benchmark
 ```
 
 Search for `TODO` markers in the generated YAML and address them before execution. The converter prints a summary of warnings to help identify areas needing attention.

@@ -3,7 +3,7 @@ title: "Metadata Files"
 weight: 65
 ---
 
-IOPS generates metadata files with the `__iops_` prefix to track executions, enable fast lookups, and support report generation. This page documents all metadata files, their purpose, when they are written, and how to control their generation.
+IOPS generates metadata files with the `__iops_` prefix to track executions, enable fast lookups, and support report generation. This page documents each file, when it is written, and how to control its generation.
 
 ---
 
@@ -19,19 +19,13 @@ IOPS generates metadata files with the `__iops_` prefix to track executions, ena
 
 ## I/O Overhead Considerations
 
-Metadata files are written to the **workdir** during benchmark execution. While these files are small (typically a few KB each), they can introduce I/O overhead in certain scenarios:
+Metadata files are written to the **workdir** during benchmark execution. They are small (typically a few KB each), but consider disabling them when:
 
-**When to disable metadata generation:**
+- **Workdir is on the tested filesystem**: metadata writes can interfere with measurements; either disable them or place the workdir on a separate filesystem.
+- **Running thousands of sub-second tests**: per-execution JSON writes may become noticeable.
+- **Using high-latency network filesystems**: metadata writes can add latency between tests.
 
-- **Workdir on tested filesystem**: If your workdir is located on the filesystem being benchmarked, metadata writes can interfere with your measurements. For accurate I/O benchmarks, either disable metadata generation or place the workdir on a separate filesystem.
-- **High-frequency short tests**: For benchmarks with thousands of very short tests (sub-second), the overhead of writing JSON files for each execution may become noticeable.
-- **Network filesystems with high latency**: On slow network filesystems, metadata writes can add latency between test executions.
-
-**When metadata is safe:**
-
-- Workdir is on a separate filesystem from the test target
-- Tests run for several seconds or longer
-- You need `iops find` or `iops report` functionality
+Metadata is safe when the workdir is on a separate filesystem from the test target, tests run for several seconds or longer, or you need `iops find` or `iops report` functionality.
 
 ## Metadata Files Overview
 
@@ -75,7 +69,7 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 | `parser_stdout` | Parser script print() output (if any) |
 | `parser_stderr` | Parser script errors/warnings (if any) |
 
-These files capture all output from script execution and parsing, useful for debugging failed tests. Parser output files are only created if the parser produces output.
+These files capture all output from script execution and parsing, useful for debugging failed tests; parser output files are only created if the parser produces output.
 
 ### System Info Files
 
@@ -87,7 +81,7 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 | `__iops_atexit_sysinfo.sh` | System info collection script |
 | `__iops_sysinfo.json` | Hardware/environment info (generated at exit) |
 | `__iops_atexit_versions.sh` | Software version capture script (versions probe) |
-| `__iops_versions.json` | Captured software/library versions (generated at script start) |
+| `__iops_versions.json` | Captured software/library versions (generated at exit) |
 
 ### Resource Tracing Files
 
@@ -106,7 +100,7 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 
 ### Disable Execution Tracking
 
-To disable `__iops_index.json`, `__iops_params.json`, `__iops_skipped`, and `__iops_status.json`:
+Disables `__iops_index.json`, `__iops_params.json`, `__iops_skipped`, and `__iops_status.json`:
 
 ```yaml
 benchmark:
@@ -114,14 +108,11 @@ benchmark:
     execution_index: false
 ```
 
-**Impact:**
-- `iops find` command will not work for these runs
-- Watch mode (`--watch`) will not work
-- Reduces I/O by 3 small JSON writes per execution
+**Impact:** `iops find` and watch mode (`--watch`) will not work for these runs; reduces I/O by 3 small JSON writes per execution.
 
 ### Disable System Information Collection
 
-To disable `__iops_atexit_sysinfo.sh` and `__iops_sysinfo.json`:
+Disables `__iops_atexit_sysinfo.sh` and `__iops_sysinfo.json`:
 
 ```yaml
 benchmark:
@@ -129,10 +120,7 @@ benchmark:
     system_snapshot: false
 ```
 
-**Impact:**
-- System environment info will not appear in HTML reports
-- Reduces I/O by 1 small JSON write per repetition
-- Removes the system info script injection from generated scripts
+**Impact:** system environment info will not appear in HTML reports; removes the system info script injection from generated scripts; reduces I/O by 1 small JSON write per repetition.
 
 ### Disable All Metadata
 
@@ -155,7 +143,7 @@ Note: `__iops_run_metadata.json` is always written as it's required for `iops re
 
 **Written:** Once at the end of benchmark execution (or dry-run)
 
-**Purpose:** Contains comprehensive metadata about the benchmark run, used by `iops report` to generate HTML reports without re-running the benchmark.
+**Purpose:** Metadata about the benchmark run, used by `iops report` to generate HTML reports without re-running the benchmark.
 
 **Structure:**
 ```json
@@ -228,15 +216,6 @@ Note: `__iops_run_metadata.json` is always written as it's required for `iops re
         "block_size": 1024
       },
       "command": "mpirun -np 4 ./benchmark --nodes 1"
-    },
-    "exec_0002": {
-      "path": "exec_0002",
-      "params": {
-        "nodes": 1,
-        "ppn": 4,
-        "block_size": 4096
-      },
-      "command": "mpirun -np 4 ./benchmark --nodes 1"
     }
   }
 }
@@ -275,7 +254,7 @@ All paths are relative to the run root, making workdirs portable across systems.
 
 **Written:** When a test is skipped (constraint violation or planner decision)
 
-**Purpose:** Marker file indicating that a test was skipped. Only present for skipped tests. If this file does not exist, watch mode assumes the test is pending or active.
+**Purpose:** Marker file for skipped tests; if absent, watch mode assumes the test is pending or active.
 
 **Structure:**
 ```json
@@ -300,12 +279,9 @@ All paths are relative to the run root, making workdirs portable across systems.
 
 **Location:** `workdir/run_001/exec_0001/repetition_1/__iops_status.json`
 
-**Written:**
-- When a job is submitted (initial status)
-- After each repetition completes or fails
-- During SLURM job execution when status changes (PENDING → RUNNING)
+**Written:** When a job is submitted (initial status), after each repetition completes or fails, and during SLURM job execution when status changes (PENDING → RUNNING)
 
-**Purpose:** Tracks repetition execution status for `iops find` filtering and watch mode. Enables real-time status updates during SLURM job execution.
+**Purpose:** Tracks repetition execution status for `iops find` filtering and watch mode, including real-time status updates during SLURM jobs.
 
 **Structure:**
 ```json
@@ -336,11 +312,11 @@ All paths are relative to the run root, making workdirs portable across systems.
 | `local` | `RUNNING` | Local jobs start executing immediately |
 | `slurm` | `PENDING` | SLURM jobs go to queue before running |
 
-The `error` field contains the error message when status is FAILED or ERROR.
+**Other fields:**
 
-The `cached` field indicates whether the result was retrieved from cache (`true`) or freshly executed (`false`). This is set when running with `--use-cache` and a cached result is found.
-
-The `duration_seconds` field contains the actual execution time in seconds from the probe script. This is available for both executed and cached results (the sysinfo is stored in the cache).
+- `error` - error message when status is FAILED or ERROR
+- `cached` - `true` if the result was retrieved from cache (set when running with `--use-cache` and a cached result is found)
+- `duration_seconds` - actual execution time in seconds from the probe script, available for both executed and cached results (the sysinfo is stored in the cache)
 
 **Controlled by:** `benchmark.probes.execution_index`
 
@@ -352,16 +328,7 @@ The `duration_seconds` field contains the actual execution time in seconds from 
 
 **Written:** When the repetition folder is created, before the test runs
 
-**Purpose:** Provides a centralized EXIT trap that coordinates cleanup for all IOPS features. Other scripts register their cleanup functions with this handler rather than setting their own traps.
-
-**How it works:**
-1. IOPS writes `__iops_exit_handler.sh` to the repetition folder
-2. The generated benchmark script sources this file first
-3. The handler sets a single EXIT trap for the entire script
-4. Other IOPS scripts register cleanup functions via `_iops_register_exit`
-5. When the script exits, all registered functions are called in order
-
-This architecture avoids trap conflicts between multiple IOPS features.
+**Purpose:** Centralized EXIT trap that coordinates cleanup for all IOPS features. The generated benchmark script sources this file first; it sets a single EXIT trap, and other IOPS scripts register cleanup functions via `_iops_register_exit` instead of setting their own traps, avoiding trap conflicts. On exit, registered functions run in order.
 
 **Always written** when any IOPS feature is enabled.
 
@@ -373,16 +340,7 @@ This architecture avoids trap conflicts between multiple IOPS features.
 
 **Written:** When the repetition folder is created, before the test runs
 
-**Purpose:** A shell script that collects system information from compute nodes. It registers with the exit handler to collect information after the benchmark completes.
-
-**How it works:**
-1. IOPS writes `__iops_atexit_sysinfo.sh` to the repetition folder
-2. The generated benchmark script sources this file after the exit handler
-3. The script registers `_iops_collect_sysinfo` with the exit handler
-4. When the benchmark script exits (success or failure), the function executes
-5. System information is written to `__iops_sysinfo.json`
-
-This approach ensures system info is collected even if the benchmark fails, and it runs on the actual compute node (important for SLURM jobs).
+**Purpose:** Collects system information from compute nodes. The generated benchmark script sources it after the exit handler; it registers `_iops_collect_sysinfo`, which writes `__iops_sysinfo.json` when the script exits (success or failure). This ensures system info is collected even if the benchmark fails, and on the actual compute node (important for SLURM jobs).
 
 **Controlled by:** `benchmark.probes.system_snapshot`
 
@@ -435,15 +393,9 @@ This approach ensures system info is collected even if the benchmark fails, and 
 
 **Location:** `workdir/run_001/exec_0001/repetition_1/__iops_atexit_versions.sh`
 
-**Written:** When the repetition folder is created, before the test runs
+**Written:** When the repetition folder is created, before the test runs (when `benchmark.probes.versions` is configured)
 
-**Purpose:** A shell script that captures software and library versions for the execution. Capture is registered with the exit handler and runs after the benchmark body (so tools loaded by the benchmark's own `module load` commands are in scope). Results are written to `__iops_versions.json` in the same directory.
-
-**How it works:**
-1. IOPS writes `__iops_atexit_versions.sh` to the repetition folder when `benchmark.probes.versions` is configured.
-2. The generated benchmark script sources this file, which registers the capture function with the centralized exit handler.
-3. On exit (after the benchmark body), the capture function runs each configured command, captures stdout (up to 4000 bytes), and writes `__iops_versions.json`.
-4. All capture is best-effort: a failing command records an empty string rather than aborting the run.
+**Purpose:** Captures software and library versions for the execution. The generated benchmark script sources it, registering the capture function with the centralized exit handler. On exit, after the benchmark body (so tools loaded by the benchmark's own `module load` commands are in scope), it runs each configured command, captures stdout (up to 4000 bytes), and writes `__iops_versions.json`. Capture is best-effort: a failing command records an empty string rather than aborting the run.
 
 **Controlled by:** `benchmark.probes.versions`
 
@@ -455,7 +407,7 @@ This approach ensures system info is collected even if the benchmark fails, and 
 
 **Written:** On script exit, after the benchmark body has run (via the exit handler)
 
-**Purpose:** Contains software and library versions captured by the version probe. The HTML report reads these files to render the Software Versions section and to detect version drift across executions. The same values are also written to the results sink as `version.<component>` columns, so versions can be queried alongside the metrics.
+**Purpose:** Contains software and library versions captured by the version probe. The HTML report reads these files to render the Software Versions section. The same values are also written to the results sink as `version.<component>` columns, so versions can be queried alongside the metrics.
 
 **Structure:**
 ```json
@@ -468,9 +420,7 @@ This approach ensures system info is collected even if the benchmark fails, and 
 
 Each key is the component name defined in `benchmark.probes.versions`. The value is the trimmed stdout of the configured command, or an empty string if the command failed.
 
-**Fields:** Component names are user-defined (matching `benchmark.probes.versions` keys).
-
-**Drift detection:** When the HTML report is generated, IOPS compares the version strings across all executions. Components with more than one distinct value trigger a drift warning in the Software Versions section (indicating the study may mix results from different software environments or cached results from an older run).
+**Drift detection:** During report generation, components with more than one distinct value across executions trigger a drift warning in the Software Versions section (the study may mix results from different software environments or cached results from an older run).
 
 **Controlled by:** `benchmark.probes.versions`
 
@@ -482,16 +432,7 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 
 **Written:** When the repetition folder is created, before the test runs
 
-**Purpose:** A shell script that collects CPU and memory utilization during benchmark execution. For multi-node SLURM jobs, it launches samplers on all nodes using `srun`.
-
-**How it works:**
-1. IOPS writes `__iops_runtime_sampler.sh` to the repetition folder
-2. The generated benchmark script sources this file after the exit handler
-3. The script creates a sentinel file (`__iops_trace_running`) and starts sampling
-4. For single-node: runs the sampling loop locally in the background
-5. For multi-node SLURM: uses `srun --overlap` to launch samplers on all nodes
-6. Each node writes to its own trace file (`__iops_trace_<hostname>.csv`)
-7. When the script exits, the exit handler removes the sentinel file, stopping all samplers
+**Purpose:** Collects CPU and memory utilization during benchmark execution. The generated benchmark script sources it after the exit handler. It creates the sentinel file `__iops_trace_running` and starts sampling: locally in the background for single-node jobs, or via `srun --overlap` on all nodes for multi-node SLURM jobs. Each node writes its own trace file (`__iops_trace_<hostname>.csv`). On exit, the exit handler removes the sentinel file, stopping all samplers.
 
 **Controlled by:** `benchmark.probes.resource_sampling`
 
@@ -505,7 +446,7 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 
 **Removed:** When benchmark script exits (via exit handler)
 
-**Purpose:** A sentinel file that signals resource samplers to keep running. When removed, all samplers (including those on remote nodes in multi-node SLURM jobs) terminate gracefully.
+**Purpose:** Sentinel file that signals resource samplers to keep running. Removing it gracefully terminates all samplers, including those on remote nodes in multi-node SLURM jobs.
 
 **Controlled by:** `benchmark.probes.resource_sampling`
 
@@ -517,7 +458,7 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 
 **Written:** Continuously during benchmark execution by the resource sampler
 
-**Purpose:** Contains per-core CPU and memory utilization samples. For multi-node jobs, each node produces its own file with its hostname in the filename.
+**Purpose:** Contains per-core CPU and memory utilization samples, one file per node.
 
 **Format:**
 ```csv
@@ -536,16 +477,7 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 
 **Written:** During artifact preparation (before benchmark runs)
 
-**Purpose:** Background GPU sampler script that collects GPU metrics (utilization, memory, temperature, power draw, clock speeds) at configurable intervals. Currently supports NVIDIA GPUs via `nvidia-smi`, with vendor detection designed for future AMD and Intel GPU support. Gracefully skips if no supported GPU is detected.
-
-The sampler follows the same architecture as the CPU/memory sampler:
-
-1. Detects GPU vendor at runtime (`command -v nvidia-smi`)
-2. Creates a sentinel file (`__iops_gpu_trace_running`) and starts sampling
-3. For single-node: runs the sampling loop locally in the background
-4. For multi-node SLURM: uses `srun --overlap` to launch samplers on all nodes
-5. Each node writes to its own trace file (`__iops_gpu_trace_<hostname>.csv`)
-6. When the script exits, the exit handler removes the sentinel file, stopping all samplers
+**Purpose:** Collects GPU metrics (utilization, memory, temperature, power draw, clock speeds) at configurable intervals. Currently supports NVIDIA GPUs via `nvidia-smi` (detected with `command -v nvidia-smi`), with vendor detection designed for future AMD and Intel support; gracefully skips if no supported GPU is detected. Follows the same architecture as the CPU/memory sampler: a sentinel file (`__iops_gpu_trace_running`), local or `srun --overlap` multi-node sampling, one trace file per node, and shutdown via the exit handler.
 
 **Controlled by:** `benchmark.probes.gpu_sampling`
 
@@ -559,7 +491,7 @@ The sampler follows the same architecture as the CPU/memory sampler:
 
 **Removed:** When benchmark script exits (via exit handler)
 
-**Purpose:** A sentinel file that signals GPU samplers to keep running. Independent of the CPU/memory sampler sentinel. When removed, all GPU samplers terminate gracefully.
+**Purpose:** Sentinel file that signals GPU samplers to keep running; independent of the CPU/memory sampler sentinel.
 
 **Controlled by:** `benchmark.probes.gpu_sampling`
 
@@ -571,7 +503,7 @@ The sampler follows the same architecture as the CPU/memory sampler:
 
 **Written:** Continuously during benchmark execution by the GPU sampler
 
-**Purpose:** Contains GPU metrics samples for all GPUs on each node. For multi-node jobs, each node produces its own file with its hostname in the filename.
+**Purpose:** Contains GPU metrics samples for all GPUs on each node, one file per node.
 
 **Format:**
 ```csv
@@ -597,7 +529,6 @@ timestamp,hostname,gpu_index,gpu_name,utilization_gpu_pct,utilization_mem_pct,me
 #SBATCH --nodes=8
 #SBATCH --time=02:00:00
 #SBATCH --partition=batch
-#SBATCH --account=myaccount
 #SBATCH --exclusive
 
 # IOPS-managed directives
@@ -617,16 +548,13 @@ run_test() {
 
 # Sequential test execution
 run_test "/path/to/exec_0001/repetition_001" "run_script.sh" "exec_0001" "1"
-run_test "/path/to/exec_0001/repetition_002" "run_script.sh" "exec_0001" "2"
 ...
 ```
 
 **Key features:**
-- Contains user-provided SBATCH directives from `allocation_script`
-- IOPS adds: shebang, job-name (`iops_single_alloc`), output/error paths
+- User-provided SBATCH directives come from `allocation_script`; IOPS adds the shebang, job-name (`iops_single_alloc`), and output/error paths
 - User setup commands (module loads, exports) run once at the start
-- Tests run sequentially via the `run_test()` dispatcher function
-- Each test respects `test_timeout` (default: 3600s)
+- Tests run sequentially via the `run_test()` dispatcher; each respects `test_timeout` (default: 3600s)
 - Status files (`__iops_status.json`) updated for each test (RUNNING → SUCCEEDED/FAILED/TIMEOUT)
 
 **Controlled by:** `slurm_options.allocation.mode: "single"`
@@ -639,42 +567,25 @@ run_test "/path/to/exec_0001/repetition_002" "run_script.sh" "exec_0001" "2"
 
 **Written:** When generating HTML reports via `iops report --export-plots` (requires kaleido)
 
-**Purpose:** Contains image exports of all plots from the HTML report, allowing users to include plots in publications or presentations.
+**Purpose:** Contains image exports of all plots from the HTML report, for use in publications or presentations.
 
 **Structure:**
 ```
 __iops_plots/
 ├── 001_test_summary.pdf
 ├── 002_best_configurations_bandwidth.pdf
-├── 003_bayesian_evolution_bandwidth.pdf
-├── 004_variable_impact_bandwidth.pdf
 └── ...
 ```
 
-**File naming:**
-- Files are numbered in the order they appear in the report (001, 002, ...)
-- Names include the plot type and metric for easy identification
-- Special characters are sanitized to underscores
-- Extension matches the chosen format (pdf, png, svg, jpg, webp)
+**File naming:** Files are numbered in report order (001, 002, ...); names include the plot type and metric, with special characters sanitized to underscores; the extension matches the chosen format (pdf, png, svg, jpg, webp).
 
-**Controlled by:** `--export-plots` flag when running `iops report`. Requires `kaleido` package (`pip install iops-benchmark[plots]`)
-
-**Supported formats:** Use `--plot-format FORMAT` to select output format (default: pdf)
+**Controlled by:** `--export-plots` flag when running `iops report` (use `--plot-format FORMAT` to select the format, default: pdf). Requires the `kaleido` package (`pip install iops-benchmark[plots]`).
 
 ## Best Practices
 
 ### For I/O Benchmarks
 
-When benchmarking storage systems, place your workdir on a **different** filesystem than the one being tested:
-
-```yaml
-benchmark:
-  name: "Lustre I/O Benchmark"
-  workdir: "/local/scratch/iops_workdir"  # Local SSD, not Lustre
-  # ... benchmark tests Lustre at /lustre/project/data
-```
-
-Or disable metadata if you must use the same filesystem:
+When benchmarking storage systems, place your workdir on a **different** filesystem than the one being tested (e.g., `workdir: "/local/scratch/iops_workdir"` while the benchmark targets `/lustre/project/data`). If you must use the same filesystem, disable metadata:
 
 ```yaml
 benchmark:
@@ -687,15 +598,10 @@ benchmark:
 
 ### For Production Runs
 
-Keep metadata enabled for:
-- Post-run analysis with `iops find`
-- HTML report generation with `iops report`
-- Debugging failed executions
-- Monitoring with watch mode
+Keep metadata enabled for post-run analysis with `iops find`, HTML report generation, debugging failed executions, and watch mode monitoring.
 
 ### For Large Parameter Sweeps
 
 With thousands of executions, consider:
 - Using `create_folders_upfront: false` (default) to create folders lazily
-- Placing workdir on a fast local filesystem
-- Using SSD storage for the workdir if available
+- Placing workdir on a fast local filesystem (SSD if available)

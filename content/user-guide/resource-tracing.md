@@ -3,18 +3,11 @@ title: "Resource Sampling"
 weight: 66
 ---
 
-IOPS can optionally sample CPU, memory, and GPU utilization during benchmark execution. This feature helps correlate parameter configurations with resource footprint, enabling heatmap analysis of how different parameters affect system resource usage.
+IOPS can optionally sample CPU, memory, and GPU utilization during benchmark execution, so you can correlate parameter configurations with resource footprint (e.g., heatmap analysis of how parameters affect resource usage).
 
 **Warning: Performance Impact**
 
-Resource sampling runs background processes that periodically collect system metrics and write to CSV files. While designed to minimize interference (runs at low priority via `renice`), this may still affect benchmark results:
-
-- **CPU overhead**: The sampler consumes a small amount of CPU time for reading proc files and computing deltas
-- **GPU overhead**: The GPU sampler invokes `nvidia-smi` at each sampling interval
-- **I/O overhead**: Each sample appends a row to the trace CSV file
-- **Memory**: The background processes use minimal memory (~1-2 MB each)
-
-For performance-critical measurements, run your benchmark **without sampling first** to establish a baseline, then enable sampling in a separate run to collect resource data.
+Resource sampling runs background processes that periodically collect system metrics and write to CSV files. Although the samplers run at low priority (via `renice`), they may still affect benchmark results: a small amount of CPU time for reading proc files, an `nvidia-smi` invocation per GPU sample, one CSV append per sample interval, and ~1-2 MB of memory per process. For performance-critical measurements, run your benchmark **without sampling first** to establish a baseline, then enable sampling in a separate run to collect resource data.
 
 ## Quick Start
 
@@ -33,25 +26,13 @@ benchmark:
 
 ### CPU/Memory Sampling
 
-When `probes.resource_sampling: true`, IOPS injects a resource sampler (`__iops_runtime_sampler.sh`) into each benchmark script. The sampler:
-
-1. **Runs with low priority** (`renice -n 19`) to minimize interference
-2. **Samples at configurable intervals** from `/proc/stat` and `/proc/meminfo`
-3. **Writes per-node, per-attempt sample files** with hostname and attempt id in the filename (`__iops_trace_<hostname>_<attempt_id>.csv`, where `attempt_id` is the SLURM job id or the shell PID when running locally)
-4. **Uses a per-attempt sentinel file** (`__iops_trace_running.<attempt_id>`) for graceful termination
-5. **Stops automatically** when the exit handler removes its own sentinel file
+When `probes.resource_sampling: true`, IOPS injects a resource sampler (`__iops_runtime_sampler.sh`) into each benchmark script. The sampler runs with low priority (`renice -n 19`), reads `/proc/stat` and `/proc/meminfo` at the configured interval, and writes per-node, per-attempt sample files (`__iops_trace_<hostname>_<attempt_id>.csv`). A per-attempt sentinel file (`__iops_trace_running.<attempt_id>`) controls graceful termination: the sampler stops when the exit handler removes its sentinel.
 
 ### GPU Sampling
 
-When `probes.gpu_sampling: true`, IOPS injects a GPU sampler (`__iops_runtime_gpu_sampler.sh`) that collects GPU metrics. The sampler:
+When `probes.gpu_sampling: true`, IOPS injects a GPU sampler (`__iops_runtime_gpu_sampler.sh`) that detects the GPU vendor at runtime (currently NVIDIA via `nvidia-smi`, designed for future AMD/Intel support), queries all GPUs in a single call per interval, and writes per-node, per-attempt GPU sample files (`__iops_gpu_trace_<hostname>_<attempt_id>.csv`). It gracefully skips if no supported GPU is detected (no errors, no empty files) and uses its own per-attempt sentinel file (`__iops_gpu_trace_running.<attempt_id>`), independent of the CPU sampler.
 
-1. **Detects GPU vendor** at runtime (currently supports NVIDIA via `nvidia-smi`, designed for future AMD/Intel support)
-2. **Queries all GPUs** in a single call per sample interval
-3. **Writes per-node, per-attempt GPU sample files** (`__iops_gpu_trace_<hostname>_<attempt_id>.csv`)
-4. **Gracefully skips** if no supported GPU is detected (no errors, no empty files)
-5. **Uses its own per-attempt sentinel file** (`__iops_gpu_trace_running.<attempt_id>`) independent of the CPU sampler
-
-Both samplers share the `sampling_interval` setting, run at low priority, and support SLURM multi-node jobs.
+Both samplers share the `sampling_interval` setting and support SLURM multi-node jobs.
 
 ## Output Files
 
@@ -68,7 +49,6 @@ Each execution produces one CSV file per node:
 timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,mem_available_kb
 1705123456.123,node01,0,45.2,5.1,49.7,128000000,64000000
 1705123456.123,node01,1,42.1,4.8,53.1,128000000,64000000
-1705123457.123,node01,0,47.8,5.3,46.9,128000000,63000000
 ```
 
 **Fields:**
@@ -87,14 +67,13 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 
 When `gpu_sampling` is enabled and a supported GPU is detected, each execution produces one GPU sample CSV per node:
 
-**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_gpu_trace_<hostname>.csv`
+**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_gpu_trace_<hostname>_<attempt_id>.csv`
 
 **Format:**
 ```csv
 timestamp,hostname,gpu_index,gpu_name,utilization_gpu_pct,utilization_mem_pct,memory_used_mib,memory_total_mib,temperature_c,power_draw_w,clock_sm_mhz,clock_mem_mhz
 1705123456.5,node01,0,NVIDIA A100-SXM4-80GB,85,40,30000,81920,62,250.50,1410,1215
 1705123457.5,node01,0,NVIDIA A100-SXM4-80GB,92,45,32000,81920,64,275.30,1410,1215
-1705123456.5,node01,1,NVIDIA A100-SXM4-80GB,78,35,28000,81920,60,240.10,1410,1215
 ```
 
 **Fields:**
@@ -119,11 +98,11 @@ After all executions complete, IOPS aggregates samples into a summary CSV:
 
 **Location:** `workdir/run_001/__iops_resource_summary.csv`
 
-This file contains one row per execution+repetition, with all user variables and aggregated metrics from both CPU/memory and GPU samples (when enabled). This enables correlation analysis between parameter configurations and resource footprint.
+This file contains one row per execution+repetition, with all user variables and aggregated metrics from both CPU/memory and GPU samples (when enabled), enabling correlation analysis between parameter configurations and resource footprint.
 
 ### CPU/Memory Aggregated Metrics
 
-Metrics are computed from all samples across all nodes. A **sample** is one row in the CSV, representing a single measurement at a specific timestamp for a specific core on a specific node.
+Metrics are computed from all samples across all nodes. A **sample** is one row in the CSV: a single measurement at a specific timestamp for a specific core on a specific node.
 
 The following intermediate values are computed per sample:
 
@@ -158,9 +137,7 @@ Each GPU gets its own set of columns in the summary CSV, named by device index:
 | `gpuN_avg_temperature_c` | `gpu0_avg_temperature_c` | Average temperature for GPU N |
 | `gpuN_mem_peak_mib` | `gpu0_mem_peak_mib` | Peak memory used by GPU N |
 
-These per-GPU columns let you identify which GPUs were active and compare their individual resource profiles.
-
-When traces span multiple nodes (multi-node runs, or a rescheduled job that left a partial trace on a previous host), the hostname is added as a prefix so same-indexed GPUs on different hosts do not collide. For example, two GPUs on `node01` and `node02` become `node01_gpu0_*`, `node01_gpu1_*`, `node02_gpu0_*`, `node02_gpu1_*`. Single-node runs keep the plain `gpuN_*` naming.
+When traces span multiple nodes (multi-node runs, or a rescheduled job that left a partial trace on a previous host), the hostname is added as a prefix so same-indexed GPUs on different hosts do not collide: `node01_gpu0_*`, `node01_gpu1_*`, `node02_gpu0_*`, and so on. Single-node runs keep the plain `gpuN_*` naming.
 
 #### Aggregate Columns
 
@@ -183,13 +160,7 @@ Aggregate metrics use the **maximum of per-GPU averages** so that idle GPUs do n
 
 #### Energy Calculation
 
-The `gpu_energy_j` metric provides total GPU energy consumption in Joules. Energy is computed per GPU by integrating instantaneous power draw over time using the trapezoidal rule, then summed across all GPUs:
-
-```
-E = sum over all GPUs of: integral(P(t) dt)
-```
-
-For each GPU, consecutive power samples are integrated: `E_interval = (P_i + P_{i+1}) / 2 * (t_{i+1} - t_i)`. This gives accurate results even with varying power draw. Per-GPU energy is available via `gpu0_energy_j`, `gpu1_energy_j`, etc. To convert to kilowatt-hours: `kWh = gpu_energy_j / 3600000`.
+The `gpu_energy_j` metric provides total GPU energy consumption in Joules. Energy is computed per GPU by integrating instantaneous power draw over time using the trapezoidal rule (`E_interval = (P_i + P_{i+1}) / 2 * (t_{i+1} - t_i)` for consecutive samples), then summed across all GPUs. This gives accurate results even with varying power draw. Per-GPU energy is available via `gpu0_energy_j`, `gpu1_energy_j`, etc. To convert to kilowatt-hours: `kWh = gpu_energy_j / 3600000`.
 
 ## Configuration Reference
 
@@ -212,16 +183,9 @@ benchmark:
 
 ## Multi-Node Support
 
-For SLURM multi-node jobs, IOPS automatically launches samplers on all allocated nodes:
+For SLURM multi-node jobs, IOPS automatically launches samplers on all allocated nodes. The sampler detects multi-node jobs via `SLURM_NNODES > 1` and uses `srun --overlap --ntasks-per-node=1` to start one sampler per node. All samplers share the same sentinel file on the shared filesystem; when the exit handler removes it, all node samplers stop.
 
-1. **Detection**: The sampler detects multi-node jobs via `SLURM_NNODES > 1`
-2. **Launch**: Uses `srun --overlap --ntasks-per-node=1` to start one sampler per node
-3. **Coordination**: All samplers share the same sentinel file on the shared filesystem
-4. **Termination**: When the exit handler removes the sentinel file, all node samplers stop
-
-Each node produces its own sample files (`__iops_trace_node01.csv`, `__iops_gpu_trace_node01.csv`, etc.), and the aggregation automatically combines data from all nodes.
-
-Both the CPU/memory sampler and the GPU sampler support multi-node operation independently.
+Each node produces its own sample files (`__iops_trace_node01_<attempt_id>.csv`, `__iops_gpu_trace_node01_<attempt_id>.csv`, etc.), and the aggregation combines data from all nodes. The CPU/memory sampler and the GPU sampler support multi-node operation independently.
 
 ## Fault Tolerance
 
@@ -234,9 +198,4 @@ Resource sampling is designed to never break your benchmark:
 
 ## I/O Considerations
 
-Sample files are written to the execution directory. For benchmarks testing storage performance:
-
-- Place workdir on a separate filesystem from the test target
-- Or accept the minimal I/O overhead (one CSV append per sample interval)
-
-The sampler uses buffered writes and runs at lowest scheduling priority to minimize impact.
+Sample files are written to the execution directory. For benchmarks testing storage performance, place workdir on a separate filesystem from the test target, or accept the minimal I/O overhead (one CSV append per sample interval). The sampler uses buffered writes and runs at lowest scheduling priority to minimize impact.

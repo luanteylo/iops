@@ -2,7 +2,7 @@
 title: "Custom Reports & Visualization"
 ---
 
-IOPS includes a comprehensive reporting system that generates interactive HTML reports with custom plots and statistical analysis from your benchmark results.
+IOPS includes a reporting system that generates interactive HTML reports with custom plots and statistical analysis from your benchmark results.
 
 ---
 
@@ -12,29 +12,20 @@ IOPS includes a comprehensive reporting system that generates interactive HTML r
 2. [Basic Usage](#basic-usage)
 3. [Report Sections](#report-sections)
 4. [Controlling Sections](#controlling-sections)
-5. [Per-Test Image Gallery](#per-test-image-gallery)
-6. [Software Version Capture Probe](#software-version-capture-probe)
-7. [Custom Plots](#custom-plots)
-8. [Default Plots](#default-plots)
-9. [Themes and Styling](#themes-and-styling)
-10. [Plot Sizing and Defaults](#plot-sizing-and-defaults)
-11. [Output Configuration](#output-configuration)
+5. [Custom Plots](#custom-plots)
+6. [Default Plots](#default-plots)
+7. [Themes and Styling](#themes-and-styling)
+8. [Plot Sizing and Defaults](#plot-sizing-and-defaults)
+9. [Output Configuration](#output-configuration)
+10. [Per-Test Image Gallery](#per-test-image-gallery)
+11. [Software Version Capture Probe](#software-version-capture-probe)
 12. [Examples](#examples)
 
 ---
 
 ## Introduction
 
-The reporting feature allows you to:
-
-- **Auto-generate reports** after benchmark execution
-- **Create custom plots** per metric with full control over visualization
-- **Customize themes** and styling to match your preferences
-- **Control report sections** to include only relevant analyses
-- **Regenerate reports** with different configurations without re-running benchmarks
-- **Export plots as PDF** for publications and presentations (optional, requires kaleido)
-
-Reports are generated as self-contained HTML files with embedded interactive Plotly visualizations. Optionally, all plots can be exported as PDF files for use in external documents.
+Reports are generated as self-contained HTML files with embedded interactive Plotly visualizations. You can auto-generate reports after execution, define custom plots and themes per metric, control which sections appear, regenerate reports with different configurations without re-running benchmarks, and optionally export all plots as image files (requires kaleido).
 
 ---
 
@@ -49,7 +40,7 @@ reporting:
   enabled: true
 ```
 
-With this minimal configuration, IOPS will automatically generate a report after benchmark execution using default settings.
+IOPS then automatically generates a report after benchmark execution using default settings.
 
 ### Manual Report Generation
 
@@ -69,7 +60,7 @@ Generate a report with custom visualization settings:
 iops report /path/to/workdir/run_001 --report-config custom_report.yaml
 ```
 
-The `--report-config` file contains only the `reporting` section, allowing you to experiment with different visualizations without re-running benchmarks.
+The `--report-config` file contains only the `reporting` section, so you can experiment with different visualizations without re-running benchmarks.
 
 **Example custom_report.yaml**:
 
@@ -93,109 +84,67 @@ reporting:
 
 ## Report Sections
 
-Generated reports include the following sections (all enabled by default):
+Generated reports can include the following sections (all enabled by default except Bayesian Parameter Evolution):
 
 ### Image Gallery
 
-Embeds per-execution images into the HTML report as a thumbnail grid grouped by execution, with click-to-enlarge. This is useful for visual sanity checks: confirm that a simulation "looks right" before trusting its metrics.
-
-Images are base64-embedded so the HTML report remains fully self-contained. The section appears automatically when `reporting.gallery.enabled: true` and at least one image is found. See [Per-Test Image Gallery](#per-test-image-gallery) below for configuration details.
+Embeds per-execution images into the HTML report as a thumbnail grid grouped by execution, with click-to-enlarge. Useful for visual sanity checks: confirm that a simulation "looks right" before trusting its metrics. Images are base64-embedded so the report remains self-contained. The section appears automatically when `reporting.gallery.enabled: true` and at least one image is found. See [Per-Test Image Gallery](#per-test-image-gallery) for configuration.
 
 ### Software Versions
 
-Renders a table of captured software and library versions per execution. When a component reports more than one distinct version across executions, a prominent drift warning is shown. This warning is the cache-mixing detector: it catches the case where a study mixes freshly executed results with older cached results that were produced by a different software version. Outlier cells are highlighted.
-
-The section appears automatically when `benchmark.probes.versions` is configured and at least one `__iops_versions.json` file is present. See [Software Version Capture](#software-version-capture-probe) below for configuration details.
+Renders a table of captured software and library versions per execution. When a component reports more than one distinct version across executions, a prominent drift warning is shown, with outlier cells highlighted. This warning is the cache-mixing detector: it catches studies that mix freshly executed results with older cached results produced by a different software version. The section appears automatically when `benchmark.probes.versions` is configured and at least one `__iops_versions.json` file is present. See [Software Version Capture Probe](#software-version-capture-probe) for configuration.
 
 ### Test Summary
 
-Displays execution statistics and parameter space information:
-
-- Total execution time
-- Number of tests executed
-- Cache hit rate (if caching enabled)
-- Core-hours consumed (if budget tracking enabled)
-- Success/failure counts
-- Parameter space coverage
+Displays execution statistics and parameter space information: total execution time, number of tests executed, cache hit rate (if caching enabled), core-hours consumed (if budget tracking enabled), success/failure counts, and parameter space coverage.
 
 ### Best Results
 
-Shows the top N configurations for each metric:
-
-- Top 5 configurations by default (configurable via `best_results.top_n`)
-- Parameter values for each configuration
-- Metric values (mean, standard deviation, sample count)
-- Optionally includes the rendered command for reproducibility
-- Can filter by minimum sample count to ensure statistical reliability
+Shows the top N configurations for each metric: parameter values, metric values (mean, standard deviation, sample count), and optionally the rendered command for reproducibility.
 
 **Configuration**:
 
 ```yaml
 reporting:
   best_results:
-    top_n: 10                # Show top 10 configurations
+    top_n: 10                # Show top N configurations (default: 5)
     show_command: true       # Include rendered commands
     min_samples: 3           # Require at least 3 repetitions (filters unreliable results)
 ```
 
 ### Variable Impact Analysis
 
-Analyzes which variables have the strongest effect on metrics using variance-based importance:
-
-- Identifies which parameters most affect performance
-- Helps focus optimization efforts
-- Uses statistical variance decomposition
+Analyzes which variables have the strongest effect on metrics using variance-based importance, helping focus optimization efforts.
 
 **When to use**: Large parameter spaces where you need to identify the most influential variables.
 
 ### Parallel Coordinates Plot
 
-Multi-dimensional visualization showing relationships between all variables and metrics:
+Multi-dimensional visualization showing relationships between all variables and metrics: parameter correlations and trade-offs between metrics.
 
-- Visualize high-dimensional parameter spaces
-- Identify parameter correlations
-- Spot trade-offs between metrics
-
-**When to use**: Understanding complex relationships in multi-variable optimization.
+**When to use**: Understanding relationships in multi-variable optimization.
 
 ### Bayesian Evolution
 
-Shows optimization progress over iterations (Bayesian search only):
-
-- Visualizes convergence behavior
-- Shows exploration vs exploitation balance
-- Tracks improvement over time
+Shows optimization progress over iterations: convergence behavior, exploration vs exploitation balance, and improvement over time.
 
 **When to use**: Only relevant when using `search_method: "bayesian"`.
 
 ### Bayesian Parameter Evolution
 
-Shows which parameter values were explored at each iteration, with colors indicating the metric value achieved.
-
-- Disabled by default (can be verbose with many parameters)
-- Enable with `bayesian_parameter_evolution: true` in the `sections` config
-
-**When to use**: When you want detailed visualization of parameter exploration patterns.
+Shows which parameter values were explored at each iteration, with colors indicating the metric value achieved. Disabled by default (can be verbose with many parameters); enable with `bayesian_parameter_evolution: true` in the `sections` config.
 
 ### Adaptive Probing Results
 
-Shows adaptive probing outcomes (adaptive search only). This section is automatically included when using `search_method: "adaptive"` and contains:
+Shows adaptive probing outcomes, included automatically when using `search_method: "adaptive"` with no additional configuration:
 
-- **Probing Configuration** (collapsible): displays the adaptive variable settings (initial value, step method, stop condition, direction, max iterations)
-- **Probe Results Summary**: a table with one row per swept variable combination showing the last passing value, the value that triggered the stop condition, iteration count, and stop reason
-- **Trajectory Plots**: for each metric, an interactive line chart showing how the metric changes as the adaptive variable increases, with one trace per swept variable combination. Found values are marked with green-outlined circles and stop-triggered values with red X markers.
-
-**When to use**: Only relevant when using `search_method: "adaptive"`. The section appears automatically with no additional configuration needed.
+- **Probing Configuration** (collapsible): the adaptive variable settings (initial value, step method, stop condition, direction, max iterations)
+- **Probe Results Summary**: one row per swept variable combination showing the last passing value, the value that triggered the stop condition, iteration count, and stop reason
+- **Trajectory Plots**: per metric, an interactive line chart of the metric versus the adaptive variable, one trace per swept variable combination; found values are marked with green-outlined circles, stop-triggered values with red X markers
 
 ### Resource Sampling
 
-Displays a summary table of resource metrics collected by IOPS probes during benchmark execution (CPU/memory utilization, GPU power, temperature, energy, etc.).
-
-- Shows min/max/mean for each resource metric
-- Automatically appears when `__iops_resource_summary.csv` exists
-- Resource metrics are also available as regular metrics for custom plots (see below)
-
-**When to use**: Always useful when `probes.resource_sampling` or `probes.gpu_sampling` is enabled. The summary table gives a quick overview, while custom plots let you visualize correlations with your benchmark variables.
+Displays a summary table (min/max/mean) of resource metrics collected by IOPS probes during execution (CPU/memory utilization, GPU power, temperature, energy, etc.). Appears automatically when `__iops_resource_summary.csv` exists. Resource metrics are also available as regular metrics for custom plots (see [Resource Sampling Plots](#resource-sampling-plots)).
 
 ### Custom Plots
 
@@ -230,20 +179,13 @@ Define custom plots per metric for detailed analysis.
 
 ### Plot Types
 
-IOPS supports 9 plot types:
+IOPS supports 10 plot types. All types accept these optional parameters: `title` (string), `xaxis_label` (string), `yaxis_label` (string, default: metric name), `height` (pixels), and `width` (pixels). Type-specific parameters are listed below.
 
 #### 1. Execution Scatter
 
-A simple scatter plot showing metric values for each test execution in sequential order.
+A scatter plot showing metric values for each test execution in sequential order. Hover displays all parameter values for each test.
 
-**Required Parameters**: None (automatically uses execution index as x-axis)
-
-**Optional Parameters**:
-- `title` (string): Custom plot title
-- `xaxis_label` (string): Custom x-axis label (default: "Test Execution ID")
-- `yaxis_label` (string): Custom y-axis label (default: metric name)
-- `height` (integer): Plot height in pixels
-- `width` (integer): Plot width in pixels
+**Required Parameters**: None (uses execution index as x-axis; default x-axis label is "Test Execution ID")
 
 ```yaml
 metrics:
@@ -255,11 +197,11 @@ metrics:
         yaxis_label: "Bandwidth (MB/s)"
 ```
 
-**When to use**: Quick visualization of all metric values in execution order. Hover displays all parameter values for each test. This is the default first plot when using legacy report mode. Useful for identifying outliers, trends across test execution order, or verifying result consistency.
+**When to use**: Identifying outliers, trends across execution order, or verifying result consistency. This is the default first plot in legacy report mode.
 
 #### 2. Bar Charts
 
-Displays metric values with error bars (mean ± standard deviation).
+Displays metric values with error bars (mean ± standard deviation). Good for comparing discrete parameter values and showing statistical variation.
 
 ```yaml
 metrics:
@@ -271,11 +213,9 @@ metrics:
         title: "Bandwidth by Block Size"
 ```
 
-**When to use**: Comparing discrete parameter values, showing statistical variation.
-
 #### 3. Line Plots
 
-Shows trends across continuous or ordered parameters.
+Shows trends across continuous or ordered parameters: scaling behavior, grouped comparisons.
 
 ```yaml
 metrics:
@@ -289,11 +229,9 @@ metrics:
         yaxis_label: "Bandwidth (MB/s)"
 ```
 
-**When to use**: Visualizing trends, scaling behavior, grouped comparisons.
-
 #### 4. Scatter Plots
 
-Shows individual data points with optional color/size mapping.
+Shows individual data points with optional color/size mapping, for exploring relationships in high-dimensional data.
 
 ```yaml
 metrics:
@@ -307,11 +245,9 @@ metrics:
         title: "Parameter Space Exploration"
 ```
 
-**When to use**: Exploring relationships, identifying patterns, visualizing high-dimensional data.
-
 #### 5. Heatmaps
 
-2D heatmaps showing metric values across two variables.
+2D heatmaps showing metric values across a two-variable parameter grid.
 
 ```yaml
 metrics:
@@ -324,8 +260,6 @@ metrics:
         title: "Bandwidth Heatmap"
 ```
 
-**When to use**: Visualizing performance across two-dimensional parameter grid.
-
 **Supported colorscales**: `"Viridis"`, `"Plasma"`, `"Inferno"`, `"Magma"`, `"Cividis"`, `"Blues"`, `"Reds"`, `"RdBu"`, etc.
 
 #### 6. Box Plots
@@ -337,11 +271,6 @@ Box plots showing distribution statistics (quartiles, median) with optional outl
 
 **Optional Parameters**:
 - `show_outliers` (boolean): Display outlier points beyond whiskers (default: false)
-- `title` (string): Custom plot title
-- `xaxis_label` (string): Custom x-axis label
-- `yaxis_label` (string): Custom y-axis label
-- `height` (integer): Plot height in pixels
-- `width` (integer): Plot width in pixels
 
 ```yaml
 metrics:
@@ -355,21 +284,12 @@ metrics:
         yaxis_label: "Latency (ms)"
 ```
 
-**When to use**: Understanding distributions, detecting outliers, comparing variability across parameter values.
-
 #### 7. Violin Plots
 
-Violin plots showing distribution with kernel density estimation and embedded box plot.
+Violin plots showing distribution with kernel density estimation and embedded box plot, for detailed comparison of distribution shapes.
 
 **Required Parameters**:
 - `x_var` (string): Variable for categorical grouping (x-axis)
-
-**Optional Parameters**:
-- `title` (string): Custom plot title
-- `xaxis_label` (string): Custom x-axis label
-- `yaxis_label` (string): Custom y-axis label
-- `height` (integer): Plot height in pixels
-- `width` (integer): Plot width in pixels
 
 ```yaml
 metrics:
@@ -382,8 +302,6 @@ metrics:
         yaxis_label: "Latency (ms)"
 ```
 
-**When to use**: Detailed distribution analysis, comparing shapes of distributions, visualizing density patterns.
-
 #### 8. 3D Surface Plots
 
 3D surface plots showing metric values across two variables.
@@ -395,11 +313,6 @@ metrics:
 **Optional Parameters**:
 - `z_metric` (string): Metric to display as z-axis/surface (default: current metric)
 - `colorscale` (string): Plotly colorscale name (default: "Viridis")
-- `title` (string): Custom plot title
-- `xaxis_label` (string): Custom x-axis label
-- `yaxis_label` (string): Custom y-axis label
-- `height` (integer): Plot height in pixels
-- `width` (integer): Plot width in pixels
 
 ```yaml
 metrics:
@@ -415,7 +328,7 @@ metrics:
         yaxis_label: "Block Size (MB)"
 ```
 
-**When to use**: Visualizing smooth response surfaces, finding optimal regions in 2D parameter space, understanding interactions between two variables.
+**When to use**: Visualizing response surfaces, finding optimal regions in 2D parameter space, understanding interactions between two variables.
 
 #### 9. Parallel Coordinates
 
@@ -425,7 +338,6 @@ Multi-dimensional visualization showing all numeric swept variables and the metr
 
 **Optional Parameters**:
 - `colorscale` (string): Colorscale for lines colored by metric value (default: "Viridis")
-- `title` (string): Custom plot title
 
 ```yaml
 metrics:
@@ -436,11 +348,11 @@ metrics:
         title: "Multi-Dimensional Parameter Analysis"
 ```
 
-**When to use**: Visualizing relationships across many variables simultaneously, identifying parameter correlations, exploring high-dimensional parameter spaces.
+**When to use**: Visualizing relationships across many variables simultaneously, identifying parameter correlations.
 
 #### 10. Coverage Heatmap
 
-Multi-variable heatmap showing parameter space coverage with hierarchical indexing. This plot displays selected variables using multi-level row/column indices, similar to a pivot table.
+Multi-variable heatmap showing parameter space coverage with hierarchical row/column indices, similar to a pivot table.
 
 **Required Parameters**:
 - `row_vars` (list of strings): Variables to use as row indices (supports multi-level indexing)
@@ -453,23 +365,11 @@ Multi-variable heatmap showing parameter space coverage with hierarchical indexi
 - `sort_cols_by` (string): Sort columns by - "index" (variable values, default) or "values" (metric aggregation)
 - `sort_ascending` (boolean): Sort direction for "values" mode (default: false = highest values first)
 - `colorscale` (string): Plotly colorscale name (default: "Viridis")
-- `title` (string): Custom plot title
-- `xaxis_label` (string): Custom x-axis label
-- `yaxis_label` (string): Custom y-axis label
-- `height` (integer): Plot height in pixels
-- `width` (integer): Plot width in pixels
 
 ```yaml
 metrics:
   bandwidth:
     plots:
-      # Simple heatmap with 2 variables
-      - type: "coverage_heatmap"
-        row_vars: ["nodes"]
-        col_var: "transfer_size_kb"
-        aggregation: "mean"
-        title: "Bandwidth Coverage Matrix"
-
       # Multi-level row index with 3 variables
       - type: "coverage_heatmap"
         row_vars: ["nodes", "processes_per_node"]
@@ -483,35 +383,20 @@ metrics:
         row_vars: ["nodes", "processes_per_node"]
         col_var: "transfer_size_kb"
         aggregation: "mean"
-        sort_rows_by: "values"     # Sort rows by metric performance
-        sort_cols_by: "values"     # Sort columns by metric performance
-        sort_ascending: false      # Highest values first
+        sort_rows_by: "values"
+        sort_cols_by: "values"
+        sort_ascending: false
         title: "Bandwidth Sorted by Performance"
 ```
 
-**When to use**:
-- Visualizing the complete parameter space and metric values across all variable combinations
-- Identifying coverage gaps in your experimental design (missing combinations show as NaN)
-- Understanding how metrics vary across multi-dimensional parameter spaces
-- Showing test repetition counts with `aggregation: "count"`
-- Creating comprehensive coverage reports similar to pivot tables
+**When to use**: Visualizing metric values across all variable combinations, spotting coverage gaps (untested combinations show as visually distinct NaN cells), or showing repetition counts with `aggregation: "count"`.
 
 **How it works**:
-- **Variable selection**: You must specify which variables to visualize using `row_vars` (1+ variables) and `col_var` (1 variable)
-- **Multi-level indices**: Multiple `row_vars` create hierarchical row labels (e.g., "nodes=4, processes_per_node=16")
-- **Aggregation**: Cell values are aggregated using the specified function (useful when multiple tests share the same parameter combination)
-- **Sorting modes**:
-  - **`"index"`** (default): Sort by variable values in natural order (e.g., nodes: 1, 2, 4, 8; transfer_size: 64, 128, 256)
-  - **`"values"`**: Hierarchical performance-based sorting - for multi-level rows, each level is sorted by its group's average performance:
-    - First, all values of the first variable are sorted by their mean performance
-    - Within each first-level group, the second variable values are sorted by their mean performance within that group
-    - This continues for all levels, creating well-organized groupings of similar-performing configurations
-- **Missing data**: NaN values (untested combinations) are visually distinct, making it easy to spot coverage gaps
-- **Interactive hover**: Shows all variable values and the metric value for each cell
-- **Performance**: Keep total variables to 2-3 for best performance (more variables = larger pivot table)
-
-
-
+- Multiple `row_vars` create hierarchical row labels (e.g., "nodes=4, processes_per_node=16")
+- Cell values are aggregated with the chosen function when multiple tests share the same parameter combination
+- `sort_rows_by`/`sort_cols_by: "index"` (default) sorts by variable values in natural order; `"values"` sorts hierarchically by mean metric performance, level by level, grouping similar-performing configurations
+- Interactive hover shows all variable values and the metric value per cell
+- Keep total variables to 2-3 for best performance (more variables means a larger pivot table)
 
 ---
 
@@ -528,10 +413,8 @@ reporting:
     - type: "parallel_coordinates"
 ```
 
-These plots are used when:
-- `custom_plots` section is enabled
-- A metric has no specific `metrics.{metric_name}` configuration
-- Quick exploration of all parameters without manually specifying each plot.
+These plots are used when the `custom_plots` section is enabled and a metric has no specific `metrics.{metric_name}` configuration, giving quick coverage of all parameters without specifying each plot.
+
 ---
 
 ## Themes and Styling
@@ -549,7 +432,7 @@ reporting:
 
 ### Custom Colors
 
-Define a custom color palette:
+Define a custom color palette, used for grouping, categorical variables, and multi-series plots:
 
 ```yaml
 reporting:
@@ -562,8 +445,6 @@ reporting:
       - "#AB63FA"               # Purple
       - "#FFA15A"               # Orange
 ```
-
-Colors are used for grouping, categorical variables, and multi-series plots.
 
 ### Font Customization
 
@@ -610,7 +491,7 @@ metrics:
 
 ### Output Location
 
-By default, reports are saved to the workdir. Customize the location:
+By default, reports are saved to the run's workdir (e.g., `/workdir/run_001/analysis_report.html`). Customize the location:
 
 ```yaml
 reporting:
@@ -619,29 +500,18 @@ reporting:
   output_filename: "benchmark_report.html"  # Custom filename
 ```
 
-**Default behavior**: If `output_dir` is not specified, reports are saved to the run's workdir (e.g., `/workdir/run_001/analysis_report.html`).
-
 ### Plot Export (Optional)
 
-IOPS can export all plots as image files for use in publications, presentations, or external documents. This feature requires the `kaleido` package and is enabled via CLI options.
-
-**Installation:**
+IOPS can export all plots as image files for publications, presentations, or external documents. This requires the `kaleido` package and is enabled via CLI options:
 
 ```bash
 pip install iops-benchmark[plots]
 ```
 
-**Usage:**
-
 ```bash
-# Export plots as PDF (default format)
-iops report ./workdir/run_001 --export-plots
-
-# Export plots as PNG
+iops report ./workdir/run_001 --export-plots                     # PDF (default)
 iops report ./workdir/run_001 --export-plots --plot-format png
-
-# Export plots as SVG (vector format, editable)
-iops report ./workdir/run_001 --export-plots --plot-format svg
+iops report ./workdir/run_001 --export-plots --plot-format svg   # vector, editable
 ```
 
 **Supported formats:**
@@ -662,21 +532,18 @@ workdir/run_001/
 └── __iops_plots/
     ├── 001_test_summary.pdf
     ├── 002_best_configurations_bandwidth.pdf
-    ├── 003_bayesian_evolution_bandwidth.pdf
     └── ...
 ```
 
-Files are numbered in the order they appear in the report, with descriptive names based on the plot type and metric.
+Files are numbered in report order, with names based on the plot type and metric.
 
-**Note:** Plot export is opt-in. Without the `--export-plots` flag, only the HTML report is generated. If `kaleido` is not installed and `--export-plots` is used, a warning is displayed.
+**Note:** Plot export is opt-in; without `--export-plots`, only the HTML report is generated. If `kaleido` is not installed and `--export-plots` is used, a warning is displayed.
 
 ---
 
 ## Per-Test Image Gallery
 
-The gallery feature embeds per-execution images into the HTML report as a thumbnail grid grouped by execution, with click-to-enlarge. It is useful for visual sanity checks: confirm that a simulation, rendering, or analysis output "looks right" before trusting the numeric metrics.
-
-Images are base64-embedded so the HTML report is fully self-contained. Pillow is an optional dependency for downscaling; without it, images are embedded at full size.
+The gallery feature embeds per-execution images into the HTML report as a thumbnail grid grouped by execution, with click-to-enlarge (see [Report Sections](#image-gallery)). Pillow is an optional dependency for downscaling; without it, images are embedded at full size.
 
 ### Enabling the Gallery
 
@@ -693,7 +560,7 @@ With this minimal configuration, IOPS automatically scans `<execution_dir>/image
 
 ### Image Discovery
 
-IOPS supports two discovery methods that can be combined:
+IOPS supports two discovery methods that can be combined; results are deduplicated by resolved path.
 
 **1. Convention folder (zero-config beyond enabling)**
 
@@ -720,8 +587,6 @@ reporting:
       - "{{ execution_dir }}/plots/*.png"
 ```
 
-Both methods can be combined. IOPS deduplicates results by resolved path.
-
 ### Writing Images from Scripts
 
 Use the `{{ artifacts_dir }}` built-in variable in `script_template` to place images in the gallery folder without hardcoding the folder name:
@@ -734,26 +599,9 @@ scripts:
       {{ command.template }}
       mkdir -p {{ artifacts_dir }}
       cp final_state.png {{ artifacts_dir }}/
-      cp slice_xy.png {{ artifacts_dir }}/
 ```
 
-`{{ artifacts_dir }}` resolves to `<execution_dir>/<gallery.folder>` (default: `<execution_dir>/images`). When you change `gallery.folder`, `{{ artifacts_dir }}` updates automatically.
-
-### Full Gallery Configuration
-
-```yaml
-reporting:
-  enabled: true
-  gallery:
-    enabled: true                       # default: false
-    folder: images                      # default "images"; convention folder per execution
-    sources:                            # OPTIONAL explicit list of Jinja2-templated paths
-      - "{{ execution_dir }}/final_state.png"
-    pattern: "*.png"                    # default "*.png"; glob used when scanning folder
-    max_width: 512                      # OPTIONAL: downscale wider images (requires Pillow)
-    caption_vars: [nodes, ppn]          # OPTIONAL: params shown under each card (defaults to report_vars)
-    title: "Simulation thumbnails"      # default "Image Gallery"
-```
+`{{ artifacts_dir }}` resolves to `<execution_dir>/<gallery.folder>` (default: `<execution_dir>/images`) and updates automatically when you change `gallery.folder`.
 
 ### Gallery Options
 
@@ -763,9 +611,25 @@ reporting:
 | `folder` | `"images"` | Convention folder scanned per execution directory |
 | `sources` | none | Explicit Jinja2-templated paths resolved per execution |
 | `pattern` | `"*.png"` | Glob pattern used when scanning the convention folder |
-| `max_width` | none | Maximum width in pixels of the embedded image (requires Pillow; degrades gracefully without it). This is the resolution used both for the thumbnail and for the click-to-enlarge view, so set it generously (e.g. 800 to 1200) for a crisp enlarged image; the grid thumbnail is shrunk to fit its card regardless. Omit it to embed images at their original resolution. |
+| `max_width` | none | Maximum width in pixels of the embedded image (requires Pillow; degrades gracefully without it). Used for both the thumbnail and the click-to-enlarge view, so set it generously (e.g. 800 to 1200); the grid thumbnail is shrunk to fit its card regardless. Omit to embed images at original resolution. |
 | `caption_vars` | report_vars | Variable names shown as the caption under each execution's cards |
 | `title` | `"Image Gallery"` | Heading for the gallery section |
+
+Full configuration example:
+
+```yaml
+reporting:
+  enabled: true
+  gallery:
+    enabled: true
+    folder: images
+    sources:
+      - "{{ execution_dir }}/final_state.png"
+    pattern: "*.png"
+    max_width: 512
+    caption_vars: [nodes, ppn]
+    title: "Simulation thumbnails"
+```
 
 To hide the gallery from the report without disabling image collection, use the section toggle:
 
@@ -779,11 +643,11 @@ reporting:
 
 ## Software Version Capture Probe
 
-The versions probe captures software and library versions once per execution. This is metadata, not a measured metric. It is most useful for detecting version drift across a study: when a study mixes freshly executed results with older cached results produced by a different software version, the HTML report shows a prominent warning.
+The versions probe captures software and library versions once per execution (metadata, not a measured metric). It is most useful for detecting version drift: when a study mixes freshly executed results with older cached results produced by a different software version, the HTML report shows a prominent warning.
 
 ### Configuration
 
-Add `benchmark.probes.versions` with a mapping of component name to a shell command that prints the version:
+Add `benchmark.probes.versions` with a mapping of component name to a shell snippet that prints the version:
 
 ```yaml
 benchmark:
@@ -794,26 +658,21 @@ benchmark:
       compiler: "gcc --version | head -1"
 ```
 
-Each value is a shell snippet. IOPS injects a probe script (`__iops_atexit_versions.sh`) that captures versions once per execution and writes `__iops_versions.json` to the execution's repetition directory. Failing commands record an empty string rather than aborting the run.
+Failing commands record an empty string rather than aborting the run.
 
 ### How It Works
 
 1. IOPS writes `__iops_atexit_versions.sh` to each repetition folder and sources it from the generated benchmark script (after the shebang/`#SBATCH` header).
 2. The capture function is registered with the centralized exit handler, so it runs **after the benchmark body** via the `EXIT` trap. This matters on HPC systems: the version tools (`mpirun`, your application, compilers) are often only on `PATH` once the benchmark has run its own `module load` commands. Because the trap fires in the same shell, the modified environment is in scope.
-3. The probe executes each configured command, captures stdout (first 4000 bytes), and writes `__iops_versions.json`.
-4. When generating the HTML report, IOPS reads all `__iops_versions.json` files and renders the Software Versions section.
-5. The captured versions are also written to the results sink (CSV/Parquet/SQLite) as `version.<component>` columns (e.g. `version.app`, `version.mpi`), one per row. This makes versions queryable alongside the metrics, which is useful for reanalyzing old runs ("which build produced these numbers?"). To omit them, add `version.*` to `output.sink.exclude`.
+3. The probe runs each configured command, captures stdout (first 4000 bytes), and writes `__iops_versions.json`.
+4. During report generation, IOPS reads all `__iops_versions.json` files and renders the Software Versions section.
+5. The captured versions are also written to the results sink (CSV/Parquet/SQLite) as `version.<component>` columns (e.g. `version.app`, `version.mpi`), one per row, making versions queryable alongside the metrics. To omit them, add `version.*` to `output.sink.exclude`.
 
 > **Note:** Capturing at exit means versions reflect the environment the benchmark actually ran in. If the benchmark crashes before loading its modules, the affected commands record an empty string.
 
 ### Report Output
 
-The HTML report includes:
-
-- A table with one row per execution and one column per component showing the captured version string.
-- A drift warning when any component reports more than one distinct value across executions. Outlier cells are highlighted.
-
-The drift warning reads: "Warning: software version drift detected. The following components differ across executions. Results produced by different versions may not be comparable (this often happens when a study mixes freshly executed tests with older cached results)."
+The HTML report includes a table with one row per execution and one column per component, plus a drift warning when any component reports more than one distinct value across executions (outlier cells highlighted). The warning reads: "Warning: software version drift detected. The following components differ across executions. Results produced by different versions may not be comparable (this often happens when a study mixes freshly executed tests with older cached results)."
 
 ### Controlling the Section
 
@@ -827,7 +686,7 @@ reporting:
 
 ---
 
-##  Examples
+## Examples
 
 ### Minimal Configuration
 
@@ -880,22 +739,12 @@ reporting:
           colorscale: "Viridis"
           title: "Bandwidth Heatmap"
 
-        - type: "scatter"
-          x_var: "nodes"
-          y_var: "processes_per_node"
-          color_by: "bandwidth"
-
     iops:
       plots:
         - type: "bar"
           x_var: "concurrency"
           show_error_bars: true
           title: "IOPS by Concurrency Level"
-
-        - type: "line"
-          x_var: "block_size"
-          group_by: "nodes"
-          title: "IOPS Scaling"
 
   plot_defaults:
     height: 500
@@ -904,23 +753,13 @@ reporting:
 
 ### Multi-Metric Comparison
 
+Metrics can also be used as plot axes to visualize trade-offs:
+
 ```yaml
 reporting:
   enabled: true
 
   metrics:
-    bandwidth:
-      plots:
-        - type: "line"
-          x_var: "block_size"
-          group_by: "nodes"
-
-    latency:
-      plots:
-        - type: "line"
-          x_var: "block_size"
-          group_by: "nodes"
-
     efficiency:
       plots:
         - type: "scatter"
@@ -947,33 +786,15 @@ reporting:
           title: "GPU Energy Consumption by Matrix Size"
           yaxis_label: "Energy (Joules)"
 
-        - type: "heatmap"
-          x_var: "matrix_size"
-          y_var: "duration"
-          title: "Energy Consumption Heatmap"
-
-    # GPU power draw correlation
-    gpu_avg_power_w:
-      plots:
-        - type: "line"
-          x_var: "matrix_size"
-          title: "Average GPU Power Draw"
-          yaxis_label: "Power (Watts)"
-
     # CPU utilization across configurations
     cpu_avg_pct:
       plots:
         - type: "bar"
           x_var: "nodes"
           title: "CPU Utilization by Node Count"
-
-    # Per-GPU metrics (available on multi-GPU machines)
-    gpu0_energy_j:
-      plots:
-        - type: "bar"
-          x_var: "matrix_size"
-          title: "GPU 0 Energy Consumption"
 ```
+
+Per-GPU metrics (`gpu0_*`, `gpu1_*`, ...) are available on multi-GPU machines.
 
 **Common resource metrics:**
 

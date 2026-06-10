@@ -58,6 +58,7 @@ benchmark:
   bayesian_config:                  # Required if search_method: "bayesian"
     objective_metric: string        #   Required: metric to optimize
     objective: string               #   "minimize" | "maximize" (default: "minimize")
+    fallback_to_exhaustive: boolean #   Use exhaustive if n_iterations >= total space (default: true)
     n_iterations: integer           #   Total evaluations (default: 20)
     n_initial_points: integer       #   Random samples before optimization (default: 5)
     acquisition_func: string        #   "EI" | "PI" | "LCB" (default: "EI")
@@ -108,13 +109,10 @@ benchmark:
 Human-readable benchmark name. Used in logs and output.
 
 #### `workdir` (required)
-Base directory for all benchmark outputs. Supports environment variables.
-
-#### `description` (optional)
-Free-text description of the benchmark purpose.
+Base directory for all benchmark outputs. Supports environment variables. Created automatically on first run if it does not exist.
 
 #### `repetitions` (optional, default: 1)
-Number of times each test should be repeated.
+Number of times each test is repeated.
 
 #### `search_method` (optional, default: "exhaustive")
 Test selection strategy: `exhaustive`, `random`, `bayesian`, or `adaptive`. See [Adaptive Variables](../adaptive-variables) for the `adaptive` method.
@@ -122,56 +120,24 @@ Test selection strategy: `exhaustive`, `random`, `bayesian`, or `adaptive`. See 
 <details>
 <summary><strong>random_config</strong> (required if search_method: "random")</summary>
 
-Configuration for random sampling:
-
-```yaml
-benchmark:
-  search_method: "random"
-  random_config:
-    n_samples: 20                    # Sample exactly N configurations
-    # OR
-    percentage: 0.1                  # Sample 10% of parameter space
-    fallback_to_exhaustive: true     # Use full space if sample >= total
-```
-
 - `n_samples` and `percentage` are mutually exclusive
-- `fallback_to_exhaustive`: When true, uses exhaustive search if requested samples >= total space
+- `percentage` is a fraction between 0 and 1 (e.g., `0.5` samples 50% of the space); values above 1.0 are rejected
 
 </details>
 
 <details>
 <summary><strong>bayesian_config</strong> (required if search_method: "bayesian")</summary>
 
-Configuration for Bayesian optimization. Default values are empirically tuned: with 20 iterations (~7% of search space), Bayesian optimization achieves ~90% of optimal vs ~79% for random search.
-
-```yaml
-benchmark:
-  search_method: "bayesian"
-  bayesian_config:
-    objective_metric: "throughput"   # Required: metric to optimize
-    objective: "maximize"            # "minimize" | "maximize"
-    n_iterations: 20                 # Total evaluations
-    n_initial_points: 5              # Random samples before optimization
-    acquisition_func: "EI"           # "EI", "PI", or "LCB"
-    base_estimator: "RF"             # "RF", "GP", "ET", or "GBRT"
-    xi: 0.01                         # Exploration trade-off for EI/PI
-    kappa: 1.96                      # Exploration parameter for LCB
-    fallback_to_exhaustive: true     # Use exhaustive if n_iterations >= total space
-    early_stop_on_convergence: false # Stop when optimizer converges
-    convergence_patience: 3          # Convergences before early stop
-    xi_boost_factor: 5.0             # xi multiplier when stuck
-```
+Default values are empirically tuned: with 20 iterations (~7% of search space), Bayesian optimization achieves ~90% of optimal vs ~79% for random search.
 
 **Options:**
-- `fallback_to_exhaustive` (default: true): When `n_iterations >= total_space_size`, automatically switches to exhaustive search to avoid Bayesian optimization overhead for small parameter spaces.
-- `early_stop_on_convergence` (default: false): When the optimizer converges (keeps suggesting already-visited configurations), stop after `convergence_patience` consecutive convergences. When convergence is detected, `xi` is boosted by `xi_boost_factor` to encourage exploration before stopping.
-- `convergence_patience` (default: 3): Number of consecutive convergence events before early stopping. Only used when `early_stop_on_convergence: true`.
-- `xi_boost_factor` (default: 5.0): Multiplier for `xi` when convergence is detected. Helps escape local optima by encouraging more exploration.
+- `fallback_to_exhaustive` (default: true): switches to exhaustive search when `n_iterations >= total_space_size`, avoiding optimizer overhead for small parameter spaces.
+- `early_stop_on_convergence` (default: false): when the optimizer converges (keeps suggesting already-visited configurations), `xi` is boosted by `xi_boost_factor` (default: 5.0) to encourage exploration and escape local optima; after `convergence_patience` (default: 3) consecutive convergences, the run stops early.
 
 **Surrogate models:**
-- `RF`: Random Forest (default) - Most consistent results, handles categorical/mixed spaces well
-- `ET`: Extra Trees - Similar to RF, slightly higher variance
-- `GP`: Gaussian Process - Best for continuous spaces, struggles with categoricals
+- `RF`: Random Forest (default) - most consistent results, handles categorical/mixed spaces well
+- `ET`: Extra Trees - similar to RF, slightly higher variance
+- `GP`: Gaussian Process - best for continuous spaces, struggles with categoricals
 - `GBRT`: Gradient Boosted Regression Trees
 
 </details>
@@ -182,22 +148,7 @@ Execution backend: `local` or `slurm`.
 <details>
 <summary><strong>slurm_options</strong> (optional, SLURM only)</summary>
 
-Customize SLURM commands and polling behavior:
-
-```yaml
-benchmark:
-  executor: "slurm"
-  slurm_options:
-    commands:
-      submit: "sbatch"                                     # Default submit command
-      status: "squeue -j {job_id} --noheader --format=%T"
-      info: "scontrol show job {job_id}"
-      cancel: "scancel {job_id}"
-    poll_interval: 30  # seconds
-```
-
-- `{job_id}` placeholder is replaced at runtime
-- Useful for systems with command wrappers or custom SLURM installations
+`commands` customizes the SLURM command templates (see defaults in the schema above); the `{job_id}` placeholder is replaced at runtime. Useful for systems with command wrappers or custom SLURM installations.
 
 **Single-Allocation Mode:**
 
@@ -238,16 +189,6 @@ Variables to exclude from cache hash (e.g., path-based derived variables).
 
 Configuration for IOPS probes (system monitoring and execution tracking):
 
-```yaml
-benchmark:
-  probes:
-    system_snapshot: true      # Collect system info from compute nodes
-    execution_index: true      # Write metadata files for 'iops find'
-    resource_sampling: false   # Enable CPU/memory sampling
-    gpu_sampling: false        # Enable GPU metrics tracing
-    sampling_interval: 1.0     # Sampling interval in seconds
-```
-
 | Field | Default | Description |
 |-------|---------|-------------|
 | `system_snapshot` | `true` | Collect hardware/environment info from compute nodes |
@@ -262,23 +203,10 @@ benchmark:
 #### `create_folders_upfront` (optional, default: false)
 Create all execution folders at run start instead of lazily during execution.
 
-When enabled:
-- All `exec_XXXX` folders are created before execution begins
-- Tests that will be skipped (due to constraints or planner selection) get a `SKIPPED` status
-- Full visibility into parameter space from the start
-- Useful for debugging constraints and planner behavior
-
-When disabled (default):
-- Folders are created lazily as each test executes
-- SKIPPED tests have no folder (current behavior)
-
-Note: Requires `track_executions: true` to write status files.
+When enabled, all `exec_XXXX` folders exist before execution begins and tests skipped by constraints or planner selection get a `SKIPPED` status, giving full visibility into the parameter space (useful for debugging constraints and planner behavior). When disabled, folders are created lazily and skipped tests have no folder. Requires `probes.execution_index: true` to write status files.
 
 #### `exhaustive_vars` (optional)
 Variables to test exhaustively at each search point (for hybrid strategies).
-
-#### `report_vars` (optional)
-Variables to include in analysis reports.
 
 #### `max_core_hours` (optional)
 CPU core-hours budget. Overridable via `--max-core-hours`.
@@ -290,9 +218,7 @@ Jinja2 expression to compute cores per test (e.g., `"{{ nodes * ppn }}"`).
 Estimated time per test. Used for dry-run budget analysis.
 
 #### `parallel` (optional, default: 1)
-Maximum number of tests to run concurrently. Overridable via `--parallel N`.
-
-When set to a value greater than 1, IOPS dispatches multiple tests to a thread pool and waits for completions as they arrive. Works with both `local` and `slurm` executors.
+Maximum number of tests to run concurrently (thread pool). Overridable via `--parallel N`. Works with both `local` and `slurm` executors.
 
 Planner-aware behavior:
 - **Exhaustive / Random**: Supports any degree of parallelism (tests are independent).
@@ -358,45 +284,7 @@ The `list` type is used for derived variables that hold arrays, enabling indexed
 #### `sweep` (for swept variables)
 Defines values to sweep. Creates executions via Cartesian product. Mutually exclusive with `expr` and `adaptive`.
 
-<details>
-<summary><strong>sweep.mode: list</strong></summary>
-
-Explicit list of values:
-
-```yaml
-vars:
-  nodes:
-    type: int
-    sweep:
-      mode: list
-      values: [1, 2, 4, 8]
-
-  io_pattern:
-    type: str
-    sweep:
-      mode: list
-      values: ["sequential", "random"]
-```
-
-</details>
-
-<details>
-<summary><strong>sweep.mode: range</strong></summary>
-
-Numeric range (inclusive). `step` can be negative for descending:
-
-```yaml
-vars:
-  processes_per_node:
-    type: int
-    sweep:
-      mode: range
-      start: 8
-      end: 32
-      step: 8   # Creates: [8, 16, 24, 32]
-```
-
-</details>
+`mode: list` takes an explicit `values` list. `mode: range` takes `start`, `end`, `step` (inclusive; `start: 8, end: 32, step: 8` creates `[8, 16, 24, 32]`); `step` can be negative for descending ranges.
 
 #### `expr` (for derived variables)
 Expression to compute the variable. Mutually exclusive with `sweep` and `adaptive`.
@@ -432,20 +320,7 @@ Available functions: `min()`, `max()`, `abs()`, `round()`, `floor()`, `ceil()`, 
 
 </details>
 
-<details>
-<summary><strong>Built-in Variables</strong></summary>
-
-| Variable | Type | Description |
-|----------|------|-------------|
-| `execution_id` | int | Unique execution ID (1, 2, 3, ...) |
-| `repetition` | int | Current repetition (1, 2, 3, ...) |
-| `repetitions` | int | Total repetitions for this test |
-| `workdir` | str | Base working directory |
-| `execution_dir` | str | Per-execution directory |
-| `artifacts_dir` | str | Per-execution artifacts folder (`<execution_dir>/<gallery.folder>`). Use this in `script_template` to write gallery images without hardcoding the folder name. |
-| `os_env` | dict | System environment variables (e.g., `{{ os_env.HOME }}`) |
-
-</details>
+Built-in variables (`execution_id`, `repetition`, `repetitions`, `workdir`, `execution_dir`, `artifacts_dir`, `os_env`, ...) are available in expressions; see [Standard Context Variables](../templating-and-context#standard-context-variables).
 
 #### `adaptive` (for adaptive/probing variables)
 Defines a variable that is explored by adaptive probing. Mutually exclusive with `sweep` and `expr`. Requires `benchmark.search_method: "adaptive"`. Only one adaptive variable is allowed per config.
@@ -465,24 +340,10 @@ See [Adaptive Variables](../adaptive-variables) for a full guide with examples.
 | `max_iterations` | No | No limit | Maximum number of values to test |
 | `direction` | No | `"ascending"` | `"ascending"` or `"descending"` |
 
-**Example:**
-```yaml
-vars:
-  problem_size:
-    type: int
-    adaptive:
-      initial: 1000
-      factor: 2
-      stop_when: "exit_code != 0"
-      max_iterations: 15
-```
-
 </details>
 
 #### `when` (for conditional variables, optional)
-Condition expression for conditional sweep. When true, the variable is swept normally. When false, the variable uses the `default` value. Only valid for swept variables.
-
-This eliminates redundant test combinations where a variable is irrelevant based on another variable's value.
+Condition expression for conditional sweep. When true, the variable is swept normally; when false, it uses the `default` value. Only valid for swept variables. This eliminates redundant combinations where a variable is irrelevant given another variable's value. See [Execution Matrix Generation](../matrix-generation#conditional-variables) for how conditional variables shape the matrix.
 
 #### `default` (required if `when` is specified)
 Value to use when the `when` condition is false. Must be compatible with the variable's `type`.
@@ -511,49 +372,7 @@ vars:
 Without `when`: 2 × 3 = 6 combinations
 With `when`: 3 (true) + 1 (false) = 4 combinations
 
-**Complex condition:**
-```yaml
-vars:
-  nodes:
-    type: int
-    sweep:
-      mode: list
-      values: [1, 2, 4, 8]
-
-  advanced_threads:
-    type: int
-    sweep:
-      mode: list
-      values: [2, 4, 8]
-    when: "nodes > 2"          # Only sweep for larger node counts
-    default: 1
-```
-
-**Dependency chain:**
-```yaml
-vars:
-  enable_feature:
-    type: bool
-    sweep:
-      mode: list
-      values: [true, false]
-
-  feature_mode:
-    type: str
-    sweep:
-      mode: list
-      values: ["fast", "balanced", "accurate"]
-    when: "enable_feature"
-    default: "disabled"
-
-  feature_intensity:
-    type: int
-    sweep:
-      mode: list
-      values: [1, 2, 3]
-    when: "feature_mode != 'disabled'"   # Depends on feature_mode
-    default: 0
-```
+Conditions can chain: a variable's `when` may reference another conditional variable (e.g., `when: "feature_mode != 'disabled'"` where `feature_mode` itself has a `when`).
 
 **Available operators:** `==`, `!=`, `<`, `>`, `<=`, `>=`, `and`, `or`, `not`
 
@@ -610,22 +429,11 @@ constraints:
     rule: "nodes * processes_per_node <= 256"
     violation_policy: "warn"
 
-  # Relationship validation
-  - name: "transfer_size_limit"
-    rule: "transfer_size <= block_size"
-    violation_policy: "skip"
-
   # Environment variable requirement
   - name: "require_scratch_dir"
     rule: "os_env.get('SCRATCH', '') != ''"
     violation_policy: "error"
     description: "SCRATCH environment variable must be set"
-
-  # Conditional based on cluster
-  - name: "large_jobs_on_hpc"
-    rule: "nodes <= 4 or os_env.get('CLUSTER_NAME', '') == 'hpc_large'"
-    violation_policy: "skip"
-    description: "Jobs with >4 nodes only allowed on hpc_large cluster"
 ```
 
 </details>
@@ -710,25 +518,6 @@ Script identifier. Used for file naming.
 #### `script_template` (required)
 Script content as Jinja2 template. Use `{{ command.template }}` to include the command.
 
-<details>
-<summary><strong>Local Executor Example</strong></summary>
-
-```yaml
-scripts:
-  - name: "ior"
-    script_template: |
-      #!/bin/bash
-      set -euo pipefail
-      echo "Execution {{ execution_id }}, repetition {{ repetition }}"
-      module load mpi ior
-      {{ command.template }}
-```
-
-</details>
-
-<details>
-<summary><strong>SLURM Executor Example</strong></summary>
-
 ```yaml
 scripts:
   - name: "ior"
@@ -744,14 +533,14 @@ scripts:
       mpirun {{ command.template }}
 ```
 
-</details>
+For local execution, omit the `#SBATCH` directives. See [Writing Scripts](../writing-scripts) for practical guidance and more examples.
 
 <details>
 <summary><strong>inputs</strong> (optional)</summary>
 
-Declarative input files generated before the script runs. Useful when the benchmark reads its parameters from a config file (or hostfile, manifest, etc.) instead of the command line.
+Declarative input files generated before the script runs, for benchmarks that read parameters from a config file (or hostfile, manifest, etc.) instead of the command line.
 
-Files are rendered with the same Jinja2 context as `script_template` and written to disk at preparation time, alongside `run_*.sh`. Because they're materialized up front, the exact input used for every execution is on disk for inspection even when the script aborts before producing output.
+Files are rendered with the same Jinja2 context as `script_template` and written at preparation time, alongside `run_*.sh`, so the exact input of every execution is on disk for inspection even when the script aborts before producing output.
 
 ```yaml
 scripts:
@@ -780,7 +569,7 @@ scripts:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Identifier used in `{{ inputs.<name>.path }}` references. Must be a valid Python identifier (letters/digits/underscores, no leading digit) and unique within the script. |
+| `name` | Yes | Identifier used in `{{ inputs.<name>.path }}` references. Must be a valid Python identifier, unique within the script. |
 | `path` | Yes | Destination path on disk, Jinja2-rendered (e.g. `"{{ execution_dir }}/ior.conf"`). |
 | `template` | One of | Inline content, rendered with the full execution context. |
 | `file` | One of | Path to an external template file (resolved relative to the YAML config, or as an absolute path). The file content replaces `template` at load time. |
@@ -792,14 +581,9 @@ scripts:
 - `{{ os_env.* }}` for environment variables
 - `{{ inputs.<other>.path }}` to reference another input's resolved path (within the same script)
 
-**Referencing inputs in `script_template`, `command.template`, or `post.script`:**
-
-Use `{{ inputs.<name>.path }}` to get the rendered destination path. The reference works in any of the script-level templates and in the top-level `command.template`.
+`{{ inputs.<name>.path }}` also works in `script_template`, `post.script`, and the top-level `command.template`.
 
 **Rules:**
-- `name` and `path` are required for every entry.
-- Exactly one of `template` or `file` must be provided per entry.
-- Input names must be unique within a script.
 - Jinja2 syntax in `template` and `path` is validated at load time (alongside `script_template`).
 - The file is rewritten on every repetition, so each repetition_NNN folder gets its own copy.
 
@@ -842,7 +626,6 @@ scripts:
       metrics:
         - name: bwMiB
         - name: iops
-        - name: latency
       parser_script: |
         import json
 
@@ -852,8 +635,7 @@ scripts:
             results = data["tests"][0]["Results"][0]
             return {
                 "bwMiB": float(results["bwMiB"]),
-                "iops": float(results["OPs"]),
-                "latency": float(results["MeanTime"])
+                "iops": float(results["OPs"])
             }
 ```
 
@@ -861,6 +643,8 @@ scripts:
 - Function must be named `parse`
 - Takes one argument: `file_path` (str)
 - Returns dict with metric names matching `metrics` list
+
+See [Writing Parsers](../writing-parsers) for context globals and more examples.
 
 </details>
 
@@ -908,26 +692,6 @@ Exclude specific fields from output using dot notation. Wildcards are supported.
 #### `table` (optional, SQLite only)
 Table name (default: "results").
 
-<details>
-<summary><strong>Examples</strong></summary>
-
-```yaml
-# CSV with default path ({{ workdir }}/results.csv)
-output:
-  sink:
-    type: csv
-    exclude:
-      - "benchmark.description"
-
-# CSV with custom path
-output:
-  sink:
-    type: csv
-    path: "{{ workdir }}/custom_results.csv"
-```
-
-</details>
-
 ---
 
 ## `reporting` (optional)
@@ -941,21 +705,22 @@ reporting:
   output_filename: string       # Optional: report filename (default: "analysis_report.html")
 
   theme:                        # Optional: theme configuration
-    style: string               #   Plotly theme (default: "plotly_white")
+    style: string               #   Plotly theme: "plotly_white" (default), "plotly",
+                                #   "plotly_dark", "ggplot2", "seaborn", "simple_white"
     colors: list                #   Custom color palette (hex codes)
-    font_family: string         #   Font family
+    font_family: string         #   Font family (e.g., "Arial, sans-serif")
 
   sections:                     # Optional: section visibility
-    test_summary: boolean       #   (default: true)
-    best_results: boolean       #   (default: true)
-    variable_impact: boolean    #   (default: true)
-    parallel_coordinates: boolean #   (default: true)
-    bayesian_evolution: boolean #   (default: true)
-    bayesian_parameter_evolution: boolean #   (default: false)
-    resource_sampling: boolean  #   (default: true)
-    custom_plots: boolean       #   (default: true)
-    gallery: boolean            #   (default: true; auto-enabled when gallery images exist)
-    versions: boolean           #   (default: true; auto-enabled when version probe data exists)
+    test_summary: boolean       #   Execution statistics (default: true)
+    best_results: boolean       #   Top N configurations (default: true)
+    variable_impact: boolean    #   Variance-based importance (default: true)
+    parallel_coordinates: boolean #   Multi-dimensional visualization (default: true)
+    bayesian_evolution: boolean #   Optimization progress, Bayesian only (default: true)
+    bayesian_parameter_evolution: boolean #   Parameter exploration (default: false)
+    resource_sampling: boolean  #   Resource metrics summary table (default: true)
+    custom_plots: boolean       #   User-defined plots (default: true)
+    gallery: boolean            #   Per-execution image gallery (default: true; auto-enabled when images exist)
+    versions: boolean           #   Software versions table (default: true; auto-enabled when probe data exists)
 
   gallery:                      # Optional: per-execution image gallery
     enabled: boolean            #   Enable the gallery section (default: false)
@@ -984,71 +749,16 @@ reporting:
       ...
 
   plot_defaults:                # Optional: default sizing
-    height: integer
-    width: integer
-    margin:
+    height: integer             #   (default: 500)
+    width: integer              #   (default: null = auto)
+    margin:                     #   (default: null = Plotly defaults)
       l: integer
       r: integer
       t: integer
       b: integer
 ```
 
-#### `enabled` (optional, default: false)
-Enable automatic report generation. Can also use `iops report` manually.
-
-#### `output_dir` (optional)
-Directory for reports. Defaults to run's workdir.
-
-#### `output_filename` (optional, default: "analysis_report.html")
-Report filename.
-
-<details>
-<summary><strong>theme</strong> (optional)</summary>
-
-```yaml
-reporting:
-  theme:
-    style: "plotly_white"     # plotly, plotly_dark, ggplot2, seaborn, simple_white
-    colors: ["#3498db", "#e74c3c", "#2ecc71"]
-    font_family: "Arial, sans-serif"
-```
-
-</details>
-
-<details>
-<summary><strong>sections</strong> (optional)</summary>
-
-Controls which report sections are visible:
-
-```yaml
-reporting:
-  sections:
-    test_summary: true         # Execution statistics
-    best_results: true         # Top N configurations
-    variable_impact: true      # Variance-based importance
-    parallel_coordinates: true # Multi-dimensional visualization
-    bayesian_evolution: true   # Optimization progress (Bayesian only)
-    bayesian_parameter_evolution: false  # Parameter exploration (default: false)
-    resource_sampling: true    # Resource metrics summary table
-    custom_plots: true         # User-defined plots
-    gallery: true              # Per-execution image gallery (auto-enabled when images exist)
-    versions: true             # Software versions table (auto-enabled when probe data exists)
-```
-
-</details>
-
-<details>
-<summary><strong>best_results</strong> (optional)</summary>
-
-```yaml
-reporting:
-  best_results:
-    top_n: 10                 # Number of top configurations
-    show_command: true        # Include rendered command
-    min_samples: 3            # Minimum repetitions required
-```
-
-</details>
+Reports can also be generated manually with `iops report`, regardless of `enabled`.
 
 <details>
 <summary><strong>metrics</strong> (optional)</summary>
@@ -1061,8 +771,6 @@ reporting:
     # Benchmark metric (from parser)
     bwMiB:
       plots:
-        - type: "execution_scatter"
-
         - type: "line"
           x_var: "block_size_mb"
           group_by: "nodes"
@@ -1072,11 +780,6 @@ reporting:
           x_var: "nodes"
           y_var: "processes_per_node"
           colorscale: "Viridis"
-
-        - type: "coverage_heatmap"
-          row_vars: ["nodes", "processes_per_node"]
-          col_var: "volume_size_gb"
-          aggregation: "mean"
 
     # Resource sampling metric (from gpu_sampling probe)
     gpu_energy_j:
@@ -1117,25 +820,6 @@ reporting:
 
 </details>
 
-<details>
-<summary><strong>plot_defaults</strong> (optional)</summary>
-
-Default sizing for all plots:
-
-```yaml
-reporting:
-  plot_defaults:
-    height: 500
-    width: null              # auto
-    margin:
-      l: 80
-      r: 80
-      t: 100
-      b: 80
-```
-
-</details>
-
 ---
 
 ## `machines` (optional)
@@ -1154,6 +838,6 @@ machines:
     reporting: {}     # Optional: reporting overrides
 ```
 
-Each machine entry can override any combination of the standard top-level sections. Overrides are deep-merged into the base configuration — only what you specify is changed.
+Each machine entry can override any combination of the standard top-level sections. Overrides are deep-merged into the base configuration: only what you specify is changed.
 
 See the [Machine Overrides Guide](machines) for merge rules, examples, and best practices.

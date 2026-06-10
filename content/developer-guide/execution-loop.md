@@ -3,7 +3,7 @@ title: "Execution Loop"
 weight: 30
 ---
 
-This page documents the IOPS execution loop architecture, including how the Runner, Planner, and Executor components work together to orchestrate benchmark execution.
+This page documents the IOPS execution loop architecture: how the Runner, Planner, and Executor components orchestrate benchmark execution.
 
 ## Overview
 
@@ -142,7 +142,7 @@ class BasePlanner(ABC):
 
 ### Registry Pattern
 
-Planners register themselves using a decorator:
+Planners (and executors, see below) register themselves with a decorator:
 
 ```python
 @BasePlanner.register("exhaustive")
@@ -157,6 +157,10 @@ class RandomSamplingPlanner(BasePlanner):
 class BayesianPlanner(BasePlanner):
     ...
 
+@BasePlanner.register("adaptive")
+class AdaptivePlanner(BasePlanner):
+    ...
+
 # Dynamic instantiation from config
 planner = BasePlanner.build(cfg)  # Uses cfg.benchmark.search_method
 ```
@@ -168,6 +172,7 @@ planner = BasePlanner.build(cfg)  # Uses cfg.benchmark.search_method
 | **Exhaustive** | Tests all parameter combinations | No-op |
 | **Random** | Random subset of parameter space | No-op |
 | **Bayesian** | Optimization-guided search | Updates surrogate model |
+| **Adaptive** | Threshold probing | Evaluates `stop_when`, advances or stops the probe |
 
 ### Execution Matrix
 
@@ -413,9 +418,7 @@ class ExecutionInstance:
 
 ### Cache Key
 
-Results are cached by:
-- Parameter values (excluding `cache_exclude_vars`)
-- Repetition number
+Results are keyed by parameter values (excluding `cache_exclude_vars`) and repetition number:
 
 ```python
 cache_key = hash(
@@ -477,7 +480,7 @@ def _write_status_file(self, test, status=None):
 | File | Purpose |
 |------|---------|
 | `iops/execution/runner.py` | IOPSRunner class, main execution loop |
-| `iops/execution/planner.py` | BasePlanner, ExhaustivePlanner, BayesianPlanner |
+| `iops/execution/planner.py` | BasePlanner, ExhaustivePlanner, RandomSamplingPlanner, BayesianPlanner, AdaptivePlanner |
 | `iops/execution/executors.py` | BaseExecutor, LocalExecutor, SlurmExecutor |
 | `iops/execution/matrix.py` | build_execution_matrix(), ExecutionInstance |
 | `iops/execution/cache.py` | ExecutionCache class |

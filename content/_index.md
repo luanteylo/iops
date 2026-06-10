@@ -7,11 +7,7 @@ weight: 1
 
 **A generic benchmark orchestration framework for automated parametric experiments.**
 
-IOPS automates the generation, execution, and analysis of benchmark experiments. Instead of writing custom scripts for each benchmark study, you define a YAML configuration describing what to vary, what to run, and what to measure—IOPS handles the rest.
-
-## What is IOPS?
-
-IOPS is a framework that transforms benchmark experiments from manual scripting into automated, reproducible workflows.
+IOPS automates the generation, execution, and analysis of benchmark experiments. Instead of writing custom scripts for each study, you define a YAML configuration describing what to vary, what to run, and what to measure; IOPS handles the rest.
 
 **Without IOPS**: Write bash scripts → Parse outputs → Aggregate data → Generate plots → Repeat for each parameter change
 
@@ -21,30 +17,26 @@ Originally designed for I/O performance studies (see [our 2022 paper](https://in
 
 ## Key Features
 
-- **Parameter Sweeping**: Automatically generate and execute tests for all parameter combinations
-- **Multiple Search Strategies**: Exhaustive, Bayesian optimization, or random sampling
+- **Parameter Sweeping**: Generate and execute tests for all parameter combinations
+- **Search Strategies**: Exhaustive, Bayesian optimization, or random sampling
 - **Execution Backends**: Run locally or submit to SLURM clusters
 - **Execution Exploration**: Find and filter execution folders by parameter values
-- **Smart Caching**: Skip redundant tests with parameter-aware result caching
+- **Caching**: Skip redundant tests with parameter-aware result caching
 - **Budget Control**: Set core-hour limits to avoid exceeding compute allocations
-- **Automatic Reports**: Generate interactive HTML reports with plots and statistical analysis
-- **Flexible Output**: Export results to CSV, Parquet, or SQLite
+- **Reports**: Interactive HTML reports with plots and statistical analysis
+- **Output**: Export results to CSV, Parquet, or SQLite
 
 ## Blog
 
-Check out our [blog]({{< ref "/blog" >}}) for tutorials and use cases:
+Tutorials and use cases on the [blog]({{< ref "/blog" >}}):
 
 - [Measuring the runtime overhead of an I/O interception library]({{< ref "/blog/toto-overhead-analysis" >}}) - Quantifying TOTO's overhead with conditional variables and resource tracing
 - [Testing IOPS's Bayesian search against random sampling]({{< ref "/blog/bayesian-optimization-study" >}}) - How guided search reaches the optimum with far fewer evaluations
 - [Using IOPS on Grid'5000]({{< ref "/blog/grid500" >}}) - Run IOPS with OAR scheduler on Grid'5000
 
-## Slides
-
-New to IOPS? The [overview presentation (PDF)](slides/iops_presentation.pdf) walks through the YAML configuration, search strategies, parsers and reports, with a running IOR example.
-
 ## Links
 
-- **Slides**: [IOPS overview (PDF)](slides/iops_presentation.pdf)
+- **Slides**: [IOPS overview (PDF)](slides/iops_presentation.pdf) - YAML configuration, search strategies, parsers, and reports, with a running IOR example
 - **Repository**: [GitLab](https://gitlab.inria.fr/lgouveia/iops)
 - **Issues**: [Issue Tracker](https://gitlab.inria.fr/lgouveia/iops/-/issues)
 - **PyPI**: [iops-benchmark](https://pypi.org/project/iops-benchmark/)
