@@ -1,4 +1,19 @@
 {{ define "main" }}
+  {{ $docsSections := slice "getting-started" "user-guide" "developer-guide" "about" }}
+  {{ if in $docsSections .Section }}
+  <div class="container docs-container" role="main">
+    <div class="row">
+      <div class="col-md-3 docs-sidebar-col">
+        {{ partial "docs_sidebar.html" . }}
+      </div>
+      <div class="col-md-9 docs-content">
+        {{ with .Content }}
+          {{ . }}
+        {{ end }}
+      </div>
+    </div>
+  </div>
+  {{ else }}
   <div class="container" role="main">
     <div class="row">
       <div class="col-lg-8 col-lg-offset-2 col-md-10 col-md-offset-1">
@@ -10,4 +25,5 @@
       </div>
     </div>
   </div>
+  {{ end }}
 {{ end }}

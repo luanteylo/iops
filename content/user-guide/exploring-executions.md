@@ -1,5 +1,6 @@
 ---
 title: "Exploring Executions"
+weight: 85
 ---
 
 IOPS provides tools to explore, search, and inspect execution folders after running benchmarks, useful for large parameter sweeps where you need to find specific configurations or investigate failures. For the full flag reference, see the [CLI guide](../cli#find---explore-executions).

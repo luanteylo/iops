@@ -1,6 +1,6 @@
 ---
 title: "Data Sources"
-weight: 10
+weight: 30
 ---
 
 This page documents where IOPS CLI commands read their data.

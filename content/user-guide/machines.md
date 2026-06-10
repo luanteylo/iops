@@ -1,6 +1,6 @@
 ---
 title: "Machine Overrides"
-weight: 15
+weight: 55
 ---
 
 Use a single configuration file across multiple systems with per-machine overrides.

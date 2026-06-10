@@ -1,5 +1,6 @@
 ---
 title: "Command Line Interface"
+weight: 90
 ---
 
 Complete reference for the IOPS command-line interface.

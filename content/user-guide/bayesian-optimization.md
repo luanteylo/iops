@@ -1,5 +1,6 @@
 ---
 title: "Bayesian Optimization"
+weight: 40
 ---
 
 Bayesian optimization lets IOPS explore a parameter space to find configurations that maximize or minimize a target metric, using far fewer evaluations than exhaustive search. Instead of testing every combination, it builds a surrogate model from observed results and focuses on the most promising regions.

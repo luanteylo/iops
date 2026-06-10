@@ -1,5 +1,6 @@
 ---
 title: "IOPS YAML Format Reference"
+weight: 10
 ---
 
 *Complete guide to the IOPS benchmark configuration format*

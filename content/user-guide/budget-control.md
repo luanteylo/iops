@@ -1,5 +1,6 @@
 ---
 title: "Budget Control"
+weight: 70
 ---
 
 IOPS can track core-hours consumption and automatically stop execution when a budget limit is reached, helping prevent exceeding compute allocations on HPC systems.

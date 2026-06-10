@@ -1,5 +1,6 @@
 ---
 title: "Writing Scripts"
+weight: 20
 ---
 
 The `scripts[]` section of your YAML tells IOPS *how* to launch your benchmark. IOPS owns the parameter sweep and the result database; you own the shell script that actually runs the workload. This page is the practical guide to writing scripts; for the schema (every field, every option), see [YAML Schema Reference / scripts](../yaml-schema/#scripts).

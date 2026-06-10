@@ -1,5 +1,6 @@
 ---
 title: "Writing Parsers"
+weight: 25
 ---
 
 IOPS does not know the output format of your benchmark. Instead, you provide a small Python script (the **parser**) that reads whatever your benchmark produces and returns the metrics you care about. This page explains how parsers work, how to write one, and where the extracted data ends up.

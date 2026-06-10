@@ -1,5 +1,6 @@
 ---
 title: "Single-Allocation Mode"
+weight: 65
 ---
 
 > **Experimental Feature**

@@ -1,5 +1,6 @@
 ---
 title: "Changelog"
+weight: 40
 ---
 
 All notable changes to IOPS are documented here.

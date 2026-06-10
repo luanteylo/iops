@@ -1,6 +1,6 @@
 ---
 title: "Execution Loop"
-weight: 30
+weight: 10
 ---
 
 This page documents the IOPS execution loop architecture: how the Runner, Planner, and Executor components orchestrate benchmark execution.

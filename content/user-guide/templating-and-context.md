@@ -1,5 +1,6 @@
 ---
 title: "Templating and Context Reference"
+weight: 15
 ---
 
 IOPS uses Jinja2 templating throughout the configuration to enable dynamic values, conditional logic, and computed expressions. This guide covers both the Jinja2 syntax and the context variables available in each configuration section.

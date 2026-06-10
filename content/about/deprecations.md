@@ -1,5 +1,6 @@
 ---
 title: "Deprecations"
+weight: 30
 ---
 
 This page lists deprecated features and provides migration guidance.

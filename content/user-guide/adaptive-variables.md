@@ -1,5 +1,6 @@
 ---
 title: "Adaptive Variables"
+weight: 45
 ---
 
 Adaptive variables let IOPS probe for threshold values by starting at an initial value and progressing until a stop condition is met. Use them to find limits such as maximum problem sizes, memory capacities, or performance cliffs without manually defining the search space.

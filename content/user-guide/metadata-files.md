@@ -1,6 +1,6 @@
 ---
 title: "Metadata Files"
-weight: 65
+weight: 80
 ---
 
 IOPS generates metadata files with the `__iops_` prefix to track executions, enable fast lookups, and support report generation. This page documents each file, when it is written, and how to control its generation.

@@ -1,5 +1,6 @@
 ---
 title: "Design Philosophy"
+weight: 10
 ---
 
 Five design principles guide IOPS development. They explain why IOPS looks the way it does and what trade-offs were chosen.

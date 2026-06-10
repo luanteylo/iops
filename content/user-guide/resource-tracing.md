@@ -1,6 +1,6 @@
 ---
 title: "Resource Sampling"
-weight: 66
+weight: 75
 ---
 
 IOPS can optionally sample CPU, memory, and GPU utilization during benchmark execution, so you can correlate parameter configurations with resource footprint (e.g., heatmap analysis of how parameters affect resource usage).

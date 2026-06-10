@@ -1,5 +1,6 @@
 ---
 title: "Custom Reports & Visualization"
+weight: 95
 ---
 
 IOPS includes a reporting system that generates interactive HTML reports with custom plots and statistical analysis from your benchmark results.
