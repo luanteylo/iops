@@ -6,6 +6,62 @@ All notable changes to IOPS are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+#### Search and planning
+- Bayesian search no longer crashes on string (categorical) sweep variables: the nearest-valid-point mapping converted every dimension with `float()`, so any `type: str` variable with more than one value failed on the first iteration. Categorical values are now mapped to category indices for distance computation.
+- Single-allocation (kickoff) mode now honors random sampling. Previously `search_method: random` with `allocation.mode: single` silently prepared and ran the entire parameter space, ignoring `n_samples`/`percentage`.
+- `search_method: adaptive` is now rejected with `allocation.mode: single` (same as bayesian) instead of crashing at run start; adaptive probing cannot work in a pre-generated script.
+- Constraints that reference an adaptive variable no longer abort the run during matrix generation with an undefined-variable error. They are deferred to per-probe evaluation, where the adaptive value is in scope.
+- The Bayesian planner now hands out per-repetition clones of execution instances instead of mutating one shared object. Previously resource-sampling summaries collapsed to the last repetition per execution, and dry-run accounting could attribute results to the wrong execution id.
+- When the Bayesian optimizer suggests an already-visited configuration, the planner now re-tells the optimizer that point's known outcome so the next suggestion actually changes; previously all retries returned the identical point and the iteration silently degraded to random sampling or triggered spurious early convergence.
+- An explicit `random_seed: null` no longer crashes the Bayesian convergence fallback.
+
+#### Execution runtime
+- Parser output capture is now serialized across worker threads. With `parallel > 1`, the process-wide stdout/stderr redirection could cross-contaminate `parser_stdout`/`parser_stderr` files between tests and leave the process writing to an abandoned buffer.
+- IOPS metadata files (`__iops_index.json`, `__iops_status.json`, `__iops_params.json`, run metadata) are now written atomically (temp file plus rename). Concurrent readers such as `iops find` and watch mode could previously observe truncated JSON mid-rewrite and fail or flicker.
+- The local executor streams benchmark stdout/stderr directly to files instead of buffering everything in memory: verbose benchmarks no longer risk exhausting RAM, and output captured before an interrupt is preserved.
+- A typo in `benchmark.cores_expr` now fails fast with a clear error instead of silently counting every test as 1 core, which effectively disabled `max_core_hours` budget enforcement. The expression is also evaluated without builtins.
+- Fixed two Ctrl+C races: the interrupt handler could deadlock on the job-tracking lock, and an interrupt arriving between the shutdown check and a thread-pool submission turned a clean shutdown into a traceback.
+- Dry-run reports for planners that reuse test objects (Bayesian) now snapshot execution ids and variables at collection time, fixing unique-test counts and cache-hit accounting.
+
+#### Configuration loading
+- Config blocks with a null or wrong-typed body (`sweep:`, `adaptive:`, `vars:`, `scripts:`, `command:`, `parser:`, `post:`, `constraints:`, `machines:`, and all `reporting` sub-blocks) now produce field-located validation errors instead of raw AttributeError/TypeError crashes. Commenting out a block body while leaving the key is the common trigger.
+- `--machine`/`IOPS_MACHINE` with no `machines` section in the config now produces the intended friendly error instead of `KeyError: 'machines'`.
+- `cache_file: null` no longer crashes; an empty `cache_file` is rejected with a clear error instead of resolving to the current directory. Templated `cache_file` paths now render strictly: an undefined variable raises a field-located error instead of silently producing a wrong path like `.db`.
+- One-line script templates containing Jinja expressions (e.g. `bash {{ workdir }}/run.sh`) are no longer misclassified as file paths and rejected with "file was not found".
+- `output.sink.include` now emits a warning that it is not supported instead of being silently ignored.
+- `random_config.percentage` values above 1.0 are rejected with an explanation that percentage is a 0-1 fraction; previously `percentage: 50` was silently clamped to 1.0, meaning 100% sampling.
+- Non-string `command.template`/`script_template` values now produce the intended "must be a string, got int" hint instead of an AttributeError.
+- A script without a `name` now fails with `scripts[i].name is required` instead of a KeyError.
+- Machine overrides that replace a var's `sweep` with `expr` now also clear inherited `when`/`default`, fixing a confusing validation failure for a reasonable override.
+- Duplicate names within a machine-override list (`scripts`, `constraints`) now raise an error instead of silently dropping the second entry.
+- `benchmark.workdir` no longer needs to pre-exist; it is created on first run as the (previously unreachable) creation logic always intended.
+
+#### CLI, watch mode, find
+- Bare `iops archive` and `iops cache` print the intended "No subcommand specified" help instead of crashing with an AttributeError.
+- `iops find --interval` values below 1 are rejected; an interval of 0 previously busy-spun the CPU and disabled all keyboard controls.
+- PageUp/PageDown now work in watch mode: their 4-byte escape sequences were truncated to 3 bytes and could never match, leaving a stray `~` consumed as a spurious keypress.
+- The `/` go-to-test search in watch mode jumps to the correct row when completed tests are hidden (auto-enabled for runs with more than 20 tests).
+- Watch mode no longer evaluates `cores_expr` text from metadata files with `eval()`; values are parsed as plain numbers.
+- A held or repeated keypress can no longer starve the watch-mode data refresh; refresh is driven by a monotonic deadline.
+- The `/dev/tty` keyboard fallback now also engages when stdin is closed or unusable, not only when it is a non-TTY.
+- An interrupt arriving before the first watch refresh no longer raises UnboundLocalError.
+- `iops find` parameter filters now match numerically and case-insensitively for booleans: `nodes=4` matches a stored `4.0`, `flag=true` matches `True`, `1e3` matches `1000.0`. The same matching is used by watch-mode filters.
+- Log messages containing ` | ` (such as per-test metric summaries) no longer have their first part duplicated as a prefix on wrapped or multi-line console output.
+
+#### Reporting
+- Total core-hours in HTML reports paired each row with the wrong duration (or silently skipped rows) whenever any execution had been filtered out as failed; rows and durations are now aligned positionally.
+- Benchmark name, description, variable values, hostnames, and probe-collected system strings are now HTML-escaped in report sections that previously interpolated them raw, so a value containing markup cannot break or inject into the report.
+- Custom plot configurations survive report regeneration: the serialized template now includes `row_vars`, `col_var`, `aggregation`, sort options, the `bayesian_parameter_evolution` and `resource_sampling` section flags, and `best_results.min_samples`, all of which were previously dropped.
+- Scatter plots with a string-typed variable as y-axis or color no longer fail; non-numeric color columns are encoded with labeled colorbars.
+- The variable impact plot no longer disappears when all impacts are zero.
+
+#### Cache
+- The repetition count for cached parameter sets now counts distinct repetitions, fixing over-counting on caches built with `iops cache rebuild` (which may hold several rows per repetition).
+- The objective-metric cache lookup orders entries by creation time, making the fallback deterministic, and no longer crashes on string-serialized metric values.
+- Fixed a connection leak in the cache's locked-database retry path, and `iops cache rebuild` now closes its database connections.
+
 ## [3.5.7] - 2026-06-10
 
 This release fixes a set of correctness bugs found in a code audit,
