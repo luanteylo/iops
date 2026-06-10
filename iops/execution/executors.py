@@ -172,6 +172,14 @@ class BaseExecutor(ABC, HasLogger):
         except Exception as e:
             self.logger.debug(f"  [{self._LOG_PREFIX}] Failed to write status update: {e}")
 
+        # Mirror live PENDING/RUNNING transitions into the run-root roll-up so
+        # watch sees them without scanning folders.
+        rollup = getattr(self.runner, "status_rollup", None) if self.runner else None
+        if rollup is not None:
+            rollup.record(
+                f"exec_{test.execution_id:04d}", test.repetition, status_data
+            )
+
     # ------------------------------------------------------------------ #
     # Filesystem helpers with retry for HPC shared filesystems
     # ------------------------------------------------------------------ #

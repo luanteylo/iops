@@ -5,6 +5,7 @@ from iops.execution.executors import BaseExecutor
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
+from iops.results.status_rollup import StatusRollup, exec_key_for
 from iops.fileutils import atomic_write_json
 from iops.reporting.config_template import serialize_reporting_config, save_report_config_template
 
@@ -105,6 +106,11 @@ class IOPSRunner(HasLogger):
 
         # Pass runner reference to executor for job tracking (used by SLURM)
         self.executor.set_runner(self)
+
+        # Run-root status roll-up: a single aggregate of per-repetition status
+        # that watch/find can read instead of scanning every execution folder.
+        # Created at run() start when execution tracking is enabled.
+        self.status_rollup: Optional[StatusRollup] = None
 
         # Cache-only mode: skip tests not in cache instead of executing
         self.cache_only = getattr(args, 'cache_only', False) and self.cache is not None
@@ -1037,6 +1043,12 @@ class IOPSRunner(HasLogger):
             self.logger.debug(f"  [Status] Wrote status file: {status_file} (status={final_status})")
         except Exception as e:
             self.logger.warning(f"Failed to write status file {status_file}: {e}")
+
+        # Mirror into the run-root roll-up so watch/find can avoid folder scans.
+        if self.status_rollup is not None:
+            self.status_rollup.record(
+                exec_key_for(test.execution_id), test.repetition, status_data
+            )
 
     def _make_progress_bar(self, percentage: float, width: int = 30) -> str:
         """
@@ -2185,6 +2197,17 @@ class IOPSRunner(HasLogger):
         # a usable file exists even if the process is forcefully killed.
         self._init_run_metadata()
 
+        # Start maintaining the status roll-up so watch/find can read one file
+        # instead of scanning every execution folder. Mirrors the index root.
+        probes = self.cfg.benchmark.probes
+        execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
+        if execution_index and self.status_rollup is None:
+            self.status_rollup = StatusRollup(
+                run_root=Path(self.cfg.benchmark.workdir),
+                benchmark_name=self.cfg.benchmark.name,
+                repetitions=max(1, int(getattr(self.cfg.benchmark, "repetitions", 1) or 1)),
+            )
+
         test_count = 0
         adaptive_results = None
         benchmark_end_time = None
@@ -2322,3 +2345,11 @@ class IOPSRunner(HasLogger):
 
             # Save report config template for easy regeneration
             save_report_config_template(self.cfg, logger=self.logger)
+
+            # Flush the final status roll-up and mark it complete so offline
+            # consumers (iops find) can trust it without scanning folders. On an
+            # abrupt kill this never runs, complete stays false, and consumers
+            # fall back to the folder scan.
+            if self.status_rollup is not None:
+                self.status_rollup.close(complete=True)
+                self.status_rollup = None

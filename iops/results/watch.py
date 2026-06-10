@@ -53,6 +53,7 @@ from .find import (
     _read_run_metadata,
     param_value_matches,
 )
+from .status_rollup import load_status_rollup, rollup_rep_statuses
 
 
 class WatchModeError(Exception):
@@ -364,6 +365,11 @@ def _collect_execution_data(
     tests = []
     status_counts = {s: 0 for s in STATUS_ORDER}
 
+    # Load the run-root status roll-up once. When present it lets us read one
+    # file instead of scanning every execution's repetition folders; executions
+    # it does not cover fall back to a per-folder scan below.
+    rollup = load_status_rollup(run_root)
+
     for exec_key, exec_data in sorted(executions.items()):
         params = exec_data.get("params", {})
         rel_path = exec_data.get("path", "")
@@ -385,6 +391,11 @@ def _collect_execution_data(
         # Get the exec_XXXX folder
         exec_path = run_root / rel_path
 
+        # Prefer the run-root status roll-up (one file) over scanning this
+        # execution's repetition folders. Returns None for executions the
+        # roll-up does not cover yet, which fall back to a folder scan below.
+        rollup_reps = rollup_rep_statuses(rollup, exec_key)
+
         # Check for skipped marker (indicates test was skipped)
         skip_reason = None
         is_skipped = False
@@ -394,8 +405,9 @@ def _collect_execution_data(
             is_skipped = exec_data.get("skipped", False)
             skip_reason = exec_data.get("skip_reason")
 
-        # If not in index, check for skipped marker file
-        if not is_skipped:
+        # If not in index and not covered by the roll-up, check the marker
+        # file. Roll-up-covered executions never need this per-folder stat.
+        if not is_skipped and rollup_reps is None:
             skipped_marker = exec_path / SKIPPED_MARKER_FILENAME
             if skipped_marker.exists():
                 is_skipped = True
@@ -445,11 +457,13 @@ def _collect_execution_data(
         latest_submission_time = None  # Track most recent submission for this test
         all_metrics: Dict[str, list] = {}  # Collect metrics for averaging
 
-        # Scan for repetition subdirectories
-        rep_dirs = sorted(exec_path.glob("repetition_*"))
-
-        if rep_dirs:
-            for rep_dir in rep_dirs:
+        # Acquire the per-repetition status dicts. Prefer the roll-up; fall back
+        # to scanning repetition folders for executions it does not cover.
+        if rollup_reps is not None:
+            rep_status_infos = rollup_reps
+        else:
+            rep_status_infos = []
+            for rep_dir in sorted(exec_path.glob("repetition_*")):
                 # Read status file directly (not using _read_status which aggregates)
                 rep_status_file = rep_dir / STATUS_FILENAME
                 status_info = {}
@@ -459,7 +473,13 @@ def _collect_execution_data(
                             status_info = json.load(f)
                     except (json.JSONDecodeError, OSError):
                         pass
+                rep_status_infos.append(status_info)
 
+        existing_reps = len(rep_status_infos)
+        folders_exist = existing_reps > 0
+
+        if rep_status_infos:
+            for status_info in rep_status_infos:
                 status = status_info.get("status", "UNKNOWN")
                 rep_statuses.append(status)
                 rep_cached_flags.append(status_info.get("cached", False))
@@ -509,7 +529,6 @@ def _collect_execution_data(
                             all_metrics[metric_name].append(metric_value)
 
             # Add pending for missing repetitions
-            existing_reps = len(rep_dirs)
             if existing_reps < expected_repetitions:
                 pending_count = expected_repetitions - existing_reps
                 for _ in range(pending_count):
@@ -517,7 +536,7 @@ def _collect_execution_data(
                     rep_cached_flags.append(False)
                 status_counts["PENDING"] += pending_count
         else:
-            # No repetition folders yet - all repetitions are pending
+            # No repetition data yet - all repetitions are pending
             for _ in range(expected_repetitions):
                 rep_statuses.append("PENDING")
                 rep_cached_flags.append(False)
@@ -611,7 +630,7 @@ def _collect_execution_data(
             "skip_reason": None,
             "cached": cached,
             "metrics": avg_metrics,
-            "folders_exist": len(rep_dirs) > 0,  # True if submitted (rep folders created)
+            "folders_exist": folders_exist,  # True if submitted (rep folders/roll-up exist)
             "latest_submission_time": latest_submission_time,  # For identifying active test
         })
 

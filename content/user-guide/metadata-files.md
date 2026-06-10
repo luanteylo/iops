@@ -37,6 +37,7 @@ Located in `workdir/run_XXX/`:
 |------|---------|
 | `__iops_run_metadata.json` | Report generation (config, timing, variables) |
 | `__iops_index.json` | Fast execution lookup for `iops find` |
+| `__iops_status_rollup.json` | Aggregated per-repetition status for `iops find` and watch mode |
 | `__iops_resource_summary.csv` | Aggregated CPU/memory and GPU metrics |
 | `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
 | `__iops_plots/` | PDF exports of report plots (requires kaleido) |
@@ -319,6 +320,40 @@ All paths are relative to the run root, making workdirs portable across systems.
 - `duration_seconds` - actual execution time in seconds from the probe script, available for both executed and cached results (the sysinfo is stored in the cache)
 
 **Controlled by:** `benchmark.probes.execution_index`
+
+---
+
+### `__iops_status_rollup.json`
+
+**Location:** `workdir/run_001/__iops_status_rollup.json`
+
+**Written:** Maintained by the runner during execution (flushed periodically) and finalized when the run ends.
+
+**Purpose:** A single run-root aggregate of every repetition's status, mirroring the per-folder `__iops_status.json` files keyed by execution and repetition. It lets `iops find` and watch mode read one file instead of scanning every execution folder, which keeps them fast on large parameter spaces (thousands of executions). The per-folder status files remain the source of truth; the roll-up is an accelerator with a folder-scan fallback.
+
+**Structure:**
+```json
+{
+  "benchmark": "My Study",
+  "repetitions": 3,
+  "complete": false,
+  "executions": {
+    "exec_0001": {
+      "reps": {
+        "1": { "status": "SUCCEEDED", "cached": false, "duration_seconds": 12.3, "metrics": {"bandwidth": 980.0} },
+        "2": { "status": "RUNNING" }
+      }
+    }
+  }
+}
+```
+
+**Fields:**
+
+- `complete` - `false` while the run is in progress, `true` once the runner finishes. Watch mode always reads the roll-up (a small lag is fine for a live monitor); `iops find` only trusts it when `complete` is `true` and otherwise falls back to scanning folders, so an interrupted or abruptly killed run stays correct.
+- `executions.<exec>.reps.<n>` - the exact status dict that was written to that repetition's `__iops_status.json`.
+
+**Controlled by:** `benchmark.probes.execution_index` (same switch as the per-folder status files).
 
 ---
 
