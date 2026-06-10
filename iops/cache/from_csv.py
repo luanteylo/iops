@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .execution_cache import ExecutionCache
+from .execution_cache import ExecutionCache, _normalize_value
 
 # Try to import rich for progress bars (optional dependency)
 try:
@@ -87,18 +87,12 @@ def _coerce(value: Optional[str]) -> Any:
     text = value.strip()
     if text == "":
         return None
-    try:
-        return int(text)
-    except ValueError:
-        pass
-    try:
-        return float(text)
-    except ValueError:
-        pass
     low = text.lower()
     if low in ("true", "false"):
         return low == "true"
-    return text
+    # Use the exact normalization the cache applies at lookup time so
+    # CSV-built hashes line up with runtime hashes (incl. negative ints).
+    return _normalize_value(text)
 
 
 def create_cache_from_csv(
@@ -217,7 +211,7 @@ def create_cache_from_csv(
                 params=params,
                 repetition=repetition,
                 metrics=metrics,
-                metadata={"status": "SUCCEEDED", "__source": "csv"},
+                metadata={"__executor_status": "SUCCEEDED", "__source": "csv"},
             )
             stats.stored_entries += 1
 

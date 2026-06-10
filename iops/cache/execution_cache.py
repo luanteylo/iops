@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import math
 import sqlite3
 import json
 import hashlib
@@ -20,6 +21,35 @@ DEFAULT_SQLITE_TIMEOUT = 60
 # Retry settings for database lock errors
 MAX_RETRIES = 5
 RETRY_BASE_DELAY = 0.5  # seconds
+
+
+def _normalize_value(value: Any) -> Any:
+    """
+    Normalize a single parameter value for hashing.
+
+    Strings that unambiguously represent numbers are coerced so that "8" and 8
+    hash the same. Coercion only happens when the numeric form round-trips back
+    to the exact original string, so distinct strings such as "1.10" and "1.1",
+    "1e3" and "1000.0", or "08" and "8" keep distinct hashes instead of
+    silently colliding (which would produce false cache hits).
+    """
+    if isinstance(value, Path):
+        return str(value)
+    if not isinstance(value, str):
+        return value
+    try:
+        as_int = int(value)
+        if str(as_int) == value:
+            return as_int
+    except ValueError:
+        pass
+    try:
+        as_float = float(value)
+        if math.isfinite(as_float) and str(as_float) == value:
+            return as_float
+    except ValueError:
+        pass
+    return value
 
 
 def _is_on_nfs(path: Path) -> bool:
@@ -254,20 +284,8 @@ class ExecutionCache(HasLogger):
             if key in self.exclude_vars:
                 continue
 
-            # Convert Path to string
-            if isinstance(value, Path):
-                value = str(value)
-
-            # Normalize numeric types (treat "8" and 8 as same)
-            if isinstance(value, str) and value.isdigit():
-                value = int(value)
-            elif isinstance(value, str):
-                try:
-                    value = float(value)
-                except ValueError:
-                    pass  # Keep as string
-
-            normalized[key] = value
+            # Convert Path to string, coerce unambiguous numeric strings
+            normalized[key] = _normalize_value(value)
 
         return normalized
 
@@ -336,6 +354,16 @@ class ExecutionCache(HasLogger):
                     metric_value = metrics.get(self.objective_metric)
 
                     if metric_value is None:
+                        continue
+
+                    # Metrics serialized with default=str may come back as
+                    # strings (e.g. numpy scalars); compare numerically only.
+                    if isinstance(metric_value, str):
+                        try:
+                            metric_value = float(metric_value)
+                        except ValueError:
+                            continue
+                    if isinstance(metric_value, bool) or not isinstance(metric_value, (int, float)):
                         continue
 
                     if best_value is None:
@@ -555,18 +583,7 @@ def normalize_params(params: Dict[str, Any], exclude_vars: Optional[set] = None)
         if key in exclude_vars:
             continue
 
-        if isinstance(value, Path):
-            value = str(value)
-
-        if isinstance(value, str) and value.isdigit():
-            value = int(value)
-        elif isinstance(value, str):
-            try:
-                value = float(value)
-            except ValueError:
-                pass
-
-        normalized[key] = value
+        normalized[key] = _normalize_value(value)
 
     return normalized
 
