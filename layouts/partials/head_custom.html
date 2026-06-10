@@ -78,9 +78,13 @@ details > *:not(summary) {
 
 /* Documentation sidebar layout */
 /* Spacer replacing the hero banner on docs pages: clears the fixed
-   navbar so the sidebar and content start right below it. */
+   navbar so the sidebar and content start right below it. The theme's
+   body is a fixed-height flex column; without flex-shrink:0 this spacer
+   (the only shrinkable child) collapses to 0 when the page overflows,
+   dropping the sidebar and content behind the navbar. */
 .docs-header-spacer {
   height: 95px;
+  flex-shrink: 0;
 }
 @media (max-width: 767px) {
   .docs-header-spacer {
