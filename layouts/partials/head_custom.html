@@ -111,6 +111,15 @@ details > *:not(summary) {
   margin-left: 0;
   margin-right: 0;
 }
+@media (min-width: 992px) {
+  /* Floated Bootstrap columns are only as tall as their own content,
+     which leaves position:sticky no room to move: the sidebar column
+     must stretch to the height of the content column for stickiness
+     to engage. Flex items stretch by default and ignore floats. */
+  .docs-container > .row {
+    display: flex;
+  }
+}
 .docs-sidebar-col {
   padding-left: 0;
   padding-right: 0;
