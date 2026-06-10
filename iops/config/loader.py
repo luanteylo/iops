@@ -986,7 +986,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             base_estimator=bc.get("base_estimator", "RF"),
             xi=float(xi) if isinstance(xi, (int, float)) else xi,
             kappa=float(kappa) if isinstance(kappa, (int, float)) else kappa,
-            objective=bc.get("objective", "maximize"),
+            objective=bc.get("objective", "minimize"),
             objective_metric=bc.get("objective_metric"),
             fallback_to_exhaustive=bc.get("fallback_to_exhaustive", True),
             early_stop_on_convergence=bc.get("early_stop_on_convergence", False),

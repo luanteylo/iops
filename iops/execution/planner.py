@@ -2913,7 +2913,13 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.optimizer.tell(self.current_params, y_value)
 
         # Update best found
-        if self.best_value is None or aggregated_value > (self.best_value if self.objective == 'maximize' else -self.best_value):
+        if self.best_value is None:
+            is_improvement = True
+        elif self.objective == 'maximize':
+            is_improvement = aggregated_value > self.best_value
+        else:
+            is_improvement = aggregated_value < self.best_value
+        if is_improvement:
             self.best_params = self._params_to_dict(self.current_params)
             self.best_value = aggregated_value
 
