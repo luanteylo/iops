@@ -69,40 +69,92 @@ def check_rich_available() -> None:
 
 class _KeyboardContext:
     """
-    Context manager that sets terminal to non-blocking mode with no echo.
-    Keeps terminal in this mode for the duration to avoid race conditions.
+    Context manager that sets the terminal to non-blocking mode with no echo.
+    Keeps the terminal in this mode for the duration to avoid race conditions.
+
+    Keyboard input is read from ``sys.stdin`` when it is a real terminal. When
+    stdin is not a TTY (e.g. it has been redirected, piped, or the process was
+    started by a launcher that does not attach a terminal to stdin), the
+    controlling terminal ``/dev/tty`` is opened directly so the interactive
+    controls (q, p, navigation) keep working instead of silently dropping all
+    keypresses and leaving the terminal echoing in canonical mode.
     """
     def __init__(self):
         self.fd = None
         self.old_settings = None
+        self._own_fd = False  # True when we opened /dev/tty and must close it
 
     def __enter__(self):
         if not UNIX_TERMINAL:
             return self
+
+        fd = None
+        own = False
         try:
-            self.fd = sys.stdin.fileno()
-            self.old_settings = termios.tcgetattr(self.fd)
-            # Use cbreak mode (no echo, no line buffering) instead of raw mode
-            # cbreak leaves output processing intact so Rich can render properly
-            tty.setcbreak(self.fd)
+            if os.isatty(sys.stdin.fileno()):
+                fd = sys.stdin.fileno()
+            else:
+                # stdin is not a usable terminal: fall back to the controlling
+                # terminal so keyboard controls still work.
+                fd = os.open("/dev/tty", os.O_RDONLY | os.O_NONBLOCK)
+                own = True
         except Exception:
+            fd = None
+
+        if fd is None:
+            return self
+
+        try:
+            self.old_settings = termios.tcgetattr(fd)
+            # Use cbreak mode (no echo, no line buffering) instead of raw mode.
+            # cbreak leaves output processing and ISIG intact so Rich can render
+            # properly and Ctrl+C still raises SIGINT.
+            tty.setcbreak(fd)
+            self.fd = fd
+            self._own_fd = own
+        except Exception:
+            # Could not configure the terminal; release /dev/tty if we opened it.
+            if own:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             self.fd = None
+            self.old_settings = None
         return self
 
     def __exit__(self, *args):
-        if self.old_settings is not None:
+        if self.fd is not None and self.old_settings is not None:
             try:
                 termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
             except Exception:
                 pass
+        if self._own_fd and self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+        self.fd = None
+        self.old_settings = None
+        self._own_fd = False
+
+    @property
+    def available(self) -> bool:
+        """True when a usable keyboard terminal was acquired."""
+        return self.fd is not None
 
     def read_key(self, timeout: float = 0.01) -> Optional[str]:
         """Read a key with timeout. Returns None if no key available."""
         if self.fd is None:
+            # No keyboard available: sleep for the requested interval instead of
+            # returning immediately, so callers that poll in a loop do not
+            # busy-spin (which would also collapse the watch refresh interval).
+            if timeout > 0:
+                time.sleep(timeout)
             return None
 
         try:
-            ready, _, _ = select.select([sys.stdin], [], [], timeout)
+            ready, _, _ = select.select([self.fd], [], [], timeout)
             if not ready:
                 return None
 
@@ -112,13 +164,13 @@ class _KeyboardContext:
 
             # Handle escape sequences (arrow keys)
             if char == '\x1b':
-                ready, _, _ = select.select([sys.stdin], [], [], 0.01)
+                ready, _, _ = select.select([self.fd], [], [], 0.01)
                 if ready:
                     char2 = os.read(self.fd, 1).decode('utf-8', errors='ignore')
                     if char2:
                         char += char2
                         if char == '\x1b[':
-                            ready, _, _ = select.select([sys.stdin], [], [], 0.01)
+                            ready, _, _ = select.select([self.fd], [], [], 0.01)
                             if ready:
                                 char3 = os.read(self.fd, 1).decode('utf-8', errors='ignore')
                                 if char3:
@@ -1272,7 +1324,12 @@ def watch_executions(
     cached_status_counts = {}
 
     try:
-        with Live(console=console, refresh_per_second=10, screen=True) as live:
+        # Acquire the keyboard once for the whole session and keep the terminal
+        # in cbreak mode throughout. Re-entering cbreak each refresh left a brief
+        # canonical-mode window during rendering where keypresses were echoed and
+        # then flushed away (so 'q' appeared but never registered).
+        with Live(console=console, refresh_per_second=10, screen=True) as live, \
+                _KeyboardContext() as keyboard:
             while not interrupted:
                 # Track total items for scroll (updated after table build)
                 total_items_for_scroll = 0
@@ -1418,7 +1475,10 @@ def watch_executions(
                 else:
                     header_text.append(" [LIVE]", style="green bold")
                     header_text.append("  ", style="")
-                    header_text.append("p:pause  q:quit", style="dim italic")
+                    if keyboard.available:
+                        header_text.append("p:pause  q:quit", style="dim italic")
+                    else:
+                        header_text.append("Ctrl+C:quit", style="dim italic")
 
                 header = Panel(header_text, border_style="blue", padding=(0, 1))
 
@@ -1557,8 +1617,9 @@ def watch_executions(
                     # Terminal bell to alert user
                     footer_text.append("\a", style="")
                 else:
-                    # Show hint only if keyboard nav not available
-                    if not UNIX_TERMINAL:
+                    # Show the Ctrl+C hint when interactive keyboard controls
+                    # are not available (no terminal could be acquired).
+                    if not keyboard.available:
                         footer_text.append("\n ")
                         footer_text.append("Press Ctrl+C to exit", style="dim italic")
 
@@ -1576,95 +1637,98 @@ def watch_executions(
                     time.sleep(1)
                     break
 
-                # Wait for next refresh, checking for keyboard input
-                # Keep terminal in cbreak mode for entire interval to avoid echo/race conditions
+                # Wait for the next refresh, polling for keyboard input. A
+                # monotonic deadline drives the timing so the configured refresh
+                # interval is always honored, even when no usable keyboard is
+                # available (read_key sleeps instead of returning immediately).
                 key_handled = False
-                with _KeyboardContext() as keyboard:
-                    for _ in range(interval * 200):  # Check every ~5ms for faster response
-                        if interrupted:
-                            break
+                deadline = time.monotonic() + interval
+                while not interrupted:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
 
-                        key = keyboard.read_key(0.005)
-                        if key:
-                            key_handled = True
-                            # Handle search mode input
-                            if search_mode:
-                                if key == '\x1b':  # Escape - cancel search
-                                    search_mode = False
-                                    search_buffer = ""
-                                    search_error = ""
-                                    break
-                                elif key in ('\r', '\n'):  # Enter - execute search
-                                    if search_buffer:
-                                        try:
-                                            target_id = int(search_buffer)
-                                            # Find the index of the test in the display list
-                                            found_idx = None
-                                            for idx in range(total_items_for_scroll):
-                                                # Test IDs are 1-based (exec_0001 = ID 1)
-                                                if idx + 1 == target_id:
-                                                    found_idx = idx
-                                                    break
-                                            if found_idx is not None and found_idx < total_items_for_scroll:
-                                                # Calculate scroll offset to show this test
-                                                page_size = max_rows if max_rows else 20
-                                                scroll_offset = (found_idx // page_size) * page_size
-                                                search_error = ""
-                                            else:
-                                                search_error = f"Not found"
-                                        except ValueError:
-                                            search_error = "Invalid number"
-                                    search_mode = False
-                                    search_buffer = ""
-                                    break
-                                elif key == '\x7f' or key == '\b':  # Backspace
-                                    search_buffer = search_buffer[:-1]
-                                    break
-                                elif key.isdigit():  # Digit input
-                                    search_buffer += key
-                                    break
-                                continue  # Ignore other keys in search mode
-
-                            # Normal mode keys
-                            if key == 'q':
-                                interrupted = True
-                                break
-                            elif key == 'p':
-                                pause_mode = not pause_mode
-                                if not pause_mode:
-                                    scroll_offset = 0
-                                    needs_data_refresh = True  # Refresh when resuming live mode
-                                search_error = ""
-                                break  # Refresh display immediately
-                            elif key == '/' and pause_mode:  # Enter search mode
-                                search_mode = True
+                    key = keyboard.read_key(min(0.02, remaining))
+                    if key:
+                        key_handled = True
+                        # Handle search mode input
+                        if search_mode:
+                            if key == '\x1b':  # Escape - cancel search
+                                search_mode = False
                                 search_buffer = ""
                                 search_error = ""
                                 break
-                            elif key in ('j', '\x1b[B', '\x1b[6~'):  # j, down arrow, or Page Down
-                                if pause_mode:
-                                    page_size = max_rows if max_rows else 20
-                                    max_scroll = max(0, total_items_for_scroll - page_size)
-                                    scroll_offset = min(scroll_offset + page_size, max_scroll)
-                                    search_error = ""
-                                    break
-                            elif key in ('k', '\x1b[A', '\x1b[5~'):  # k, up arrow, or Page Up
-                                if pause_mode:
-                                    page_size = max_rows if max_rows else 20
-                                    scroll_offset = max(0, scroll_offset - page_size)
-                                    search_error = ""
-                                    break
-                            elif key == 'g':  # Go to top
-                                if pause_mode:
-                                    scroll_offset = 0
-                                    search_error = ""
-                                    break
-                            elif key == 'G':  # Go to bottom
-                                if pause_mode and total_items_for_scroll > 0:
-                                    max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
-                                    scroll_offset = max_scroll
-                                    search_error = ""
-                                    break
+                            elif key in ('\r', '\n'):  # Enter - execute search
+                                if search_buffer:
+                                    try:
+                                        target_id = int(search_buffer)
+                                        # Find the index of the test in the display list
+                                        found_idx = None
+                                        for idx in range(total_items_for_scroll):
+                                            # Test IDs are 1-based (exec_0001 = ID 1)
+                                            if idx + 1 == target_id:
+                                                found_idx = idx
+                                                break
+                                        if found_idx is not None and found_idx < total_items_for_scroll:
+                                            # Calculate scroll offset to show this test
+                                            page_size = max_rows if max_rows else 20
+                                            scroll_offset = (found_idx // page_size) * page_size
+                                            search_error = ""
+                                        else:
+                                            search_error = f"Not found"
+                                    except ValueError:
+                                        search_error = "Invalid number"
+                                search_mode = False
+                                search_buffer = ""
+                                break
+                            elif key == '\x7f' or key == '\b':  # Backspace
+                                search_buffer = search_buffer[:-1]
+                                break
+                            elif key.isdigit():  # Digit input
+                                search_buffer += key
+                                break
+                            continue  # Ignore other keys in search mode
+
+                        # Normal mode keys
+                        if key == 'q':
+                            interrupted = True
+                            break
+                        elif key == 'p':
+                            pause_mode = not pause_mode
+                            if not pause_mode:
+                                scroll_offset = 0
+                                needs_data_refresh = True  # Refresh when resuming live mode
+                            search_error = ""
+                            break  # Refresh display immediately
+                        elif key == '/' and pause_mode:  # Enter search mode
+                            search_mode = True
+                            search_buffer = ""
+                            search_error = ""
+                            break
+                        elif key in ('j', '\x1b[B', '\x1b[6~'):  # j, down arrow, or Page Down
+                            if pause_mode:
+                                page_size = max_rows if max_rows else 20
+                                max_scroll = max(0, total_items_for_scroll - page_size)
+                                scroll_offset = min(scroll_offset + page_size, max_scroll)
+                                search_error = ""
+                                break
+                        elif key in ('k', '\x1b[A', '\x1b[5~'):  # k, up arrow, or Page Up
+                            if pause_mode:
+                                page_size = max_rows if max_rows else 20
+                                scroll_offset = max(0, scroll_offset - page_size)
+                                search_error = ""
+                                break
+                        elif key == 'g':  # Go to top
+                            if pause_mode:
+                                scroll_offset = 0
+                                search_error = ""
+                                break
+                        elif key == 'G':  # Go to bottom
+                            if pause_mode and total_items_for_scroll > 0:
+                                max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
+                                scroll_offset = max_scroll
+                                search_error = ""
+                                break
 
                 # If interval expired without keypress, refresh data
                 if not key_handled and not interrupted:

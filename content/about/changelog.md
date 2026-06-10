@@ -6,6 +6,9 @@ All notable changes to IOPS are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- `iops find --watch`: keyboard controls (`q` to quit, `p` to pause, navigation) and the `--interval` refresh rate now work when standard input is not a terminal (e.g. stdin redirected, piped, or the process launched without a terminal attached to stdin). Watch mode now falls back to the controlling terminal (`/dev/tty`) for keyboard input instead of silently dropping every keypress and leaving the terminal echoing in canonical mode. The refresh interval is now driven by a monotonic deadline, so it is honored even when no keyboard is available rather than collapsing into a busy loop.
+
 ## [3.5.6] - 2026-06-09
 
 ### Added
