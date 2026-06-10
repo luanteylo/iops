@@ -10,7 +10,9 @@
       <details class="docs-nav-section"{{ if eq $current.Section $sec }} open{{ end }}>
         <summary class="docs-section-title">{{ .Title }}</summary>
         <ul>
-          <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">Overview</a></li>
+          {{ if eq $sec "user-guide" }}
+            <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">Overview</a></li>
+          {{ end }}
           {{ range .RegularPages }}
             <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
           {{ end }}
