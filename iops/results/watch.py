@@ -10,6 +10,7 @@ Requires the 'rich' library: pip install iops-benchmark[watch]
 from __future__ import annotations
 
 import json
+import logging
 import time
 import signal
 import sys
@@ -50,6 +51,7 @@ from .find import (
     _truncate_value,
     _read_status,
     _read_run_metadata,
+    param_value_matches,
 )
 
 
@@ -93,13 +95,20 @@ class _KeyboardContext:
         try:
             if os.isatty(sys.stdin.fileno()):
                 fd = sys.stdin.fileno()
-            else:
-                # stdin is not a usable terminal: fall back to the controlling
-                # terminal so keyboard controls still work.
+        except Exception:
+            # stdin is closed or replaced by an object without a usable
+            # fileno; treat it the same as a non-TTY stdin and fall through
+            # to the /dev/tty fallback below.
+            fd = None
+
+        if fd is None:
+            # stdin is not a usable terminal: fall back to the controlling
+            # terminal so keyboard controls still work.
+            try:
                 fd = os.open("/dev/tty", os.O_RDONLY | os.O_NONBLOCK)
                 own = True
-        except Exception:
-            fd = None
+            except Exception:
+                fd = None
 
         if fd is None:
             return self
@@ -162,7 +171,7 @@ class _KeyboardContext:
             if not char:
                 return None
 
-            # Handle escape sequences (arrow keys)
+            # Handle escape sequences (arrow keys, PageUp/PageDown, ...)
             if char == '\x1b':
                 ready, _, _ = select.select([self.fd], [], [], 0.01)
                 if ready:
@@ -170,11 +179,21 @@ class _KeyboardContext:
                     if char2:
                         char += char2
                         if char == '\x1b[':
-                            ready, _, _ = select.select([self.fd], [], [], 0.01)
-                            if ready:
-                                char3 = os.read(self.fd, 1).decode('utf-8', errors='ignore')
-                                if char3:
-                                    char += char3
+                            # CSI sequence: zero or more parameter bytes
+                            # (digits and ';') followed by a single final
+                            # byte. Arrow keys are "\x1b[A".."\x1b[D" while
+                            # PageUp/PageDown are "\x1b[5~"/"\x1b[6~", so we
+                            # must keep reading until the final byte.
+                            while True:
+                                ready, _, _ = select.select([self.fd], [], [], 0.01)
+                                if not ready:
+                                    break
+                                next_char = os.read(self.fd, 1).decode('utf-8', errors='ignore')
+                                if not next_char:
+                                    break
+                                char += next_char
+                                if next_char not in '0123456789;':
+                                    break
 
             return char
         except Exception:
@@ -215,6 +234,29 @@ STATUS_LABELS = {
 }
 
 
+def _parse_cores_value(cores_str: Any) -> Optional[int]:
+    """
+    Safely parse a rendered cores expression result into an integer.
+
+    The cores expression is rendered by Jinja2 upstream, so the result is
+    expected to be a plain number (e.g. "8" or "7.5"). No code evaluation
+    is performed.
+
+    Returns:
+        The parsed integer (floats are rounded), or None when the value
+        cannot be parsed as a number.
+    """
+    text = str(cores_str).strip()
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return round(float(text))
+    except (ValueError, OverflowError):
+        return None
+
+
 def _compute_cores_from_expr(cores_expr: str, params: Dict[str, Any]) -> int:
     """
     Compute number of cores from a Jinja2-like expression.
@@ -233,10 +275,17 @@ def _compute_cores_from_expr(cores_expr: str, params: Dict[str, Any]) -> int:
         from jinja2 import Template
         template = Template(cores_expr)
         cores_str = template.render(**params)
-        cores = int(eval(cores_str))
-        return max(1, cores)
     except Exception:
         return 1
+
+    cores = _parse_cores_value(cores_str)
+    if cores is None:
+        logging.getLogger("iops.watch").debug(
+            "Could not parse cores expression result %r (from %r); defaulting to 1",
+            cores_str, cores_expr,
+        )
+        return 1
+    return max(1, cores)
 
 
 def _load_index(index_file: Path) -> Tuple[str, Dict[str, Any], int, int, bool, int, int]:
@@ -327,7 +376,7 @@ def _collect_execution_data(
                 if fkey not in params:
                     match = False
                     break
-                if str(params[fkey]) != fval:
+                if not param_value_matches(params[fkey], fval):
                     match = False
                     break
             if not match:
@@ -567,16 +616,66 @@ def _collect_execution_data(
         })
 
     # Sort tests numerically by execution ID
-    def get_exec_num(test):
-        """Extract numeric ID from exec_key like 'exec_0001' -> 1."""
-        key = test["exec_key"]
-        try:
-            return int(key.split("_")[-1])
-        except (ValueError, IndexError):
-            return 0
-    tests.sort(key=get_exec_num)
+    tests.sort(key=lambda test: _get_exec_num(test["exec_key"]))
 
     return tests, status_counts
+
+
+def _get_exec_num(exec_key: str) -> int:
+    """Extract numeric ID from exec_key like 'exec_0001' -> 1."""
+    try:
+        return int(exec_key.split("_")[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+def _build_display_items(
+    tests: List[Dict],
+    show_only_active: bool,
+    total_expected_configs: int,
+) -> List[Tuple[int, Optional[Dict], bool, str]]:
+    """
+    Build the ordered list of items shown in the watch table.
+
+    Every existing test is included, plus queued placeholders up to the
+    expected total. The range must never fall below the highest existing
+    exec ID: the planner's total_expected is only an estimate, and campaigns
+    can generate more executions than estimated (e.g. adaptive/bayesian
+    probing). Bounding the range by the estimate alone would silently hide
+    real executions.
+
+    When show_only_active is True, fully SUCCEEDED tests and queued
+    placeholders are dropped, so display position does not match exec ID.
+
+    Returns:
+        List of (exec_id, test_or_none, is_queued, status) tuples in
+        display (exec ID) order.
+    """
+    tests_by_id = {_get_exec_num(t["exec_key"]): t for t in tests}
+
+    existing_ids = set(tests_by_id.keys())
+    max_id = max(existing_ids) if existing_ids else 0
+
+    upper = max(total_expected_configs, max_id)
+    if upper > 0:
+        all_ids = range(1, upper + 1)
+    else:
+        all_ids = sorted(existing_ids)
+
+    display_items = []
+    for exec_id in all_ids:
+        if exec_id in tests_by_id:
+            test = tests_by_id[exec_id]
+            overall_status = _get_test_overall_status(test["rep_statuses"])
+            # Skip completed tests if show_only_active
+            if show_only_active and overall_status == "SUCCEEDED":
+                continue
+            display_items.append((exec_id, test, False, overall_status))
+        else:
+            # Queued placeholder - skip if show_only_active (queued are "pending", not active)
+            if not show_only_active:
+                display_items.append((exec_id, None, True, "QUEUED"))
+    return display_items
 
 
 def _get_test_overall_status(rep_statuses: List[str]) -> str:
@@ -799,44 +898,9 @@ def _build_table(
             return val
         return _truncate_value(val, truncate_width)
 
-    # Build a map of existing tests by their numeric ID
-    def get_exec_num(exec_key: str) -> int:
-        try:
-            return int(exec_key.split("_")[-1])
-        except (ValueError, IndexError):
-            return 0
-
-    tests_by_id = {get_exec_num(t["exec_key"]): t for t in tests}
-
-    # Determine the range of IDs to display
-    existing_ids = set(tests_by_id.keys())
-    max_id = max(existing_ids) if existing_ids else 0
-
-    # Display every existing test, plus queued placeholders up to the expected
-    # total. The range must never fall below the highest existing exec ID: the
-    # planner's total_expected is only an estimate, and campaigns can generate
-    # more executions than estimated (e.g. adaptive/bayesian probing). Bounding
-    # the range by the estimate alone would silently hide real executions.
-    upper = max(total_expected_configs, max_id)
-    if upper > 0:
-        all_ids = range(1, upper + 1)
-    else:
-        all_ids = sorted(existing_ids)
-
     # Build combined list: existing tests + queued placeholders, in order
-    display_items = []  # List of (id, test_or_none, is_queued, status)
-    for exec_id in all_ids:
-        if exec_id in tests_by_id:
-            test = tests_by_id[exec_id]
-            overall_status = _get_test_overall_status(test["rep_statuses"])
-            # Skip completed tests if show_only_active
-            if show_only_active and overall_status == "SUCCEEDED":
-                continue
-            display_items.append((exec_id, test, False, overall_status))
-        else:
-            # Queued placeholder - skip if show_only_active (queued are "pending", not active)
-            if not show_only_active:
-                display_items.append((exec_id, None, True, "QUEUED"))
+    # (list of (id, test_or_none, is_queued, status) tuples)
+    display_items = _build_display_items(tests, show_only_active, total_expected_configs)
 
     # Find the active test BEFORE pagination (so it's correct across all pages)
     # This handles cases where jobs complete so fast we never see RUNNING status
@@ -1319,6 +1383,15 @@ def watch_executions(
     search_error = ""        # Error message from last search
     needs_data_refresh = True  # Skip data reload for pure navigation actions
 
+    # Initialized before the loop so an interrupt arriving before the first
+    # iteration cannot leave it unbound when it is read after the loop.
+    all_complete = False
+
+    # Persistent deadline for the next data refresh. It is only reset when
+    # the data is actually reloaded, so keypresses (which redraw using cached
+    # data) can never postpone or starve the refresh.
+    next_data_refresh = time.monotonic()
+
     # Cached data for navigation without reload
     cached_tests = []
     cached_status_counts = {}
@@ -1349,6 +1422,7 @@ def watch_executions(
                         cached_filter=cached_filter, metric_filters=metric_filter_dict
                     )
                     needs_data_refresh = False  # Reset flag
+                    next_data_refresh = time.monotonic() + interval
 
                 # Use cached data
                 tests = cached_tests
@@ -1637,102 +1711,110 @@ def watch_executions(
                     time.sleep(1)
                     break
 
-                # Wait for the next refresh, polling for keyboard input. A
-                # monotonic deadline drives the timing so the configured refresh
-                # interval is always honored, even when no usable keyboard is
-                # available (read_key sleeps instead of returning immediately).
-                key_handled = False
-                deadline = time.monotonic() + interval
+                # Wait for the next data refresh, polling for keyboard input.
+                # The persistent monotonic deadline (next_data_refresh) drives
+                # the timing so the configured refresh interval is always
+                # honored, even when no usable keyboard is available (read_key
+                # sleeps instead of returning immediately). Action keys break
+                # out early to redraw with cached data, but they never move
+                # the deadline, so a continuous stream of keypresses cannot
+                # starve the data refresh.
                 while not interrupted:
-                    remaining = deadline - time.monotonic()
+                    remaining = next_data_refresh - time.monotonic()
                     if remaining <= 0:
+                        needs_data_refresh = True
                         break
 
                     key = keyboard.read_key(min(0.02, remaining))
-                    if key:
-                        key_handled = True
-                        # Handle search mode input
-                        if search_mode:
-                            if key == '\x1b':  # Escape - cancel search
-                                search_mode = False
-                                search_buffer = ""
-                                search_error = ""
-                                break
-                            elif key in ('\r', '\n'):  # Enter - execute search
-                                if search_buffer:
-                                    try:
-                                        target_id = int(search_buffer)
-                                        # Find the index of the test in the display list
-                                        found_idx = None
-                                        for idx in range(total_items_for_scroll):
-                                            # Test IDs are 1-based (exec_0001 = ID 1)
-                                            if idx + 1 == target_id:
-                                                found_idx = idx
-                                                break
-                                        if found_idx is not None and found_idx < total_items_for_scroll:
-                                            # Calculate scroll offset to show this test
-                                            page_size = max_rows if max_rows else 20
-                                            scroll_offset = (found_idx // page_size) * page_size
-                                            search_error = ""
-                                        else:
-                                            search_error = f"Not found"
-                                    except ValueError:
-                                        search_error = "Invalid number"
-                                search_mode = False
-                                search_buffer = ""
-                                break
-                            elif key == '\x7f' or key == '\b':  # Backspace
-                                search_buffer = search_buffer[:-1]
-                                break
-                            elif key.isdigit():  # Digit input
-                                search_buffer += key
-                                break
-                            continue  # Ignore other keys in search mode
+                    if not key:
+                        continue
 
-                        # Normal mode keys
-                        if key == 'q':
-                            interrupted = True
-                            break
-                        elif key == 'p':
-                            pause_mode = not pause_mode
-                            if not pause_mode:
-                                scroll_offset = 0
-                                needs_data_refresh = True  # Refresh when resuming live mode
-                            search_error = ""
-                            break  # Refresh display immediately
-                        elif key == '/' and pause_mode:  # Enter search mode
-                            search_mode = True
+                    # Handle search mode input
+                    if search_mode:
+                        if key == '\x1b':  # Escape - cancel search
+                            search_mode = False
                             search_buffer = ""
                             search_error = ""
                             break
-                        elif key in ('j', '\x1b[B', '\x1b[6~'):  # j, down arrow, or Page Down
-                            if pause_mode:
-                                page_size = max_rows if max_rows else 20
-                                max_scroll = max(0, total_items_for_scroll - page_size)
-                                scroll_offset = min(scroll_offset + page_size, max_scroll)
-                                search_error = ""
-                                break
-                        elif key in ('k', '\x1b[A', '\x1b[5~'):  # k, up arrow, or Page Up
-                            if pause_mode:
-                                page_size = max_rows if max_rows else 20
-                                scroll_offset = max(0, scroll_offset - page_size)
-                                search_error = ""
-                                break
-                        elif key == 'g':  # Go to top
-                            if pause_mode:
-                                scroll_offset = 0
-                                search_error = ""
-                                break
-                        elif key == 'G':  # Go to bottom
-                            if pause_mode and total_items_for_scroll > 0:
-                                max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
-                                scroll_offset = max_scroll
-                                search_error = ""
-                                break
+                        elif key in ('\r', '\n'):  # Enter - execute search
+                            if search_buffer:
+                                try:
+                                    target_id = int(search_buffer)
+                                    # Search the actual display items for the
+                                    # matching execution ID. When
+                                    # show_only_active hides completed tests,
+                                    # the display index no longer equals
+                                    # exec ID - 1, so positional lookup would
+                                    # land on the wrong row.
+                                    display_items = _build_display_items(
+                                        tests, show_only_active, total_expected_configs
+                                    )
+                                    found_idx = None
+                                    for idx, (exec_id, _, _, _) in enumerate(display_items):
+                                        if exec_id == target_id:
+                                            found_idx = idx
+                                            break
+                                    if found_idx is not None:
+                                        # Calculate scroll offset to show this test
+                                        page_size = max_rows if max_rows else 20
+                                        scroll_offset = (found_idx // page_size) * page_size
+                                        search_error = ""
+                                    else:
+                                        search_error = "Not found"
+                                except ValueError:
+                                    search_error = "Invalid number"
+                            search_mode = False
+                            search_buffer = ""
+                            break
+                        elif key == '\x7f' or key == '\b':  # Backspace
+                            search_buffer = search_buffer[:-1]
+                            break
+                        elif key.isdigit():  # Digit input
+                            search_buffer += key
+                            break
+                        continue  # Ignore other keys in search mode
 
-                # If interval expired without keypress, refresh data
-                if not key_handled and not interrupted:
-                    needs_data_refresh = True
+                    # Normal mode keys (keys with no bound action fall
+                    # through and keep polling until the refresh deadline)
+                    if key == 'q':
+                        interrupted = True
+                        break
+                    elif key == 'p':
+                        pause_mode = not pause_mode
+                        if not pause_mode:
+                            scroll_offset = 0
+                            needs_data_refresh = True  # Refresh when resuming live mode
+                        search_error = ""
+                        break  # Refresh display immediately
+                    elif key == '/' and pause_mode:  # Enter search mode
+                        search_mode = True
+                        search_buffer = ""
+                        search_error = ""
+                        break
+                    elif key in ('j', '\x1b[B', '\x1b[6~'):  # j, down arrow, or Page Down
+                        if pause_mode:
+                            page_size = max_rows if max_rows else 20
+                            max_scroll = max(0, total_items_for_scroll - page_size)
+                            scroll_offset = min(scroll_offset + page_size, max_scroll)
+                            search_error = ""
+                            break
+                    elif key in ('k', '\x1b[A', '\x1b[5~'):  # k, up arrow, or Page Up
+                        if pause_mode:
+                            page_size = max_rows if max_rows else 20
+                            scroll_offset = max(0, scroll_offset - page_size)
+                            search_error = ""
+                            break
+                    elif key == 'g':  # Go to top
+                        if pause_mode:
+                            scroll_offset = 0
+                            search_error = ""
+                            break
+                    elif key == 'G':  # Go to bottom
+                        if pause_mode and total_items_for_scroll > 0:
+                            max_scroll = max(0, total_items_for_scroll - max_rows) if max_rows else 0
+                            scroll_offset = max_scroll
+                            search_error = ""
+                            break
 
     finally:
         signal.signal(signal.SIGINT, original_handler)

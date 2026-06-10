@@ -23,6 +23,41 @@ METADATA_FILENAME = "__iops_run_metadata.json"
 DEFAULT_TRUNCATE_WIDTH = 30
 
 
+def param_value_matches(actual: Any, expected: str) -> bool:
+    """
+    Check whether a stored parameter value matches a filter string.
+
+    Matches when:
+    - the string representations are identical, or
+    - both sides represent booleans (true/false, case-insensitive), or
+    - both sides parse as numbers and are numerically equal
+      (so filter "4" matches 4.0 and "1e3" matches 1000.0).
+
+    Args:
+        actual: The stored parameter value (any type, e.g. from JSON)
+        expected: The filter value as typed on the command line
+
+    Returns:
+        True if the values are considered equal
+    """
+    expected = str(expected)
+    if str(actual) == expected:
+        return True
+
+    actual_text = str(actual).strip().lower()
+    expected_text = expected.strip().lower()
+
+    # Case-insensitive boolean match (covers Python bools and "true"/"false" strings)
+    if actual_text in ("true", "false") and expected_text in ("true", "false"):
+        return actual_text == expected_text
+
+    # Numeric equality when both sides parse as numbers
+    try:
+        return float(actual) == float(expected)
+    except (TypeError, ValueError):
+        return False
+
+
 def _truncate_value(value: str, max_width: int) -> str:
     """Truncate a value to max_width, showing the end (most relevant part)."""
     if len(value) <= max_width:
@@ -411,8 +446,7 @@ def _show_executions_from_index(
                 if fkey not in params:
                     match = False
                     break
-                # Convert both to string for comparison
-                if str(params[fkey]) != fval:
+                if not param_value_matches(params[fkey], fval):
                     match = False
                     break
             if not match:
