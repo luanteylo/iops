@@ -24,6 +24,7 @@ from iops.execution.constraints import (
     filter_execution_matrix,
     classify_constraints,
     check_constraints_for_vars,
+    extract_constraint_variables,
 )
 
 
@@ -959,11 +960,28 @@ def create_execution_instance(
         output_exclude=output_exclude,
     )
 
-    # Validate constraints using computed vars (base + derived)
+    # Validate constraints using computed vars (base + derived).
+    # Constraints referencing variables that are not part of this instance
+    # (e.g. an adaptive variable when building the static matrix) cannot be
+    # evaluated here; they are checked when an instance that has the
+    # variable in scope is created (the adaptive probe path).
     if not cfg.constraints:
         return instance, True, []
 
-    is_valid, violations = check_constraints_for_vars(instance.vars, cfg.constraints)
+    adaptive_names = {name for name, v in cfg.vars.items() if v.adaptive is not None}
+    available = set(instance.vars.keys())
+    applicable_constraints = []
+    for constraint in cfg.constraints:
+        missing = extract_constraint_variables(constraint.rule) - available
+        if missing and missing <= adaptive_names:
+            continue  # adaptive var not in scope for this instance
+        # Constraints with genuinely unknown references stay in: evaluation
+        # reports them as undefined-variable configuration errors.
+        applicable_constraints.append(constraint)
+    if not applicable_constraints:
+        return instance, True, []
+
+    is_valid, violations = check_constraints_for_vars(instance.vars, applicable_constraints)
     return instance, is_valid, violations
 
 
@@ -1145,12 +1163,26 @@ def build_execution_matrix(
     # Classify constraints:
     # - early_constraints: only reference swept variables (can filter before derived eval)
     # - late_constraints: reference derived variables (must filter after derived eval)
+    # Constraints that reference an adaptive variable cannot be evaluated at
+    # matrix time at all (adaptive vars are excluded from the Cartesian
+    # product); they are deferred to per-probe evaluation in
+    # create_execution_instance, which has the adaptive value in scope.
     early_constraints: List = []
     late_constraints: List = []
 
     if cfg.constraints:
+        adaptive_var_names_set = {
+            name for name, v in cfg.vars.items() if v.adaptive is not None
+        }
+        matrix_constraints = []
+        for constraint in cfg.constraints:
+            rule_vars = extract_constraint_variables(constraint.rule)
+            if rule_vars & adaptive_var_names_set:
+                continue  # deferred to probe-time evaluation
+            matrix_constraints.append(constraint)
+
         early_constraints, late_constraints = classify_constraints(
-            cfg.constraints,
+            matrix_constraints,
             swept_var_names_set,
             derived_var_names_set,
         )

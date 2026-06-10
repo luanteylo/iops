@@ -10,6 +10,7 @@ This module contains all planner implementations:
 """
 
 from iops.logger import HasLogger
+from iops.fileutils import atomic_write_json
 from iops.config.models import GenericBenchmarkConfig
 from iops.execution.matrix import ExecutionInstance, build_execution_matrix, _cast_value, _render_template, create_execution_instance
 
@@ -621,6 +622,14 @@ class BasePlanner(ABC, HasLogger):
             items = self.random.sample(items, sample_size)
         return items
 
+    def _select_kickoff_instances(self, kept_instances: list) -> tuple:
+        """
+        Hook for planners to narrow the instance selection in
+        single-allocation (kickoff) mode. Returns (selected, skipped).
+        The default keeps everything.
+        """
+        return kept_instances, []
+
     def _clone_matrix_entry(self, idx: int) -> Any:
         """
         Return a per-attempt copy of `self.execution_matrix[idx]`.
@@ -729,6 +738,11 @@ class BasePlanner(ABC, HasLogger):
         # Build execution matrix
         self.logger.info("Building execution matrix...")
         kept_instances, skipped_instances = build_execution_matrix(self.cfg)
+
+        # Let the planner narrow the selection (random sampling honors
+        # n_samples/percentage here too, not only in interactive mode)
+        kept_instances, sampling_skipped = self._select_kickoff_instances(kept_instances)
+        skipped_instances = list(skipped_instances) + sampling_skipped
 
         # Store for tracking
         self.execution_matrix = kept_instances
@@ -1050,8 +1064,7 @@ class BasePlanner(ABC, HasLogger):
         execution_index = probes.execution_index if probes else self.cfg.benchmark.track_executions
         if getattr(self, '_kickoff_preparation', False) and execution_index:
             rep_status_file = exec_dir / STATUS_FILENAME
-            with open(rep_status_file, "w") as f:
-                json.dump({"status": "PENDING"}, f)
+            atomic_write_json(rep_status_file, {"status": "PENDING"})
 
         # Point to repetition dir (useful for templates like {{ execution_dir }})
         # Must be set before _write_params_file so derived variables render correctly
@@ -1273,8 +1286,7 @@ class BasePlanner(ABC, HasLogger):
 
         # Write params file in exec folder
         params_file = exec_parent_dir / PARAMS_FILENAME
-        with open(params_file, "w") as f:
-            json.dump(params, f, indent=2, default=str)
+        atomic_write_json(params_file, params, indent=2, default=str)
 
         # Update global index
         self._update_index_file(test, params, exec_parent_dir)
@@ -1331,8 +1343,7 @@ class BasePlanner(ABC, HasLogger):
         }
 
         # Write updated index
-        with open(index_file, "w") as f:
-            json.dump(index, f, indent=2, default=str)
+        atomic_write_json(index_file, index, indent=2, default=str)
 
     def _write_skipped_marker(
         self,
@@ -1362,8 +1373,7 @@ class BasePlanner(ABC, HasLogger):
         if message:
             marker_data["message"] = message
 
-        with open(marker_file, "w") as f:
-            json.dump(marker_data, f, indent=2, default=str)
+        atomic_write_json(marker_file, marker_data, indent=2, default=str)
 
     def _initialize_all_folders(
         self,
@@ -1408,8 +1418,7 @@ class BasePlanner(ABC, HasLogger):
 
             # Write params file
             params_file = exec_dir / PARAMS_FILENAME
-            with open(params_file, "w") as f:
-                json.dump(params, f, indent=2, default=str)
+            atomic_write_json(params_file, params, indent=2, default=str)
 
             # Add to index (no status field - watch infers PENDING from absence of skipped marker)
             exec_rel_path = exec_dir.relative_to(run_root)
@@ -1433,8 +1442,7 @@ class BasePlanner(ABC, HasLogger):
 
             # Write params file
             params_file = exec_dir / PARAMS_FILENAME
-            with open(params_file, "w") as f:
-                json.dump(params, f, indent=2, default=str)
+            atomic_write_json(params_file, params, indent=2, default=str)
 
             # Get skip reason and message from metadata
             reason = instance.metadata.get("__skip_reason", "unknown")
@@ -1505,8 +1513,7 @@ class BasePlanner(ABC, HasLogger):
             exec_key = entry.pop("exec_key")
             index["executions"][exec_key] = entry
 
-        with open(index_file, "w") as f:
-            json.dump(index, f, indent=2, default=str)
+        atomic_write_json(index_file, index, indent=2, default=str)
 
 
 # ============================================================================ #
@@ -1877,6 +1884,27 @@ class RandomSamplingPlanner(ExhaustivePlanner):
 
             return sampled_matrix
 
+    def _select_kickoff_instances(self, kept_instances: list) -> tuple:
+        """
+        Apply random sampling in single-allocation mode. Without this,
+        kickoff mode would silently run the full parameter space,
+        ignoring n_samples/percentage.
+        """
+        sampled = self._sample_execution_matrix(kept_instances)
+        if len(sampled) == len(kept_instances):
+            return kept_instances, []
+        selected_ids = {t.execution_id for t in sampled}
+        skipped = []
+        for t in kept_instances:
+            if t.execution_id not in selected_ids:
+                t.metadata["__skipped"] = True
+                t.metadata["__skip_reason"] = "planner"
+                skipped.append(t)
+        self.logger.info(
+            f"  Random sampling: {len(sampled)}/{len(kept_instances)} combinations selected"
+        )
+        return sampled, skipped
+
     def _build_execution_matrix(self) -> bool:
         """
         Build the execution matrix with random sampling.
@@ -2032,6 +2060,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Build search space from swept variables
         # This also populates self.ordinal_mappings for index-to-value conversion
         self.ordinal_mappings: Dict[str, List[Any]] = {}  # var_name -> list of valid values
+        self.categorical_mappings: Dict[str, List[Any]] = {}  # var_name -> category list (str vars)
         self.fixed_values: Dict[str, Any] = {}  # var_name -> fixed value (for single-value sweeps)
         self.search_space, self.var_names = self._build_search_space()
 
@@ -2273,6 +2302,22 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
         return params
 
+    def _param_to_index(self, name: str, value: Any) -> float:
+        """
+        Convert one optimizer-format parameter value to a float for
+        index-space distance computation. Ordinal variables are already
+        indices; categorical (string) variables map to their category index.
+        """
+        if hasattr(value, 'item'):
+            value = value.item()
+        if name in self.categorical_mappings:
+            categories = self.categorical_mappings[name]
+            try:
+                return float(categories.index(value))
+            except ValueError:
+                return 0.0
+        return float(value)
+
     def _find_nearest_valid_point_by_indices(self, suggested_params: List[Any]) -> tuple:
         """
         Find the nearest valid search point using index-based distance.
@@ -2294,21 +2339,24 @@ class BayesianPlanner(BasePlanner, HasLogger):
         Returns:
             Nearest valid search point tuple (actual values, not indices)
         """
-        # Convert suggested params to index representation (keeping floats)
-        suggested_indices = []
-        for i, name in enumerate(self.var_names):
-            value = suggested_params[i]
-            # Convert numpy types to native Python
-            if hasattr(value, 'item'):
-                value = value.item()
-            suggested_indices.append(float(value))
+        # Convert suggested params to index representation (keeping floats).
+        # Categorical (string) dimensions are mapped to their category index;
+        # float() on the raw category would raise ValueError.
+        suggested_indices = [
+            self._param_to_index(name, suggested_params[i])
+            for i, name in enumerate(self.var_names)
+        ]
 
         # Build index representation for all valid points (once, cached)
         if not hasattr(self, '_valid_points_indices'):
             self._valid_points_indices = []
             for valid_point in self._valid_search_points:
                 indices = self._search_point_to_params(valid_point)
-                self._valid_points_indices.append((valid_point, tuple(float(x) for x in indices)))
+                self._valid_points_indices.append((
+                    valid_point,
+                    tuple(self._param_to_index(name, x)
+                          for name, x in zip(self.var_names, indices)),
+                ))
 
         # Find all points with minimum distance, then break ties deterministically
         candidates = []
@@ -2472,6 +2520,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
                     )
                 else:
                     # Categorical (string) values - keep as Categorical
+                    self.categorical_mappings[var_name] = list(values)
                     dim = Categorical(
                         categories=values,
                         name=var_name
@@ -2481,6 +2530,17 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 var_names.append(var_name)
 
         return dimensions, var_names
+
+    def _clone_instance(self, template: ExecutionInstance) -> ExecutionInstance:
+        """
+        Shallow per-call copy of a matrix instance with a fresh metadata
+        dict (same rationale as BasePlanner._clone_matrix_entry): the
+        returned object is mutated per repetition and stored in
+        completed_tests, so it must not alias the lookup template.
+        """
+        test = copy.copy(template)
+        test.metadata = dict(test.metadata) if getattr(test, "metadata", None) else {}
+        return test
 
     def _params_to_dict(self, params: List[Any]) -> Dict[str, Any]:
         """
@@ -2553,11 +2613,16 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.current_rep += 1
             self._attempt_count += 1
 
-            # Get the current exhaustive instance (not always instances[0])
-            test = self._current_instances[self._current_instance_idx]
+            # Get the current exhaustive instance (not always instances[0]).
+            # Clone it: completed tests are aggregated later by
+            # (execution_id, repetition), and aliased references would all
+            # reflect the last repetition's state.
+            test = self._clone_instance(self._current_instances[self._current_instance_idx])
+            test.execution_id = self.iteration
             test.repetition = self.current_rep
             test.repetitions = self.repetitions
             self._prepare_execution_artifacts(test, self.current_rep)
+            self.current_test = test
 
             self.logger.debug(
                 f"  [Bayesian] Instance {self._current_instance_idx + 1}/{len(self._current_instances)}, "
@@ -2572,7 +2637,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
             self.current_rep = 1
             self._attempt_count += 1
 
-            test = self._current_instances[self._current_instance_idx]
+            test = self._clone_instance(self._current_instances[self._current_instance_idx])
             test.execution_id = self.iteration
             test.repetition = self.current_rep
             test.repetitions = self.repetitions
@@ -2634,9 +2699,16 @@ class BayesianPlanner(BasePlanner, HasLogger):
                 search_point = candidate_point
                 break
 
-            # This point was already visited; tell optimizer about it to help it learn
-            # and then request a new suggestion
+            # This point was already visited. Re-tell the optimizer its known
+            # outcome so the surrogate refits and the next ask() proposes a
+            # different point; without this, ask() returns the same cached
+            # suggestion and every retry is a no-op.
             actual_params = self._search_point_to_params(candidate_point)
+            try:
+                observed_idx = self.X_observed.index(actual_params)
+                self.optimizer.tell(actual_params, self.y_observed[observed_idx])
+            except ValueError:
+                pass  # visited but no metric was recorded (failed run)
             self.logger.debug(
                 f"  [Bayesian] Attempt {attempt + 1}: suggestion maps to visited point, requesting new"
             )
@@ -2684,7 +2756,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
 
                     # Random sample to continue exploration
                     import random
-                    rng = random.Random(self.cfg.benchmark.random_seed + self.iteration)
+                    seed = self.cfg.benchmark.random_seed
+                    rng = random.Random(None if seed is None else seed + self.iteration)
                     search_point = rng.choice(unvisited)
                     self.logger.info(
                         f"  [Bayesian] Randomly sampling from {len(unvisited)} unvisited configurations"
@@ -2692,7 +2765,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
             else:
                 # Random fallback: sample from unvisited configurations
                 import random
-                rng = random.Random(self.cfg.benchmark.random_seed + self.iteration)
+                seed = self.cfg.benchmark.random_seed
+                rng = random.Random(None if seed is None else seed + self.iteration)
                 search_point = rng.choice(unvisited)
                 self.logger.info(
                     f"  [Bayesian] Optimizer converged; randomly sampling from "
@@ -2747,8 +2821,8 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.iteration += 1
         self._attempt_count += 1
 
-        # Get the first instance for this search point
-        test = instances[0]
+        # Get the first instance for this search point (cloned, see above)
+        test = self._clone_instance(instances[0])
         test.execution_id = self.iteration
         test.repetition = self.current_rep
         test.repetitions = self.repetitions
