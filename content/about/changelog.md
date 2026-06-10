@@ -7,6 +7,10 @@ All notable changes to IOPS are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `iops find` and watch mode now read a single run-root `__iops_status_rollup.json` aggregate instead of scanning every `exec_XXXX/repetition_N/__iops_status.json` on each refresh. This keeps them responsive on large parameter spaces (thousands of executions) and on parallel/network filesystems, where per-folder reads dominate wall-clock. The runner maintains the roll-up during the run and marks it complete when finished; watch always reads it, while `iops find` trusts it only when complete and otherwise falls back to the folder scan. The per-folder status files remain the source of truth, so older runs and archives keep working.
+
 ### Fixed
 
 #### Search and planning
