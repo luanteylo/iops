@@ -9,6 +9,36 @@ All notable changes to IOPS are documented here.
 ### Fixed
 - `iops find --watch`: keyboard controls (`q` to quit, `p` to pause, navigation) and the `--interval` refresh rate now work when standard input is not a terminal (e.g. stdin redirected, piped, or the process launched without a terminal attached to stdin). Watch mode now falls back to the controlling terminal (`/dev/tty`) for keyboard input instead of silently dropping every keypress and leaving the terminal echoing in canonical mode. The refresh interval is now driven by a monotonic deadline, so it is honored even when no keyboard is available rather than collapsing into a busy loop.
 
+- Bayesian search: `bayesian_config.objective` now defaults to `minimize` as documented. The loader previously defaulted to `maximize`, silently optimizing in the wrong direction for configurations that omitted the field. If you relied on the undocumented default, set `objective: maximize` explicitly.
+
+- Bayesian search: the end-of-run "Best parameters found" summary now reports the actual best point for `objective: minimize` studies. The best-value comparison was inverted, so the summary tracked the last evaluated point instead of the best one (the optimizer itself was unaffected).
+
+- CSV results sink: extending the schema with a new column (e.g. a metric that first appears mid-run) no longer rewrites existing rows through pandas type inference. Previously the rewrite silently mutated stored values, such as `"0010"` becoming `10` and integer columns becoming floats. Existing rows are now preserved verbatim. A zero-byte results file left behind by an interrupted run no longer makes every subsequent write fail.
+
+- SQLite results sink: rows that introduce new columns no longer abort the run with "table has no column named ...". The table schema is extended with `ALTER TABLE ADD COLUMN` instead.
+
+- Parquet results sink: appending a row that lacks a value for an existing integer column no longer permanently upcasts the column to float; integer columns are preserved as nullable integers.
+
+- Execution cache: numeric-looking strings are only coerced for hashing when the conversion round-trips exactly, so distinct string parameters such as `"1.1"` and `"1.10"` (version strings) or `"1e3"` no longer collapse into the same cache key and return each other's results as false cache hits. Negative integer strings now hash like their native integer counterparts.
+
+- `iops cache create`: caches built from CSV now store the executor status under the key the runner actually reads, so cache hits report `SUCCEEDED` instead of `UNKNOWN` in status files, results, and `iops find --status` filtering. CSV cell coercion now matches runtime parameter normalization exactly (previously negative integers never produced cache hits).
+
+- SLURM executor: a transient `squeue` failure (e.g. `slurm_load_jobs error: Socket timed out`) is no longer interpreted as "job left the queue". Previously one controller hiccup abandoned a live job: polling stopped, the job was removed from Ctrl+C cleanup tracking, and a still-running state was recorded as final. Status polling now retries on transient errors and confirms job completion via `scontrol` before finalizing.
+
+- SLURM single-allocation mode: a transient `squeue` failure no longer fails the current test and poisons every remaining test while the allocation keeps running on the cluster. The allocation state check is also throttled to `poll_interval` (previously `squeue` was invoked twice per second for the entire run).
+
+- SLURM executor: job ids are now parsed from multi-cluster submission output (`Submitted batch job 12345 on cluster c2`). Previously the job was marked as an error and ran untracked on the cluster.
+
+- SLURM executor: `DEADLINE`, `REVOKED`, and `SPECIAL_EXIT` are now recognized as terminal failure states. A deadline-killed job could previously be recorded as `SUCCEEDED` when its partial output happened to parse.
+
+- SLURM executor: the job start timestamp is now recorded when a job is already running at the first poll, fixing wrong queue-wait/run-time splits for jobs that start immediately.
+
+- `iops archive`: partial archives (`--status`, `--params`, `--min-completed-reps`) no longer fail their own integrity verification on extraction. Checksums are now computed over the content actually stored in the archive (filtered index and included executions) instead of the unfiltered source tree.
+
+- `iops archive create --min-completed-reps`: filtered result files are no longer empty. Repetition folder numbers (1-based) were compared against result rows using a 0-based index, so completed repetitions almost never matched.
+
+- `iops archive extract`: extraction now applies the standard library's `data` filter, which rejects symlinks and hard links pointing outside the destination directory, absolute paths, and device nodes. The previous custom filter only inspected member names, leaving a path traversal vector via crafted symlink members, and it also skipped legitimate files whose names merely contained `..` (e.g. `results..csv`).
+
 ## [3.5.6] - 2026-06-09
 
 ### Added
