@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Set, Tuple, Optional
 import itertools
 import math
 
-from jinja2 import Environment, StrictUndefined
+from jinja2 import Environment, StrictUndefined, UndefinedError
 
 from iops.config.models import (
     GenericBenchmarkConfig,
@@ -524,7 +524,14 @@ class ExecutionInstance:
         results: List[Dict[str, Any]] = []
         for inp in self.input_file_templates:
             content_ctx = {**base_ctx, "inputs": inputs_ctx}
-            content = _render_template(inp.template or "", content_ctx)
+            try:
+                content = _render_template(inp.template or "", content_ctx)
+            except UndefinedError as exc:
+                available = sorted(base_ctx.keys())
+                raise ConfigValidationError(
+                    f"Undefined variable in input file template '{inp.name}': {exc}\n"
+                    f"Available variables: {', '.join(available)}"
+                ) from exc
             entry = inputs_ctx[inp.name]
             results.append({
                 "name": inp.name,
