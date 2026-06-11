@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from iops.config.models import ConfigValidationError
+
 
 def _is_named_object_list(lst: list) -> bool:
     """Check if all items in a list are dicts containing a 'name' key.
@@ -15,15 +17,32 @@ def _is_named_object_list(lst: list) -> bool:
     return all(isinstance(item, dict) and "name" in item for item in lst)
 
 
-def _merge_named_lists(base: List[dict], override: List[dict]) -> List[dict]:
+def _merge_named_lists(base: List[dict], override: List[dict], field: str = "") -> List[dict]:
     """Merge two named-object lists by matching on the 'name' key.
 
     Items with matching names are deep-merged (override wins on conflict).
     New items from override are appended.
     Order: base items first (merged if matched), then new override items.
+
+    Raises:
+        ConfigValidationError: If the override list contains duplicate names
+            (later duplicates would silently vanish otherwise).
     """
-    # Index base items by name, preserving order
-    base_by_name = {item["name"]: item for item in base}
+    # Reject duplicate names within the override list
+    override_names_seen = set()
+    duplicates = []
+    for item in override:
+        item_name = item.get("name")
+        if item_name in override_names_seen:
+            duplicates.append(item_name)
+        override_names_seen.add(item_name)
+    if duplicates:
+        where = f" '{field}'" if field else ""
+        raise ConfigValidationError(
+            f"Override list{where} contains duplicate names: {sorted(set(duplicates))}. "
+            f"Each item in a named list override must have a unique 'name'."
+        )
+
     seen_names = set()
     result = []
 
@@ -82,7 +101,7 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
         # Both lists -> check if named-object lists
         elif isinstance(base_val, list) and isinstance(override_val, list):
             if _is_named_object_list(base_val) and _is_named_object_list(override_val):
-                result[key] = _merge_named_lists(base_val, override_val)
+                result[key] = _merge_named_lists(base_val, override_val, field=key)
             else:
                 # Scalar/anonymous lists: replace entirely
                 result[key] = _deep_copy(override_val)

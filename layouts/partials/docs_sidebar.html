@@ -1,0 +1,23 @@
+{{- /*
+  Left navigation for documentation pages.
+  Each section is collapsible; only the section containing the current
+  page starts expanded. The section landing page is the first entry.
+*/ -}}
+{{ $current := . }}
+<nav class="docs-sidebar" aria-label="Documentation">
+  {{ range $sec := slice "getting-started" "user-guide" "developer-guide" }}
+    {{ with $.Site.GetPage (printf "/%s" $sec) }}
+      <details class="docs-nav-section"{{ if eq $current.Section $sec }} open{{ end }}>
+        <summary class="docs-section-title">{{ .Title }}</summary>
+        <ul>
+          {{ if eq $sec "user-guide" }}
+            <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">Overview</a></li>
+          {{ end }}
+          {{ range .RegularPages }}
+            <li{{ if eq $current . }} class="active"{{ end }}><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
+          {{ end }}
+        </ul>
+      </details>
+    {{ end }}
+  {{ end }}
+</nav>

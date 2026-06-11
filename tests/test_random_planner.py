@@ -145,8 +145,8 @@ def test_random_config_invalid_percentage_zero(tmp_path, sample_config_dict):
         load_config(config_file)
 
 
-def test_random_config_percentage_over_one_clamped(tmp_path, sample_config_dict):
-    """Test that percentage > 1.0 is clamped to 1.0 with warning."""
+def test_random_config_percentage_over_one_rejected(tmp_path, sample_config_dict):
+    """Test that percentage > 1.0 raises a clear error (it is a 0-1 fraction)."""
     sample_config_dict["benchmark"]["search_method"] = "random"
     sample_config_dict["benchmark"]["random_config"] = {
         "percentage": 1.5
@@ -156,10 +156,8 @@ def test_random_config_percentage_over_one_clamped(tmp_path, sample_config_dict)
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
 
-    config = load_config(config_file)
-    planner = BasePlanner.build(config)
-
-    assert planner.percentage == 1.0  # Should be clamped
+    with pytest.raises(ConfigValidationError, match="fraction between 0 and 1"):
+        load_config(config_file)
 
 
 def test_random_sampling_with_n_samples(tmp_path, sample_config_dict):

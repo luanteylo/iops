@@ -3,10 +3,10 @@ title: "Developer Guide"
 weight: 80
 ---
 
-This section contains technical documentation for developers working on the IOPS codebase. It covers internal architecture, data flows, and implementation details that are useful when contributing to or extending IOPS.
+Internal architecture, data flows, and implementation details for developers contributing to or extending the IOPS codebase.
 
 ## Contents
 
-- [Data Sources]({{< relref "data-sources" >}}) - Where CLI commands get their data from
+- [Data Sources]({{< relref "data-sources" >}}) - Where CLI commands read their data
 - [Probe System]({{< relref "probe-system" >}}) - System information collection mechanism
 - [Execution Loop]({{< relref "execution-loop" >}}) - Runner, Planner, and Executor architecture

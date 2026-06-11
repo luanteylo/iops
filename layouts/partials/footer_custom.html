@@ -1,0 +1,47 @@
+<script>
+/* Keep the docs sidebar where the reader left it: restore its scroll
+   position and manually toggled sections across page navigations, so
+   browsing pages one by one does not reset the menu to the top. */
+(function () {
+  var sidebar = document.querySelector('.docs-sidebar');
+  if (!sidebar || !window.sessionStorage) return;
+
+  /* Restore sections the reader explicitly opened or closed */
+  var openState = {};
+  try {
+    openState = JSON.parse(sessionStorage.getItem('docsSidebarOpen') || '{}');
+  } catch (e) { openState = {}; }
+  sidebar.querySelectorAll('details.docs-nav-section').forEach(function (d) {
+    var summary = d.querySelector('summary');
+    var key = summary ? summary.textContent.trim() : '';
+    if (key && key in openState) d.open = openState[key];
+    d.addEventListener('toggle', function () {
+      if (!key) return;
+      openState[key] = d.open;
+      sessionStorage.setItem('docsSidebarOpen', JSON.stringify(openState));
+    });
+  });
+
+  /* The section containing the current page always stays reachable */
+  var active = sidebar.querySelector('li.active');
+  if (active) {
+    var section = active.closest('details');
+    if (section) section.open = true;
+  }
+
+  /* Restore scroll position; on a fresh visit, bring the active item
+     into view instead */
+  var pos = sessionStorage.getItem('docsSidebarScroll');
+  if (pos !== null) {
+    sidebar.scrollTop = parseInt(pos, 10) || 0;
+  } else if (active) {
+    active.scrollIntoView({ block: 'nearest' });
+  }
+
+  function save() {
+    sessionStorage.setItem('docsSidebarScroll', String(sidebar.scrollTop));
+  }
+  sidebar.addEventListener('click', save, true);
+  window.addEventListener('pagehide', save);
+})();
+</script>

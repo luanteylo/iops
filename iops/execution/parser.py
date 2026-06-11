@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -13,6 +14,15 @@ from iops.execution.matrix import ExecutionInstance
 class ParserError(Exception): ...
 class ParserScriptError(ParserError): ...
 class ParserContractError(ParserError): ...
+
+
+# redirect_stdout/redirect_stderr swap sys.stdout/sys.stderr for the WHOLE
+# process, not per thread. Parsing runs in worker threads when parallel > 1,
+# so interleaved enter/exit would cross-contaminate captured output between
+# tests and could leave sys.stdout pointing at an abandoned buffer. This lock
+# serializes the capture regions (parsing is fast relative to execution, so
+# the serialization cost is negligible).
+_capture_lock = threading.RLock()
 
 
 
@@ -44,7 +54,7 @@ def _build_parse_fn(
         code = compile(parser_script, "<parser_script>", "exec")
         # Execute with optional output capture
         if stdout_buffer is not None and stderr_buffer is not None:
-            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            with _capture_lock, redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
                 exec(code, ns, ns)
         else:
             exec(code, ns, ns)
@@ -143,7 +153,7 @@ def parse_metrics_from_execution(test: ExecutionInstance) -> Dict[str, Any]:
         )
 
         # Also capture output during parse() call
-        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+        with _capture_lock, redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
             metrics = parse_fn(parser.file)
 
     except Exception as e:

@@ -1,5 +1,6 @@
 ---
 title: "Templating and Context Reference"
+weight: 15
 ---
 
 IOPS uses Jinja2 templating throughout the configuration to enable dynamic values, conditional logic, and computed expressions. This guide covers both the Jinja2 syntax and the context variables available in each configuration section.
@@ -21,7 +22,7 @@ IOPS uses Jinja2 templating throughout the configuration to enable dynamic value
    - [scripts[].script_template](#scriptsscript_template)
    - [scripts[].post.script](#scriptspostscript)
    - [scripts[].parser.file](#scriptsparserfile)
-   - [scripts[].parser.parser_script](#scriptsparserparsers_cript)
+   - [scripts[].parser.parser_script](#scriptsparserparser_script)
    - [vars[].expr](#varsexpr)
    - [output.sink.path](#outputsinkpath)
 4. [Complete Example](#complete-example)
@@ -65,7 +66,7 @@ These variables are available in all Jinja2 templates:
 
 ### Variable Substitution
 
-The most common use case is variable interpolation using `{{ variable_name }}`:
+Interpolate variables with `{{ variable_name }}`:
 
 ```yaml
 command:
@@ -82,15 +83,9 @@ vars:
 Access system environment variables via `os_env`:
 
 ```yaml
-# Use system paths in commands
+# Use system paths in commands and derived variables
 command:
   template: "{{ os_env.HOME }}/bin/benchmark --scratch {{ os_env.SCRATCH | default('/tmp') }}"
-
-# Reference environment in derived variables
-vars:
-  scratch_dir:
-    type: str
-    expr: "{{ os_env.SCRATCH | default('/tmp') }}/iops_{{ execution_id }}"
 
 # Conditional based on cluster environment
 scripts:
@@ -108,37 +103,18 @@ scripts:
 Use `{% if condition %}` for conditional logic:
 
 ```yaml
-# Basic conditional
-command:
-  template: >
-    my_benchmark --input data.bin
-    {% if use_compression %} --compress {% endif %}
-    --output {{ output_file }}
-
-# With else clause
+# Basic conditional with else clause
 command:
   template: >
     ior {% if operation == "write" %} -w {% else %} -r {% endif %}
     -b {{ block_size }}mb
     -o {{ output_path }}
 
-# Numeric comparison
-command:
-  template: >
-    mpirun -np {{ ntasks }}
-    ./benchmark {% if nodes > 8 %} --large-scale {% endif %}
-
-# Complex conditions
+# Complex conditions and membership tests
 command:
   template: >
     benchmark
     {% if nodes > 1 and processes_per_node >= 4 %} --parallel-mode {% endif %}
-    --config {{ config_file }}
-
-# Membership test
-command:
-  template: >
-    benchmark
     {% if filesystem in ["lustre", "gpfs"] %} --parallel-fs {% endif %}
     {% if access_pattern not in ["sequential"] %} --random-io {% endif %}
     --output {{ output_file }}
@@ -169,13 +145,6 @@ command:
   template: >
     benchmark
     {% for i in range(3) %} --file{{ i }} input{{ i }}.dat {% endfor %}
-
-# Iterate with index
-script_template: |
-  #!/bin/bash
-  {% for i in range(nodes) %}
-  echo "Processing node {{ i }}"
-  {% endfor %}
 ```
 
 **Loop variables:**
@@ -193,29 +162,19 @@ Filters transform values using the `|` operator:
 command:
   template: "benchmark --config {{ config_path | default('./default.conf') }}"
 
-# String manipulation
+# String and numeric filters
 vars:
   uppercase_name:
     type: str
     expr: "{{ benchmark.name | upper }}"
 
-  lowercase_name:
-    type: str
-    expr: "{{ benchmark.name | lower }}"
-
   filename:
     type: str
     expr: "{{ output_path | basename }}"
 
-# Numeric filters
-vars:
   rounded_value:
     type: float
     expr: "{{ block_size_mb | round(2) }}"
-
-  absolute_value:
-    type: int
-    expr: "{{ difference | abs }}"
 ```
 
 **Common filters:**
@@ -239,7 +198,6 @@ vars:
 Combine variables with arithmetic and function calls:
 
 ```yaml
-# Arithmetic in derived variables
 vars:
   total_processes:
     type: int
@@ -249,19 +207,9 @@ vars:
     type: int
     expr: "{{ (volume_size_gb * 1024) // (nodes * ppn) }}"
 
-  percentage:
-    type: float
-    expr: "{{ (current_value / max_value) * 100.0 }}"
-
-# Using functions
-vars:
   max_cores:
     type: int
     expr: "{{ max(nodes * ppn, 16) }}"
-
-  min_block_size:
-    type: int
-    expr: "{{ min(block_size_mb, 1024) }}"
 ```
 
 **Available functions:**
@@ -339,20 +287,6 @@ scripts:
       {{ command.template }}
 ```
 
-This renders to:
-
-```bash
-#!/bin/bash
-
-export OMP_NUM_THREADS="8"
-export IOPS_NODES="2"
-export IOPS_BLOCK_SIZE="1024"
-export IOPS_EXEC_DIR="/path/to/workdir/run_001/exec_0001"
-export MY_STATIC_VAR="some_value"
-
-./benchmark
-```
-
 ---
 
 ### `scripts[].script_template`
@@ -386,15 +320,7 @@ scripts:
 
 #### External File
 
-You can reference an external file instead of inline content:
-
-```yaml
-scripts:
-  - name: "ior"
-    script_template: /path/to/my_script_template.sh
-```
-
-Or relative to the YAML config file:
+You can reference an external file instead of inline content, either absolute or relative to the YAML config file:
 
 ```yaml
 scripts:
@@ -402,27 +328,7 @@ scripts:
     script_template: ./templates/slurm_template.sh
 ```
 
-The external file can contain Jinja2 templates:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=iops_{{ execution_id }}
-#SBATCH --nodes={{ nodes }}
-#SBATCH --ntasks-per-node={{ ppn }}
-#SBATCH --output={{ execution_dir }}/stdout
-#SBATCH --error={{ execution_dir }}/stderr
-
-module load mpi ior
-
-echo "Running execution {{ execution_id }}, repetition {{ repetition }}"
-echo "Variables: nodes={{ nodes }}, ppn={{ ppn }}, block_size={{ block_size }}"
-
-{% for key, value in command_env.items() %}
-export {{ key }}="{{ value }}"
-{% endfor %}
-
-srun {{ command.template }}
-```
+The external file can contain the same Jinja2 templates as inline content.
 
 #### File Detection Logic
 
@@ -462,16 +368,7 @@ scripts:
         ls -lh {{ execution_dir }}
 ```
 
-#### External File
-
-```yaml
-scripts:
-  - name: "benchmark"
-    script_template: ./templates/main.sh
-
-    post:
-      script: ./templates/post_process.sh
-```
+Like `script_template`, the value can also be a path to an external file (e.g., `script: ./templates/post_process.sh`).
 
 ---
 
@@ -515,32 +412,10 @@ The parser script does NOT support Jinja2 templating, but has access to executio
 | `repetition` | int | Current repetition number |
 | `repetitions` | int | Total number of repetitions |
 
-#### Inline Content
-
-```yaml
-parser:
-  file: "{{ execution_dir }}/output.json"
-  metrics:
-    - name: throughput
-    - name: latency
-  parser_script: |
-    import json
-
-    def parse(file_path):
-        with open(file_path) as f:
-            data = json.load(f)
-
-        return {
-            "throughput": data["bandwidth_mb"],
-            "latency": data["latency_ms"]
-        }
-```
-
 #### Using Context Variables
 
 Access execution context via global variables:
 
-**Example 1: Per-node throughput**
 ```yaml
 parser:
   file: "{{ execution_dir }}/output.json"
@@ -556,64 +431,7 @@ parser:
         return {"throughput_per_node": data["total_bw"] / vars["nodes"]}
 ```
 
-**Example 2: Efficiency metric**
-```yaml
-parser:
-  file: "{{ execution_dir }}/results.txt"
-  metrics:
-    - name: bandwidth
-    - name: efficiency
-  parser_script: |
-    import re
-
-    def parse(file_path):
-        with open(file_path) as f:
-            content = f.read()
-        bw = float(re.search(r"Bandwidth: ([\d.]+)", content).group(1))
-        # Efficiency = bandwidth per core
-        eff = bw / (vars["nodes"] * vars["ppn"])
-        return {"bandwidth": bw, "efficiency": eff}
-```
-
-**Example 3: Conditional parsing based on operation type**
-```yaml
-parser:
-  file: "{{ execution_dir }}/output.json"
-  metrics:
-    - name: performance
-  parser_script: |
-    import json
-
-    def parse(file_path):
-        with open(file_path) as f:
-            data = json.load(f)
-        # Use different field based on operation variable
-        if vars["operation"] == "write":
-            return {"performance": data["write_bw"]}
-        else:
-            return {"performance": data["read_bw"]}
-```
-
-**Example 4: Using system environment variables**
-```yaml
-parser:
-  file: "{{ execution_dir }}/output.json"
-  metrics:
-    - name: throughput
-    - name: cluster
-  parser_script: |
-    import json
-
-    def parse(file_path):
-        with open(file_path) as f:
-            data = json.load(f)
-        # Include cluster name from environment for multi-cluster studies
-        cluster = os_env.get("CLUSTER_NAME", "unknown")
-        return {
-            "throughput": data["bandwidth"],
-            "cluster": cluster
-        }
-```
+More patterns (regex parsing, conditional logic, CSV output, `os_env` usage) are covered in [Writing Parsers](../writing-parsers).
 
 #### External File
 
@@ -625,17 +443,7 @@ parser:
   parser_script: ./parsers/my_parser.py
 ```
 
-The external file (`./parsers/my_parser.py`):
-
-```python
-import json
-
-def parse(file_path):
-    # Context globals available: vars, env, os_env, execution_id, execution_dir, workdir, log_dir, repetition, repetitions
-    with open(file_path) as f:
-        data = json.load(f)
-    return {"throughput": data["bandwidth"] / vars["nodes"]}
-```
+The external file has the same structure and access to the same context globals.
 
 #### Requirements
 
@@ -702,33 +510,16 @@ vars:
   partition:
     type: str
     expr: "{% if nodes > 4 %}large{% else %}small{% endif %}"
-```
 
-#### Using environment variables
-
-Access system environment variables via `os_env`:
-
-```yaml
-vars:
+  # Environment variables work here too
   scratch_path:
     type: str
     expr: "{{ os_env.SCRATCH | default('/tmp') }}/iops_{{ execution_id }}"
-
-  home_bin:
-    type: str
-    expr: "{{ os_env.HOME }}/bin"
-
-  # Conditional based on cluster environment
-  queue:
-    type: str
-    expr: "{% if os_env.CLUSTER_NAME == 'hpc1' %}batch{% else %}default{% endif %}"
 ```
 
 #### List variables for correlated parameters
 
-The `list` type allows defining arrays that can be indexed in templates. This is useful when you have multiple parameters that must change together (correlated parameters).
-
-**Use case**: You want to sweep over simulation configurations where grid size and time steps are paired, not all combinations.
+The `list` type defines arrays that can be indexed in templates, for parameters that must change together rather than combine. For example, sweep over simulation configurations where grid size and time steps are paired:
 
 ```yaml
 vars:
@@ -754,16 +545,7 @@ command:
                --steps {{ time_steps[config_index] }}
 ```
 
-This creates **5 executions** with correlated parameters:
-| `config_index` | `grid_sizes[...]` | `time_steps[...]` |
-|----------------|-------------------|-------------------|
-| 0 | 100 | 1000 |
-| 1 | 200 | 2000 |
-| 2 | 400 | 4000 |
-| 3 | 800 | 8000 |
-| 4 | 1600 | 16000 |
-
-Without list variables, sweeping `grid_size: [100, 200, 400, 800, 1600]` and `time_steps: [1000, 2000, 4000, 8000, 16000]` would create **25 executions** (all combinations).
+This creates **5 executions** with paired values (`100/1000`, `200/2000`, ..., `1600/16000`). Sweeping the two lists as separate variables would create **25 executions** (all combinations).
 
 ---
 
@@ -781,25 +563,11 @@ Path to the output results file.
 ```yaml
 output:
   sink:
-    type: csv
-    path: "{{ workdir }}/results.csv"
-
-# Or with more complex path
-output:
-  sink:
     type: parquet
     path: "{{ workdir }}/results/{{ benchmark.name }}_results.parquet"
 ```
 
-#### Default Paths
-
-If `path` is not specified, IOPS uses sensible defaults:
-
-| Type | Default Path |
-|------|--------------|
-| `csv` | `{{ workdir }}/results.csv` |
-| `parquet` | `{{ workdir }}/results.parquet` |
-| `sqlite` | `{{ workdir }}/results.db` |
+If `path` is not specified, IOPS uses per-type defaults; see [YAML Schema / output](../yaml-schema#output).
 
 ---
 

@@ -56,6 +56,14 @@ def _serialize_plot_config(plot_cfg) -> Dict[str, Any]:
         "width": plot_cfg.width,
         "per_variable": plot_cfg.per_variable,
         "include_metric": plot_cfg.include_metric,
+        # Coverage heatmap options (must round-trip through report metadata)
+        "row_vars": plot_cfg.row_vars,
+        "col_var": plot_cfg.col_var,
+        "aggregation": plot_cfg.aggregation,
+        "show_missing": plot_cfg.show_missing,
+        "sort_rows_by": plot_cfg.sort_rows_by,
+        "sort_cols_by": plot_cfg.sort_cols_by,
+        "sort_ascending": plot_cfg.sort_ascending,
     }
 
 
@@ -87,6 +95,8 @@ def serialize_reporting_config(reporting: "ReportingConfig") -> Optional[Dict[st
             "variable_impact": reporting.sections.variable_impact,
             "parallel_coordinates": reporting.sections.parallel_coordinates,
             "bayesian_evolution": reporting.sections.bayesian_evolution,
+            "bayesian_parameter_evolution": reporting.sections.bayesian_parameter_evolution,
+            "resource_sampling": reporting.sections.resource_sampling,
             "custom_plots": reporting.sections.custom_plots,
             "gallery": reporting.sections.gallery,
             "versions": reporting.sections.versions,
@@ -94,6 +104,7 @@ def serialize_reporting_config(reporting: "ReportingConfig") -> Optional[Dict[st
         "best_results": {
             "top_n": reporting.best_results.top_n,
             "show_command": reporting.best_results.show_command,
+            "min_samples": reporting.best_results.min_samples,
         },
         "plot_defaults": {
             "height": reporting.plot_defaults.height,

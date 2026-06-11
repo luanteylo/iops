@@ -1,6 +1,6 @@
 ---
 title: "Caching"
-weight: 6
+weight: 50
 ---
 
 ---
@@ -11,6 +11,11 @@ weight: 6
 2. [Configuration](#configuration)
    - [Basic Usage](#basic-usage)
    - [Cache-Only Mode](#cache-only-mode)
+   - [Parameter Hashing](#parameter-hashing)
+   - [Excluding Variables from Cache](#excluding-variables-from-cache)
+   - [Cache Schema](#cache-schema)
+   - [Important: Command Changes Are Not Detected](#important-command-changes-are-not-detected)
+   - [What Gets Cached](#what-gets-cached)
 3. [Inspecting the Cache](#inspecting-the-cache)
 4. [Rebuilding the Cache](#rebuilding-the-cache)
 
@@ -18,11 +23,7 @@ weight: 6
 
 ## Overview
 
-IOPS supports intelligent caching of execution results using SQLite. This allows you to:
-- Skip re-running tests with identical parameters
-- Speed up iterative development and testing
-- Safely retry failed runs without re-executing successful tests
-- Handle repetitions correctly (each repetition is cached separately)
+IOPS caches execution results in SQLite so that tests with identical parameters can be skipped on re-runs. This speeds up iterative development, lets you safely retry failed runs without re-executing successful tests, and handles repetitions correctly (each repetition is cached separately).
 
 **Warning: Use caching with caution.** The cache key is computed only from variable values, not from the command template. If you change your command (e.g., from `./benchmark {{ var1 }}` to `./benchmark -F {{ var1 }}`), the cache will still return old results because the parameters haven't changed. This can lead to incorrect results. See [Command Changes Are Not Detected](#important-command-changes-are-not-detected) for details and workarounds.
 
@@ -33,7 +34,6 @@ Add `cache_file` to your YAML config:
 ```yaml
 benchmark:
   name: "IOR Benchmark"
-  description: "I/O performance testing"
   workdir: "/home/user/workdir/"
   cache_file: "/home/user/iops_cache.db"  # Cache database
   repetitions: 3
@@ -53,11 +53,7 @@ iops run config.yaml --use-cache
 
 ### Cache-Only Mode
 
-The `--cache-only` flag runs IOPS using only cached results, skipping any tests not found in the cache. This is useful for:
-
-- Regenerating CSV/output files from an existing cache without running new tests
-- Extracting a subset of results from a large campaign
-- Verifying what's in the cache without executing anything
+The `--cache-only` flag runs IOPS using only cached results, skipping any tests not found in the cache. Use it to regenerate CSV/output files from an existing cache, extract a subset of results from a large campaign, or verify what's in the cache without executing anything.
 
 ```bash
 # Only use cached results, skip tests not in cache
@@ -67,17 +63,11 @@ iops run config.yaml --cache-only
 iops run config.yaml --cache-only --dry-run
 ```
 
-**Behavior:**
-- Tests found in cache are loaded and written to the output file
-- Tests not in cache are marked as `SKIPPED` with reason "Not in cache (cache-only mode)"
-- Skipped tests appear in `iops find --status SKIPPED`
-- The final summary shows how many tests were from cache vs skipped
+Tests found in cache are loaded and written to the output file. Tests not in cache are marked as `SKIPPED` with reason "Not in cache (cache-only mode)" and appear in `iops find --status SKIPPED`. The final summary shows how many tests came from cache vs were skipped:
 
-**Example output:**
 ```
 [  1] exec_0001 (rep 1/1) → SUCCEEDED [CACHED] | result=100
 [  2] exec_0002 (rep 1/1) -> SKIPPED (not in cache)
-[  3] exec_0003 (rep 1/1) → SUCCEEDED [CACHED] | result=200
 
 Benchmark completed (cache-only mode): 3 tests processed
   From cache: 2
@@ -94,16 +84,15 @@ Each test is uniquely identified by:
 2. **Repetition**: Which repetition this is (1, 2, 3, ...)
 
 Parameters are normalized before hashing:
-- Type normalization: `"8"` and `8` are treated as identical
+- Numeric strings: a string is coerced to a number only when the numeric form round-trips back to the exact original string. `"8"` and `8` hash the same, but `"1.10"` and `"1.1"` (or `"08"` and `"8"`, `"1e3"` and `"1000.0"`) keep distinct hashes.
 - Internal keys removed: `__test_index`, etc. are ignored
 - Excluded variables removed: Variables in `cache_exclude_vars` are skipped
 - Sorted consistently: Order doesn't matter
 
 ### Excluding Variables from Cache
 
-**Problem**: Some derived variables contain run-specific paths that change between executions, causing unnecessary cache misses.
+Some derived variables contain run-specific paths that change between executions, causing unnecessary cache misses:
 
-**Example**:
 ```yaml
 vars:
   nodes:
@@ -119,15 +108,12 @@ Without exclusion:
 - Run 1: `summary_file=/workdir/run_001/summary.txt` → Cache key: `abc123`
 - Run 2: `summary_file=/workdir/run_002/summary.txt` → Cache key: `def456` **Cache miss!**
 
-**Solution**: Use `cache_exclude_vars` to exclude path-based variables:
+Use `cache_exclude_vars` to exclude path-based variables:
 
 ```yaml
 benchmark:
-  name: "IOR Benchmark"
-  workdir: "/home/user/workdir/"
   cache_file: "/home/user/iops_cache.db"
   cache_exclude_vars: ["summary_file"]  # Exclude from cache hash
-  repetitions: 3
 ```
 
 
@@ -151,7 +137,7 @@ CREATE INDEX idx_param_hash ON cached_executions(param_hash, repetition);
 
 ### Important: Command Changes Are Not Detected
 
-**Warning**: The cache hash is computed **only from variables**, not from the command template itself. This is intentional—commands often contain paths like `{{ execution_dir }}` that change between runs but shouldn't invalidate the cache.
+**Warning**: The cache hash is computed **only from variables**, not from the command template itself. This is intentional: commands often contain paths like `{{ execution_dir }}` that change between runs but shouldn't invalidate the cache.
 
 However, this means that if you modify your command template in ways that affect results, the cache will still return old results:
 
@@ -223,7 +209,6 @@ Hash      dataset       light_conv  Reps  average_epoch_time_sec  peak_gpu_memor
 -----------------------------------------------------------------------------------------------------
 57c77ec3  moving_mnist  tied        2     430.72                  10996.97             2026-04-17T23:53:07
 096cd29f  taasrad19     sqnxt       2     391.29                  11134.85             2026-04-17T12:21:38
-9ec8f1cb  moving_mnist  dws         2     454.16                  11957.98             2026-04-17T11:51:36
 ...
 ```
 
@@ -265,16 +250,10 @@ Repetitions: 2
   rep=1  cached_at=2026-04-08T08:01:27.580146
     metrics:
       average_epoch_time_sec: 428.96
-      min_epoch_gen_loss: -293.98
-      peak_gpu_memory_mib: 10996.97
       ...
     metadata:
       __executor_status: SUCCEEDED
-      __jobid: 4646245
       ...
-
-  rep=2  cached_at=2026-04-17T23:53:07.035720
-    ...
 ```
 
 If the prefix matches multiple hashes, IOPS reports the candidates and asks for a longer prefix:
@@ -292,43 +271,28 @@ The CLI subcommands are thin wrappers around helpers in `iops.cache` that you ca
 
 ```python
 from iops.cache import (
-    list_cache_entries,
-    get_cache_entry,
-    get_cache_stats,
-    resolve_hash_prefix,
-    ExecutionCache,
+    list_cache_entries, get_cache_entry, get_cache_stats,
+    resolve_hash_prefix, ExecutionCache,
 )
 
-# Summary statistics
-stats = get_cache_stats("cache.db")
-print(f"Total entries: {stats['total_entries']}")
-print(f"Unique parameter sets: {stats['unique_parameter_sets']}")
+stats = get_cache_stats("cache.db")  # total_entries, unique_parameter_sets, ...
 
 # List entries, filtered and collapsed per parameter hash
-entries = list_cache_entries(
-    "cache.db",
-    param_filters={"dataset": "moving_mnist"},
-    limit=10,
-)
-for e in entries:
-    print(e["hash"][:8], e["params"], e["rep_count"], e["metrics"])
+entries = list_cache_entries("cache.db", param_filters={"dataset": "moving_mnist"}, limit=10)
 
 # Full detail for a single entry (git-style prefix accepted)
 entry = get_cache_entry("cache.db", "57c77e")
-for rep in entry["repetitions"]:
-    print(rep["repetition"], rep["metrics"])
 
 # Resolve a prefix to a full hash (raises HashPrefixError on ambiguity)
 full_hash = resolve_hash_prefix("cache.db", "57c77e")
 
 # Mutating operations still go through ExecutionCache
-cache = ExecutionCache("cache.db")
-cache.clear_cache()
+ExecutionCache("cache.db").clear_cache()
 ```
 
 ## Rebuilding the Cache
 
-The `iops cache rebuild` command allows you to modify an existing cache database by:
+The `iops cache rebuild` command modifies an existing cache database by:
 - **Excluding variables** from the hash (consolidating entries that now hash to the same value)
 - **Adding variables** with constant values to all entries (enabling cache reuse after config changes)
 
@@ -338,11 +302,8 @@ The `iops cache rebuild` command allows you to modify an existing cache database
 # Exclude variables from hash
 iops cache rebuild cache.db --exclude summary_file,output_path -o new_cache.db
 
-# Add a variable to all entries (with type)
+# Add a variable to all entries (with type); repeat --add for multiple variables
 iops cache rebuild cache.db --add use_new_flag:bool=false -o new_cache.db
-
-# Add multiple variables
-iops cache rebuild cache.db --add cluster:str=skylake --add version:int=2 -o new_cache.db
 
 # Combine exclude and add
 iops cache rebuild cache.db --exclude output_path --add use_feature:bool=true -o new_cache.db
@@ -350,7 +311,7 @@ iops cache rebuild cache.db --exclude output_path --add use_feature:bool=true -o
 
 ### Adding Variables (Type Syntax)
 
-When adding variables, you can specify the type to ensure it matches your YAML config:
+When adding variables, specify the type to ensure it matches your YAML config:
 
 ```bash
 --add VAR:TYPE=VALUE
@@ -388,10 +349,6 @@ Cache Rebuild Summary
 ==================================================
 Source entries:        100
 Source unique hashes:  100
-Excluded variables:    output_file
-Added variables:       (none)
---------------------------------------------------
-Output entries:        100
 Output unique hashes:  3
 Collapsed entries:     97
 ==================================================
@@ -400,23 +357,14 @@ Rebuilt cache saved to: cache_rebuilt.db
 
 ### Example: Adding a New Variable
 
-You have a cache from previous runs and want to add a new variable to your config:
+You have a cache from previous runs and add a new swept variable to your config:
 
-**Original config (already executed):**
 ```yaml
 vars:
   nodes:
     type: int
     sweep: { mode: list, values: [2, 4, 8] }
-```
-
-**New config (with additional variable):**
-```yaml
-vars:
-  nodes:
-    type: int
-    sweep: { mode: list, values: [2, 4, 8] }
-  use_new_optimization:
+  use_new_optimization:                       # New variable, not in the cache
     type: bool
     sweep: { mode: list, values: [false, true] }
 ```
@@ -424,60 +372,35 @@ vars:
 To reuse the existing cache for `use_new_optimization=false` cases:
 
 ```bash
-$ iops cache rebuild cache.db --add use_new_optimization:bool=false -o new_cache.db
-
-Cache Rebuild Summary
-==================================================
-Source entries:        3
-Source unique hashes:  3
-Excluded variables:    (none)
-Added variables:       use_new_optimization=False
---------------------------------------------------
-Output entries:        3
-Output unique hashes:  3
-Collapsed entries:     0
-==================================================
-Rebuilt cache saved to: new_cache.db
+iops cache rebuild cache.db --add use_new_optimization:bool=false -o new_cache.db
 ```
 
 Now `iops run new_config.yaml --use-cache` will find cache hits for `use_new_optimization=false` and only execute the `use_new_optimization=true` cases.
 
 ### How It Works
 
-1. Reads all entries from the source cache
-2. Adds new variables to each entry's parameters (if `--add` specified)
-3. Re-normalizes parameters excluding specified variables (if `--exclude` specified)
-4. Re-computes the hash for each entry
-5. Writes all entries to the new database
+Rebuild reads all entries from the source cache, adds new variables to each entry's parameters (`--add`), re-normalizes parameters excluding specified variables (`--exclude`), re-computes each hash, and writes all entries to the new database.
 
-**Important**: When multiple entries collapse to the same `(hash, repetition)`, all entries are preserved. The rebuilt database does not enforce uniqueness, allowing you to keep all historical data. When reading from the cache, IOPS uses `ORDER BY created_at DESC LIMIT 1` to return the most recent entry.
+**Important**: When multiple entries collapse to the same `(hash, repetition)`, all entries are preserved. The rebuilt database does not enforce uniqueness, so all historical data is kept. When reading from the cache, IOPS uses `ORDER BY created_at DESC LIMIT 1` to return the most recent entry.
 
 ### After Rebuilding
 
-1. Update your YAML config to use the rebuilt cache:
-   ```yaml
-   benchmark:
-     cache_file: "./workdir/new_cache.db"
-     cache_exclude_vars: ["output_file"]  # If you excluded variables
-   ```
+Update your YAML config to use the rebuilt cache; future runs with `--use-cache` will find cache hits for matching parameters:
 
-2. Future runs with `--use-cache` will now find cache hits for matching parameters.
+```yaml
+benchmark:
+  cache_file: "./workdir/new_cache.db"
+  cache_exclude_vars: ["output_file"]  # If you excluded variables
+```
 
 ### Cache Behavior Details
 
-**When cache is used:**
-1. Before each test execution, check if `(params, repetition)` exists in cache
-2. If found: populate test with cached metrics and metadata, skip execution
-3. If not found: execute normally
+**When cache is used:** before each test execution, IOPS checks whether `(params, repetition)` exists in the cache. If found, the test is populated with cached metrics and metadata and execution is skipped; otherwise it executes normally.
 
-**When cache is updated:**
-1. After successful execution (`STATUS_SUCCEEDED`)
-2. Store `(params, repetition, metrics, metadata)` in cache
-3. On duplicate (same params/repetition): update with latest result
+**When cache is updated:** after each successful execution (`STATUS_SUCCEEDED`), IOPS stores `(params, repetition, metrics, metadata)`. On duplicate (same params/repetition), the entry is updated with the latest result.
 
 ### Core-Hours Savings Tracking
 
-When using cache with a core-hours budget (`max_core_hours`), cached tests don't count toward the budget and IOPS tracks how many core-hours were saved. This appears in progress logs and final summary.
+When using cache with a core-hours budget (`max_core_hours`), cached tests don't count toward the budget and IOPS tracks how many core-hours were saved. This appears in progress logs and the final summary.
 
 See the **[Budget Control](../budget-control#cache-interaction)** guide for details.
-

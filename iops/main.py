@@ -98,6 +98,10 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser):
         if getattr(args, 'cache_only', False):
             args.use_cache = True
 
+    if args.command == 'find':
+        if args.interval < 1:
+            parser.error("--interval must be at least 1 second")
+
 def parse_arguments():
     _preprocess_args()
 
@@ -163,7 +167,7 @@ Examples:
     find_parser.add_argument('--watch', '-w', action='store_true',
                              help="Continuously monitor execution status (requires: pip install iops-benchmark[watch])")
     find_parser.add_argument('--interval', type=int, default=5, metavar='SECONDS',
-                             help="Refresh interval in seconds for watch mode (default: 5)")
+                             help="Refresh interval in seconds for watch mode (default: 5, minimum: 1)")
     find_parser.add_argument('--metrics', '-m', action='store_true',
                              help="Show metric columns with average values (watch mode only)")
     find_parser.add_argument('--filter-metric', type=str, action='append', metavar='METRIC<OP>VALUE',
@@ -368,12 +372,18 @@ Examples:
 
 
 def initialize_logger(args):
+    # Bare parent commands (e.g. 'iops archive' with no subcommand) do not
+    # carry the common logging arguments, so fall back to defaults instead of
+    # crashing before the friendly "no subcommand" message can be shown.
+    log_file = getattr(args, 'log_file', Path("iops.log"))
+    log_level = getattr(args, 'log_level', 'INFO')
+    no_log_terminal = getattr(args, 'no_log_terminal', False)
     return setup_logger(
         name="iops",
-        log_file=args.log_file,
-        to_stdout=not args.no_log_terminal,
-        to_file=args.log_file is not None,
-        level=getattr(logging, args.log_level.upper(), logging.INFO)
+        log_file=log_file,
+        to_stdout=not no_log_terminal,
+        to_file=log_file is not None,
+        level=getattr(logging, log_level.upper(), logging.INFO)
     )
 
 

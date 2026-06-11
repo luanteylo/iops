@@ -51,4 +51,186 @@ details summary:hover {
 details > *:not(summary) {
   padding: 0 1em;
 }
+
+/* Uniform page title size: the theme styles .page-heading (80px) and
+   .post-heading (50px) but leaves section types unstyled, so the title
+   size jumped between pages. All content sections share one size now;
+   the home page keeps its hero banner. */
+.intro-header .getting-started-heading h1,
+.intro-header .user-guide-heading h1,
+.intro-header .developer-guide-heading h1,
+.intro-header .about-heading h1,
+.intro-header .reports-heading h1,
+.intro-header .search-heading h1 {
+  margin-top: 0;
+  font-size: 36px;
+}
+@media only screen and (min-width: 768px) {
+  .intro-header .getting-started-heading h1,
+  .intro-header .user-guide-heading h1,
+  .intro-header .developer-guide-heading h1,
+  .intro-header .about-heading h1,
+  .intro-header .reports-heading h1,
+  .intro-header .search-heading h1 {
+    font-size: 36px;
+  }
+}
+
+/* Documentation sidebar layout */
+/* Spacer replacing the hero banner on docs pages: clears the fixed
+   navbar so the sidebar and content start right below it. The theme's
+   body is a fixed-height flex column; without flex-shrink:0 this spacer
+   (the only shrinkable child) collapses to 0 when the page overflows,
+   dropping the sidebar and content behind the navbar. */
+.docs-header-spacer {
+  height: 95px;
+  flex-shrink: 0;
+}
+@media (max-width: 767px) {
+  .docs-header-spacer {
+    height: 60px;
+  }
+}
+/* Page title inside the content column: one fixed size on every page */
+.docs-page-title {
+  font-size: 30px;
+  font-weight: 700;
+  color: #2c3e50;
+  margin: 0 0 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
+}
+.docs-container {
+  /* The theme's body is a flex column and Bootstrap gives
+     container-fluid auto side margins; on a flex item those absorb the
+     free space and shrink-center the box. Force full width instead. */
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+  flex: 1 0 auto;
+  padding-left: 0;
+  padding-right: 0;
+}
+.docs-container > .row {
+  margin-left: 0;
+  margin-right: 0;
+}
+@media (min-width: 992px) {
+  /* Floated Bootstrap columns are only as tall as their own content,
+     which leaves position:sticky no room to move: the sidebar column
+     must stretch to the height of the content column for stickiness
+     to engage. Flex items stretch by default and ignore floats. */
+  .docs-container > .row {
+    display: flex;
+  }
+}
+.docs-sidebar-col {
+  padding-left: 0;
+  padding-right: 0;
+}
+.docs-sidebar {
+  position: sticky;
+  /* Clear the fixed navbar at its full (unshrunk) height of ~90px so
+     the top entries never slide underneath it while scrolling */
+  top: 100px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  padding: 14px 8px 30px 12px;
+  font-size: 14px;
+  background: #fafbfc;
+  border-right: 1px solid #eee;
+  min-height: calc(100vh - 110px);
+}
+/* Collapsible sections: undo the generic content <details> styling */
+.docs-sidebar details.docs-nav-section,
+.docs-sidebar details.docs-nav-section[open] {
+  border: none;
+  background: none;
+  border-radius: 0;
+  margin: 2px 0;
+}
+.docs-sidebar details.docs-nav-section > *:not(summary) {
+  padding: 0;
+}
+.docs-sidebar summary.docs-section-title {
+  display: block;
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #2c3e50;
+  background: none;
+  padding: 6px 4px 6px 1.2em;
+  margin: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  list-style: none;
+  position: relative;
+}
+.docs-sidebar summary.docs-section-title::before {
+  content: "\25B6";
+  position: absolute;
+  left: 0.2em;
+  top: 0.85em;
+  font-size: 0.7em;
+  transition: transform 0.2s;
+}
+.docs-sidebar details[open] > summary.docs-section-title::before {
+  transform: rotate(90deg);
+}
+.docs-sidebar summary.docs-section-title:hover {
+  color: #0085a1;
+  background: #f0f4f8;
+}
+.docs-sidebar ul {
+  list-style: none;
+  padding-left: 12px;
+  margin: 2px 0 6px;
+}
+.docs-sidebar li a {
+  display: block;
+  padding: 3px 8px;
+  color: #555;
+  border-left: 2px solid #e3e3e3;
+  text-decoration: none;
+  line-height: 1.45;
+}
+.docs-sidebar li a:hover {
+  color: #0085a1;
+  border-left-color: #0085a1;
+}
+.docs-sidebar li.active > a {
+  color: #0085a1;
+  font-weight: 600;
+  border-left-color: #0085a1;
+  background: #eef6f8;
+}
+.docs-content {
+  padding-left: 35px;
+  padding-right: 30px;
+  min-height: 70vh;
+}
+.docs-content > article,
+.docs-content > div {
+  max-width: 980px;
+}
+@media (max-width: 991px) {
+  .docs-sidebar {
+    position: static;
+    max-height: none;
+    min-height: 0;
+    border-right: none;
+    border-bottom: 1px solid #eee;
+    margin-bottom: 20px;
+  }
+  .docs-content {
+    padding-left: 15px;
+    padding-right: 15px;
+  }
+}
 </style>
+
+{{- /* Expose the search-index URL for the active baseURL so the search page
+   does not hardcode a path. The site is deployed both under /iops/ and at a
+   domain root, and absURL resolves correctly for each. */ -}}
+<script>window.IOPS_SEARCH_INDEX = "{{ "index.json" | absURL }}";</script>

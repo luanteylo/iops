@@ -12,6 +12,8 @@ import tarfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
+from .status_rollup import load_status_rollup, rollup_rep_statuses
+
 # IOPS file constants
 INDEX_FILENAME = "__iops_index.json"
 PARAMS_FILENAME = "__iops_params.json"
@@ -21,6 +23,41 @@ METADATA_FILENAME = "__iops_run_metadata.json"
 
 # Default truncation width for parameter values
 DEFAULT_TRUNCATE_WIDTH = 30
+
+
+def param_value_matches(actual: Any, expected: str) -> bool:
+    """
+    Check whether a stored parameter value matches a filter string.
+
+    Matches when:
+    - the string representations are identical, or
+    - both sides represent booleans (true/false, case-insensitive), or
+    - both sides parse as numbers and are numerically equal
+      (so filter "4" matches 4.0 and "1e3" matches 1000.0).
+
+    Args:
+        actual: The stored parameter value (any type, e.g. from JSON)
+        expected: The filter value as typed on the command line
+
+    Returns:
+        True if the values are considered equal
+    """
+    expected = str(expected)
+    if str(actual) == expected:
+        return True
+
+    actual_text = str(actual).strip().lower()
+    expected_text = expected.strip().lower()
+
+    # Case-insensitive boolean match (covers Python bools and "true"/"false" strings)
+    if actual_text in ("true", "false") and expected_text in ("true", "false"):
+        return actual_text == expected_text
+
+    # Numeric equality when both sides parse as numbers
+    try:
+        return float(actual) == float(expected)
+    except (TypeError, ValueError):
+        return False
 
 
 def _truncate_value(value: str, max_width: int) -> str:
@@ -33,15 +70,23 @@ def _truncate_value(value: str, max_width: int) -> str:
     return "..." + value[-(max_width - 3):]
 
 
-def _read_status(exec_path: Path) -> Dict[str, Any]:
+def _read_status(
+    exec_path: Path,
+    rollup: Optional[Dict[str, Any]] = None,
+    exec_key: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Read execution status from status files.
+    Read execution status from status files (or the run-root roll-up).
 
-    First checks for skipped marker file in exec_XXXX folder.
-    Then checks repetition folders for execution status.
+    When ``rollup`` covers ``exec_key``, the per-repetition status is taken from
+    that single pre-loaded file instead of scanning this execution's repetition
+    folders. Otherwise it falls back to the folder scan: first a skipped marker
+    in the exec_XXXX folder, then the repetition folders.
 
     Args:
         exec_path: Path to the exec_XXXX folder
+        rollup: Pre-loaded run-root roll-up dict, or None to always scan
+        exec_key: This execution's key (e.g. 'exec_0001') for roll-up lookup
 
     Returns:
         Dict with status info, or default values if file doesn't exist.
@@ -50,28 +95,49 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         Includes 'metrics' field: Dict of metric_name -> average value across
         successful repetitions, or None if no metrics available.
     """
-    # First check for skipped marker file
-    skipped_marker = exec_path / SKIPPED_MARKER_FILENAME
-    if skipped_marker.exists():
-        try:
-            with open(skipped_marker, 'r') as f:
-                marker_data = json.load(f)
-                return {
-                    "status": "SKIPPED",
-                    "reason": marker_data.get("reason"),
-                    "message": marker_data.get("message"),
-                    "error": None,
-                    "end_time": None,
-                    "cached": False,
-                    "metrics": None,
-                }
-        except (json.JSONDecodeError, OSError):
-            # Marker exists but couldn't be read - still skipped
-            return {"status": "SKIPPED", "error": None, "end_time": None, "cached": False, "metrics": None}
+    # Prefer the run-root roll-up when it covers this execution.
+    rollup_reps = rollup_rep_statuses(rollup, exec_key) if exec_key else None
 
-    # Check repetition folders for execution status
-    rep_dirs = sorted(exec_path.glob("repetition_*"))
-    if rep_dirs:
+    if rollup_reps is None:
+        # First check for skipped marker file (roll-up-covered executions are
+        # authoritative and skip this per-folder stat).
+        skipped_marker = exec_path / SKIPPED_MARKER_FILENAME
+        if skipped_marker.exists():
+            try:
+                with open(skipped_marker, 'r') as f:
+                    marker_data = json.load(f)
+                    return {
+                        "status": "SKIPPED",
+                        "reason": marker_data.get("reason"),
+                        "message": marker_data.get("message"),
+                        "error": None,
+                        "end_time": None,
+                        "cached": False,
+                        "metrics": None,
+                    }
+            except (json.JSONDecodeError, OSError):
+                # Marker exists but couldn't be read - still skipped
+                return {"status": "SKIPPED", "error": None, "end_time": None, "cached": False, "metrics": None}
+
+    # Acquire the per-repetition status dicts: from the roll-up when it covers
+    # this execution, otherwise by scanning the repetition folders.
+    if rollup_reps is not None:
+        rep_status_dicts: Optional[List[Dict[str, Any]]] = rollup_reps
+    else:
+        rep_dirs = sorted(exec_path.glob("repetition_*"))
+        rep_status_dicts = [] if rep_dirs else None
+        for rep_dir in rep_dirs:
+            rep_status_file = rep_dir / STATUS_FILENAME
+            if rep_status_file.exists():
+                try:
+                    with open(rep_status_file, 'r') as f:
+                        rep_status_dicts.append(json.load(f))
+                except (json.JSONDecodeError, OSError):
+                    rep_status_dicts.append({"status": "UNKNOWN"})
+            else:
+                rep_status_dicts.append({"status": "PENDING"})
+
+    if rep_status_dicts:
         # Aggregate status from repetitions
         statuses = []
         cached_flags = []
@@ -80,32 +146,21 @@ def _read_status(exec_path: Path) -> Dict[str, Any]:
         # Collect metrics from all successful repetitions for averaging
         all_metrics: Dict[str, list] = {}
 
-        for rep_dir in rep_dirs:
-            rep_status_file = rep_dir / STATUS_FILENAME
-            if rep_status_file.exists():
-                try:
-                    with open(rep_status_file, 'r') as f:
-                        rep_status = json.load(f)
-                        statuses.append(rep_status.get("status", "UNKNOWN"))
-                        cached_flags.append(rep_status.get("cached", False))
-                        if rep_status.get("error"):
-                            error = rep_status.get("error")
-                        if rep_status.get("end_time"):
-                            end_time = rep_status.get("end_time")
-                        # Collect metrics for averaging
-                        rep_metrics = rep_status.get("metrics")
-                        if rep_metrics:
-                            for metric_name, metric_value in rep_metrics.items():
-                                if metric_value is not None:
-                                    if metric_name not in all_metrics:
-                                        all_metrics[metric_name] = []
-                                    all_metrics[metric_name].append(metric_value)
-                except (json.JSONDecodeError, OSError):
-                    statuses.append("UNKNOWN")
-                    cached_flags.append(False)
-            else:
-                statuses.append("PENDING")
-                cached_flags.append(False)
+        for rep_status in rep_status_dicts:
+            statuses.append(rep_status.get("status", "UNKNOWN"))
+            cached_flags.append(rep_status.get("cached", False))
+            if rep_status.get("error"):
+                error = rep_status.get("error")
+            if rep_status.get("end_time"):
+                end_time = rep_status.get("end_time")
+            # Collect metrics for averaging
+            rep_metrics = rep_status.get("metrics")
+            if rep_metrics:
+                for metric_name, metric_value in rep_metrics.items():
+                    if metric_value is not None:
+                        if metric_name not in all_metrics:
+                            all_metrics[metric_name] = []
+                        all_metrics[metric_name].append(metric_value)
 
         # Determine overall status
         if any(s == "RUNNING" for s in statuses):
@@ -284,8 +339,11 @@ def _show_single_execution(
     if bench_meta.get("timestamp"):
         print(f"Executed: {bench_meta['timestamp']}")
 
-    # Read status
-    status_info = _read_status(exec_dir)
+    # Read status, preferring a completed run's roll-up over a folder scan.
+    rollup = load_status_rollup(run_root)
+    if not (rollup and rollup.get("complete")):
+        rollup = None
+    status_info = _read_status(exec_dir, rollup=rollup, exec_key=exec_dir.name)
     status = status_info.get("status", "UNKNOWN")
 
     print(f"\nStatus: {status}")
@@ -376,6 +434,14 @@ def _show_executions_from_index(
     # Determine truncation width
     truncate_width = None if show_full else DEFAULT_TRUNCATE_WIDTH
 
+    # Prefer the run-root status roll-up over scanning every execution's
+    # folders, but only when the run finished and marked it complete. For a
+    # live or abruptly killed run it may lag the on-disk files, so fall back to
+    # the folder scan to stay correct.
+    rollup = load_status_rollup(run_root)
+    if not (rollup and rollup.get("complete")):
+        rollup = None
+
     # Filter executions and collect status
     matches = []
     for exec_key, exec_data in sorted(executions.items()):
@@ -385,7 +451,7 @@ def _show_executions_from_index(
 
         # Read status from status file
         exec_path = run_root / rel_path
-        status_info = _read_status(exec_path)
+        status_info = _read_status(exec_path, rollup=rollup, exec_key=exec_key)
         status = status_info.get("status", "UNKNOWN")
 
         # Apply status filter
@@ -411,8 +477,7 @@ def _show_executions_from_index(
                 if fkey not in params:
                     match = False
                     break
-                # Convert both to string for comparison
-                if str(params[fkey]) != fval:
+                if not param_value_matches(params[fkey], fval):
                     match = False
                     break
             if not match:

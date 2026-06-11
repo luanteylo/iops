@@ -1,33 +1,21 @@
 ---
 title: "Writing Parsers"
+weight: 25
 ---
 
 IOPS does not know the output format of your benchmark. Instead, you provide a small Python script (the **parser**) that reads whatever your benchmark produces and returns the metrics you care about. This page explains how parsers work, how to write one, and where the extracted data ends up.
 
 ---
 
-## Why You Need a Parser
-
-Every benchmark writes its results differently: JSON files, plain text logs, CSV tables, binary formats. IOPS handles orchestration (running tests, sweeping parameters, managing repetitions) but delegates result extraction to you, because only you know your benchmark's output format.
-
-The parser is the bridge between raw benchmark output and structured data that IOPS can store, plot, and analyze.
-
----
-
 ## How It Works
 
-After each execution completes, IOPS runs your parser through this sequence:
+Every benchmark writes its results differently: JSON files, plain text logs, CSV tables, binary formats. The parser is the bridge between raw benchmark output and structured data that IOPS can store, plot, and analyze. After each execution completes, IOPS runs it through this sequence:
 
 1. **Locate the output file** using the `parser.file` path (resolved with Jinja2)
 2. **Load your parser script** and inject execution context as Python globals
 3. **Call your `parse(file_path)` function** with the resolved file path
 4. **Validate the result**, checking that all declared metrics are present
 5. **Store the metrics** alongside the execution parameters in the configured output sink
-
-```
-Benchmark runs  ──>  Output file  ──>  Your parser  ──>  Metrics dict  ──>  Results file
-                     (any format)      parse(path)       {"metric": val}    (CSV/Parquet/SQLite)
-```
 
 ---
 
@@ -71,8 +59,6 @@ scripts:
 
 ## Writing the `parse()` Function
 
-Your script must define a function named `parse` that takes one argument (the file path) and returns a dictionary mapping metric names to their values.
-
 ### Rules
 
 - The function **must be named `parse`** and accept exactly one positional argument
@@ -95,7 +81,7 @@ def parse(file_path):
 
 ## Context Variables
 
-Your parser script has access to execution context through Python global variables. These are injected before your script runs, so you can use them directly, without imports or arguments.
+Your parser script has access to execution context through Python global variables, injected before your script runs. Use them directly, without imports or arguments.
 
 | Variable | Type | Description |
 |----------|------|-------------|
@@ -109,8 +95,6 @@ Your parser script has access to execution context through Python global variabl
 | `repetition` | int | Current repetition number |
 | `repetitions` | int | Total number of repetitions |
 | `metrics` | list | List of declared metric names |
-
-These globals let you write parsers that adapt to the execution context without hardcoding values.
 
 ---
 
@@ -167,32 +151,11 @@ parser:
         return {"elapsed_time": time, "gflops": gflops}
 ```
 
-### CSV Output (ML Training)
-
-A training script writes epoch-level metrics to CSV. The parser reads the final row:
-
-```yaml
-parser:
-  file: "{{ execution_dir }}/training_log.csv"
-  metrics:
-    - name: final_loss
-    - name: accuracy
-  parser_script: |
-    import csv
-
-    def parse(file_path):
-        with open(file_path) as f:
-            rows = list(csv.DictReader(f))
-        last = rows[-1]
-        return {
-            "final_loss": float(last["loss"]),
-            "accuracy": float(last["accuracy"])
-        }
-```
+The same pattern works for any format your benchmark produces (CSV via `csv.DictReader`, XML, binary, ...): open the file, extract values, return the dict.
 
 ### Using Context Variables (Derived Metrics)
 
-Compute per-node throughput using the `vars` global:
+Compute per-node throughput using the `vars` global. The same pattern supports conditional logic, e.g. picking a different JSON field when `vars["operation"] == "write"`:
 
 ```yaml
 parser:
@@ -213,30 +176,9 @@ parser:
         }
 ```
 
-### Conditional Logic Based on Parameters
-
-Parse different fields depending on a variable:
-
-```yaml
-parser:
-  file: "{{ execution_dir }}/output.json"
-  metrics:
-    - name: performance
-  parser_script: |
-    import json
-
-    def parse(file_path):
-        with open(file_path) as f:
-            data = json.load(f)
-        if vars["operation"] == "write":
-            return {"performance": data["write_bw"]}
-        else:
-            return {"performance": data["read_bw"]}
-```
-
 ### External Parser File
 
-For complex parsers, keep the script in a separate file instead of inlining it:
+For complex parsers, keep the script in a separate `.py` file instead of inlining it. The file has the same structure and access to the same context globals:
 
 ```yaml
 parser:
@@ -246,32 +188,11 @@ parser:
   parser_script: ./scripts/my_parser.py
 ```
 
-The external file has the same structure and access to the same context globals:
-
-```python
-# ./scripts/my_parser.py
-import json
-
-def parse(file_path):
-    with open(file_path) as f:
-        data = json.load(f)
-    return {"throughput": data["bandwidth"] / vars["nodes"]}
-```
-
 ---
 
 ## Where the Data Goes
 
-After parsing, IOPS combines your metrics with the execution parameters and writes everything to the configured output sink:
-
-```yaml
-output:
-  sink:
-    type: csv
-    path: "{{ workdir }}/results.csv"
-```
-
-Each row in the results file contains:
+After parsing, IOPS combines your metrics with the execution parameters and writes everything to the configured output sink (`output.sink`, formats: `csv`, `parquet`, `sqlite`). Each row in the results file contains:
 
 | Category | Fields |
 |----------|--------|
@@ -281,7 +202,7 @@ Each row in the results file contains:
 | **Your metrics** | Every metric returned by your `parse()` function |
 | **Metadata** | Status, timing, job IDs (depending on executor) |
 
-Supported output formats are `csv`, `parquet`, and `sqlite`. The results file is then used by `iops report` to generate interactive HTML reports, and you can also load it directly for custom analysis with tools like pandas or R.
+The results file feeds `iops report` for HTML reports and can be loaded directly for custom analysis with tools like pandas or R.
 
 ---
 
@@ -307,8 +228,8 @@ Common issues:
 
 ## Tips
 
-- **Start simple.** Write and test your parser on a single output file before integrating it into the full YAML configuration.
-- **Use `print()` for debugging.** Anything printed during parsing is captured in `parser_stdout`, so you can inspect it if something goes wrong.
-- **Return `None` for missing metrics.** If a metric cannot be extracted from a particular run, return `None` instead of raising an exception. This keeps the rest of the study intact.
-- **Keep parsers focused.** The parser's job is to extract numbers from a file. Avoid heavy computation or side effects.
-- **Use external files for complex parsers.** If your parser exceeds ~20 lines, put it in a separate `.py` file for easier editing and testing.
+- **Start simple.** Test your parser on a single output file before integrating it into the YAML.
+- **Use `print()` for debugging.** Anything printed during parsing is captured in `parser_stdout`.
+- **Return `None` for missing metrics** instead of raising an exception; this keeps the rest of the study intact.
+- **Keep parsers focused.** Extract numbers from a file; avoid heavy computation or side effects.
+- **Use external files for complex parsers.** Past ~20 lines, move to a separate `.py` file for easier editing and testing.

@@ -1,6 +1,6 @@
 ---
 title: "Machine Overrides"
-weight: 15
+weight: 55
 ---
 
 Use a single configuration file across multiple systems with per-machine overrides.
@@ -62,10 +62,7 @@ The distinction follows the Kubernetes convention: lists of **named objects** (e
 
 ### sweep/expr/adaptive Mutual Exclusion
 
-Since `sweep`, `expr`, and `adaptive` are mutually exclusive, IOPS handles conflicts automatically after merging:
-- Override provides `expr` → base's `sweep` and `adaptive` are removed
-- Override provides `sweep` → base's `expr` and `adaptive` are removed
-- Override provides `adaptive` → base's `sweep` and `expr` are removed
+Since `sweep`, `expr`, and `adaptive` are mutually exclusive, IOPS resolves conflicts automatically after merging: whichever of the three the override provides wins, and the other two are removed from the base.
 
 ```yaml
 # Base: total_cores is swept
@@ -85,30 +82,7 @@ machines:
 # Result: sweep is removed, only expr remains
 ```
 
-This also works for switching to or from adaptive variables:
-
-```yaml
-# Base: problem_size is swept
-vars:
-  problem_size:
-    type: int
-    sweep:
-      mode: list
-      values: [1000, 2000, 4000]
-
-# Machine override: problem_size becomes adaptive
-machines:
-  hpc:
-    benchmark:
-      search_method: "adaptive"
-    vars:
-      problem_size:
-        adaptive:
-          initial: 1000
-          factor: 2
-          stop_when: "exit_code != 0"
-# Result: sweep is removed, only adaptive remains
-```
+The same applies when switching to or from an `adaptive` definition (remember to also set `benchmark.search_method: "adaptive"` in the override).
 
 ---
 
@@ -134,11 +108,11 @@ Machine names are arbitrary identifiers (e.g., `laptop`, `cluster_a`, `grid5000_
 
 IOPS validates configuration in two phases:
 
-1. **Structural validation (before merge):** Checks that all required top-level sections (`benchmark`, `vars`, `command`, `scripts`, `output`) are present in the base config, and that the `machines` section structure is well-formed. This runs even without `--machine`.
+1. **Structural validation (before merge):** All required top-level sections (`benchmark`, `vars`, `command`, `scripts`, `output`) must be present in the base config and the `machines` section must be well-formed. This runs even without `--machine`.
 
-2. **Semantic validation (after merge):** Validates the fully merged configuration (types, references, constraints, etc.). This runs on the final result after machine overrides have been applied.
+2. **Semantic validation (after merge):** Types, references, constraints, etc. are validated on the fully merged configuration.
 
-Because structural validation runs first, **the base config must be self-contained** with all required sections present at the top level. You cannot define a required section (e.g., `output`) only inside a machine override. If needed, provide a minimal placeholder at the top level and let the machine override replace it:
+Because structural validation runs first, **the base config must be self-contained**: a required section (e.g., `output`) cannot live only inside a machine override. If needed, provide a minimal placeholder at the top level and let the machine override replace it:
 
 ```yaml
 # Base: placeholder output (will be overridden per machine)
@@ -158,7 +132,7 @@ iops check config.yaml                    # Validates structure including machin
 iops check config.yaml --machine cluster  # Validates merged config
 ```
 
-Use `--resolve` to inspect the final merged YAML after overrides are applied. This is useful for debugging which values a machine override produces:
+Use `--resolve` to inspect the final merged YAML after overrides are applied, which helps debug which values a machine override produces:
 
 ```bash
 iops check config.yaml --machine cluster --resolve            # Print to stdout
@@ -241,7 +215,7 @@ machines:
 
     scripts:
       - name: "run"
-        # Parser is inherited from base — only script_template changes
+        # Parser is inherited from base; only script_template changes
         script_template: |
           #!/bin/bash
           #SBATCH --job-name=iops_{{ execution_id }}
@@ -267,7 +241,7 @@ iops run config.yaml --machine cluster  # Cluster: 4×3×5 reps = 60 tests
 
 ## Use Cases
 
-**Multiple SLURM clusters** — Override `workdir`, SLURM partitions, module systems, or custom command wrappers per cluster:
+**Multiple SLURM clusters.** Override `workdir`, SLURM partitions, module systems, or custom command wrappers per cluster:
 
 ```yaml
 machines:
@@ -285,21 +259,9 @@ machines:
           #SBATCH --account=proj_a
           module load clustera-mpi
           {{ command.template }}
-
-  cluster_b:
-    benchmark:
-      workdir: "/work/user/benchmarks"
-    scripts:
-      - name: "run"
-        script_template: |
-          #!/bin/bash
-          #SBATCH --partition=standard
-          #SBATCH --qos=normal
-          module load intel openmpi
-          {{ command.template }}
 ```
 
-**Swept → fixed variables** — A variable swept in the base config can become fixed on a specific machine (sweep/expr conflict resolved automatically):
+**Swept to fixed variables.** A variable swept in the base config can become fixed on a specific machine (sweep/expr conflict resolved automatically):
 
 ```yaml
 # Base: sweep both filesystems locally
@@ -314,51 +276,27 @@ machines:
   cluster_lustre:
     vars:
       filesystem:
-        expr: "lustre"          # Fixed — sweep removed automatically
+        expr: "lustre"          # Fixed; sweep removed automatically
 ```
 
-**CI/CD environments** — Define minimal configs for fast CI runs:
+**CI/CD environments.** Define a minimal machine (e.g., `ci`) overriding `repetitions: 1` and a single-value sweep for fast CI runs.
 
-```yaml
-machines:
-  ci:
-    benchmark:
-      repetitions: 1
-    vars:
-      nodes:
-        sweep:
-          values: [1]           # Minimal testing
-```
-
-**Shared configs across a research group** — Each researcher overrides their account and workdir:
-
-```yaml
-machines:
-  alice:
-    benchmark:
-      workdir: "/home/alice/scratch/bench"
-    scripts:
-      - name: "run"
-        script_template: |
-          #!/bin/bash
-          #SBATCH --account=alice_account
-          {{ command.template }}
-```
+**Shared configs across a research group.** Each researcher gets a machine entry overriding their `workdir` and `#SBATCH --account` line.
 
 ---
 
 ## Tips
 
-1. **Start with a working base config** — ensure it works in at least one environment before adding overrides
-2. **Override only what differs** — don't repeat unchanged settings; the merge handles inheritance
-3. **Use `iops check --resolve`** to inspect the fully merged YAML after overrides are applied
-4. **Use semantic names** — `grid5000_lyon` is clearer than `machine2`
+1. **Start with a working base config** before adding overrides
+2. **Override only what differs**; the merge handles inheritance
+3. **Use `iops check --resolve`** to inspect the fully merged YAML
+4. **Use semantic names**: `grid5000_lyon` is clearer than `machine2`
 5. **Use `IOPS_MACHINE` in scripts** for automation and CI/CD pipelines
-6. **Include full key paths** — override `benchmark.slurm_options`, not just `slurm_options`
+6. **Include full key paths**: override `benchmark.slurm_options`, not just `slurm_options`
 
 ---
 
 ## See Also
 
-- [YAML Schema Reference](yaml-schema#machines-optional) — `machines` section syntax
-- [Command Line Interface](cli) — `--machine` flag and `IOPS_MACHINE` usage
+- [YAML Schema Reference](yaml-schema#machines-optional) for `machines` section syntax
+- [Command Line Interface](cli) for the `--machine` flag and `IOPS_MACHINE` usage

@@ -1,5 +1,6 @@
 ---
 title: "Execution Backends"
+weight: 60
 ---
 
 IOPS supports two execution backends for running benchmarks: local execution and SLURM cluster submission.
@@ -20,21 +21,7 @@ IOPS supports two execution backends for running benchmarks: local execution and
 
 ## Local Executor
 
-Runs benchmarks directly on your local machine using subprocesses.
-
-```yaml
-benchmark:
-  executor: "local"
-```
-
-### Use Cases
-
-- Development and testing
-- Small experiments
-- Single-node benchmarks
-- Quick iterations
-
-### Example Configuration
+Runs benchmarks directly on your local machine using subprocesses. Suited for development, small experiments, single-node benchmarks, and quick iterations.
 
 ```yaml
 benchmark:
@@ -52,7 +39,7 @@ scripts:
 
 ## Parallel Execution
 
-By default, IOPS runs tests sequentially (one at a time). You can run multiple tests concurrently by setting the `parallel` option:
+By default, IOPS runs tests sequentially (one at a time). Run multiple tests concurrently by setting the `parallel` option:
 
 ```yaml
 benchmark:
@@ -88,23 +75,7 @@ When the requested degree exceeds what the planner supports, IOPS logs a warning
 
 ## SLURM Executor
 
-Submits jobs to a SLURM cluster with automatic resource management and monitoring.
-
-```yaml
-benchmark:
-  executor: "slurm"
-  max_core_hours: 1000
-  cores_expr: "{{ nodes * processes_per_node }}"
-```
-
-### Use Cases
-
-- Large-scale experiments
-- Multi-node benchmarks
-- HPC environments
-- Resource-intensive workloads
-
-### Example Configuration
+Submits jobs to a SLURM cluster with automatic resource management and monitoring. Suited for large-scale, multi-node, and resource-intensive experiments.
 
 ```yaml
 benchmark:
@@ -154,16 +125,11 @@ For detailed configuration, accuracy considerations, and cache interaction, see 
 
 ### Job Monitoring
 
-IOPS automatically:
-
-- Submits jobs via `sbatch`
-- Monitors status with `squeue`
-- Handles job failures gracefully
-- Tracks resource usage
+IOPS automatically submits jobs via `sbatch`, monitors status with `squeue`, handles job failures gracefully, and tracks resource usage.
 
 ### Custom SLURM Commands
 
-For systems with command wrappers or custom SLURM installations, you can customize the command templates used for job management. Commands are templates that support `{job_id}` placeholder for runtime substitution:
+For systems with command wrappers or custom SLURM installations, you can customize the command templates used for job management. Commands are templates that support a `{job_id}` placeholder, replaced with the actual job ID at runtime:
 
 ```yaml
 benchmark:
@@ -191,32 +157,12 @@ benchmark:
     poll_interval: 10                                       # Check status every 10 seconds
 ```
 
-This allows IOPS to work with various SLURM configurations and wrapper systems commonly found in HPC environments. The `{job_id}` placeholder is replaced with the actual job ID at runtime, giving you complete control over command structure and flags.
-
 **Notes**:
 - The `{job_id}` placeholder is required for status, info, and cancel commands.
 - The `poll_interval` controls how often (in seconds) IOPS checks job status during execution. Default is 30 seconds.
 
 ### Single-Allocation Mode
 
-By default, IOPS submits a separate SLURM job for each test (`per-test` mode). For scenarios where this creates too much scheduler overhead, you can run all tests within a single SLURM allocation.
+By default, IOPS submits a separate SLURM job for each test (`per-test` mode). When this creates too much scheduler overhead (job limits, long queue waits, many small tests), set `slurm_options.allocation.mode: "single"` to run all tests within one SLURM allocation.
 
-```yaml
-benchmark:
-  executor: "slurm"
-  slurm_options:
-    allocation:
-      mode: "single"
-      test_timeout: 300  # Per-test timeout in seconds (default: 3600)
-      allocation_script: |
-        #SBATCH --nodes=8
-        #SBATCH --time=02:00:00
-        #SBATCH --partition=batch
-        #SBATCH --account=myaccount
-        #SBATCH --exclusive
-```
-
-**When to use:** HPC systems with job limits, long queue wait times, or many small tests.
-
-For detailed configuration, MPI setup, troubleshooting, and complete examples, see the **[Single-Allocation Mode](../single-allocation-mode)** guide.
-
+See the **[Single-Allocation Mode](../single-allocation-mode)** guide for configuration, search method restrictions, MPI setup, and complete examples.

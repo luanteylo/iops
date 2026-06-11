@@ -21,34 +21,29 @@ enableGitInfo = true
   weight = 1
 
 [[menu.main]]
-  name = "Getting Started"
+  name = "Documentation"
   url = "getting-started/"
   weight = 2
 
 [[menu.main]]
-  name = "User Guide"
-  url = "user-guide/"
-  weight = 3
-
-[[menu.main]]
-  name = "About"
-  url = "about/"
-  weight = 4
-
-[[menu.main]]
   name = "Blog"
   url = "blog/"
-  weight = 5
+  weight = 3
 
 [[menu.main]]
   name = "Reports"
   url = "reports/"
-  weight = 6
+  weight = 4
+
+[[menu.main]]
+  name = "About"
+  url = "about/"
+  weight = 5
 
 [[menu.main]]
   name = "Search"
   url = "search/"
-  weight = 7
+  weight = 6
 
 [outputs]
   home = ["HTML", "RSS", "JSON"]

@@ -208,14 +208,21 @@ def _write_csv(path: Path, df: pd.DataFrame) -> None:
         return
 
     # APPEND: align to existing schema
-    existing_cols = list(pd.read_csv(path, nrows=0).columns)
+    try:
+        existing_cols = list(pd.read_csv(path, nrows=0).columns)
+    except pd.errors.EmptyDataError:
+        # File exists but is empty (e.g. crash before first flush): fresh write
+        df.to_csv(path, index=False)
+        return
 
     # If df introduces new columns, extend schema and rewrite file
     new_cols = [c for c in df.columns if c not in existing_cols]
     if new_cols:
-        old = pd.read_csv(path)
+        # Read existing rows as verbatim strings so the rewrite cannot
+        # re-infer dtypes and mutate stored values (e.g. "0010" -> 10).
+        old = pd.read_csv(path, dtype=str, keep_default_na=False)
         all_cols = existing_cols + new_cols
-        old = old.reindex(columns=all_cols)
+        old = old.reindex(columns=all_cols, fill_value="")
         df = df.reindex(columns=all_cols)
         out = pd.concat([old, df], ignore_index=True)
         out.to_csv(path, index=False)
@@ -248,23 +255,52 @@ def _write_parquet(path: Path, df: pd.DataFrame) -> None:
         if c not in all_cols:
             all_cols.append(c)
 
+    int_cols = {
+        c for frame in (old, df)
+        for c in frame.columns
+        if pd.api.types.is_integer_dtype(frame[c])
+    }
+
     old = old.reindex(columns=all_cols)
     df = df.reindex(columns=all_cols)
 
     new = pd.concat([old, df], ignore_index=True)
+
+    # Reindex/concat introduce NaN for missing values, silently upcasting
+    # integer columns to float64 forever. Restore them as nullable Int64.
+    for c in int_cols:
+        if pd.api.types.is_float_dtype(new[c]):
+            non_null = new[c].dropna()
+            if (non_null % 1 == 0).all():
+                new[c] = new[c].astype("Int64")
+
     new.to_parquet(path, index=False)
 
 
 def _write_sqlite(db_path: Path, table: str, df: pd.DataFrame) -> None:
     """
-    SQLite writer (always appends).
-
-    Note: schema evolution (new columns) is not handled here.
-    If you want schema evolution for sqlite, you need ALTER TABLE logic.
+    SQLite writer (always appends), extending the table schema with
+    ALTER TABLE ADD COLUMN when new columns appear.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path)) as con:
+    con = sqlite3.connect(str(db_path))
+    try:
+        exists = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        if exists is not None:
+            existing_cols = {
+                row[1] for row in con.execute(f'PRAGMA table_info("{table}")')
+            }
+            for col in df.columns:
+                if col not in existing_cols:
+                    quoted = col.replace('"', '""')
+                    con.execute(f'ALTER TABLE "{table}" ADD COLUMN "{quoted}"')
         df.to_sql(table, con, if_exists="append", index=False)
+        con.commit()
+    finally:
+        con.close()
 
 
 # -------------------------

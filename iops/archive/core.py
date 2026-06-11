@@ -450,26 +450,63 @@ class ArchiveWriter(HasLogger):
 
         return critical_files
 
-    def _compute_checksums(self) -> Dict[str, str]:
+    def _is_included_in_partial(self, file_path: Path) -> bool:
         """
-        Compute SHA256 checksums for critical metadata files.
+        Check whether a source file survives partial-archive filtering.
+
+        Mirrors _add_partial_content: a file is added only if it and every
+        ancestor directory below the source root pass _should_include_item.
+        """
+        rel = file_path.relative_to(self.source_path)
+        current = self.source_path
+        for part in rel.parts:
+            current = current / part
+            if not self._should_include_item(current):
+                return False
+        return True
+
+    def _compute_checksums(self, temp_dir: Optional[Path] = None) -> Dict[str, str]:
+        """
+        Compute SHA256 checksums for critical metadata files as they will be
+        stored in the archive.
+
+        For partial archives, filtered files written to temp_dir (e.g. the
+        filtered __iops_index.json) take precedence over the originals, and
+        files excluded by the filters are not checksummed at all; otherwise
+        extraction would fail its own integrity verification.
 
         Returns:
             Dictionary mapping relative file paths to their SHA256 checksums.
         """
         checksums = {}
-        critical_files = self._collect_critical_files()
 
-        for file_path in critical_files:
+        replaced = set()
+        if self.partial and temp_dir is not None:
+            for item in temp_dir.rglob("*"):
+                if not item.is_file():
+                    continue
+                relative_path = str(item.relative_to(temp_dir))
+                replaced.add(relative_path)
+                if item.name in CRITICAL_METADATA_PATTERNS:
+                    checksums[relative_path] = _compute_checksum(item)
+
+        for file_path in self._collect_critical_files():
             relative_path = str(file_path.relative_to(self.source_path))
+            if relative_path in replaced:
+                continue
+            if self.partial and not self._is_included_in_partial(file_path):
+                continue
             checksums[relative_path] = _compute_checksum(file_path)
             self.logger.debug(f"Checksum for {relative_path}: {checksums[relative_path][:16]}...")
 
         return checksums
 
-    def _build_manifest(self) -> ArchiveManifest:
+    def _build_manifest(self, temp_dir: Optional[Path] = None) -> ArchiveManifest:
         """
         Build the archive manifest with run information and checksums.
+
+        Args:
+            temp_dir: Directory holding filtered content for partial archives.
 
         Returns:
             ArchiveManifest containing all archive metadata.
@@ -493,7 +530,7 @@ class ArchiveWriter(HasLogger):
                     run_info = self._get_run_info(run_dir, run_dir.name)
                     runs.append(run_info)
 
-        checksums = self._compute_checksums()
+        checksums = self._compute_checksums(temp_dir)
 
         # Build filters_applied dict for partial archives
         filters_applied = None
@@ -566,8 +603,8 @@ class ArchiveWriter(HasLogger):
             self._prepare_filtered_content(temp_dir)
 
         try:
-            # Build manifest (uses filtered counts if partial)
-            manifest = self._build_manifest()
+            # Build manifest (uses filtered counts and content if partial)
+            manifest = self._build_manifest(temp_dir)
 
             if self.partial:
                 excluded = self._original_execution_count - manifest.total_executions
@@ -871,9 +908,31 @@ class ArchiveReader(HasLogger):
                     # Track progress
                     if progress is not None:
                         progress.advance(task)
-                    # Security: prevent path traversal attacks
-                    if member.name.startswith("/") or ".." in member.name:
+                    # Security: a custom filter callable REPLACES the stdlib
+                    # 'data' filter, so safety checks must be applied here.
+                    if hasattr(tarfile, "data_filter"):
+                        # Rejects absolute paths, traversal via "..", links
+                        # pointing outside the destination, device nodes, and
+                        # strips dangerous permission bits.
+                        try:
+                            return tarfile.data_filter(member, path)
+                        except tarfile.FilterError as e:
+                            self.logger.warning(f"Skipping unsafe archive member {member.name}: {e}")
+                            return None
+                    # Python < 3.10.12 lacks tarfile.data_filter: manual checks
+                    name = Path(member.name)
+                    if name.is_absolute() or ".." in name.parts:
                         self.logger.warning(f"Skipping potentially unsafe path: {member.name}")
+                        return None
+                    if member.issym() or member.islnk():
+                        target = Path(member.linkname)
+                        if target.is_absolute() or ".." in target.parts:
+                            self.logger.warning(
+                                f"Skipping link pointing outside archive: {member.name} -> {member.linkname}"
+                            )
+                            return None
+                    if member.isdev():
+                        self.logger.warning(f"Skipping device node: {member.name}")
                         return None
                     return member
 

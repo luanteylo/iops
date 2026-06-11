@@ -1,18 +1,15 @@
 ---
 title: "Writing Scripts"
+weight: 20
 ---
 
-The `scripts[]` section of your YAML tells IOPS *how* to launch your benchmark. IOPS owns the parameter sweep and the result database; you own the shell script that actually runs the workload. This page explains how scripts are rendered and executed, what context is available, and how to handle the common cases (local vs. SLURM, parameter files, post-execution cleanup, external script files).
-
-If you're looking for the schema (every field, every option), see [YAML Schema Reference / scripts](../yaml-schema/#scripts). This page is the practical "how do I write a good one" guide.
+The `scripts[]` section of your YAML tells IOPS *how* to launch your benchmark. IOPS owns the parameter sweep and the result database; you own the shell script that actually runs the workload. This page is the practical guide to writing scripts; for the schema (every field, every option), see [YAML Schema Reference / scripts](../yaml-schema/#scripts).
 
 ---
 
 ## Why You Need a Script Template
 
-IOPS does not assume anything about how your benchmark is launched. Some benchmarks are a single executable; others need MPI launchers, module loads, environment setup, or pre-flight checks. Some run on a laptop, some on a SLURM cluster, some in an MPI allocation that wraps many tests.
-
-The `script_template` is the bridge: a Jinja2-rendered shell script that IOPS materializes to disk and hands to the configured executor. Per test execution, IOPS writes it to `<execution_dir>/run_<name>.sh` so you can inspect (or rerun) exactly what was executed.
+IOPS does not assume anything about how your benchmark is launched: some benchmarks are a single executable, others need MPI launchers, module loads, environment setup, or pre-flight checks. The `script_template` is the bridge: a Jinja2-rendered shell script that IOPS materializes to disk and hands to the configured executor. Per test execution, IOPS writes it to `<execution_dir>/run_<name>.sh` so you can inspect (or rerun) exactly what was executed.
 
 ---
 
@@ -28,11 +25,6 @@ For each test execution, IOPS goes through this sequence:
 6. **Submit it** with the executor (`bash` locally, `sbatch` on SLURM)
 7. **Wait for completion**, capture `stdout` / `stderr`
 8. **Run the parser** (and the optional `post.script`)
-
-```
-Variables resolved  ──>  Inputs written  ──>  Script rendered  ──>  Script written  ──>  Executor runs it
-{ nodes: 4, ... }       config.ini, etc.    Jinja2 + context     run_<name>.sh        bash / sbatch
-```
 
 Each repetition gets its own folder with its own script, so different repetitions of the same test can be inspected independently.
 
@@ -103,16 +95,11 @@ echo "Nodes: $SLURM_JOB_NUM_NODES, Tasks: $SLURM_NTASKS"
 mpirun -np {{ ntasks }} {{ command.template }}
 ```
 
-**Why this layout works well:**
-- SLURM directives come first (they're parsed by `sbatch` before anything runs)
-- `set -euo pipefail` catches failures early instead of silently continuing
-- Modules and env vars are explicit, so the same script reproduces the same environment
-- Logging the resolved parameters helps when something goes wrong in a specific test
-- The actual command is the last thing, so a script failure points at something concrete
+This layout works well because SLURM directives must come first (parsed by `sbatch` before anything runs), `set -euo pipefail` catches failures early, explicit modules and env vars make the environment reproducible, and logging the resolved parameters helps when a specific test misbehaves.
 
 ### Rules
 
-- The shell language is yours to choose (`#!/bin/bash`, `#!/bin/zsh`, `#!/usr/bin/env python3` — anything `submit` can execute)
+- The shell language is yours to choose (`#!/bin/bash`, `#!/bin/zsh`, `#!/usr/bin/env python3`, anything `submit` can execute)
 - `{{ }}` placeholders are rendered **before** the script is written; the running shell never sees Jinja2
 - Lines starting with `#SBATCH` are ignored by `bash` but parsed by `sbatch`, so you can leave them in a local-executor script if you sometimes switch executors
 - The script's working directory at runtime is **not** guaranteed to be the execution directory; use `{{ execution_dir }}` for absolute paths instead of relying on `cwd`
@@ -121,24 +108,9 @@ mpirun -np {{ ntasks }} {{ command.template }}
 
 ## Context Variables
 
-The full execution context is injected into the Jinja2 template. The complete list with examples lives in [Templating and Context / `scripts[].script_template`](../templating-and-context/#scriptsscript_template); the short version:
+The full execution context is injected into the Jinja2 template: all declared `vars`, `execution_id`, `repetition`, `repetitions`, `execution_dir` (per-repetition output directory, where `run_*.sh` lives), `workdir`, `log_dir`, `os_env`, `command.template` (the rendered benchmark command), `command_env`, `command_labels`, and `inputs` (`{{ inputs.<name>.path }}`, see below).
 
-| Variable | Type | Description |
-|----------|------|-------------|
-| All declared `vars` | varies | `{{ nodes }}`, `{{ block_size_mb }}`, etc. |
-| `execution_id` | int | Unique execution identifier (1, 2, 3, ...) |
-| `repetition` | int | Current repetition (1-based) |
-| `repetitions` | int | Total repetitions for this test |
-| `execution_dir` | str | Per-repetition output directory (where `run_*.sh` lives) |
-| `workdir` | str | Root working directory |
-| `log_dir` | str | Logs directory |
-| `os_env` | dict | System environment variables, e.g. `{{ os_env.HOME }}` |
-| `command.template` | str | The rendered benchmark command |
-| `command_env` | dict | Rendered `command.env` mapping |
-| `command_labels` | dict | Rendered `command.labels` mapping |
-| `inputs` | dict | Rendered input files (see below); `{{ inputs.<name>.path }}` |
-
-For Jinja2 syntax itself (conditionals, loops, filters), see [Templating and Context / Jinja2 Syntax](../templating-and-context/#jinja2-syntax-reference).
+The complete table with examples lives in [Templating and Context / `scripts[].script_template`](../templating-and-context/#scriptsscript_template); for Jinja2 syntax itself (conditionals, loops, filters), see [Templating and Context / Jinja2 Syntax](../templating-and-context/#jinja2-syntax-reference).
 
 ---
 
@@ -185,7 +157,7 @@ scripts:
       ./io500 {{ inputs.config_ini.path }}
 ```
 
-The file is written **before** the script runs and stays on disk even if the script aborts — useful when you need to debug "what input did this particular execution actually receive". See [YAML Schema / inputs](../yaml-schema/#scripts) for the full reference.
+The file is written **before** the script runs and stays on disk even if the script aborts, so you can always check what input a particular execution actually received. See [YAML Schema / inputs](../yaml-schema/#scripts) for the full reference.
 
 ---
 
@@ -207,9 +179,7 @@ scripts:
         ls -lh {{ execution_dir }}
 ```
 
-The post script receives the same Jinja2 context as `script_template`, including `{{ inputs.<name>.path }}` references.
-
-Post scripts run with the same executor as the main script (local or SLURM submission depending on `executor`).
+The post script receives the same Jinja2 context as `script_template`, including `{{ inputs.<name>.path }}` references, and runs with the same executor as the main script.
 
 ---
 
@@ -224,15 +194,13 @@ scripts:
     parser: { ... }
 ```
 
-The file is resolved relative to the YAML, loaded at config-load time, then rendered with Jinja2 the same way an inline string would be. This keeps long scripts in `.sh` files where editors can syntax-highlight them.
-
-The same external-file shortcut works for `post.script` and `parser.parser_script`.
+The file is resolved relative to the YAML, loaded at config-load time, then rendered with Jinja2 the same way an inline string would be. The same external-file shortcut works for `post.script` and `parser.parser_script`.
 
 ---
 
 ## Examples
 
-### Local Executor — Single Binary
+### Local Executor: Single Binary
 
 ```yaml
 benchmark:
@@ -254,29 +222,7 @@ scripts:
             return {"bandwidth": float(re.search(r"Triad:\s+([\d.]+)", content).group(1))}
 ```
 
-### SLURM Executor — MPI Job
-
-```yaml
-benchmark:
-  executor: "slurm"
-scripts:
-  - name: "ior"
-    script_template: |
-      #!/bin/bash
-      #SBATCH --job-name=iops_{{ execution_id }}
-      #SBATCH --nodes={{ nodes }}
-      #SBATCH --ntasks-per-node={{ processes_per_node }}
-      #SBATCH --time=01:00:00
-      #SBATCH --chdir={{ execution_dir }}
-      #SBATCH -o batch%j.out
-      #SBATCH -e batch%j.err
-
-      set -euo pipefail
-      module purge
-      module load mpi/openmpi/4.1 ior
-
-      srun {{ command.template }}
-```
+For a SLURM MPI job, see the [anatomy script above](#anatomy-of-a-good-script): set `executor: "slurm"` and keep the `#SBATCH` directives.
 
 ### Conditional Directives (Different Resource Tiers)
 
@@ -297,35 +243,7 @@ scripts:
       srun {{ command.template }}
 ```
 
-Note the required spaces inside `{% %}` — `{%if%}` raises a `TemplateSyntaxError`.
-
-### Driven by an Input File
-
-```yaml
-scripts:
-  - name: "io500"
-    inputs:
-      - name: config_ini
-        path: "{{ execution_dir }}/config.ini"
-        template: |
-          [global]
-          datadir = {{ os_env.SCRATCH }}/io500
-          api = POSIX
-
-          [ior-easy]
-          blockSize = {{ block_size_gb }}g
-          transferSize = 2m
-    script_template: |
-      #!/bin/bash
-      #SBATCH --nodes={{ nodes }}
-      #SBATCH --ntasks-per-node={{ processes_per_node }}
-      #SBATCH --time=02:00:00
-
-      module load io500
-      srun ./io500 {{ inputs.config_ini.path }}
-```
-
-The benchmark reads `config.ini`; you don't have to encode every parameter on the command line.
+Note the required spaces inside `{% %}`: `{%if%}` raises a `TemplateSyntaxError`.
 
 ### Reusing a Script Across Machines
 
@@ -365,8 +283,8 @@ machines:
 
 When `slurm_options.allocation.mode: "single"`, IOPS submits **one** SLURM job and runs every test inside that allocation via `srun --jobid=<id> --overlap`. The implications for `script_template`:
 
-- **Drop the `#SBATCH` directives** from `script_template` — resources are controlled by `slurm_options.allocation.allocation_script`
-- **Load modules inside the script** — each `srun` starts a fresh shell
+- **Drop the `#SBATCH` directives**: resources are controlled by `slurm_options.allocation.allocation_script`
+- **Load modules inside the script**: each `srun` starts a fresh shell
 - For MPI programs, use `srun` directly with the variables (no `mpirun` wrapper needed)
 
 See [Single-Allocation Mode](../single-allocation-mode/) for the full picture and a complete example.
@@ -392,7 +310,7 @@ After execution, every test directory contains a complete record of what ran:
     └── __iops_sysinfo.json       # System info (if system_snapshot probe is on)
 ```
 
-`run_<name>.sh` is the exact, fully-rendered script that ran — no `{{ }}` placeholders, no environment surprises. You can rerun it by hand to reproduce a failure: `cd repetition_001 && bash run_<name>.sh`.
+`run_<name>.sh` is the exact, fully rendered script that ran (no `{{ }}` placeholders). You can rerun it by hand to reproduce a failure: `cd repetition_001 && bash run_<name>.sh`.
 
 ---
 
@@ -430,7 +348,7 @@ cd ./workdir/run_001/runs/exec_0017/repetition_001 && bash run_ior.sh
 
 - **Start with `iops check` and `--dry-run`.** They catch most YAML and template mistakes before any job goes out.
 - **Use `set -euo pipefail`.** A silent module-load failure that leaves the benchmark unrun is far more painful than a loud error.
-- **Capture parameters at the top of the script** (`echo "nodes={{ nodes }} ppn={{ processes_per_node }}"`). When you scan logs later, the parameter values are right there.
+- **Capture parameters at the top of the script** (`echo "nodes={{ nodes }} ppn={{ processes_per_node }}"`) so the values are right there when you scan logs later.
 - **Use absolute paths via `{{ execution_dir }}`.** Don't rely on the script's working directory being anywhere in particular.
-- **Don't put `iops`-specific logic in the script.** IOPS injects what it needs (probes, samplers) automatically; your script should look the same as a script a human would write.
-- **Externalize long scripts.** Past ~30 lines, move the body into a `.sh` file and use `script_template: ./scripts/run.sh`. Easier to lint, edit, and test in isolation.
+- **Don't put `iops`-specific logic in the script.** IOPS injects what it needs (probes, samplers) automatically.
+- **Externalize long scripts.** Past ~30 lines, move the body into a `.sh` file (`script_template: ./scripts/run.sh`) for easier linting and testing.

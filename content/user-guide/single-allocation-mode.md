@@ -1,12 +1,13 @@
 ---
 title: "Single-Allocation Mode"
+weight: 65
 ---
 
 > **Experimental Feature**
 >
 > Single-allocation mode is experimental. It may contain bugs or undergo breaking changes in future releases. Please report any issues you encounter.
 
-Single-allocation mode runs all tests within a single SLURM allocation instead of submitting separate jobs for each test. This guide explains how to configure this mode.
+Single-allocation mode runs all tests within a single SLURM allocation instead of submitting separate jobs for each test.
 
 ---
 
@@ -30,27 +31,22 @@ By default, IOPS submits a separate SLURM job for each test (`per-test` mode). S
 | `per-test` (default) | Each test = separate `sbatch` job |
 | `single` | One allocation, all tests run sequentially in bash |
 
+**Compatibility:**
+
+- Supported search methods: `exhaustive` and `random`. `bayesian` and `adaptive` are rejected at config validation because single-allocation mode pre-generates all tests upfront, leaving no feedback loop for the optimizer or probe.
+- The `parallel` setting is ignored (with a warning); tests run sequentially inside the allocation.
+
 ---
 
 ## When to Use
 
-Single-allocation mode is useful when:
-
-- **Job limits**: Your HPC system limits jobs per user
-- **Queue wait times**: Avoid waiting in queue for each test
-- **Many small tests**: Hundreds of short tests run more efficiently
-- **Scheduler load**: Reduce load on the SLURM scheduler
+Single-allocation mode helps when your HPC system limits jobs per user, queue wait times are long, you have many small tests, or you want to reduce scheduler load.
 
 > **Warning: Resource efficiency considerations**
 >
-> Single-allocation mode requires allocating resources for your **largest test**. When sweeping over variable resource counts (e.g., `nodes: [1, 2, 4, 8]`), smaller tests leave resources idle:
+> Single-allocation mode requires allocating resources for your **largest test**. When sweeping over variable resource counts (e.g., `nodes: [1, 2, 4, 8]`), smaller tests leave resources idle: allocate 8 nodes, run a 2-node test, and 6 nodes sit unused while consuming core-hours.
 >
-> - Allocate 8 nodes, run a 2-node test → 6 nodes idle
-> - This increases core-hours consumed while resources sit unused
->
-> **Best suited for:** Tests that all use the same (or similar) amount of resources.
->
-> **Consider per-test mode** (`mode: "per-test"`) when tests have highly variable resource requirements and queue wait times are acceptable.
+> **Best suited for:** Tests that all use the same (or similar) amount of resources. Consider per-test mode (`mode: "per-test"`) when tests have highly variable resource requirements and queue wait times are acceptable.
 
 ---
 
@@ -71,54 +67,21 @@ benchmark:
         #SBATCH --exclusive
 ```
 
-
-
-The `allocation_script` contains your SBATCH directives and setup commands. IOPS generates a complete execution script (`__iops_kickoff.sh`) that includes:
-- Shebang (`#!/bin/bash`)
-- Your SBATCH directives
-- `--job-name=iops_single_alloc` and output/error paths
-- Your setup commands (module loads, environment variables)
-- A `run_test()` dispatcher function that runs each test with timeout
-- Sequential calls to `run_test` for each test
-
-The job completes automatically when all tests finish.
+The `allocation_script` contains your SBATCH directives and setup commands (module loads, environment variables). The job completes automatically when all tests finish.
 
 ---
 
 ## How It Works
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  1. IOPS generates __iops_kickoff.sh with all tests         │
-│     - Your SBATCH directives and setup commands             │
-│     - run_test() function with timeout handling             │
-│     - Sequential run_test calls for each test               │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  2. IOPS submits __iops_kickoff.sh via sbatch               │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  3. Tests run sequentially inside the allocation:           │
-│     run_test "exec_0001/rep_001" "script.sh" ...            │
-│     run_test "exec_0001/rep_002" "script.sh" ...            │
-│     ...                                                     │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  4. Each test writes status to __iops_status.json:          │
-│     RUNNING → SUCCEEDED / FAILED / TIMEOUT                  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  5. IOPS runner monitors status files and collects results  │
-└─────────────────────────────────────────────────────────────┘
-```
+1. IOPS generates a complete execution script (`__iops_kickoff.sh`) containing the shebang (`#!/bin/bash`), your SBATCH directives plus `--job-name=iops_single_alloc` and output/error paths, your setup commands, a `run_test()` dispatcher function that runs each test with timeout handling, and sequential `run_test` calls for every test.
+2. IOPS submits `__iops_kickoff.sh` via `sbatch`.
+3. Tests run sequentially inside the allocation:
+   ```
+   run_test "exec_0001/rep_001" "script.sh" ...
+   run_test "exec_0001/rep_002" "script.sh" ...
+   ```
+4. Each test writes its status to `__iops_status.json`: `RUNNING` then `SUCCEEDED` / `FAILED` / `TIMEOUT`.
+5. The IOPS runner monitors the status files and collects results.
 
 ## Running MPI Programs
 
@@ -184,4 +147,3 @@ script_template: |
 | `--map-by ppr:N:node` | Place N processes per node |
 | `--mca plm rsh` | Use SSH to launch on remote nodes (bypasses SLURM) |
 | `--oversubscribe` | Bypass slot detection (safe with `--exclusive`) |
-

@@ -1,8 +1,9 @@
 ---
 title: "Bayesian Optimization"
+weight: 40
 ---
 
-Bayesian optimization lets IOPS intelligently explore a parameter space to find configurations that maximize or minimize a target metric, using far fewer evaluations than exhaustive search. Instead of testing every combination, it builds a surrogate model from observed results and focuses on the most promising regions.
+Bayesian optimization lets IOPS explore a parameter space to find configurations that maximize or minimize a target metric, using far fewer evaluations than exhaustive search. Instead of testing every combination, it builds a surrogate model from observed results and focuses on the most promising regions.
 
 ## Table of Contents
 
@@ -26,25 +27,15 @@ Bayesian optimization lets IOPS intelligently explore a parameter space to find 
 
 ## Overview
 
-Bayesian optimization (BO) is a sequential, model-based strategy for optimizing expensive black-box functions. In the context of benchmarking, each "function evaluation" is a full benchmark run, which may take minutes or hours. BO reduces the number of runs needed to find a good configuration by learning from previous results.
+Bayesian optimization (BO) is a sequential, model-based strategy for optimizing expensive black-box functions. In benchmarking, each "function evaluation" is a full benchmark run that may take minutes or hours; BO reduces the number of runs needed by learning from previous results. Use it when runs are expensive and you want the best configuration without testing every combination. Prefer exhaustive or random search when the space is small enough to cover fully, when you need complete coverage for statistical analysis, or when there is no clear optimization target.
 
-**When to use Bayesian optimization:**
-
-- You have multiple parameters with many possible combinations
-- Each benchmark run is expensive (long runtime, cluster allocation)
-- You want to find the best configuration without testing everything
-
-**When exhaustive or random search may be better:**
-
-- Your parameter space is small enough to test everything
-- You need complete coverage for statistical analysis
-- You have no clear optimization target (exploratory study)
-
-**Install note:** Bayesian optimization requires the `scikit-optimize` library. Install with:
+**Install note:** Bayesian optimization requires the `scikit-optimize` library:
 
 ```bash
 pip install iops-benchmark[bayesian]
 ```
+
+**Note:** Bayesian optimization cannot be used with SLURM [single-allocation mode](../single-allocation-mode), which pre-generates all tests upfront and leaves no feedback loop. IOPS rejects this combination at config validation.
 
 ## Basic Configuration
 
@@ -117,82 +108,59 @@ This config has 4 x 5 x 16 = 320 possible combinations. With `n_iterations: 20`,
 Each Bayesian iteration follows a four-step cycle:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  1. ASK     Optimizer suggests a point in continuous space   │
-│       ↓                                                      │
-│  2. MAP     Nearest-neighbor lookup finds the closest valid  │
-│             configuration from the pre-built execution matrix│
-│       ↓                                                      │
-│  3. EXECUTE Run the benchmark (all repetitions)              │
-│       ↓                                                      │
-│  4. TELL    Report the observed metric back to the optimizer │
-│             (using the actual evaluated point, not the       │
-│             original suggestion)                             │
-└─────────────────────────────────────────────────────────────┘
+1. ASK      Optimizer suggests a point in continuous space
+2. MAP      Nearest-neighbor lookup finds the closest valid configuration
+            from the pre-built execution matrix
+3. EXECUTE  Run the benchmark (all repetitions)
+4. TELL     Report the observed metric back to the optimizer
+            (using the actual evaluated point, not the original suggestion)
 ```
 
 The first `n_initial_points` iterations (default: 5) use random sampling to build an initial dataset. After that, the surrogate model guides each suggestion.
 
-IOPS builds the full execution matrix upfront (all valid parameter combinations after constraint filtering), then uses a lookup table to map optimizer suggestions to real configurations. This ensures every evaluated point is a valid, constraint-respecting combination.
+IOPS builds the full execution matrix upfront (all valid parameter combinations after constraint filtering), then uses a lookup table to map optimizer suggestions to real configurations. Every evaluated point is therefore a valid, constraint-respecting combination.
 
 ### Parameter space encoding
 
-The optimizer works in a continuous numerical space, but IOPS variables come in different forms. Each variable type is encoded differently:
+The optimizer works in a continuous numerical space, so each variable type is encoded differently:
 
-**Integer and float ranges** (`sweep.mode: range`) map directly to `Integer` or `Real` dimensions in scikit-optimize. The optimizer can suggest any value in the continuous range, and nearest-neighbor mapping selects the closest valid discrete point.
+**Integer and float ranges** (`sweep.mode: range`) map directly to `Integer` or `Real` dimensions in scikit-optimize. The optimizer can suggest any value in the range; nearest-neighbor mapping selects the closest valid discrete point.
 
 ```yaml
 # Maps to Integer(low=1, high=16)
-transfer_size:
-  type: int
-  sweep:
-    mode: range
-    start: 1
-    end: 16
+transfer_size: { type: int, sweep: { mode: range, start: 1, end: 16 } }
 ```
 
-**Numeric lists** (`sweep.mode: list` with `type: int` or `type: float`) use ordinal encoding. Values are sorted, and the optimizer works with indices (0, 1, 2, ...) instead of the raw values. This preserves the natural ordering: the model can learn that index 3 tends to produce better results than index 1, which it cannot do with categorical encoding.
+**Numeric lists** (`sweep.mode: list` with `type: int` or `type: float`) use ordinal encoding: values are sorted and the optimizer works with indices (0, 1, 2, ...). This preserves the natural ordering, so the model can learn that index 3 tends to beat index 1, which categorical encoding cannot express.
 
 ```yaml
 # Sorted to [64, 128, 256, 512, 1024]
 # Maps to Integer(low=0, high=4) where index 0 = 64, index 4 = 1024
-block_size:
-  type: int
-  sweep:
-    mode: list
-    values: [256, 64, 1024, 128, 512]
+block_size: { type: int, sweep: { mode: list, values: [256, 64, 1024, 128, 512] } }
 ```
 
-**String lists** (`type: str`) use categorical encoding. There is no meaningful ordering between string values, so the optimizer treats them as unrelated categories.
+**String lists** (`type: str`) use categorical encoding, since there is no meaningful ordering between string values.
 
 ```yaml
 # Maps to Categorical(categories=["read", "write", "mixed"])
-operation:
-  type: str
-  sweep:
-    mode: list
-    values: ["read", "write", "mixed"]
+operation: { type: str, sweep: { mode: list, values: ["read", "write", "mixed"] } }
 ```
 
-**Single-value variables** (one-element lists or ranges where start equals end) are excluded from the search space entirely. They are treated as fixed constants and included in every evaluation. There is nothing to optimize when only one value exists.
+**Single-value variables** (one-element lists, or ranges where start equals end) are excluded from the search space and treated as fixed constants in every evaluation.
 
 ### Nearest-neighbor mapping
 
-The optimizer suggests points in continuous space, but IOPS can only run configurations that exist in the pre-built execution matrix. After each suggestion, IOPS finds the nearest valid configuration using squared Euclidean distance in index space.
+The optimizer suggests points in continuous space, but IOPS can only run configurations from the pre-built execution matrix, so each suggestion is mapped to the nearest valid configuration by squared Euclidean distance in index space. If the optimizer suggests index 2.7 for `block_size` (values [64, 128, 256, 512, 1024]), the nearest valid index is 3, corresponding to 512. Equidistant ties go to the lexicographically largest index vector, a deterministic tie-break that tends to favor higher parameter values.
 
-This means the point actually evaluated may differ from what the optimizer suggested. For example, if the optimizer suggests index 2.7 for `block_size` (which has values [64, 128, 256, 512, 1024]), the nearest valid index is 3, corresponding to 512.
-
-When multiple valid points are equidistant (ties), IOPS selects the one with the lexicographically largest index vector. This provides deterministic tie-breaking that tends to favor higher parameter values.
-
-The feedback step (TELL) always reports the point that was actually evaluated, not the original suggestion. This prevents the surrogate model from learning incorrect associations between parameters and outcomes.
+The feedback step (TELL) always reports the point that was actually evaluated, not the original suggestion, so the surrogate model never learns incorrect parameter/outcome associations.
 
 ### Feedback and metric aggregation
 
 After a configuration finishes running, IOPS extracts the target metric from the parser results and reports it to the optimizer.
 
-**Repetitions.** When `benchmark.repetitions > 1`, IOPS runs all repetitions before reporting to the optimizer. The best value across repetitions is used (maximum for `objective: "maximize"`, minimum for `objective: "minimize"`), not the mean. This favors peak performance, which is typically more representative for benchmarks where variability comes from system noise rather than fundamental differences.
+**Repetitions.** When `benchmark.repetitions > 1`, IOPS runs all repetitions before reporting and uses the best value across repetitions (maximum for `objective: "maximize"`, minimum for `objective: "minimize"`), not the mean. This favors peak performance, which is typically more representative when variability comes from system noise.
 
-**Objective sign flip.** scikit-optimize always minimizes. When `objective: "maximize"`, IOPS negates the metric value before passing it to the optimizer (and negates it back for display). This is transparent to the user.
+**Objective sign flip.** scikit-optimize always minimizes. When `objective: "maximize"`, IOPS transparently negates the metric before passing it to the optimizer (and negates it back for display).
 
 ## Choosing a Surrogate Model
 
@@ -205,7 +173,7 @@ The `base_estimator` option selects the surrogate model that approximates the re
 | `ET` (Extra Trees) | Similar to RF | Slightly faster training | Higher variance than RF |
 | `GBRT` (Gradient Boosted Trees) | Large datasets | Good accuracy with many observations | More sensitive to hyperparameters |
 
-**Recommendation:** Start with `RF` (the default). It produces the most consistent results across different parameter space shapes. Switch to `GP` only if all your variables are continuous (integer or float ranges, no lists or strings) and the search space is smooth.
+**Recommendation:** Start with `RF` (the default); it gives the most consistent results across space shapes. Switch to `GP` only if all variables are continuous (integer or float ranges, no lists or strings) and the search space is smooth.
 
 ## Acquisition Functions
 
@@ -217,20 +185,17 @@ The acquisition function decides where to sample next, balancing exploration (tr
 | `PI` (Probability of Improvement) | `xi` (default: 0.01) | Exploitative. Selects points most likely to improve over the current best, even by a small amount. Converges faster but may miss better optima. |
 | `LCB` (Lower Confidence Bound) | `kappa` (default: 1.96) | Exploratory. Selects points where the model's lower confidence bound is lowest. Higher `kappa` values increase exploration. |
 
-**Tuning `xi` and `kappa`:**
+`xi` controls the exploration/exploitation trade-off for `EI` and `PI`: increase to 0.1 or higher for broader exploration, decrease toward 0 for more exploitation. `kappa` plays the same role for `LCB`; the default (1.96) corresponds to a 95% confidence interval.
 
-- `xi` controls the exploration/exploitation trade-off for `EI` and `PI`. The default (0.01) provides a good balance. Increase to 0.1 or higher if you want broader exploration. Decrease toward 0 for more exploitation.
-- `kappa` controls exploration for `LCB`. The default (1.96) corresponds to a 95% confidence interval. Increase for more exploration, decrease for more exploitation.
-
-For most benchmarking workloads, `EI` with the default `xi: 0.01` works well. If you find the optimizer converging too quickly to a local optimum, increase `xi` or switch to `LCB`.
+For most benchmarking workloads, `EI` with the default `xi: 0.01` works well. If the optimizer converges too quickly to a local optimum, increase `xi` or switch to `LCB`.
 
 ## Convergence and Early Stopping
 
-When the surrogate model believes it has found the optimum, it may repeatedly suggest the same (or similar) configurations that map to already-visited points. IOPS detects this and provides two strategies.
+When the surrogate model believes it has found the optimum, it may repeatedly suggest configurations that map to already-visited points. IOPS detects this and provides two strategies.
 
 ### Default behavior
 
-By default (`early_stop_on_convergence: false`), when the optimizer's suggestions keep mapping to visited points (after 10 retries), IOPS randomly samples from the remaining unvisited configurations. This ensures the full iteration budget is spent, even if the surrogate model has converged. The random fallback often discovers configurations the model missed.
+By default (`early_stop_on_convergence: false`), when the optimizer's suggestions keep mapping to visited points (after 10 retries), IOPS randomly samples from the remaining unvisited configurations. The full iteration budget is spent even if the model has converged, and the random fallback often discovers configurations the model missed.
 
 Optimization ends when either:
 - All `n_iterations` are exhausted
@@ -238,12 +203,12 @@ Optimization ends when either:
 
 ### Early stopping with xi boost
 
-When `early_stop_on_convergence: true`, IOPS uses a more sophisticated strategy before stopping:
+When `early_stop_on_convergence: true`, IOPS tries to escape local optima before stopping:
 
-1. **Convergence detected:** The optimizer's suggestions keep mapping to visited points.
-2. **Xi boost:** IOPS multiplies `xi` by `xi_boost_factor` (default: 5.0) to push the acquisition function toward unexplored regions. The boost is exponential: on the k-th convergence event, `xi` becomes `original_xi * xi_boost_factor^k`.
+1. **Convergence detected:** Suggestions keep mapping to visited points.
+2. **Xi boost:** `xi` is multiplied by `xi_boost_factor` (default: 5.0) to push the acquisition function toward unexplored regions. The boost is exponential: on the k-th convergence event, `xi` becomes `original_xi * xi_boost_factor^k`.
 3. **Random sample:** A random unvisited configuration is evaluated to provide fresh data.
-4. **Xi reset:** If the optimizer subsequently suggests a new (unvisited) point on its own, `xi` is restored to its original value and the convergence counter resets.
+4. **Xi reset:** If the optimizer then suggests a new (unvisited) point on its own, `xi` is restored to its original value and the convergence counter resets.
 5. **Early stop:** After `convergence_patience` (default: 3) consecutive convergence events, the optimization terminates.
 
 ```yaml
@@ -256,65 +221,40 @@ bayesian_config:
   xi_boost_factor: 5.0          # xi multiplied by 5.0 each time
 ```
 
-With the defaults, the xi progression on repeated convergence would be: 0.01 (original), 0.05 (first boost), 0.25 (second boost), then early stop (third event exceeds patience).
-
-Use early stopping when you want to save compute time and are confident that continued exploration is unlikely to improve results. For most cases, the default (no early stopping) produces better final results because the random fallback occasionally discovers configurations the model undervalues.
+With the defaults, repeated convergence gives xi = 0.01, 0.05, 0.25, then early stop (the third event exceeds patience). Use early stopping to save compute time when continued exploration is unlikely to help; otherwise the default usually produces better final results because the random fallback occasionally discovers configurations the model undervalues.
 
 ## Combining with Exhaustive Variables
 
-The `exhaustive_vars` feature lets you test all values of specific variables at every search point. Variables listed in `exhaustive_vars` are removed from the optimizer's search space and instead tested exhaustively at each selected point.
+Variables listed in `benchmark.exhaustive_vars` (e.g., `exhaustive_vars: ["stripe_count"]`) are removed from the optimizer's search space and instead tested exhaustively at each selected point. This suits variables that should always be fully characterized (like a filesystem tuning parameter) while others are optimized.
 
-```yaml
-benchmark:
-  search_method: "bayesian"
-  bayesian_config:
-    objective_metric: "bandwidth"
-    objective: "maximize"
-    n_iterations: 10
-  exhaustive_vars: ["stripe_count"]
+The optimizer selects a point (e.g., `nodes=4, block_size=256`), IOPS tests it with every `stripe_count` value, and the best metric across those instances is reported back to the optimizer. With `n_iterations: 10` and 3 stripe counts, that is 30 benchmark executions.
 
-vars:
-  nodes:
-    type: int
-    sweep:
-      mode: list
-      values: [1, 2, 4, 8]
-
-  block_size:
-    type: int
-    sweep:
-      mode: list
-      values: [64, 256, 1024]
-
-  stripe_count:
-    type: int
-    sweep:
-      mode: list
-      values: [1, 2, 4]
-```
-
-**Execution flow:**
-
-1. The optimizer selects a point in the search space (e.g., `nodes=4, block_size=256`).
-2. IOPS tests all `stripe_count` values for that point: `(4, 256, 1)`, `(4, 256, 2)`, `(4, 256, 4)`.
-3. The best metric value across the exhaustive instances is reported back to the optimizer.
-4. Total tests per iteration: 1 search point x 3 stripe counts = 3.
-5. Total tests for the run: 10 iterations x 3 = 30 benchmark executions.
-
-This is useful when one variable (like a filesystem tuning parameter) should always be fully characterized, while others (like scale) are worth optimizing.
-
-See [Search Methods: Exhaustive Variables](../search-methods#exhaustive-variables) for more details.
+See [Search Methods: Exhaustive Variables](../search-methods#exhaustive-variables) for a full example.
 
 ## Fallback to Exhaustive
 
-When `n_iterations` is greater than or equal to the total number of valid configurations in the search space, there is no benefit to using a surrogate model. By default (`fallback_to_exhaustive: true`), IOPS automatically switches to exhaustive search in this case:
+When `n_iterations` is greater than or equal to the total number of valid configurations, a surrogate model adds no value. By default (`fallback_to_exhaustive: true`), IOPS switches to exhaustive search in this case:
 
 ```
 INFO: Requested n_iterations=50 >= total_space=32. Using full exhaustive search
       instead of Bayesian optimization.
 ```
 
-This avoids the overhead of building and querying a surrogate model when every configuration will be tested anyway. When `fallback_to_exhaustive: false`, IOPS clamps `n_iterations` to the space size and runs the optimizer normally.
+When `fallback_to_exhaustive: false`, IOPS clamps `n_iterations` to the space size and runs the optimizer normally.
+
+## Thread usage on the orchestrator node
+
+The Bayesian planner fits a surrogate model (Gaussian Process or tree ensemble) on every iteration. That fit calls into numpy/BLAS, which by default starts one compute thread per core. On a many-core machine, and especially on a shared login node, a single `iops` process then shows dozens of threads (visible as green rows in `htop`). The fits are tiny and gain nothing from those threads, so IOPS caps them to a single thread for the duration of the surrogate math.
+
+This is purely a threading change: the suggested configurations are identical regardless of the cap. To raise or disable it, set `IOPS_BLAS_THREADS` before launching:
+
+```bash
+export IOPS_BLAS_THREADS=4   # allow up to 4 BLAS threads for the fit
+export IOPS_BLAS_THREADS=0   # disable the cap (use the library default)
+iops run config.yaml --use-cache
+```
+
+Note that this only affects the orchestrator process where `iops` runs. The benchmark itself (ior, mdtest, your MPI program) runs on the compute nodes via the executor and is unaffected.
 
 ## Configuration Reference
 

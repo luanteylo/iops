@@ -3,11 +3,11 @@ title: "Probe System"
 weight: 20
 ---
 
-This page documents the IOPS system probe mechanism that collects runtime information from compute nodes. Understanding this system is essential for developers who want to extend the collected metrics or modify the probe behavior.
+This page documents the IOPS system probe mechanism for developers who want to extend the collected metrics or modify probe behavior.
 
 ## Overview
 
-The probe system collects system information (CPU, memory, filesystems, etc.) from the actual compute node where the benchmark runs. This is particularly important for SLURM jobs where the login node differs from compute nodes.
+The probe system collects system information (CPU, memory, filesystems, etc.) from the actual compute node where the benchmark runs. This matters for SLURM jobs, where the login node differs from compute nodes.
 
 **Key files:**
 - `__iops_exit_handler.sh` - Centralized EXIT trap coordinator
@@ -41,7 +41,7 @@ User Script                     Exit Handler                    Sysinfo Script
 └─────────────────────┘
 ```
 
-The exit handler provides a centralized EXIT trap that other IOPS features register with. This avoids trap conflicts when multiple features (system probe, resource sampler) need cleanup actions.
+The exit handler provides a centralized EXIT trap that other IOPS features (system probe, resource sampler) register cleanup actions with, avoiding trap conflicts.
 
 ## How It Works
 
@@ -96,11 +96,7 @@ The sysinfo script registers its collection function:
 _iops_register_exit "_iops_collect_sysinfo"
 ```
 
-This ensures the probe runs:
-- After the benchmark completes (success or failure)
-- On the actual compute node (not the login node)
-- Without affecting the script's exit code
-- Without conflicting with other IOPS features' cleanup actions
+The probe therefore runs after the benchmark completes (success or failure), on the actual compute node, without affecting the script's exit code or conflicting with other features' cleanup actions.
 
 ### 3. Data Collection
 
@@ -178,28 +174,15 @@ Example: `lustre:/scratch,gpfs:/home`
 
 ### Why Separate Files?
 
-The probe is written as separate files (`__iops_exit_handler.sh`, `__iops_atexit_sysinfo.sh`) rather than inlined into the user script:
-
-1. **Clean user scripts** - Users can inspect their scripts without probe code clutter
-2. **Easy debugging** - Each script can be examined or modified independently
-3. **Consistent behavior** - Same code across all scripts
-4. **Modular design** - Features can be enabled/disabled independently
+The probe is written as separate files (`__iops_exit_handler.sh`, `__iops_atexit_sysinfo.sh`) rather than inlined into the user script. This keeps user scripts clean and inspectable, makes each script debuggable on its own, guarantees identical probe code across scripts, and lets features be enabled or disabled independently.
 
 ### Why Centralized Exit Handler?
 
-Using a single EXIT trap with registration instead of multiple traps:
-
-1. **No conflicts** - Multiple features can register cleanup actions
-2. **Predictable order** - Actions run in registration order
-3. **Isolated failures** - One action's failure doesn't affect others
+A single EXIT trap with registration, instead of multiple traps, avoids trap conflicts between features, runs actions in a predictable (registration) order, and isolates failures so one action cannot break the others.
 
 ### Why EXIT Trap?
 
-Using `trap ... EXIT` instead of appending code at the end:
-
-1. **Runs on failure** - Collects info even if benchmark crashes
-2. **Runs on signals** - Handles SIGTERM, SIGINT gracefully
-3. **No user code modification** - Works regardless of script structure
+Using `trap ... EXIT` instead of appending code at the end means collection runs even if the benchmark crashes or receives SIGTERM/SIGINT, and works regardless of the user script's structure.
 
 ### Why Subshell with `|| true`?
 
@@ -211,17 +194,11 @@ _iops_collect_sysinfo() {
 }
 ```
 
-1. **Never affects exit code** - Benchmark's exit code is preserved
-2. **Isolated errors** - Probe failures don't break the benchmark
-3. **Silent failures** - stderr redirected to avoid noise
+The subshell with `|| true` and stderr redirected guarantees the probe never changes the benchmark's exit code and that probe failures stay silent and isolated.
 
 ### Why `$SECONDS`?
 
-The bash `$SECONDS` variable automatically tracks time since script start:
-
-1. **Accurate** - Measures actual script execution time
-2. **Simple** - No need for explicit timing code
-3. **Includes everything** - Setup, benchmark, and cleanup time
+The bash `$SECONDS` variable tracks time since script start with no explicit timing code, covering setup, benchmark, and cleanup time.
 
 ## Configuration
 
@@ -252,15 +229,15 @@ Note: The exit handler (`__iops_exit_handler.sh`) is still written if other feat
 
 ## Version Probe
 
-The version probe captures software and library versions once per execution. This is metadata, not a measured metric. It is the cache-mixing detector: the HTML report warns when a component reports more than one distinct version across executions (catching the case where a study mixes freshly executed results with older cached results from a different software environment).
+The version probe captures software and library versions once per execution. This is metadata, not a measured metric, and it is the cache-mixing detector: the HTML report warns when a component reports more than one distinct version across executions, catching studies that mix fresh results with older cached results from a different software environment.
 
 ### How It Works
 
-1. When `benchmark.probes.versions` is configured, `_inject_iops_scripts()` calls `_build_version_probe_script()` and writes the resulting script to `__iops_atexit_versions.sh` in the repetition folder.
+1. When `benchmark.probes.versions` is configured, `_inject_iops_scripts()` calls `_build_version_probe_script()` and writes the result to `__iops_atexit_versions.sh` in the repetition folder.
 2. The generated benchmark script sources `__iops_atexit_versions.sh` after the shebang/`#SBATCH` header. The script defines `_iops_capture_versions()` and registers it with the centralized exit handler via `_iops_register_exit` (falling back to immediate execution when no handler is present, e.g. standalone runs).
-3. Capture therefore runs **after the benchmark body** via the `EXIT` trap, in the same shell. This is deliberate: version tools are frequently only on `PATH` after the benchmark runs its own `module load` commands, and the trap sees that modified environment.
-4. `_iops_capture_versions()` runs each configured command, captures its stdout (up to 4000 bytes), JSON-escapes the output, and writes `__iops_versions.json`.
-5. All capture is best-effort: a failing command yields an empty string and does not abort the run.
+3. Capture therefore runs **after the benchmark body** via the `EXIT` trap, in the same shell. This is deliberate: version tools are frequently only on `PATH` after the benchmark's own `module load` commands, and the trap sees that modified environment.
+4. `_iops_capture_versions()` runs each configured command, captures its stdout (up to 4000 bytes), JSON-escapes it, and writes `__iops_versions.json`.
+5. Capture is best-effort: a failing command yields an empty string and does not abort the run.
 
 ```yaml
 benchmark:
@@ -304,21 +281,7 @@ _iops_capture_versions
 }
 ```
 
-### Key Constants
-
-```python
-# iops/execution/planner.py
-ATEXIT_VERSION_FILENAME = "__iops_atexit_versions.sh"
-VERSIONS_FILENAME = "__iops_versions.json"
-```
-
-### Key Function
-
-| Function | Location | Purpose |
-|----------|----------|---------|
-| `_build_version_probe_script()` | planner.py | Builds the version capture shell script |
-| `_generate_versions_section()` | report_generator.py | Renders the Software Versions HTML section with drift detection |
-| `_load_execution_versions()` | report_generator.py | Reads all `__iops_versions.json` files for a run |
+Constants and functions for the version probe are listed in [Source Code References](#source-code-references) below.
 
 ---
 
@@ -358,4 +321,6 @@ SYSINFO_FILENAME = "__iops_sysinfo.json"
 | `_iops_collect_sysinfo()` | sysinfo script | Bash function that collects data |
 | `_iops_detect_pfs()` | sysinfo script | Detects parallel filesystems |
 | `_iops_capture_versions()` | version probe script | Bash function that captures software versions |
+| `_generate_versions_section()` | report_generator.py | Renders the Software Versions HTML section with drift detection |
+| `_load_execution_versions()` | report_generator.py | Reads all `__iops_versions.json` files for a run |
 

@@ -96,7 +96,7 @@ def run_with_mixed_status(tmp_path):
     # Create a results CSV file
     results_data = {
         "execution.execution_id": [1, 2, 3, 4],
-        "execution.repetition": [0, 0, 0, 0],
+        "execution.repetition": [1, 1, 1, 1],
         "vars.nodes": [1, 2, 1, 2],
         "vars.operation": ["read", "write", "write", "read"],
         "metrics.throughput": [100.0, 200.0, None, None],
@@ -186,7 +186,7 @@ def run_with_multiple_reps(tmp_path):
     # Create results CSV with rows for each completed repetition
     results_data = {
         "execution.execution_id": [1, 1, 1, 2, 2, 3],
-        "execution.repetition": [0, 1, 2, 0, 1, 0],
+        "execution.repetition": [1, 2, 3, 1, 2, 1],
         "vars.nodes": [1, 1, 1, 2, 2, 4],
         "metrics.throughput": [100, 110, 105, 200, 210, 400],
     }
@@ -700,12 +700,12 @@ class TestMinCompletedReps:
             min_completed_reps=1,
         )
 
-        # exec_0001: reps 0, 1, 2 completed
-        assert reps_map["exec_0001"] == {0, 1, 2}
-        # exec_0002: reps 0, 1 completed (rep 2 is RUNNING)
-        assert reps_map["exec_0002"] == {0, 1}
-        # exec_0003: only rep 0 completed
-        assert reps_map["exec_0003"] == {0}
+        # exec_0001: reps 1, 2, 3 completed
+        assert reps_map["exec_0001"] == {1, 2, 3}
+        # exec_0002: reps 1, 2 completed (rep 3 is RUNNING)
+        assert reps_map["exec_0002"] == {1, 2}
+        # exec_0003: only rep 1 completed
+        assert reps_map["exec_0003"] == {1}
 
 
 class TestMinRepsArchiveCreation:
@@ -755,19 +755,19 @@ class TestMinRepsArchiveCreation:
         df = pd.read_csv(results_file)
 
         # Should have:
-        # - exec_0001 (id=1): reps 0, 1, 2 (3 rows)
-        # - exec_0002 (id=2): reps 0, 1 (2 rows)
+        # - exec_0001 (id=1): reps 1, 2, 3 (3 rows)
+        # - exec_0002 (id=2): reps 1, 2 (2 rows)
         # Total: 5 rows
         assert len(df) == 5
         assert set(df["execution.execution_id"]) == {1, 2}
 
         # Check exec_0001 has all 3 reps
         exec1_reps = set(df[df["execution.execution_id"] == 1]["execution.repetition"])
-        assert exec1_reps == {0, 1, 2}
+        assert exec1_reps == {1, 2, 3}
 
         # Check exec_0002 has only 2 completed reps
         exec2_reps = set(df[df["execution.execution_id"] == 2]["execution.repetition"])
-        assert exec2_reps == {0, 1}
+        assert exec2_reps == {1, 2}
 
     def test_min_reps_implies_partial(self, run_with_multiple_reps, tmp_path):
         """Test that min_completed_reps implies partial=True in API."""

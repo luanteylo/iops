@@ -8,6 +8,18 @@ import pandas as pd
 from iops.config.models import PlotConfig, ReportThemeConfig
 
 
+def _format_hover_value(value) -> str:
+    """Format a hover-text value, applying numeric formatting only to numbers.
+
+    String-typed variables (e.g. a categorical color_by) must not go through
+    a float format spec, which would raise ValueError and kill the plot.
+    """
+    import numbers
+    if isinstance(value, numbers.Number) and not isinstance(value, bool):
+        return f"{value:.4f}"
+    return str(value)
+
+
 # ============================================================================
 # Base Plot Class
 # ============================================================================
@@ -366,20 +378,40 @@ class ScatterPlot(BasePlot):
         # Create scatter plot
         fig = go.Figure()
 
+        # Marker colors must be numeric for a colorscale. Map categorical
+        # (string) color columns to integer codes and label the colorbar
+        # ticks with the original category values.
+        color_values = df_grouped[color_col]
+        if pd.api.types.is_numeric_dtype(color_values):
+            marker_color = self._to_list(color_values)
+            colorbar = dict(title=color_by)
+        else:
+            codes, uniques = pd.factorize(color_values)
+            marker_color = [int(c) for c in codes]
+            colorbar = dict(
+                title=color_by,
+                tickvals=list(range(len(uniques))),
+                ticktext=[str(u) for u in uniques],
+            )
+
         fig.add_trace(go.Scatter(
             x=self._to_list(df_grouped[x_col]),
             y=self._to_list(df_grouped[y_col]),
             mode='markers',
             marker=dict(
                 size=12,
-                color=self._to_list(df_grouped[color_col]),
+                color=marker_color,
                 colorscale=self.config.colorscale,
                 showscale=True,
-                colorbar=dict(title=color_by),
+                colorbar=colorbar,
                 line=dict(width=1, color='white'),
             ),
             text=df_grouped.apply(
-                lambda row: f"{x_var}: {row[x_col]}<br>{y_title}: {row[y_col]:.4f}<br>{color_by}: {row[color_col]:.4f}",
+                lambda row: (
+                    f"{x_var}: {row[x_col]}<br>"
+                    f"{y_title}: {_format_hover_value(row[y_col])}<br>"
+                    f"{color_by}: {_format_hover_value(row[color_col])}"
+                ),
                 axis=1
             ),
             hovertemplate='%{text}<extra></extra>',

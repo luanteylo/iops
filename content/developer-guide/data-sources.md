@@ -1,28 +1,41 @@
 ---
 title: "Data Sources"
-weight: 10
+weight: 30
 ---
 
-This page documents where IOPS CLI commands retrieve their data from. Understanding these data sources is essential for developers working on the codebase.
+This page documents where IOPS CLI commands read their data.
 
 ## Overview
 
-IOPS commands read from metadata files generated during benchmark execution and from result files. Metadata files have the `__iops_` prefix and are documented in the [Metadata Files]({{< relref "/user-guide/metadata-files" >}}) user guide.
+IOPS commands read from result files and from metadata files generated during execution. Metadata files have the `__iops_` prefix and are documented in the [Metadata Files]({{< relref "/user-guide/metadata-files" >}}) user guide.
 
 
 ## Data Sources by Command
 
 ```
 iops find ◄─── __iops_index.json
-          ◄─── __iops_status.json
+          ◄─── __iops_status_rollup.json (preferred; falls back to per-folder scan)
+          ◄─── __iops_status.json (fallback)
           ◄─── __iops_run_metadata.json (optional metadata)
 
 iops find --watch ◄─── __iops_index.json (polling)
-                  ◄─── __iops_status.json (polling)
+                  ◄─── __iops_status_rollup.json (preferred; polling)
+                  ◄─── __iops_status.json (fallback scan)
 
 iops report ◄─── __iops_run_metadata.json
             ◄─── results.csv/parquet/sqlite
 ```
+
+### Status roll-up fast path
+
+Both `iops find` and watch mode read the run-root `__iops_status_rollup.json`
+aggregate instead of scanning every execution's repetition folders, which keeps
+them responsive on large parameter spaces. The per-folder `__iops_status.json`
+files remain the source of truth (and the node-to-runner channel in
+single-allocation mode); the roll-up is an accelerator. Watch always prefers it;
+`iops find` only trusts it when the run marked it `complete`, otherwise it falls
+back to the folder scan. When the roll-up is absent (older runs, archives), both
+fall back automatically.
 
 
 ### `iops find`

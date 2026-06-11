@@ -25,7 +25,7 @@ Before installing IOPS, ensure you have:
 
 ### Virtual environment (recommended)
 
-IOPS works the same way inside a Python virtual environment (`venv`) or a Conda environment. Both are supported, pick whichever you already use on your system. Installing into an isolated environment is recommended so IOPS and its dependencies do not conflict with other Python tools on the machine.
+Install IOPS into an isolated environment (`venv` or Conda, both work the same) so its dependencies do not conflict with other Python tools on the machine.
 
 ```bash
 # Option 1: venv (standard library)
@@ -37,21 +37,15 @@ conda create -n iops python=3.10
 conda activate iops
 ```
 
-Once the environment is active, any of the installation methods below can be used.
+With the environment active, use any of the installation methods below.
 
 ## Quick Installation (from PyPI)
-
-Install IOPS directly from PyPI:
 
 ```bash
 pip install iops-benchmark
 ```
 
 ## Installation from Source
-
-### Basic Installation
-
-Clone the repository and install the package:
 
 ```bash
 # Clone the repository
@@ -67,12 +61,11 @@ iops --version
 
 ## Offline Installation (Wheelhouse)
 
-For clusters without internet access, you can create a wheelhouse (a directory of pre-downloaded wheel files) on a machine with internet, then transfer it to the cluster.
+For clusters without internet access, create a wheelhouse (a directory of pre-downloaded wheel files) on a machine with internet, then transfer it to the cluster.
 
 ### Step 1: Create the Wheelhouse (on a machine with internet)
 
 ```bash
-# Create a directory for the wheels
 mkdir iops-wheelhouse
 
 # Download IOPS and all dependencies as wheels
@@ -81,14 +74,8 @@ pip download iops-benchmark -d iops-wheelhouse
 
 ### Step 2: Transfer to the Cluster
 
-Copy the wheelhouse directory to the cluster using your preferred method:
-
 ```bash
-# Example using scp
 scp -r iops-wheelhouse user@cluster:/path/to/destination/
-
-# Example using rsync
-rsync -av iops-wheelhouse user@cluster:/path/to/destination/
 ```
 
 ### Step 3: Install on the Cluster
@@ -105,16 +92,15 @@ pip install --no-index --find-links=/path/to/iops-wheelhouse iops-benchmark
 
 ## Installation with Spack (for HPC environments)
 
-[Spack](https://spack.io/) is a package manager designed for HPC systems. It handles complex dependency chains and integrates well with module systems commonly found on clusters.
+[Spack](https://spack.io/) is a package manager designed for HPC systems that integrates well with cluster module systems.
 
 **Warning: Spack installs can take a long time**
 
-When using the full Spack-managed dependency mode, Spack compiles everything from source, including Python itself and scientific libraries such as NumPy, SciPy, and their BLAS backends. On a typical HPC node the first build can take from 30 minutes to several hours, depending on the cluster, the compiler, and how many dependencies are already cached. Prefer the standalone mode (which uses PyPI wheels) if you just want IOPS available quickly, and reserve the full mode for reproducible environments where tight integration with Spack-built dependencies is required.
+In full Spack-managed mode, Spack compiles everything from source, including Python itself and scientific libraries such as NumPy, SciPy, and their BLAS backends. The first build can take from 30 minutes to several hours depending on the cluster, the compiler, and the dependency cache. Prefer standalone mode (PyPI wheels) to get IOPS quickly; reserve full mode for reproducible environments that require Spack-built dependencies.
 
 ### Adding the IOPS Spack Repository
 
 ```bash
-# Add the IOPS Spack repository
 spack repo add https://gitlab.inria.fr/lgouveia/iops-spack.git
 ```
 
@@ -145,8 +131,6 @@ iops --version
 ```
 
 ## Verifying Your Installation
-
-After installation, verify that IOPS is correctly installed:
 
 ```bash
 # Check version

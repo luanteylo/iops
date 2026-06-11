@@ -10,6 +10,7 @@ This module contains all executor implementations:
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import time
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Dict, Any
 
 from iops.logger import HasLogger
+from iops.fileutils import atomic_write_json
 from iops.config.models import GenericBenchmarkConfig
 from iops.execution.matrix import ExecutionInstance
 from iops.execution.parser import parse_metrics_from_execution, ParserError
@@ -165,11 +167,18 @@ class BaseExecutor(ABC, HasLogger):
         }
 
         try:
-            with open(status_file, "w") as f:
-                json.dump(status_data, f, indent=2, default=str)
+            atomic_write_json(status_file, status_data, indent=2, default=str)
             self.logger.debug(f"  [{self._LOG_PREFIX}] Status update: {status}")
         except Exception as e:
             self.logger.debug(f"  [{self._LOG_PREFIX}] Failed to write status update: {e}")
+
+        # Mirror live PENDING/RUNNING transitions into the run-root roll-up so
+        # watch sees them without scanning folders.
+        rollup = getattr(self.runner, "status_rollup", None) if self.runner else None
+        if rollup is not None:
+            rollup.record(
+                f"exec_{test.execution_id:04d}", test.repetition, status_data
+            )
 
     # ------------------------------------------------------------------ #
     # Filesystem helpers with retry for HPC shared filesystems
@@ -333,6 +342,17 @@ class BaseExecutor(ABC, HasLogger):
     # Post-processing and output helpers
     # ------------------------------------------------------------------ #
 
+    def _read_file_tail(self, path: Path, max_bytes: int = 8192) -> str:
+        """Read at most the last max_bytes of a text file (for previews)."""
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - max_bytes))
+                return f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
     def _truncate_output(self, text: str, max_lines: int = 10) -> str:
         """Truncate output to first and last N/2 lines."""
         if not text:
@@ -481,27 +501,25 @@ class LocalExecutor(BaseExecutor):
             now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             test.metadata["__submission_time"] = now
             test.metadata["__job_start"] = now
-            result = subprocess.run(
-                cmd,
-                cwd=test.execution_dir,
-                capture_output=True,
-                text=True,
-            )
+            # Stream stdout/stderr directly to files instead of buffering in
+            # memory: verbose benchmarks could exhaust RAM, and an interrupt
+            # would lose all output captured so far.
+            with open(stdout_path, "w", encoding="utf-8", errors="replace") as out_f, \
+                 open(stderr_path, "w", encoding="utf-8", errors="replace") as err_f:
+                result = subprocess.run(
+                    cmd,
+                    cwd=test.execution_dir,
+                    stdout=out_f,
+                    stderr=err_f,
+                )
             test.metadata["__end"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-
-            # Always persist outputs
-            stdout_path.write_text(result.stdout or "", encoding="utf-8", errors="replace")
-            stderr_path.write_text(result.stderr or "", encoding="utf-8", errors="replace")
 
             test.metadata["__jobid"] = "local"
             test.metadata["__returncode"] = result.returncode
 
-            # Log completion
-            stdout_lines = len(result.stdout.splitlines()) if result.stdout else 0
-            stderr_lines = len(result.stderr.splitlines()) if result.stderr else 0
             self.logger.debug(
                 f"  [LocalExec] Completed: returncode={result.returncode} "
-                f"stdout={stdout_lines} lines, stderr={stderr_lines} lines"
+                f"(output streamed to {stdout_path.name}/{stderr_path.name})"
             )
 
             if result.returncode != 0:
@@ -512,9 +530,11 @@ class LocalExecutor(BaseExecutor):
                 )
                 self.logger.error(f"  [LocalExec] FAILED: {msg}")
 
-                # Show first/last lines of stderr for debugging
-                if result.stderr:
-                    stderr_preview = self._truncate_output(result.stderr, max_lines=10)
+                # Show the tail of stderr for debugging (avoid re-reading a
+                # potentially huge file into memory)
+                stderr_tail = self._read_file_tail(stderr_path)
+                if stderr_tail:
+                    stderr_preview = self._truncate_output(stderr_tail, max_lines=10)
                     self.logger.debug(f"  [LocalExec] stderr preview:\n{stderr_preview}")
 
                 test.metadata["__executor_status"] = self.STATUS_FAILED
@@ -618,8 +638,16 @@ class SlurmExecutor(BaseExecutor):
 
     SLURM_FAIL_STATES = {
         "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
-        "PREEMPTED", "BOOT_FAIL",
+        "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED", "SPECIAL_EXIT",
     }
+
+    #: Sentinel returned by _squeue_state when the status command itself fails
+    #: (e.g. slurmctld socket timeout). Distinct from None, which means the
+    #: job is no longer visible in the queue.
+    SQUEUE_UNAVAILABLE = object()
+
+    #: Give up polling after this many consecutive status command failures.
+    MAX_STATUS_FAILURES = 10
 
     _LOG_PREFIX = "SlurmExec"
 
@@ -762,18 +790,49 @@ class SlurmExecutor(BaseExecutor):
         self.logger.debug(f"  [SlurmExec] Waiting for job {job_id} (poll interval={self.poll_interval}s)")
 
         last_state = None
+        consecutive_failures = 0
+        final_info: Optional[Dict[str, Optional[str]]] = None
         while True:
             state = self._squeue_state(job_id)
+
+            if state is self.SQUEUE_UNAVAILABLE:
+                # Transient status command failure: the job may well still be
+                # running. Keep polling instead of abandoning a live job.
+                consecutive_failures += 1
+                if consecutive_failures >= self.MAX_STATUS_FAILURES:
+                    self.logger.warning(
+                        f"  [SlurmExec] Status command failed {consecutive_failures} times "
+                        f"in a row for job {job_id}; finalizing via scontrol (best effort)"
+                    )
+                    break
+                time.sleep(self.poll_interval)
+                continue
+            consecutive_failures = 0
+
             if state is None:
-                break
+                # Not visible in squeue. Confirm with scontrol that the job is
+                # really terminal before concluding it finished: a glitchy
+                # empty response must not abandon a live job.
+                check = self._scontrol_info(job_id)
+                mapped = self._map_final_status(check.get("state"), check.get("exitcode"))
+                if mapped not in (self.STATUS_RUNNING, self.STATUS_PENDING):
+                    final_info = check
+                    break
+                raw = (check.get("state") or "").strip().upper()
+                state = raw.split()[0].split("+")[0]
+                self.logger.debug(
+                    f"  [SlurmExec] Job {job_id} missing from squeue but scontrol "
+                    f"reports {state}; continuing to poll"
+                )
 
             test.metadata["__slurm_state_live"] = state
             if state == "PENDING":
                 new_status = self.STATUS_PENDING
             else:
                 new_status = self.STATUS_RUNNING
-                # Record when job transitions from PENDING to RUNNING (actual job start)
-                if last_state == "PENDING" and "__job_start" not in test.metadata:
+                # Record when the job is first seen running (it may already be
+                # RUNNING at the first poll, so don't require a PENDING sample)
+                if "__job_start" not in test.metadata:
                     test.metadata["__job_start"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                     self.logger.debug(f"  [SlurmExec] Job {job_id} started running at {test.metadata['__job_start']}")
 
@@ -802,7 +861,7 @@ class SlurmExecutor(BaseExecutor):
             self.logger.debug(f"  [JobTracker] Unregistered completed job {job_id} (remaining tracked: {remaining})")
 
         # 1) Prefer scontrol (best SLURM-native final status without accounting)
-        info = self._scontrol_info(job_id)
+        info = final_info if final_info is not None else self._scontrol_info(job_id)
         slurm_state = info.get("state")
         exitcode = info.get("exitcode")
 
@@ -817,6 +876,19 @@ class SlurmExecutor(BaseExecutor):
                 test.metadata["__returncode"] = None
 
         final = self._map_final_status(slurm_state, exitcode)
+
+        # Only reachable when status polling failed repeatedly but scontrol
+        # still reports the job alive: report honestly instead of guessing
+        # an outcome from possibly incomplete output files.
+        if final in (self.STATUS_RUNNING, self.STATUS_PENDING):
+            msg = (
+                f"Job {job_id} still appears active ({slurm_state}) but status "
+                f"polling failed repeatedly; results were not collected."
+            )
+            self.logger.error(f"  [SlurmExec] ERROR: {msg}")
+            test.metadata["__executor_status"] = self.STATUS_UNKNOWN
+            test.metadata.setdefault("__error", msg)
+            return
 
         # 2) If scontrol cannot provide final outcome (aged out), fall back to parser
         if final == self.STATUS_UNKNOWN:
@@ -873,6 +945,7 @@ class SlurmExecutor(BaseExecutor):
         Supports:
           - sbatch --parsable  -> "12345" or "12345;something"
           - default sbatch     -> "Submitted batch job 12345"
+          - multi-cluster      -> "Submitted batch job 12345 on cluster c2"
         """
         if not stdout:
             return None
@@ -884,16 +957,24 @@ class SlurmExecutor(BaseExecutor):
         if cand.isdigit():
             return cand
 
-        # classic form: "... 12345"
+        # classic form, with optional trailing tokens (e.g. "on cluster c2")
+        m = re.search(r"\bSubmitted batch job (\d+)\b", stdout)
+        if m:
+            return m.group(1)
+
+        # last resort: "... 12345"
         parts = token.split()
         if parts and parts[-1].isdigit():
             return parts[-1]
 
         return None
 
-    def _squeue_state(self, job_id: str) -> Optional[str]:
+    def _squeue_state(self, job_id: str) -> Any:
         """
-        Returns job state string (e.g., PENDING/RUNNING/...) or None if not in queue.
+        Returns job state string (e.g., PENDING/RUNNING/...), None if the job
+        is not in the queue, or SQUEUE_UNAVAILABLE if the status command
+        itself failed (transient controller errors must not be confused with
+        "job finished").
         Uses cmd_status template with {job_id} placeholder.
         """
         try:
@@ -912,11 +993,17 @@ class SlurmExecutor(BaseExecutor):
                 return None
             return out.splitlines()[0].strip()
         except subprocess.CalledProcessError as e:
-            # treat failure as "not visible in queue" (best effort)
-            self.logger.debug(
-                f"  [SlurmExec] Status command failed for job {job_id}: {(e.stderr or str(e)).strip()}"
+            stderr = (e.stderr or "").strip()
+            # Unknown/aged-out job id: the job really is gone from the queue
+            if "invalid job id" in stderr.lower():
+                return None
+            # Anything else (e.g. "Socket timed out on send/recv operation")
+            # is a controller hiccup, not information about the job
+            self.logger.warning(
+                f"  [{self._LOG_PREFIX}] Status command failed for job {job_id} "
+                f"(transient?): {stderr or e}"
             )
-            return None
+            return self.SQUEUE_UNAVAILABLE
 
     def _scontrol_info(self, job_id: str) -> Dict[str, Optional[str]]:
         """
@@ -1210,12 +1297,35 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
         last_status = None
         wait_start = None  # Only start timing once allocation is RUNNING
         status_file_seen = False
+        alloc_state = None  # last known allocation state
+        alloc_ended = False
+        next_alloc_check = 0.0  # monotonic deadline for the next squeue call
 
         while True:
-            # Check if allocation is still running (do this first to track state)
-            alloc_state = None
-            if self.allocation_job_id:
-                alloc_state = self._squeue_state(self.allocation_job_id)
+            # Check if allocation is still running. The status file below is
+            # polled at status_poll_interval; squeue is throttled to
+            # poll_interval to avoid hammering the controller.
+            if self.allocation_job_id and time.monotonic() >= next_alloc_check:
+                next_alloc_check = time.monotonic() + self.poll_interval
+                queried = self._squeue_state(self.allocation_job_id)
+                if queried is self.SQUEUE_UNAVAILABLE:
+                    # Transient controller error: keep the last known state.
+                    # One squeue hiccup must not fail the whole allocation.
+                    pass
+                elif queried is None:
+                    # Not in queue: confirm via scontrol before concluding the
+                    # allocation ended (squeue output can be empty transiently)
+                    info = self._scontrol_info(self.allocation_job_id)
+                    mapped = self._map_final_status(info.get("state"), info.get("exitcode"))
+                    if mapped in (self.STATUS_RUNNING, self.STATUS_PENDING):
+                        raw = (info.get("state") or "").strip().upper()
+                        if raw:
+                            alloc_state = raw.split()[0].split("+")[0]
+                    else:
+                        alloc_ended = True
+                        alloc_state = None
+                else:
+                    alloc_state = queried
 
             # Start staleness timer once allocation is running
             # Don't count queue wait time (PENDING) against test_timeout
@@ -1258,7 +1368,7 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
 
             # Handle allocation state changes
             if self.allocation_job_id:
-                if alloc_state is None:
+                if alloc_ended:
                     # Allocation finished - check if test completed
                     if self._check_status_file(test, status_file, terminal_statuses, metrics):
                         break

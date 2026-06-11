@@ -869,7 +869,11 @@ class ReportGenerator:
             template = Template(cores_expr)
             total_core_hours = 0.0
 
-            for idx, row in self.df.iterrows():
+            # Pair each row with its own duration positionally. The DataFrame
+            # index may have gaps (rows are filtered to SUCCEEDED at load
+            # time), so label-based iteration combined with positional access
+            # would mismatch rows and durations.
+            for (_, row), duration_hours in zip(self.df.iterrows(), durations_hours):
                 # Extract variable values for this row
                 var_values = {}
                 for var_name in self.metadata['variables'].keys():
@@ -881,7 +885,6 @@ class ReportGenerator:
                 try:
                     cores_str = template.render(**var_values)
                     cores = eval(cores_str)  # Safe here as we control the template
-                    duration_hours = durations_hours.iloc[idx]
                     if pd.notna(duration_hours):
                         core_hours = cores * duration_hours
                         total_core_hours += core_hours
@@ -1033,8 +1036,8 @@ class ReportGenerator:
 
     def _generate_header(self) -> str:
         """Generate HTML header."""
-        benchmark_name = self.metadata['benchmark']['name']
-        timestamp = self.metadata['benchmark']['timestamp']
+        benchmark_name = html_module.escape(str(self.metadata['benchmark']['name']))
+        timestamp = html_module.escape(str(self.metadata['benchmark']['timestamp']))
         logo_data_uri = _get_logo_base64()
 
         # Build logo HTML if available
@@ -1349,7 +1352,7 @@ class ReportGenerator:
     <div class="info-box">
         <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         <p><strong>Benchmark Run:</strong> {timestamp}</p>
-        <p><strong>Description:</strong> {self.metadata['benchmark'].get('description', 'N/A')}</p>
+        <p><strong>Description:</strong> {html_module.escape(str(self.metadata['benchmark'].get('description', 'N/A')))}</p>
         <p><strong>Total Executions:</strong> {len(self.df)}</p>
     </div>
 """
@@ -1407,7 +1410,13 @@ class ReportGenerator:
         if 'execution.execution_id' in self.df.columns:
             combinations_tested = self.df['execution.execution_id'].nunique()
         else:
-            combinations_tested = total_rows // repetitions if repetitions > 0 else total_rows
+            # Approximate fallback: df only holds SUCCEEDED rows, so executions
+            # with partially failed repetitions contribute fewer than
+            # `repetitions` rows. Ceiling division avoids undercounting them.
+            if repetitions > 0:
+                combinations_tested = (total_rows + repetitions - 1) // repetitions
+            else:
+                combinations_tested = total_rows
 
         # Check for cached results
         cached_count = 0
@@ -1419,7 +1428,7 @@ class ReportGenerator:
         html += "<tr><th>Metric</th><th>Value</th></tr>\n"
 
         # Benchmark Name
-        html += f"<tr><td><strong>Benchmark Name</strong></td><td>{benchmark_meta.get('name', 'N/A')}</td></tr>\n"
+        html += f"<tr><td><strong>Benchmark Name</strong></td><td>{html_module.escape(str(benchmark_meta.get('name', 'N/A')))}</td></tr>\n"
 
         # Search Method (with seed if applicable)
         random_seed = benchmark_meta.get('random_seed')
@@ -1511,7 +1520,7 @@ class ReportGenerator:
 
         hostname = benchmark_meta.get('hostname')
         if hostname:
-            html += f"<tr><td><strong>Hostname</strong></td><td>{hostname}</td></tr>\n"
+            html += f"<tr><td><strong>Hostname</strong></td><td>{html_module.escape(str(hostname))}</td></tr>\n"
 
         html += f"<tr><td><strong>Executor</strong></td><td>{executor}</td></tr>\n"
 
@@ -1607,10 +1616,11 @@ class ReportGenerator:
                     unique_values = sorted(unique_values)
                 except TypeError:
                     pass  # Mixed types, keep original order
-                values_str = ", ".join(str(v) for v in unique_values)
+                values_str = ", ".join(html_module.escape(str(v)) for v in unique_values)
             else:
                 values_str = "N/A"
-            html += f"<tr><td><strong>{var}</strong></td><td>{var_type}</td><td>{values_str}</td></tr>\n"
+            html += (f"<tr><td><strong>{html_module.escape(str(var))}</strong></td>"
+                     f"<td>{html_module.escape(str(var_type))}</td><td>{values_str}</td></tr>\n")
 
         html += "</table>\n</div>\n</details>\n"
 
@@ -1646,14 +1656,16 @@ class ReportGenerator:
         # Node count
         node_count = sys_env.get('node_count', 0)
         nodes = sys_env.get('nodes', [])
+        # Escape probe-derived node names; markup built below is intentional.
+        escaped_nodes = ', '.join(html_module.escape(str(n)) for n in nodes)
         if node_count > 0:
             if node_count <= 5:
-                nodes_str = ', '.join(nodes)
+                nodes_str = escaped_nodes
             else:
                 # Use expandable details element for long node lists
                 nodes_str = (
                     f"<details><summary>{node_count} nodes (click to expand)</summary>"
-                    f"<div style='margin-top: 5px;'>{', '.join(nodes)}</div></details>"
+                    f"<div style='margin-top: 5px;'>{escaped_nodes}</div></details>"
                 )
             html += f"<tr><td><strong>Compute Nodes</strong></td><td>{nodes_str}</td></tr>\n"
 
@@ -1661,30 +1673,30 @@ class ReportGenerator:
         cpu_model = sys_env.get('cpu_model')
         if cpu_model:
             if isinstance(cpu_model, list):
-                cpu_model = ', '.join(cpu_model)
-            html += f"<tr><td><strong>CPU Model</strong></td><td>{cpu_model}</td></tr>\n"
+                cpu_model = ', '.join(str(m) for m in cpu_model)
+            html += f"<tr><td><strong>CPU Model</strong></td><td>{html_module.escape(str(cpu_model))}</td></tr>\n"
 
         cpu_cores = sys_env.get('cpu_cores_per_node')
         if cpu_cores:
-            html += f"<tr><td><strong>CPU Cores/Node</strong></td><td>{cpu_cores}</td></tr>\n"
+            html += f"<tr><td><strong>CPU Cores/Node</strong></td><td>{html_module.escape(str(cpu_cores))}</td></tr>\n"
 
         # Memory
         memory = sys_env.get('memory_gb_per_node')
         if memory:
-            html += f"<tr><td><strong>Memory/Node</strong></td><td>{memory} GB</td></tr>\n"
+            html += f"<tr><td><strong>Memory/Node</strong></td><td>{html_module.escape(str(memory))} GB</td></tr>\n"
 
         # OS and Kernel
         os_name = sys_env.get('os')
         if os_name:
             if isinstance(os_name, list):
-                os_name = ', '.join(os_name)
-            html += f"<tr><td><strong>Operating System</strong></td><td>{os_name}</td></tr>\n"
+                os_name = ', '.join(str(o) for o in os_name)
+            html += f"<tr><td><strong>Operating System</strong></td><td>{html_module.escape(str(os_name))}</td></tr>\n"
 
         kernel = sys_env.get('kernel')
         if kernel:
             if isinstance(kernel, list):
-                kernel = ', '.join(kernel)
-            html += f"<tr><td><strong>Kernel</strong></td><td>{kernel}</td></tr>\n"
+                kernel = ', '.join(str(k) for k in kernel)
+            html += f"<tr><td><strong>Kernel</strong></td><td>{html_module.escape(str(kernel))}</td></tr>\n"
 
         html += "</table>\n</div>\n</details>\n"
 
@@ -1697,14 +1709,16 @@ class ReportGenerator:
             for fs in filesystems:
                 if ':' in fs:
                     fs_type, mount = fs.split(':', 1)
-                    html += f"<tr><td>{fs_type}</td><td>{mount}</td></tr>\n"
+                    html += (f"<tr><td>{html_module.escape(fs_type)}</td>"
+                             f"<td>{html_module.escape(mount)}</td></tr>\n")
             html += "</table>\n</div>\n</details>\n"
 
         # Interconnect
         interconnect = sys_env.get('interconnect', [])
         if interconnect:
             html += "<h3>Interconnect</h3>\n"
-            html += f"<p><strong>InfiniBand Devices:</strong> {', '.join(interconnect)}</p>\n"
+            html += ("<p><strong>InfiniBand Devices:</strong> "
+                     f"{', '.join(html_module.escape(str(dev)) for dev in interconnect)}</p>\n")
 
         return html
 
@@ -2103,7 +2117,7 @@ class ReportGenerator:
 
                 html += f"<tr><td rowspan='2'>{idx}</td>"
                 for var in report_vars:
-                    html += f"<td>{row[var]}</td>"
+                    html += f"<td>{html_module.escape(str(row[var]))}</td>"
                 html += f"<td><strong>{row['mean']:.4f}</strong></td>"
                 html += f"<td>{row['std']:.4f}</td>"
                 html += f"<td>{int(row['count'])}</td></tr>\n"
@@ -3557,11 +3571,16 @@ class ReportGenerator:
                 textposition='outside'
             ))
 
+            # Guard against a degenerate [0, 0] range when all impacts are zero
+            # (e.g. constant metric values), which would hide the plot entirely.
+            max_impact = max(sorted_impacts) if sorted_impacts else 0
+            yaxis_range = [0, max_impact * 1.2] if max_impact > 0 else [0, 1]
+
             fig.update_layout(
                 title=f'Variable Impact on {metric}<br><sub>Higher values indicate stronger influence on performance</sub>',
                 xaxis_title='Variable',
                 yaxis_title='Impact Score (Variance Explained)',
-                yaxis=dict(range=[0, max(sorted_impacts) * 1.2]),
+                yaxis=dict(range=yaxis_range),
                 template='plotly_white',
                 height=500
             )

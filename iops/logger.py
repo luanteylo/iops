@@ -40,15 +40,23 @@ def setup_logger(
             else:
                 record.class_tag = record.name
 
-            # Format normally first
-            raw = super().format(record)
+            # Build the full message body (including exception/stack text)
+            message = record.getMessage()
+            if record.exc_info and not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+            if record.exc_text:
+                message = f"{message}\n{record.exc_text}" if message else record.exc_text
+            if record.stack_info:
+                message = f"{message}\n{self.formatStack(record.stack_info)}"
 
-            # Split prefix from message
-            try:
-                prefix, message = raw.rsplit(" | ", 1)
-                prefix += " | "
-            except ValueError:
-                return raw  # fallback, should not happen
+            # Compute the prefix by rendering the format string with an empty
+            # message. Splitting the formatted record on " | " is not safe
+            # because messages themselves routinely contain that separator
+            # (e.g. per-test metric summaries).
+            record.message = ""
+            if self.usesTime():
+                record.asctime = self.formatTime(record, self.datefmt)
+            prefix = self.formatMessage(record)
 
             wrapped_lines = []
 

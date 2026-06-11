@@ -1,5 +1,6 @@
 ---
 title: "Execution Matrix Generation"
+weight: 30
 ---
 
 *How IOPS builds the parameter space from your variable definitions*
@@ -8,7 +9,7 @@ title: "Execution Matrix Generation"
 
 ## Overview
 
-IOPS generates an **execution matrix** from your variable definitions. Each row in the matrix represents a unique parameter combination that will be tested.
+IOPS generates an **execution matrix** from your variable definitions; each row is a unique parameter combination to test.
 
 ```
 vars:                          Execution Matrix:
@@ -71,31 +72,7 @@ Use `when` and `default` to make a swept variable conditional on another variabl
 
 ### The Problem
 
-```yaml
-vars:
-  use_compression:
-    type: bool
-    sweep:
-      mode: list
-      values: [true, false]
-
-  compression_level:
-    type: int
-    sweep:
-      mode: list
-      values: [1, 5, 9]
-```
-
-**Without `when`:** 2 × 3 = 6 combinations
-
-| use_compression | compression_level | Notes |
-|-----------------|-------------------|-------|
-| true | 1 | meaningful |
-| true | 5 | meaningful |
-| true | 9 | meaningful |
-| false | 1 | **redundant** - level ignored |
-| false | 5 | **redundant** - same test |
-| false | 9 | **redundant** - same test |
+Sweeping `use_compression: [true, false]` and `compression_level: [1, 5, 9]` unconditionally creates 2 × 3 = 6 combinations, but the 3 combinations with `use_compression: false` are redundant: the level is ignored, so they run the same test three times.
 
 ### The Solution
 
@@ -149,21 +126,7 @@ command:
   template: "benchmark {% if parallel %}--parallel --threads={{ threads }}{% endif %}"
 ```
 
-#### How IOPS Builds the Matrix
-
-**Step 1: Process `parallel`** (no dependencies)
-
-| parallel |
-|----------|
-| true |
-| false |
-
-**Step 2: Process `threads`** (depends on `parallel`)
-
-| parallel | when: "parallel" | action | threads |
-|----------|------------------|--------|---------|
-| true | true | sweep [2, 4] | 2, 4 |
-| false | false | use default | 1 |
+IOPS processes `parallel` first (no dependencies), then `threads`: for `parallel: true` the `when` condition holds and `[2, 4]` is swept; for `parallel: false` the default `1` is used.
 
 #### Final Matrix
 
@@ -196,7 +159,6 @@ iops run config.yaml --dry-run
 
 ## Tips
 
-1. **Start simple**: Begin with unconditional variables, add `when` to reduce redundant tests
-2. **Check matrix size**: Use `--dry-run` to verify the number of combinations
-3. **Avoid circular dependencies**: Variable A's `when` cannot reference variable B if B's `when` references A
-4. **Use meaningful defaults**: The `default` value appears in results, choose values that make sense for analysis
+1. **Start simple**: begin with unconditional variables, add `when` to reduce redundant tests
+2. **Avoid circular dependencies**: variable A's `when` cannot reference variable B if B's `when` references A
+3. **Use meaningful defaults**: the `default` value appears in results, so choose values that make sense for analysis
