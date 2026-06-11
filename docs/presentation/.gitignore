@@ -1,0 +1,7 @@
+# LaTeX build artifacts (regenerable from the .tex sources)
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
