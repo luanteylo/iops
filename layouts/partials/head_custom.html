@@ -229,3 +229,8 @@ details > *:not(summary) {
   }
 }
 </style>
+
+{{- /* Expose the search-index URL for the active baseURL so the search page
+   does not hardcode a path. The site is deployed both under /iops/ and at a
+   domain root, and absURL resolves correctly for each. */ -}}
+<script>window.IOPS_SEARCH_INDEX = "{{ "index.json" | absURL }}";</script>

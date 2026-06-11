@@ -76,9 +76,11 @@ date: 2024-01-01
   let fuse = null;
   let searchData = [];
 
-  // Fetch the search index (relative to baseURL)
-  const baseUrl = document.querySelector('base')?.href || window.location.origin + '/iops/';
-  fetch(baseUrl + 'index.json')
+  // Fetch the search index. The URL is injected by Hugo (head_custom.html) so
+  // it matches the active baseURL, whether the site is served under /iops/ or
+  // at a domain root. Fall back to a root-relative path if it is missing.
+  const indexUrl = window.IOPS_SEARCH_INDEX || (window.location.origin + '/index.json');
+  fetch(indexUrl)
     .then(response => response.json())
     .then(data => {
       searchData = data;
