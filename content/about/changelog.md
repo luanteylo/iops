@@ -5,16 +5,43 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
-## [Unreleased]
+## [3.5.7] - 2026-06-11
 
 ### Added
 
 - Bayesian optimization now caps the BLAS/OpenMP threads used by the Gaussian Process surrogate fit (default 1, override with `IOPS_BLAS_THREADS`). Previously numpy/BLAS spawned one thread per core for every fit, so on a many-core (often shared login) node a single `iops` run appeared as dozens of threads of pure overhead. The cap does not change the optimizer's suggestions, only the threading of the underlying linear algebra.
 - `iops find` and watch mode now read a single run-root `__iops_status_rollup.json` aggregate instead of scanning every `exec_XXXX/repetition_N/__iops_status.json` on each refresh. This keeps them responsive on large parameter spaces (thousands of executions) and on parallel/network filesystems, where per-folder reads dominate wall-clock. The runner maintains the roll-up during the run and marks it complete when finished; watch always reads it, while `iops find` trusts it only when complete and otherwise falls back to the folder scan. The per-folder status files remain the source of truth, so older runs and archives keep working.
+- Per-execution image gallery (`reporting.gallery`) for embedding simulation thumbnails and other per-test images into the self-contained HTML report
+  - Thumbnail grid grouped by execution with click-to-enlarge; images are base64-embedded so the report has no external file dependencies
+  - Two discovery methods that can be combined: convention folder (auto-scans `<execution_dir>/<gallery.folder>` for files matching `pattern`) and explicit `sources` (Jinja2-templated paths resolved per execution, glob characters honored)
+  - New built-in template variable `{{ artifacts_dir }}` resolves to `<execution_dir>/<gallery.folder>` (default `<execution_dir>/images`); use it in `script_template` to write images without hardcoding the folder name
+  - `max_width` option (requires Pillow) downscales wide images before embedding; degrades gracefully without Pillow
+  - `caption_vars` controls which parameters appear as the caption under each execution's card (defaults to `report_vars`)
+  - Controlled by `reporting.sections.gallery` (default `true`); section auto-enables when images are found
+- Software version capture probe (`benchmark.probes.versions`) for recording software and library versions as metadata once per execution
+  - Mapping of component name to shell command (e.g. `app: "myapp --version"`); IOPS injects `__iops_atexit_versions.sh` and captures versions after the benchmark body via the exit handler, so version tools made available by the benchmark's own `module load` commands are in scope
+  - Failing commands record an empty string rather than aborting the run
+  - Writes `__iops_versions.json` to each repetition directory, and surfaces the captured versions as `version.<component>` columns in the results sink (CSV/Parquet/SQLite) so they can be queried alongside metrics; exclude with `output.sink.exclude: [version.*]`
+  - HTML report renders a Software Versions section with a per-execution table; a prominent drift warning is shown when any component reports more than one distinct value across executions (this is the cache-mixing detector: it catches studies that mix freshly executed results with older cached results from a different software environment)
+  - Controlled by `reporting.sections.versions` (default `true`); section auto-enables when version data is present
+- `iops cache create` subcommand to build a cache database from a CSV file
+  - `--params` and `--metrics` map CSV columns to parameters (the cache key) and metrics; each row becomes one cached execution
+  - Cell values are coerced to int/float/bool where possible so they hash the same way IOPS normalizes parameters at run time
+  - `--repetition-column` uses an existing column as the repetition number; otherwise repetitions are auto-numbered per unique parameter set
+  - Shows a progress bar while writing entries (requires the `watch` extra for `rich`); disable with `--no-progress`
+  - Imported entries are stored with `SUCCEEDED` status and work with `cache list|show|stats` and `iops run --use-cache`
+- Execution Status breakdown in HTML reports, showing the count and percentage of executions by status (SUCCEEDED, FAILED, ERROR, SKIPPED, RUNNING, PENDING). Counts come from the run index and per-execution status files, so failures and skips are reported even though the results table only contains successful executions. A success-rate summary is also shown in the Execution Overview when not every execution succeeded.
+- Log the execution id and repetition before each submission (e.g. `Submitting 684 (rep 1/3)`), so the execution can be correlated with the executor's submission output such as the SLURM job id.
+- Highlight the actively running row in `iops find --watch` with a background color (in addition to the existing `▶` marker), making the in-progress execution easier to spot.
+
+### Changed
+- `iops archive extract` without `-o` now extracts into a folder named after the archive (e.g. `study.tar.gz` -> `./study/`) instead of scattering files into the current directory. Pass `-o PATH` to choose a different destination.
 
 ### Fixed
 
 #### Search and planning
+- `bayesian_config.objective` now defaults to `minimize` as documented. The loader previously defaulted to `maximize`, silently optimizing in the wrong direction for configurations that omitted the field. If you relied on the undocumented default, set `objective: maximize` explicitly.
+- The end-of-run "Best parameters found" summary now reports the actual best point for `objective: minimize` studies. The best-value comparison was inverted, so the summary tracked the last evaluated point instead of the best one (the optimizer itself was unaffected).
 - Bayesian search no longer crashes on string (categorical) sweep variables: the nearest-valid-point mapping converted every dimension with `float()`, so any `type: str` variable with more than one value failed on the first iteration. Categorical values are now mapped to category indices for distance computation.
 - Single-allocation (kickoff) mode now honors random sampling. Previously `search_method: random` with `allocation.mode: single` silently prepared and ran the entire parameter space, ignoring `n_samples`/`percentage`.
 - `search_method: adaptive` is now rejected with `allocation.mode: single` (same as bayesian) instead of crashing at run start; adaptive probing cannot work in a pre-generated script.
@@ -56,94 +83,37 @@ All notable changes to IOPS are documented here.
 - `iops find` parameter filters now match numerically and case-insensitively for booleans: `nodes=4` matches a stored `4.0`, `flag=true` matches `True`, `1e3` matches `1000.0`. The same matching is used by watch-mode filters.
 - Log messages containing ` | ` (such as per-test metric summaries) no longer have their first part duplicated as a prefix on wrapped or multi-line console output.
 
+#### Results sinks
+- CSV results sink: extending the schema with a new column (e.g. a metric that first appears mid-run) no longer rewrites existing rows through pandas type inference. Previously the rewrite silently mutated stored values, such as `"0010"` becoming `10` and integer columns becoming floats. Existing rows are now preserved verbatim. A zero-byte results file left behind by an interrupted run no longer makes every subsequent write fail.
+- SQLite results sink: rows that introduce new columns no longer abort the run with "table has no column named ...". The table schema is extended with `ALTER TABLE ADD COLUMN` instead.
+- Parquet results sink: appending a row that lacks a value for an existing integer column no longer permanently upcasts the column to float; integer columns are preserved as nullable integers.
+
+#### Execution backends
+- SLURM executor: a transient `squeue` failure (e.g. `slurm_load_jobs error: Socket timed out`) is no longer interpreted as "job left the queue". Previously one controller hiccup abandoned a live job: polling stopped, the job was removed from Ctrl+C cleanup tracking, and a still-running state was recorded as final. Status polling now retries on transient errors and confirms job completion via `scontrol` before finalizing.
+- SLURM single-allocation mode: a transient `squeue` failure no longer fails the current test and poisons every remaining test while the allocation keeps running on the cluster. The allocation state check is also throttled to `poll_interval` (previously `squeue` was invoked twice per second for the entire run).
+- SLURM executor: job ids are now parsed from multi-cluster submission output (`Submitted batch job 12345 on cluster c2`). Previously the job was marked as an error and ran untracked on the cluster.
+- SLURM executor: `DEADLINE`, `REVOKED`, and `SPECIAL_EXIT` are now recognized as terminal failure states. A deadline-killed job could previously be recorded as `SUCCEEDED` when its partial output happened to parse.
+- SLURM executor: the job start timestamp is now recorded when a job is already running at the first poll, fixing wrong queue-wait/run-time splits for jobs that start immediately.
+
 #### Reporting
 - Total core-hours in HTML reports paired each row with the wrong duration (or silently skipped rows) whenever any execution had been filtered out as failed; rows and durations are now aligned positionally.
 - Benchmark name, description, variable values, hostnames, and probe-collected system strings are now HTML-escaped in report sections that previously interpolated them raw, so a value containing markup cannot break or inject into the report.
 - Custom plot configurations survive report regeneration: the serialized template now includes `row_vars`, `col_var`, `aggregation`, sort options, the `bayesian_parameter_evolution` and `resource_sampling` section flags, and `best_results.min_samples`, all of which were previously dropped.
 - Scatter plots with a string-typed variable as y-axis or color no longer fail; non-numeric color columns are encoded with labeled colorbars.
 - The variable impact plot no longer disappears when all impacts are zero.
+- Report generation no longer fails when merging resource sampling metrics for runs that use integer execution ids. The results dataframe stores `execution.execution_id` as integers while `__iops_resource_summary.csv` stores zero-padded folder-style ids (`exec_0002`), so the join raised "You are trying to merge on int64 and object columns". Both join keys are now normalized to the numeric execution id before merging.
 
 #### Cache
 - The repetition count for cached parameter sets now counts distinct repetitions, fixing over-counting on caches built with `iops cache rebuild` (which may hold several rows per repetition).
 - The objective-metric cache lookup orders entries by creation time, making the fallback deterministic, and no longer crashes on string-serialized metric values.
 - Fixed a connection leak in the cache's locked-database retry path, and `iops cache rebuild` now closes its database connections.
-
-## [3.5.7] - 2026-06-10
-
-This release fixes a set of correctness bugs found in a code audit,
-focused on silent result corruption (CSV/Parquet/SQLite sinks, execution
-cache), Bayesian search direction, SLURM polling robustness on busy
-clusters, and archive integrity.
-
-### Fixed
-- `iops find --watch`: keyboard controls (`q` to quit, `p` to pause, navigation) and the `--interval` refresh rate now work when standard input is not a terminal (e.g. stdin redirected, piped, or the process launched without a terminal attached to stdin). Watch mode now falls back to the controlling terminal (`/dev/tty`) for keyboard input instead of silently dropping every keypress and leaving the terminal echoing in canonical mode. The refresh interval is now driven by a monotonic deadline, so it is honored even when no keyboard is available rather than collapsing into a busy loop.
-
-- Bayesian search: `bayesian_config.objective` now defaults to `minimize` as documented. The loader previously defaulted to `maximize`, silently optimizing in the wrong direction for configurations that omitted the field. If you relied on the undocumented default, set `objective: maximize` explicitly.
-
-- Bayesian search: the end-of-run "Best parameters found" summary now reports the actual best point for `objective: minimize` studies. The best-value comparison was inverted, so the summary tracked the last evaluated point instead of the best one (the optimizer itself was unaffected).
-
-- CSV results sink: extending the schema with a new column (e.g. a metric that first appears mid-run) no longer rewrites existing rows through pandas type inference. Previously the rewrite silently mutated stored values, such as `"0010"` becoming `10` and integer columns becoming floats. Existing rows are now preserved verbatim. A zero-byte results file left behind by an interrupted run no longer makes every subsequent write fail.
-
-- SQLite results sink: rows that introduce new columns no longer abort the run with "table has no column named ...". The table schema is extended with `ALTER TABLE ADD COLUMN` instead.
-
-- Parquet results sink: appending a row that lacks a value for an existing integer column no longer permanently upcasts the column to float; integer columns are preserved as nullable integers.
-
 - Execution cache: numeric-looking strings are only coerced for hashing when the conversion round-trips exactly, so distinct string parameters such as `"1.1"` and `"1.10"` (version strings) or `"1e3"` no longer collapse into the same cache key and return each other's results as false cache hits. Negative integer strings now hash like their native integer counterparts.
-
 - `iops cache create`: caches built from CSV now store the executor status under the key the runner actually reads, so cache hits report `SUCCEEDED` instead of `UNKNOWN` in status files, results, and `iops find --status` filtering. CSV cell coercion now matches runtime parameter normalization exactly (previously negative integers never produced cache hits).
 
-- SLURM executor: a transient `squeue` failure (e.g. `slurm_load_jobs error: Socket timed out`) is no longer interpreted as "job left the queue". Previously one controller hiccup abandoned a live job: polling stopped, the job was removed from Ctrl+C cleanup tracking, and a still-running state was recorded as final. Status polling now retries on transient errors and confirms job completion via `scontrol` before finalizing.
-
-- SLURM single-allocation mode: a transient `squeue` failure no longer fails the current test and poisons every remaining test while the allocation keeps running on the cluster. The allocation state check is also throttled to `poll_interval` (previously `squeue` was invoked twice per second for the entire run).
-
-- SLURM executor: job ids are now parsed from multi-cluster submission output (`Submitted batch job 12345 on cluster c2`). Previously the job was marked as an error and ran untracked on the cluster.
-
-- SLURM executor: `DEADLINE`, `REVOKED`, and `SPECIAL_EXIT` are now recognized as terminal failure states. A deadline-killed job could previously be recorded as `SUCCEEDED` when its partial output happened to parse.
-
-- SLURM executor: the job start timestamp is now recorded when a job is already running at the first poll, fixing wrong queue-wait/run-time splits for jobs that start immediately.
-
+#### Archive
 - `iops archive`: partial archives (`--status`, `--params`, `--min-completed-reps`) no longer fail their own integrity verification on extraction. Checksums are now computed over the content actually stored in the archive (filtered index and included executions) instead of the unfiltered source tree.
-
 - `iops archive create --min-completed-reps`: filtered result files are no longer empty. Repetition folder numbers (1-based) were compared against result rows using a 0-based index, so completed repetitions almost never matched.
-
 - `iops archive extract`: extraction now applies the standard library's `data` filter, which rejects symlinks and hard links pointing outside the destination directory, absolute paths, and device nodes. The previous custom filter only inspected member names, leaving a path traversal vector via crafted symlink members, and it also skipped legitimate files whose names merely contained `..` (e.g. `results..csv`).
-
-## [3.5.6] - 2026-06-09
-
-### Added
-- Per-execution image gallery (`reporting.gallery`) for embedding simulation thumbnails and other per-test images into the self-contained HTML report
-  - Thumbnail grid grouped by execution with click-to-enlarge; images are base64-embedded so the report has no external file dependencies
-  - Two discovery methods that can be combined: convention folder (auto-scans `<execution_dir>/<gallery.folder>` for files matching `pattern`) and explicit `sources` (Jinja2-templated paths resolved per execution, glob characters honored)
-  - New built-in template variable `{{ artifacts_dir }}` resolves to `<execution_dir>/<gallery.folder>` (default `<execution_dir>/images`); use it in `script_template` to write images without hardcoding the folder name
-  - `max_width` option (requires Pillow) downscales wide images before embedding; degrades gracefully without Pillow
-  - `caption_vars` controls which parameters appear as the caption under each execution's card (defaults to `report_vars`)
-  - Controlled by `reporting.sections.gallery` (default `true`); section auto-enables when images are found
-
-- Software version capture probe (`benchmark.probes.versions`) for recording software and library versions as metadata once per execution
-  - Mapping of component name to shell command (e.g. `app: "myapp --version"`); IOPS injects `__iops_atexit_versions.sh` and captures versions after the benchmark body via the exit handler, so version tools made available by the benchmark's own `module load` commands are in scope
-  - Failing commands record an empty string rather than aborting the run
-  - Writes `__iops_versions.json` to each repetition directory, and surfaces the captured versions as `version.<component>` columns in the results sink (CSV/Parquet/SQLite) so they can be queried alongside metrics; exclude with `output.sink.exclude: [version.*]`
-  - HTML report renders a Software Versions section with a per-execution table; a prominent drift warning is shown when any component reports more than one distinct value across executions (this is the cache-mixing detector: it catches studies that mix freshly executed results with older cached results from a different software environment)
-  - Controlled by `reporting.sections.versions` (default `true`); section auto-enables when version data is present
-
-- `iops cache create` subcommand to build a cache database from a CSV file
-  - `--params` and `--metrics` map CSV columns to parameters (the cache key) and metrics; each row becomes one cached execution
-  - Cell values are coerced to int/float/bool where possible so they hash the same way IOPS normalizes parameters at run time
-  - `--repetition-column` uses an existing column as the repetition number; otherwise repetitions are auto-numbered per unique parameter set
-  - Shows a progress bar while writing entries (requires the `watch` extra for `rich`); disable with `--no-progress`
-  - Imported entries are stored with `SUCCEEDED` status and work with `cache list|show|stats` and `iops run --use-cache`
-
-- Execution Status breakdown in HTML reports, showing the count and percentage of executions by status (SUCCEEDED, FAILED, ERROR, SKIPPED, RUNNING, PENDING). Counts come from the run index and per-execution status files, so failures and skips are reported even though the results table only contains successful executions. A success-rate summary is also shown in the Execution Overview when not every execution succeeded.
-
-- Log the execution id and repetition before each submission (e.g. `Submitting 684 (rep 1/3)`), so the execution can be correlated with the executor's submission output such as the SLURM job id.
-
-- Highlight the actively running row in `iops find --watch` with a background color (in addition to the existing `▶` marker), making the in-progress execution easier to spot.
-
-### Changed
-- `iops archive extract` without `-o` now extracts into a folder named after the archive (e.g. `study.tar.gz` -> `./study/`) instead of scattering files into the current directory. Pass `-o PATH` to choose a different destination.
-
-### Fixed
-- Report generation no longer fails when merging resource sampling metrics for runs that use integer execution ids. The results dataframe stores `execution.execution_id` as integers while `__iops_resource_summary.csv` stores zero-padded folder-style ids (`exec_0002`), so the join raised "You are trying to merge on int64 and object columns". Both join keys are now normalized to the numeric execution id before merging.
 
 ## [3.5.5] - 2026-05-30
 
