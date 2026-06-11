@@ -45,3 +45,70 @@
   window.addEventListener('pagehide', save);
 })();
 </script>
+
+<script>
+/* Easter egg: the Konami code summons Tristan's hand-drawn IOPS logo.
+   Up Up Down Down Left Right Left Right B A */
+(function () {
+  var SEQ = ['arrowup', 'arrowup', 'arrowdown', 'arrowdown',
+             'arrowleft', 'arrowright', 'arrowleft', 'arrowright', 'b', 'a'];
+  var pos = 0;
+  var open = false;
+
+  document.addEventListener('keydown', function (e) {
+    var key = (e.key || '').toLowerCase();
+    if (key === SEQ[pos]) {
+      pos++;
+      if (pos === SEQ.length) { pos = 0; summon(); }
+    } else {
+      pos = (key === SEQ[0]) ? 1 : 0;
+    }
+  });
+
+  function summon() {
+    if (open) return;
+    open = true;
+
+    var style = document.createElement('style');
+    style.textContent =
+      '@keyframes iopsEggFade{from{opacity:0}to{opacity:1}}' +
+      '@keyframes iopsEggPop{0%{transform:scale(.2) rotate(-12deg);opacity:0}' +
+      '60%{transform:scale(1.05) rotate(3deg);opacity:1}100%{transform:scale(1) rotate(0)}}';
+    document.head.appendChild(style);
+
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;' +
+      'flex-direction:column;align-items:center;justify-content:center;cursor:pointer;' +
+      'background:rgba(255,255,255,.93);animation:iopsEggFade .25s ease-out';
+
+    var img = document.createElement('img');
+    img.src = "{{ "images/iops_tristan.png" | absURL }}";
+    img.alt = "Tristan's hand-drawn IOPS";
+    img.style.cssText = 'max-width:80vw;max-height:60vh;' +
+      'animation:iopsEggPop .6s cubic-bezier(.2,1.4,.4,1)';
+
+    var caption = document.createElement('p');
+    caption.textContent = 'IOPS, by Tristan';
+    caption.style.cssText = 'margin-top:18px;font-size:20px;font-style:italic;color:#2c3e50';
+
+    var hint = document.createElement('small');
+    hint.textContent = 'click anywhere to close';
+    hint.style.cssText = 'margin-top:8px;color:#888';
+
+    overlay.appendChild(img);
+    overlay.appendChild(caption);
+    overlay.appendChild(hint);
+    document.body.appendChild(overlay);
+
+    function close() {
+      overlay.remove();
+      style.remove();
+      open = false;
+      document.removeEventListener('keydown', onKey, true);
+    }
+    function onKey(ev) { ev.preventDefault(); close(); }
+    overlay.addEventListener('click', close);
+    document.addEventListener('keydown', onKey, true);
+  }
+})();
+</script>
