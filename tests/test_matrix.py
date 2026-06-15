@@ -554,3 +554,65 @@ def test_list_type_indexed_access_in_template(tmp_path, sample_config_dict):
         idx = test.vars["idx"]
         assert test.vars["block_sizes"][idx] == [64, 128, 256][idx]
         assert test.vars["thread_counts"][idx] == [1, 2, 4][idx]
+
+
+def test_sweep_value_renders_os_env(tmp_path, sample_config_dict, monkeypatch):
+    """Templated sweep values resolve os_env and cross-variable references."""
+    import yaml
+
+    monkeypatch.setenv("IOPS_TEST_OUTPUT", "/scratch/out")
+
+    sample_config_dict["vars"]["pfs_path"] = {
+        "type": "str",
+        "sweep": {
+            "mode": "list",
+            "values": ["{{ os_env.IOPS_TEST_OUTPUT }}/n_{{ nodes }}"],
+        },
+    }
+    sample_config_dict["command"]["template"] = "echo {{ pfs_path }}"
+
+    config_file = tmp_path / "os_env_sweep.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    matrix, _ = build_execution_matrix(config)
+
+    for test in matrix:
+        expected = f"/scratch/out/n_{test.vars['nodes']}"
+        assert test.vars["pfs_path"] == expected
+        # Resolved value must propagate into rendered templates, not the literal.
+        assert "{{" not in test.command
+        assert expected in test.command
+
+
+def test_conditional_default_renders_os_env(tmp_path, sample_config_dict, monkeypatch):
+    """Templated conditional defaults (when=False branch) also resolve os_env."""
+    import yaml
+
+    monkeypatch.setenv("IOPS_TEST_OUTPUT", "/scratch/out")
+
+    sample_config_dict["vars"]["ost_count"] = {
+        "type": "int",
+        "sweep": {"mode": "list", "values": [0, 4]},
+    }
+    sample_config_dict["vars"]["pfs_path"] = {
+        "type": "str",
+        "sweep": {
+            "mode": "list",
+            "values": ["{{ os_env.IOPS_TEST_OUTPUT }}/ost_{{ ost_count }}"],
+        },
+        "when": "ost_count != 0",
+        "default": "{{ os_env.IOPS_TEST_OUTPUT }}",
+    }
+
+    config_file = tmp_path / "os_env_default.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    matrix, _ = build_execution_matrix(config)
+
+    by_ost = {test.vars["ost_count"]: test.vars["pfs_path"] for test in matrix}
+    assert by_ost[0] == "/scratch/out"           # default branch rendered
+    assert by_ost[4] == "/scratch/out/ost_4"     # active sweep value rendered

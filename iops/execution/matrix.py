@@ -327,6 +327,9 @@ class ExecutionInstance:
     #   - base_vars: swept and fixed scalar vars (no expr).
     #   - derived_var_cfgs: name -> (expr, vartype) for derived vars.
     base_vars: Dict[str, Any] = field(default_factory=dict)
+    # name -> declared 'type' for base vars; used to re-cast templated string
+    # values (swept values or conditional defaults containing Jinja) after render.
+    base_var_types: Dict[str, str] = field(default_factory=dict)
     derived_var_cfgs: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
     # Exhaustive variables tracking (for planners to group instances)
@@ -421,6 +424,17 @@ class ExecutionInstance:
         """
         ctx0 = self._base_context_for_vars()
         all_vars: Dict[str, Any] = dict(self.base_vars)
+
+        # Resolve templated base vars. Swept values and conditional defaults may
+        # contain Jinja2 expressions (e.g. "{{ os_env.OUTPUT }}/ost_{{ ost_count }}"),
+        # which are stored verbatim by the matrix builder. Render them here so that
+        # os_env and cross-variable references resolve. base_vars preserves config
+        # order, so a var can reference earlier base vars.
+        for name, value in self.base_vars.items():
+            if isinstance(value, str) and ("{{" in value or "{%" in value):
+                rendered = _render_template(value, {**ctx0, **all_vars})
+                vartype = self.base_var_types.get(name, "str")
+                all_vars[name] = _cast_with_hint(vartype, rendered, value, name)
 
         # derived_var_cfgs preserves insertion order (from build_execution_matrix)
         # Note: expr validation is handled by loader.py's validate_generic_config()
@@ -957,6 +971,11 @@ def create_execution_instance(
         ),
         cache_file=getattr(cfg.benchmark, "cache_file", None),
         base_vars=base_vars,
+        base_var_types={
+            name: vcfg.type
+            for name, vcfg in cfg.vars.items()
+            if name in base_vars
+        },
         derived_var_cfgs=derived_var_cfgs,
         exhaustive_var_names=exhaustive_var_names or [],
         search_var_names=search_var_names or list(base_vars.keys()),
