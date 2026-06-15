@@ -1383,11 +1383,20 @@ def watch_executions(
     console = Console()
     start_time = datetime.now()
 
-    # Set up signal handler for clean exit
+    # Set up signal handler for clean exit.
+    #
+    # The handler RAISES KeyboardInterrupt rather than just flipping a flag.
+    # A flag-only handler is deferred: per PEP 475, when a signal handler does
+    # not raise, the interrupted syscall (select/time.sleep) and any in-flight
+    # work (e.g. a slow _collect_execution_data scan) resume after the handler
+    # returns, so the flag is only observed at the next loop boundary. On large
+    # runs that delay makes Ctrl+C feel unresponsive and the user has to press
+    # it repeatedly. Raising aborts the current operation immediately; the
+    # exception is caught below so the terminal and alternate screen are still
+    # restored cleanly by the context managers.
     interrupted = False
     def signal_handler(sig, frame):
-        nonlocal interrupted
-        interrupted = True
+        raise KeyboardInterrupt
 
     original_handler = signal.signal(signal.SIGINT, signal_handler)
 
@@ -1835,6 +1844,12 @@ def watch_executions(
                             search_error = ""
                             break
 
+    except KeyboardInterrupt:
+        # Ctrl+C: the signal handler raised to abort whatever the main thread
+        # was doing (a blocking scan, a render, or a keyboard poll). The Live
+        # and keyboard context managers have already restored the terminal and
+        # alternate screen on the way out; just fall through to the exit message.
+        interrupted = True
     finally:
         signal.signal(signal.SIGINT, original_handler)
 
