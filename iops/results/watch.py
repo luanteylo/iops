@@ -259,6 +259,24 @@ def _parse_cores_value(cores_str: Any) -> Optional[int]:
         return None
 
 
+# Compiled-template cache for the cores expression. Compiling a Jinja2
+# ``Template`` is far more expensive than rendering one, and the cores
+# expression is constant for a run, so compile it at most once per expression
+# instead of once per test on every refresh (the latter cost seconds per frame
+# on large runs and starved the UI).
+_CORES_TEMPLATE_CACHE: Dict[str, Any] = {}
+
+
+def _get_cores_template(cores_expr: str):
+    """Return the compiled (cached) Jinja2 template for a cores expression."""
+    template = _CORES_TEMPLATE_CACHE.get(cores_expr)
+    if template is None:
+        from jinja2 import Template
+        template = Template(cores_expr)
+        _CORES_TEMPLATE_CACHE[cores_expr] = template
+    return template
+
+
 def _compute_cores_from_expr(cores_expr: str, params: Dict[str, Any]) -> int:
     """
     Compute number of cores from a Jinja2-like expression.
@@ -274,9 +292,7 @@ def _compute_cores_from_expr(cores_expr: str, params: Dict[str, Any]) -> int:
         return 1
 
     try:
-        from jinja2 import Template
-        template = Template(cores_expr)
-        cores_str = template.render(**params)
+        cores_str = _get_cores_template(cores_expr).render(**params)
     except Exception:
         return 1
 
@@ -754,15 +770,24 @@ def _compute_core_hours_stats(
     executed_core_hours = 0.0
     cached_core_hours = 0.0
 
+    # Memoize cores per distinct parameter set. Many tests in a sweep share the
+    # parameters the expression actually depends on, so this collapses thousands
+    # of identical Jinja renders to one per unique combination.
+    cores_cache: Dict[tuple, int] = {}
+
     for test in tests:
         # Skip tests without timing info
         total_time = test.get("total_time")
         if total_time is None:
             continue
 
-        # Compute cores for this test
+        # Compute cores for this test (cached by parameter signature)
         params = test.get("params", {})
-        cores = _compute_cores_from_expr(cores_expr, params)
+        sig = tuple(sorted((k, str(v)) for k, v in params.items()))
+        cores = cores_cache.get(sig)
+        if cores is None:
+            cores = _compute_cores_from_expr(cores_expr, params)
+            cores_cache[sig] = cores
 
         # Compute core-hours
         core_hours = cores * (total_time / 3600.0)
@@ -1333,6 +1358,7 @@ class _WatchCollector:
         hide_columns: set,
         cached_filter: Optional[bool],
         metric_filter_dict: Optional[Dict[str, Tuple[str, float]]],
+        cores_expr: Optional[str] = None,
     ) -> None:
         self._index_file = index_file
         self._run_root = run_root
@@ -1342,6 +1368,7 @@ class _WatchCollector:
         self._hide_columns = hide_columns
         self._cached_filter = cached_filter
         self._metric_filter_dict = metric_filter_dict
+        self._cores_expr = cores_expr
 
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
@@ -1433,6 +1460,32 @@ class _WatchCollector:
             metric_filters=self._metric_filter_dict,
         )
 
+        # Pre-compute the O(number-of-tests) aggregates here, once per refresh,
+        # so the render loop never walks the full test list per frame. On large
+        # runs this is the difference between a snappy UI and one that blocks for
+        # seconds every frame (the core-hours aggregate in particular renders a
+        # Jinja expression per test).
+        num_complete = sum(
+            1 for t in tests
+            if _get_test_overall_status(t["rep_statuses"]) == "SUCCEEDED"
+        )
+
+        actual_times = [t["avg_time"] for t in tests if t.get("avg_time") is not None]
+        actual_avg_time = sum(actual_times) / len(actual_times) if actual_times else None
+
+        # Average queue wait over the most recent tests (informational only).
+        WAIT_TIME_WINDOW = 20
+        wait_times = [t["avg_wait_time"] for t in tests if t.get("avg_wait_time") is not None]
+        if wait_times:
+            recent = wait_times[-WAIT_TIME_WINDOW:]
+            actual_avg_wait_time = sum(recent) / len(recent)
+        else:
+            actual_avg_wait_time = None
+
+        executed_core_hours, cached_core_hours = _compute_core_hours_stats(
+            tests, self._cores_expr
+        )
+
         return {
             "benchmark_name": benchmark_name,
             "executions": executions,
@@ -1443,6 +1496,11 @@ class _WatchCollector:
             "skipped_tests": skipped_tests,
             "tests": tests,
             "status_counts": status_counts,
+            "num_complete": num_complete,
+            "actual_avg_time": actual_avg_time,
+            "actual_avg_wait_time": actual_avg_wait_time,
+            "executed_core_hours": executed_core_hours,
+            "cached_core_hours": cached_core_hours,
         }
 
 
@@ -1577,7 +1635,7 @@ def watch_executions(
     # the collector has most recently published.
     collector = _WatchCollector(
         index_file, run_root, interval, filter_dict, status_filter,
-        hide_columns, cached_filter, metric_filter_dict,
+        hide_columns, cached_filter, metric_filter_dict, cores_expr=cores_expr,
     )
     last_generation = -1
 
@@ -1655,7 +1713,7 @@ def watch_executions(
                 # Auto-enable show_only_active if many tests and some are complete
                 # But disable it when all tests are done so user can still browse results
                 num_tests = len(tests) + queued_count
-                num_complete = sum(1 for t in tests if _get_test_overall_status(t["rep_statuses"]) == "SUCCEEDED")
+                num_complete = snapshot["num_complete"]
                 if all_complete:
                     show_only_active = False  # Show all tests when complete
                 elif not pause_mode and num_tests > 20 and num_complete > 0:
@@ -1837,24 +1895,13 @@ def watch_executions(
                 footer_text = Text()
                 footer_text.append("\n")
 
-                # Calculate actual average execution time from sysinfo data
-                # This is more accurate than wall-clock time as it excludes queue wait, overhead
-                actual_times = [t["avg_time"] for t in tests if t.get("avg_time") is not None]
-                actual_avg_time = sum(actual_times) / len(actual_times) if actual_times else None
-
-                # Calculate average queue wait time (sliding window of last 20 tests)
-                # This is informational only - NOT included in ETA calculation
-                WAIT_TIME_WINDOW = 20
-                wait_times = [t["avg_wait_time"] for t in tests if t.get("avg_wait_time") is not None]
-                if wait_times:
-                    # Use last N wait times for more recent/relevant average
-                    recent_wait_times = wait_times[-WAIT_TIME_WINDOW:]
-                    actual_avg_wait_time = sum(recent_wait_times) / len(recent_wait_times)
-                else:
-                    actual_avg_wait_time = None
-
-                # Compute core-hours statistics
-                executed_core_hours, cached_core_hours = _compute_core_hours_stats(tests, cores_expr)
+                # Per-refresh aggregates (computed once on the collector thread,
+                # never per frame): average execution time, average queue wait,
+                # and core-hours. See _WatchCollector._collect.
+                actual_avg_time = snapshot["actual_avg_time"]
+                actual_avg_wait_time = snapshot["actual_avg_wait_time"]
+                executed_core_hours = snapshot["executed_core_hours"]
+                cached_core_hours = snapshot["cached_core_hours"]
 
                 # Progress bar (with elapsed time for throughput calculation)
                 elapsed_seconds = elapsed.total_seconds()
@@ -1918,13 +1965,20 @@ def watch_executions(
                 # redraw immediately; they never affect refresh timing, so a
                 # stream of keypresses cannot starve or postpone a data refresh.
                 while not interrupted:
-                    # New data available -> re-render. While paused the collector
-                    # publishes nothing, so the frozen snapshot stays put.
-                    if collector.generation() != last_generation:
-                        break
-
+                    # Always service the keyboard FIRST. Checking for new data
+                    # before reading a key would let a stream of refreshes starve
+                    # input: if a frame takes longer than the refresh interval
+                    # (e.g. a large run), the generation would already differ on
+                    # every pass and we would break to redraw without ever
+                    # polling, so q/p/scroll became unresponsive. Draining keys
+                    # first guarantees they are handled within one frame.
                     key = keyboard.read_key(0.02)
                     if not key:
+                        # No key pending: redraw only if the collector published
+                        # newer data. While paused it publishes nothing, so the
+                        # frozen snapshot stays put.
+                        if collector.generation() != last_generation:
+                            break
                         continue
 
                     # Handle search mode input

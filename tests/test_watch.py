@@ -1008,3 +1008,110 @@ class TestWatchCollector:
         assert self._wait(lambda: c.generation() >= 1)
         c.stop()
         assert not c._thread.is_alive()
+
+
+class TestCoreHoursPerformance:
+    """Core-hours must not recompile a Jinja template per test (the regression
+    that made watch mode block for seconds per frame on large runs)."""
+
+    def test_template_compiled_once_and_renders_memoized(self):
+        import iops.results.watch as w
+
+        w._CORES_TEMPLATE_CACHE.clear()
+
+        # 500 tests across only 4 distinct parameter sets.
+        tests = [
+            {"params": {"nodes": (i % 4) + 1, "ppn": 8},
+             "total_time": 10.0, "cached": False}
+            for i in range(500)
+        ]
+
+        executed, _ = w._compute_core_hours_stats(tests, "{{ nodes * ppn }}")
+        assert executed > 0
+
+        # The template is compiled once and cached for the whole run.
+        assert list(w._CORES_TEMPLATE_CACHE.keys()) == ["{{ nodes * ppn }}"]
+        template = w._CORES_TEMPLATE_CACHE["{{ nodes * ppn }}"]
+
+        # Count renders on the cached instance during a second pass.
+        renders = {"n": 0}
+        real_render = template.render
+
+        def counting_render(*a, **k):
+            renders["n"] += 1
+            return real_render(*a, **k)
+
+        template.render = counting_render
+        try:
+            w._compute_core_hours_stats(tests, "{{ nodes * ppn }}")
+        finally:
+            del template.render
+
+        # 500 tests, but only one render per distinct parameter set (4), and the
+        # template was reused (not recompiled).
+        assert renders["n"] == 4
+        assert list(w._CORES_TEMPLATE_CACHE.keys()) == ["{{ nodes * ppn }}"]
+
+    def test_core_hours_value_with_memoized_params(self):
+        import iops.results.watch as w
+
+        w._CORES_TEMPLATE_CACHE.clear()
+        # 3 tests, nodes*ppn = 8 cores, 3600s each => 8 core-hours each.
+        tests = [
+            {"params": {"nodes": 2, "ppn": 4}, "total_time": 3600.0, "cached": False}
+            for _ in range(3)
+        ]
+        executed, cached = w._compute_core_hours_stats(tests, "{{ nodes * ppn }}")
+        assert abs(executed - 24.0) < 1e-9
+        assert cached == 0.0
+
+
+class TestCollectorAggregates:
+    """The collector precomputes per-refresh aggregates so the render loop never
+    walks the full test list per frame."""
+
+    def test_snapshot_carries_precomputed_aggregates(self, tmp_path):
+        import time
+        from iops.results.watch import _WatchCollector
+        from iops.results.status_rollup import STATUS_ROLLUP_FILENAME
+
+        run_root = tmp_path / "run_agg"
+        run_root.mkdir()
+        index = {
+            "benchmark": "Agg", "total_expected": 2, "repetitions": 1,
+            "folders_upfront": True, "active_tests": 2, "skipped_tests": 0,
+            "executions": {
+                f"exec_{i:04d}": {"path": f"runs/exec_{i:04d}",
+                                  "params": {"nodes": 2, "ppn": 4}, "command": "x"}
+                for i in (1, 2)
+            },
+        }
+        (run_root / "__iops_index.json").write_text(json.dumps(index))
+        (run_root / STATUS_ROLLUP_FILENAME).write_text(json.dumps({"executions": {
+            "exec_0001": {"reps": {"1": {"status": "SUCCEEDED",
+                                         "duration_seconds": 3600, "cached": False}}},
+            "exec_0002": {"reps": {"1": {"status": "SUCCEEDED",
+                                         "duration_seconds": 3600, "cached": False}}},
+        }}))
+
+        c = _WatchCollector(
+            run_root / "__iops_index.json", run_root, 0.1,
+            {}, None, set(), None, None, cores_expr="{{ nodes * ppn }}",
+        )
+        c.start()
+        try:
+            snap = None
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                snap, _ = c.latest()
+                if snap is not None:
+                    break
+                time.sleep(0.02)
+            assert snap is not None
+            assert snap["num_complete"] == 2
+            assert snap["actual_avg_time"] == 3600.0
+            # cores = 2*4 = 8, 1h each, 2 tests => 16 core-hours executed
+            assert abs(snap["executed_core_hours"] - 16.0) < 1e-9
+            assert snap["cached_core_hours"] == 0.0
+        finally:
+            c.stop()
