@@ -16,6 +16,7 @@ import signal
 import sys
 import select
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -366,9 +367,19 @@ def _collect_execution_data(
     status_counts = {s: 0 for s in STATUS_ORDER}
 
     # Load the run-root status roll-up once. When present it lets us read one
-    # file instead of scanning every execution's repetition folders; executions
-    # it does not cover fall back to a per-folder scan below.
+    # file instead of scanning every execution's repetition folders.
+    #
+    # When the roll-up exists we treat it as authoritative for coverage: any
+    # execution it does not list is considered not-yet-started (PENDING) and is
+    # NOT scanned on disk. The runner keeps the roll-up current (<= its flush
+    # interval), so the next refresh picks up real status. This is what keeps a
+    # refresh O(1 file) instead of O(folders): without it, every pending
+    # execution in the index still cost a stat + directory glob on each refresh,
+    # which dominates wall-clock on large or networked runs. Only when the
+    # roll-up is entirely absent (legacy runs) do we fall back to per-folder
+    # scanning below.
     rollup = load_status_rollup(run_root)
+    rollup_present = rollup is not None
 
     for exec_key, exec_data in sorted(executions.items()):
         params = exec_data.get("params", {})
@@ -405,9 +416,10 @@ def _collect_execution_data(
             is_skipped = exec_data.get("skipped", False)
             skip_reason = exec_data.get("skip_reason")
 
-        # If not in index and not covered by the roll-up, check the marker
-        # file. Roll-up-covered executions never need this per-folder stat.
-        if not is_skipped and rollup_reps is None:
+        # If not in index and the roll-up is entirely absent, check the marker
+        # file. When a roll-up exists it is authoritative, so we never pay this
+        # per-folder stat for executions it does not cover.
+        if not is_skipped and rollup_reps is None and not rollup_present:
             skipped_marker = exec_path / SKIPPED_MARKER_FILENAME
             if skipped_marker.exists():
                 is_skipped = True
@@ -461,6 +473,12 @@ def _collect_execution_data(
         # to scanning repetition folders for executions it does not cover.
         if rollup_reps is not None:
             rep_status_infos = rollup_reps
+        elif rollup_present:
+            # Roll-up exists but does not cover this execution yet: trust it and
+            # treat the execution as not-yet-started (PENDING) with zero
+            # per-folder filesystem I/O. An empty list flows through the PENDING
+            # path below exactly like an unscanned, not-yet-created folder.
+            rep_status_infos = []
         else:
             rep_status_infos = []
             for rep_dir in sorted(exec_path.glob("repetition_*")):
@@ -1289,6 +1307,145 @@ def _is_all_complete(status_counts: Dict[str, int], total_in_index: int, total_e
     return True
 
 
+class _WatchCollector:
+    """
+    Background thread that refreshes watch-mode data off the render/input path.
+
+    The main thread only renders and reads the keyboard; this thread owns all
+    filesystem I/O (index read, status roll-up read, any folder-scan fallback)
+    and publishes an immutable snapshot under a lock. The UI therefore stays
+    responsive regardless of how long a scan takes: keypresses, pausing,
+    scrolling, and Ctrl+C never wait on the filesystem.
+
+    Timing lives here too. The thread collects, then sleeps for ``interval``
+    before collecting again, bumping a generation counter on each new snapshot
+    so the main loop knows when to redraw. Pausing stops collection entirely
+    (no I/O at all while paused); resuming forces an immediate refresh.
+    """
+
+    def __init__(
+        self,
+        index_file: Path,
+        run_root: Path,
+        interval: float,
+        filter_dict: Dict[str, str],
+        status_filter: Optional[str],
+        hide_columns: set,
+        cached_filter: Optional[bool],
+        metric_filter_dict: Optional[Dict[str, Tuple[str, float]]],
+    ) -> None:
+        self._index_file = index_file
+        self._run_root = run_root
+        self._interval = max(0.0, float(interval))
+        self._filter_dict = filter_dict
+        self._status_filter = status_filter
+        self._hide_columns = hide_columns
+        self._cached_filter = cached_filter
+        self._metric_filter_dict = metric_filter_dict
+
+        self._lock = threading.Lock()
+        self._cv = threading.Condition(self._lock)
+        self._snapshot: Optional[Dict[str, Any]] = None
+        self._generation = 0
+        self._paused = False
+        self._refresh_now = True   # collect immediately on start
+        self._stop = False
+
+        self._thread = threading.Thread(
+            target=self._run, name="iops-watch-collector", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    # ------------------------------------------------------------------ #
+    # Main-thread API
+    # ------------------------------------------------------------------ #
+    def latest(self) -> Tuple[Optional[Dict[str, Any]], int]:
+        """Return the most recent (snapshot, generation) without blocking."""
+        with self._lock:
+            return self._snapshot, self._generation
+
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    def set_paused(self, paused: bool) -> None:
+        """Pause or resume collection. Resuming forces an immediate refresh."""
+        with self._cv:
+            if self._paused == paused:
+                return
+            self._paused = paused
+            if not paused:
+                self._refresh_now = True
+            self._cv.notify_all()
+
+    def stop(self) -> None:
+        with self._cv:
+            self._stop = True
+            self._cv.notify_all()
+        if self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+    # ------------------------------------------------------------------ #
+    # Worker
+    # ------------------------------------------------------------------ #
+    def _run(self) -> None:
+        next_deadline = time.monotonic()
+        while True:
+            with self._cv:
+                while True:
+                    if self._stop:
+                        return
+                    if self._refresh_now and not self._paused:
+                        self._refresh_now = False
+                        break
+                    if self._paused:
+                        # Idle with no I/O until resumed or stopped.
+                        self._cv.wait()
+                        continue
+                    remaining = next_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._cv.wait(remaining)
+
+            # Collect outside the lock; this is the slow, I/O-heavy part.
+            snapshot = self._collect()
+            if snapshot is not None:
+                with self._cv:
+                    self._snapshot = snapshot
+                    self._generation += 1
+                    self._cv.notify_all()
+            next_deadline = time.monotonic() + self._interval
+
+    def _collect(self) -> Optional[Dict[str, Any]]:
+        try:
+            (benchmark_name, executions, total_expected, repetitions,
+             folders_upfront, active_tests, skipped_tests) = _load_index(self._index_file)
+        except WatchModeError:
+            # Transient index read failure: keep the previous snapshot.
+            return None
+
+        tests, status_counts = _collect_execution_data(
+            self._run_root, executions, self._filter_dict, self._status_filter,
+            self._hide_columns, expected_repetitions=repetitions,
+            folders_upfront=folders_upfront, cached_filter=self._cached_filter,
+            metric_filters=self._metric_filter_dict,
+        )
+
+        return {
+            "benchmark_name": benchmark_name,
+            "executions": executions,
+            "total_expected": total_expected,
+            "repetitions": repetitions,
+            "folders_upfront": folders_upfront,
+            "active_tests": active_tests,
+            "skipped_tests": skipped_tests,
+            "tests": tests,
+            "status_counts": status_counts,
+        }
+
+
 def watch_executions(
     path: Path,
     filters: Optional[List[str]] = None,
@@ -1410,22 +1567,23 @@ def watch_executions(
     search_mode = False      # When True, collecting search input
     search_buffer = ""       # Accumulated search digits
     search_error = ""        # Error message from last search
-    needs_data_refresh = True  # Skip data reload for pure navigation actions
 
     # Initialized before the loop so an interrupt arriving before the first
     # iteration cannot leave it unbound when it is read after the loop.
     all_complete = False
 
-    # Persistent deadline for the next data refresh. It is only reset when
-    # the data is actually reloaded, so keypresses (which redraw using cached
-    # data) can never postpone or starve the refresh.
-    next_data_refresh = time.monotonic()
-
-    # Cached data for navigation without reload
-    cached_tests = []
-    cached_status_counts = {}
+    # All filesystem I/O runs on a background thread so the render/input path
+    # never blocks on a slow scan. The main loop below reads whatever snapshot
+    # the collector has most recently published.
+    collector = _WatchCollector(
+        index_file, run_root, interval, filter_dict, status_filter,
+        hide_columns, cached_filter, metric_filter_dict,
+    )
+    last_generation = -1
 
     try:
+        collector.start()
+
         # Acquire the keyboard once for the whole session and keep the terminal
         # in cbreak mode throughout. Re-entering cbreak each refresh left a brief
         # canonical-mode window during rendering where keypresses were echoed and
@@ -1436,26 +1594,37 @@ def watch_executions(
                 # Track total items for scroll (updated after table build)
                 total_items_for_scroll = 0
 
-                # Only reload data when needed (not during pure navigation)
-                if needs_data_refresh:
-                    # Reload index to pick up new executions
-                    try:
-                        benchmark_name, executions, total_expected, repetitions, folders_upfront, active_tests, skipped_tests = _load_index(index_file)
-                    except WatchModeError:
-                        pass  # Keep using previous data if index read fails
+                # Pull the latest snapshot the collector has published.
+                snapshot, last_generation = collector.latest()
 
-                    # Collect current data (new format: one entry per test config)
-                    cached_tests, cached_status_counts = _collect_execution_data(
-                        run_root, executions, filter_dict, status_filter, hide_columns,
-                        expected_repetitions=repetitions, folders_upfront=folders_upfront,
-                        cached_filter=cached_filter, metric_filters=metric_filter_dict
+                if snapshot is None:
+                    # First scan has not finished yet. Show a lightweight
+                    # placeholder and keep polling the keyboard so Ctrl+C / q
+                    # stay responsive while the initial collection runs.
+                    loading = Panel(
+                        Text("Loading executions...", style="dim italic"),
+                        border_style="blue", padding=(0, 1),
                     )
-                    needs_data_refresh = False  # Reset flag
-                    next_data_refresh = time.monotonic() + interval
+                    live.update(loading)
+                    while not interrupted and collector.generation() == 0:
+                        key = keyboard.read_key(0.05)
+                        if key == 'q':
+                            interrupted = True
+                        elif key:
+                            break
+                    continue
 
-                # Use cached data
-                tests = cached_tests
-                status_counts = cached_status_counts.copy()  # Copy since we modify it
+                # Unpack the published snapshot (all filesystem work already done
+                # on the collector thread).
+                benchmark_name = snapshot["benchmark_name"]
+                executions = snapshot["executions"]
+                total_expected = snapshot["total_expected"]
+                repetitions = snapshot["repetitions"]
+                folders_upfront = snapshot["folders_upfront"]
+                active_tests = snapshot["active_tests"]
+                skipped_tests = snapshot["skipped_tests"]
+                tests = snapshot["tests"]
+                status_counts = snapshot["status_counts"].copy()  # Copy since we modify it
 
                 total_in_index = len(executions)
                 all_complete = _is_all_complete(status_counts, total_in_index, total_expected, repetitions)
@@ -1742,34 +1911,21 @@ def watch_executions(
                     time.sleep(1)
                     break
 
-                # Wait for the next data refresh, polling for keyboard input.
-                # The persistent monotonic deadline (next_data_refresh) drives
-                # the timing so the configured refresh interval is always
-                # honored, even when no usable keyboard is available (read_key
-                # sleeps instead of returning immediately). Action keys break
-                # out early to redraw with cached data, but they never move
-                # the deadline, so a continuous stream of keypresses cannot
-                # starve the data refresh.
+                # Poll the keyboard and redraw as soon as the collector publishes
+                # a newer snapshot. The collector owns refresh timing (and, while
+                # paused, simply stops publishing), so the main loop only has to
+                # watch the generation counter. Keypresses break out early to
+                # redraw immediately; they never affect refresh timing, so a
+                # stream of keypresses cannot starve or postpone a data refresh.
                 while not interrupted:
-                    if pause_mode:
-                        # Paused: hold a frozen snapshot. Do not let the refresh
-                        # deadline trigger a data reload here; rescanning and
-                        # redrawing underneath the user (rows appearing, the
-                        # scroll position jumping) is exactly what makes pause
-                        # look broken. Just poll for keys so navigation stays
-                        # responsive. Resuming forces an immediate refresh.
-                        key = keyboard.read_key(0.02)
-                        if not key:
-                            continue
-                    else:
-                        remaining = next_data_refresh - time.monotonic()
-                        if remaining <= 0:
-                            needs_data_refresh = True
-                            break
+                    # New data available -> re-render. While paused the collector
+                    # publishes nothing, so the frozen snapshot stays put.
+                    if collector.generation() != last_generation:
+                        break
 
-                        key = keyboard.read_key(min(0.02, remaining))
-                        if not key:
-                            continue
+                    key = keyboard.read_key(0.02)
+                    if not key:
+                        continue
 
                     # Handle search mode input
                     if search_mode:
@@ -1817,15 +1973,17 @@ def watch_executions(
                         continue  # Ignore other keys in search mode
 
                     # Normal mode keys (keys with no bound action fall
-                    # through and keep polling until the refresh deadline)
+                    # through and keep polling for the next key or refresh)
                     if key == 'q':
                         interrupted = True
                         break
                     elif key == 'p':
                         pause_mode = not pause_mode
+                        # Tell the collector to stop scanning while paused (no
+                        # background I/O) and to refresh immediately on resume.
+                        collector.set_paused(pause_mode)
                         if not pause_mode:
                             scroll_offset = 0
-                            needs_data_refresh = True  # Refresh when resuming live mode
                         search_error = ""
                         break  # Refresh display immediately
                     elif key == '/' and pause_mode:  # Enter search mode
@@ -1865,6 +2023,7 @@ def watch_executions(
         # alternate screen on the way out; just fall through to the exit message.
         interrupted = True
     finally:
+        collector.stop()
         signal.signal(signal.SIGINT, original_handler)
 
     # Print exit message

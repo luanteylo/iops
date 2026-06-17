@@ -827,3 +827,184 @@ class TestKeyboardNavigation:
 
         # total_display_items should match number of tests
         assert total_display_items == 3
+
+
+class TestRollupTrust:
+    """The roll-up is authoritative for coverage: uncovered executions are
+    treated as PENDING with no per-folder filesystem I/O."""
+
+    def _make_run(self, tmp_path, n_execs):
+        from iops.results.status_rollup import STATUS_ROLLUP_FILENAME
+        run_root = tmp_path / "run_rollup"
+        run_root.mkdir()
+        index = {
+            "benchmark": "Rollup",
+            "total_expected": n_execs,
+            "repetitions": 1,
+            "folders_upfront": True,
+            "active_tests": n_execs,
+            "skipped_tests": 0,
+            "executions": {
+                f"exec_{i:04d}": {
+                    "path": f"runs/exec_{i:04d}",
+                    "params": {"n": i},
+                    "command": f"echo {i}",
+                }
+                for i in range(1, n_execs + 1)
+            },
+        }
+        (run_root / "__iops_index.json").write_text(json.dumps(index))
+        return run_root, STATUS_ROLLUP_FILENAME
+
+    def test_uncovered_execs_are_pending_without_folder_scan(self, tmp_path):
+        from iops.results.watch import _collect_execution_data, _load_index
+
+        run_root, rollup_name = self._make_run(tmp_path, 50)
+        # Roll-up covers only exec_0001.
+        (run_root / rollup_name).write_text(json.dumps({
+            "executions": {"exec_0001": {"reps": {"1": {"status": "SUCCEEDED"}}}}
+        }))
+
+        _, executions, _, repetitions, folders_upfront, _, _ = _load_index(
+            run_root / "__iops_index.json"
+        )
+
+        # Count directory globs during collection: there must be none, because
+        # the roll-up is trusted and no execution folders exist on disk anyway.
+        glob_calls = {"n": 0}
+        orig_glob = Path.glob
+
+        def counting_glob(self, pattern):
+            glob_calls["n"] += 1
+            return orig_glob(self, pattern)
+
+        try:
+            Path.glob = counting_glob
+            tests, _ = _collect_execution_data(
+                run_root, executions, {}, None, set(),
+                expected_repetitions=repetitions, folders_upfront=folders_upfront,
+            )
+        finally:
+            Path.glob = orig_glob
+
+        assert glob_calls["n"] == 0
+        by_key = {t["exec_key"]: t["rep_statuses"] for t in tests}
+        assert by_key["exec_0001"] == ["SUCCEEDED"]
+        assert by_key["exec_0002"] == ["PENDING"]
+        assert by_key["exec_0050"] == ["PENDING"]
+
+    def test_no_rollup_falls_back_to_folder_scan(self, tmp_path):
+        from iops.results.watch import _collect_execution_data, _load_index
+
+        run_root, _ = self._make_run(tmp_path, 5)
+        # No roll-up file: legacy per-folder scan must still happen.
+        _, executions, _, repetitions, folders_upfront, _, _ = _load_index(
+            run_root / "__iops_index.json"
+        )
+
+        glob_calls = {"n": 0}
+        orig_glob = Path.glob
+
+        def counting_glob(self, pattern):
+            glob_calls["n"] += 1
+            return orig_glob(self, pattern)
+
+        try:
+            Path.glob = counting_glob
+            _collect_execution_data(
+                run_root, executions, {}, None, set(),
+                expected_repetitions=repetitions, folders_upfront=folders_upfront,
+            )
+        finally:
+            Path.glob = orig_glob
+
+        # One glob per execution when there is no roll-up to trust.
+        assert glob_calls["n"] == 5
+
+
+class TestWatchCollector:
+    """The background collector keeps all I/O off the render/input path."""
+
+    def _make_run(self, tmp_path):
+        run_root = tmp_path / "run_collector"
+        run_root.mkdir()
+        index = {
+            "benchmark": "Collector",
+            "total_expected": 2,
+            "repetitions": 1,
+            "folders_upfront": True,
+            "active_tests": 2,
+            "skipped_tests": 0,
+            "executions": {
+                "exec_0001": {"path": "runs/exec_0001", "params": {"n": 1}, "command": "x"},
+                "exec_0002": {"path": "runs/exec_0002", "params": {"n": 2}, "command": "x"},
+            },
+        }
+        (run_root / "__iops_index.json").write_text(json.dumps(index))
+        return run_root
+
+    def _wait(self, predicate, timeout=2.0):
+        import time
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(0.02)
+        return False
+
+    def test_publishes_snapshot_and_advances_generation(self, tmp_path):
+        from iops.results.watch import _WatchCollector
+
+        run_root = self._make_run(tmp_path)
+        c = _WatchCollector(
+            run_root / "__iops_index.json", run_root, 0.1,
+            {}, None, set(), None, None,
+        )
+        c.start()
+        try:
+            assert self._wait(lambda: c.latest()[0] is not None)
+            snap, gen = c.latest()
+            assert gen >= 1
+            assert {t["exec_key"] for t in snap["tests"]} == {"exec_0001", "exec_0002"}
+            # Generation keeps advancing while live.
+            g = c.generation()
+            assert self._wait(lambda: c.generation() > g)
+        finally:
+            c.stop()
+
+    def test_pause_stops_publishing_and_resume_refreshes(self, tmp_path):
+        from iops.results.watch import _WatchCollector
+
+        run_root = self._make_run(tmp_path)
+        c = _WatchCollector(
+            run_root / "__iops_index.json", run_root, 0.1,
+            {}, None, set(), None, None,
+        )
+        c.start()
+        try:
+            assert self._wait(lambda: c.generation() >= 1)
+            c.set_paused(True)
+            # Give any in-flight collect time to settle, then confirm frozen.
+            import time
+            time.sleep(0.3)
+            frozen = c.generation()
+            time.sleep(0.3)
+            assert c.generation() == frozen
+            # Resuming forces an immediate refresh.
+            c.set_paused(False)
+            assert self._wait(lambda: c.generation() > frozen)
+        finally:
+            c.stop()
+
+    def test_stop_joins_thread(self, tmp_path):
+        from iops.results.watch import _WatchCollector
+
+        run_root = self._make_run(tmp_path)
+        c = _WatchCollector(
+            run_root / "__iops_index.json", run_root, 0.1,
+            {}, None, set(), None, None,
+        )
+        c.start()
+        assert self._wait(lambda: c.generation() >= 1)
+        c.stop()
+        assert not c._thread.is_alive()
