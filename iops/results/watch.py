@@ -1404,7 +1404,8 @@ def watch_executions(
     show_only_active = False
 
     # Keyboard navigation state
-    pause_mode = False       # When True, disable auto-reordering
+    pause_mode = False       # When True, freeze the snapshot: no data refresh
+                             # and no auto-reordering, so the view can be scrolled
     scroll_offset = 0        # First row index to display (in pause mode)
     search_mode = False      # When True, collecting search input
     search_buffer = ""       # Accumulated search digits
@@ -1488,7 +1489,9 @@ def watch_executions(
                 num_complete = sum(1 for t in tests if _get_test_overall_status(t["rep_statuses"]) == "SUCCEEDED")
                 if all_complete:
                     show_only_active = False  # Show all tests when complete
-                elif num_tests > 20 and num_complete > 0:
+                elif not pause_mode and num_tests > 20 and num_complete > 0:
+                    # Don't change visibility while paused: the frozen snapshot
+                    # must stay put so the user can scroll without rows shifting.
                     show_only_active = True
 
                 # Initialize total_display_items (will be updated after table build)
@@ -1748,14 +1751,25 @@ def watch_executions(
                 # the deadline, so a continuous stream of keypresses cannot
                 # starve the data refresh.
                 while not interrupted:
-                    remaining = next_data_refresh - time.monotonic()
-                    if remaining <= 0:
-                        needs_data_refresh = True
-                        break
+                    if pause_mode:
+                        # Paused: hold a frozen snapshot. Do not let the refresh
+                        # deadline trigger a data reload here; rescanning and
+                        # redrawing underneath the user (rows appearing, the
+                        # scroll position jumping) is exactly what makes pause
+                        # look broken. Just poll for keys so navigation stays
+                        # responsive. Resuming forces an immediate refresh.
+                        key = keyboard.read_key(0.02)
+                        if not key:
+                            continue
+                    else:
+                        remaining = next_data_refresh - time.monotonic()
+                        if remaining <= 0:
+                            needs_data_refresh = True
+                            break
 
-                    key = keyboard.read_key(min(0.02, remaining))
-                    if not key:
-                        continue
+                        key = keyboard.read_key(min(0.02, remaining))
+                        if not key:
+                            continue
 
                     # Handle search mode input
                     if search_mode:
