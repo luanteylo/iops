@@ -102,6 +102,7 @@ ALLOWED_BAYESIAN_CONFIG_KEYS = {
     "n_initial_points", "n_iterations", "acquisition_func", "base_estimator",
     "xi", "kappa", "objective", "objective_metric", "fallback_to_exhaustive",
     "early_stop_on_convergence", "convergence_patience", "xi_boost_factor",
+    "max_retries",
 }
 
 ALLOWED_CONSTRAINT_KEYS = {"name", "rule", "violation_policy", "description"}
@@ -1056,6 +1057,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             early_stop_on_convergence=bc.get("early_stop_on_convergence", False),
             convergence_patience=bc.get("convergence_patience", 3),
             xi_boost_factor=float(bc.get("xi_boost_factor", 5.0)),
+            max_retries=int(bc.get("max_retries", 10)),
         )
 
     # Parse probes config (new nested format) with backwards compatibility

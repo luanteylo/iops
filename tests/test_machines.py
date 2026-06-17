@@ -256,6 +256,30 @@ class TestApplyMachineOverride:
         assert result["benchmark"]["name"] == "Test"  # preserved
         assert result["benchmark"]["repetitions"] == 3  # preserved
 
+    def test_bayesian_config_nested_field_override(self, tmp_path):
+        """A new nested bayesian_config field (max_retries) merges via deep_merge
+        while the other optimizer fields are preserved."""
+        data = self._base_config(tmp_path)
+        data["benchmark"]["search_method"] = "bayesian"
+        data["benchmark"]["bayesian_config"] = {
+            "objective_metric": "result",
+            "objective": "maximize",
+            "base_estimator": "GP",
+            "n_iterations": 80,
+            "max_retries": 10,
+        }
+        data["machines"] = {
+            "cluster_a": {
+                "benchmark": {"bayesian_config": {"max_retries": 2}},
+            }
+        }
+        result = _apply_machine_override(data, "cluster_a")
+        bc = result["benchmark"]["bayesian_config"]
+        assert bc["max_retries"] == 2            # overridden
+        assert bc["base_estimator"] == "GP"      # preserved
+        assert bc["n_iterations"] == 80          # preserved
+        assert bc["objective"] == "maximize"     # preserved
+
     def test_output_path_override(self, tmp_path):
         data = self._base_config(tmp_path)
         data["machines"] = {

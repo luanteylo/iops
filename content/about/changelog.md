@@ -5,6 +5,12 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
+## [3.5.8] - 2026-06-17
+
+### Added
+
+- `bayesian_config.max_retries` (default 10) controls how many times per iteration the optimizer is re-asked when its suggestion maps to an already-visited point before falling back to random sampling from unvisited points. Each retry refits the surrogate model, so on large `n_iterations` runs - where late iterations almost always collide with visited points - the retries dominated wall time (especially with the `GP` estimator, whose fit cost grows with the observation count). Lowering `max_retries` (e.g. to 2-3) cuts that per-iteration cost without changing study semantics; the previous hardcoded value of 10 remains the default.
+
 ## [3.5.7] - 2026-06-11
 
 ### Added

@@ -195,7 +195,9 @@ When the surrogate model believes it has found the optimum, it may repeatedly su
 
 ### Default behavior
 
-By default (`early_stop_on_convergence: false`), when the optimizer's suggestions keep mapping to visited points (after 10 retries), IOPS randomly samples from the remaining unvisited configurations. The full iteration budget is spent even if the model has converged, and the random fallback often discovers configurations the model missed.
+By default (`early_stop_on_convergence: false`), when the optimizer's suggestions keep mapping to visited points (after `max_retries` re-asks, default 10), IOPS randomly samples from the remaining unvisited configurations. The full iteration budget is spent even if the model has converged, and the random fallback often discovers configurations the model missed.
+
+Each re-ask refits the surrogate model, so a high `max_retries` is expensive late in a large budget, where most suggestions collide with already-visited points. If runs with large `n_iterations` slow down sharply near the end, lowering `max_retries` (e.g. to 2-3) cuts that per-iteration retry cost; the optimizer falls back to random sampling from unvisited points sooner.
 
 Optimization ends when either:
 - All `n_iterations` are exhausted
@@ -274,6 +276,7 @@ All fields below go under `benchmark.bayesian_config`:
 | `early_stop_on_convergence` | `false` | Stop when the optimizer converges instead of falling back to random sampling. |
 | `convergence_patience` | `3` | Number of consecutive convergence events before early stopping (only used when `early_stop_on_convergence` is true). |
 | `xi_boost_factor` | `5.0` | Multiplier applied to `xi` on each convergence event to encourage exploration (only used when `early_stop_on_convergence` is true). |
+| `max_retries` | `10` | Number of times per iteration to re-ask the optimizer when its suggestion maps to an already-visited point before sampling randomly from unvisited points. Each retry refits the surrogate, so lower values speed up large budgets where suggestions frequently collide. |
 
 See also:
 - [Search Methods](../search-methods) for a comparison of all search strategies

@@ -35,6 +35,7 @@ benchmark:
     early_stop_on_convergence: false # Stop when optimizer converges (default: false)
     convergence_patience: 3         # Convergence events before early stop (default: 3)
     xi_boost_factor: 5.0            # xi multiplier on each convergence event (default: 5.0)
+    max_retries: 10                 # Re-asks per iteration on a visited point before random fallback (default: 10)
 ```
 
 See [Bayesian Optimization](../bayesian-optimization) for the full guide: each option in detail, parameter encoding, surrogate model selection, and convergence behavior.

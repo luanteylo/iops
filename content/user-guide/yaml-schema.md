@@ -69,6 +69,7 @@ benchmark:
     early_stop_on_convergence: bool #   Stop when optimizer converges (default: false)
     convergence_patience: integer   #   Convergences before early stop (default: 3)
     xi_boost_factor: float          #   xi multiplier when stuck (default: 5.0)
+    max_retries: integer            #   Re-asks per iteration on a visited point before random fallback (default: 10)
 
   executor: string                  # Optional: "local" | "slurm" (default: "slurm")
   slurm_options:                 # Optional: SLURM-specific configuration
@@ -134,6 +135,7 @@ Default values are empirically tuned: with 20 iterations (~7% of search space), 
 **Options:**
 - `fallback_to_exhaustive` (default: true): switches to exhaustive search when `n_iterations >= total_space_size`, avoiding optimizer overhead for small parameter spaces.
 - `early_stop_on_convergence` (default: false): when the optimizer converges (keeps suggesting already-visited configurations), `xi` is boosted by `xi_boost_factor` (default: 5.0) to encourage exploration and escape local optima; after `convergence_patience` (default: 3) consecutive convergences, the run stops early.
+- `max_retries` (default: 10): how many times per iteration the optimizer is re-asked when its suggestion maps to an already-visited point before falling back to random sampling from unvisited points. Each retry refits the surrogate model, so lower values (e.g. 2-3) speed up large `n_iterations` runs where suggestions frequently collide.
 
 **Surrogate models:**
 - `RF`: Random Forest (default) - most consistent results, handles categorical/mixed spaces well

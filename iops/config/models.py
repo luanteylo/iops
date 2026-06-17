@@ -177,6 +177,11 @@ class BayesianConfig:
             Default: 3 (only used when early_stop_on_convergence is True)
         xi_boost_factor: Multiplier for xi when convergence is detected.
             Default: 5.0 (helps escape local optima when stuck)
+        max_retries: Number of times per iteration to re-ask the optimizer when its
+            suggestion maps to an already-visited point before giving up and
+            sampling randomly from the unvisited points. Each retry refits the
+            surrogate, so high values are expensive late in a large budget where
+            most suggestions collide. Default: 10.
     """
     n_initial_points: int = 5
     n_iterations: int = 20
@@ -190,6 +195,7 @@ class BayesianConfig:
     early_stop_on_convergence: bool = False
     convergence_patience: int = 3
     xi_boost_factor: float = 5.0
+    max_retries: int = 10
 
 
 @dataclass

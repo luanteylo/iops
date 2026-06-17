@@ -2128,6 +2128,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
         self.early_stop_on_convergence = self.bayesian_cfg.early_stop_on_convergence
         self.convergence_patience = self.bayesian_cfg.convergence_patience
         self.xi_boost_factor = self.bayesian_cfg.xi_boost_factor
+        self.max_retries = self.bayesian_cfg.max_retries
         self._use_exhaustive_fallback = False
         self._exhaustive_matrix: List[ExecutionInstance] = []
         self._exhaustive_index = 0
@@ -2711,7 +2712,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
         # Get next point from optimizer, avoiding already-visited configurations
         # The optimizer may suggest points that map to visited configs (due to nearest-neighbor mapping)
         # We retry a few times before falling back to random sampling from unvisited configs
-        max_retries = 10
+        max_retries = self.max_retries
         search_point = None
         was_mapped = False
 
