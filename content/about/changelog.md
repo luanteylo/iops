@@ -11,6 +11,14 @@ All notable changes to IOPS are documented here.
 
 - `bayesian_config.max_retries` (default 10) controls how many times per iteration the optimizer is re-asked when its suggestion maps to an already-visited point before falling back to random sampling from unvisited points. Each retry refits the surrogate model, so on large `n_iterations` runs - where late iterations almost always collide with visited points - the retries dominated wall time (especially with the `GP` estimator, whose fit cost grows with the observation count). Lowering `max_retries` (e.g. to 2-3) cuts that per-iteration cost without changing study semantics; the previous hardcoded value of 10 remains the default.
 
+### Fixed
+
+#### CLI, watch mode, find
+
+- `iops find --watch` pause (`p`) now truly freezes the view. The pause key only disabled row reordering while the periodic refresh kept reloading underneath the user, so rows appeared, completed tests were hidden, and the scroll position jumped, making pause look broken. Pausing now stops the background refresh entirely (no filesystem I/O while paused) and resuming forces an immediate refresh.
+- Watch mode now collects data on a dedicated background thread, so a slow scan no longer blocks rendering or input. Keypresses, pausing, scrolling, and Ctrl+C stay responsive on large parameter spaces and on parallel/network filesystems regardless of how long a refresh takes.
+- Watch mode no longer scans every not-yet-started execution's folder on each refresh. The run-root status roll-up is now authoritative for coverage: when it is present, executions it does not list are treated as pending without a per-folder stat or directory glob. Previously a large upfront run could scan thousands of folders every interval despite the roll-up; the folder-scan fallback now runs only when no roll-up exists.
+
 ## [3.5.7] - 2026-06-11
 
 ### Added
