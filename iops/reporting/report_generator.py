@@ -2061,13 +2061,17 @@ class ReportGenerator:
             if metric_col not in self.df.columns:
                 continue
 
-            # Group by parameter combination and get mean
+            # Group by parameter combination and get mean. Use sentinel names
+            # for the stat columns so they cannot collide with a user variable
+            # named "mean", "std", or "count" (which would create duplicate
+            # column labels and break boolean indexing).
+            mean_col, std_col, count_col = "__stat_mean", "__stat_std", "__stat_count"
             group_cols = var_cols
             df_grouped = self.df.groupby(group_cols)[metric_col].agg(['mean', 'std', 'count']).reset_index()
-            df_grouped.columns = report_vars + ['mean', 'std', 'count']
+            df_grouped.columns = report_vars + [mean_col, std_col, count_col]
 
             # Filter by minimum samples
-            df_filtered = df_grouped[df_grouped['count'] >= min_samples]
+            df_filtered = df_grouped[df_grouped[count_col] >= min_samples]
 
             if len(df_filtered) == 0:
                 html += f"<details>\n<summary>Best for {metric}</summary>\n"
@@ -2076,7 +2080,7 @@ class ReportGenerator:
 
             # Sort by mean (descending for most metrics, ascending for latency/time)
             ascending = 'latency' in metric.lower() or 'time' in metric.lower()
-            df_top = df_filtered.sort_values('mean', ascending=ascending).head(top_n)
+            df_top = df_filtered.sort_values(mean_col, ascending=ascending).head(top_n)
 
             html += f"<details>\n<summary>Best for {metric}</summary>\n"
             html += '<div class="details-content">\n<table>\n<tr><th>Rank</th>'
@@ -2118,9 +2122,9 @@ class ReportGenerator:
                 html += f"<tr><td rowspan='2'>{idx}</td>"
                 for var in report_vars:
                     html += f"<td>{html_module.escape(str(row[var]))}</td>"
-                html += f"<td><strong>{row['mean']:.4f}</strong></td>"
-                html += f"<td>{row['std']:.4f}</td>"
-                html += f"<td>{int(row['count'])}</td></tr>\n"
+                html += f"<td><strong>{row[mean_col]:.4f}</strong></td>"
+                html += f"<td>{row[std_col]:.4f}</td>"
+                html += f"<td>{int(row[count_col])}</td></tr>\n"
 
                 # Add command row
                 html += f"<tr><td colspan='{len(report_vars) + 3}' style='background-color: #f0f0f0; font-family: monospace; font-size: 0.9em; padding: 8px;'>"
