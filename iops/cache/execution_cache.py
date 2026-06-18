@@ -197,15 +197,25 @@ class ExecutionCache(HasLogger):
             conn = None
             try:
                 if self._nfs_mode:
-                    # NFS-compatible mode: disable Python's transaction handling
-                    # This uses autocommit and avoids most locking issues
+                    # NFS-compatible mode: network filesystems (NFS, and HPC
+                    # filesystems like Lustre/GPFS) frequently disable or break
+                    # POSIX advisory locking, which makes SQLite raise
+                    # "disk I/O error" (SQLITE_IOERR) on the first write even
+                    # though connect() succeeds.
+                    #
+                    # Use the built-in lock-less "unix-none" VFS so SQLite never
+                    # issues fcntl() locks, and keep the rollback journal in
+                    # memory so no on-disk journal file is created (which would
+                    # also need locking). This is safe because IOPS only uses
+                    # single-process access to the cache.
+                    db_uri = self.db_path.resolve().as_uri() + "?vfs=unix-none"
                     conn = sqlite3.connect(
-                        str(self.db_path),
+                        db_uri,
+                        uri=True,
                         timeout=self.timeout,
-                        isolation_level=None  # Autocommit mode
+                        isolation_level=None,  # Autocommit mode
                     )
-                    # Use DELETE journal mode (more NFS-compatible than WAL)
-                    conn.execute("PRAGMA journal_mode=DELETE")
+                    conn.execute("PRAGMA journal_mode=MEMORY")
                 else:
                     conn = sqlite3.connect(str(self.db_path), timeout=self.timeout)
                     # Set busy timeout as additional protection
