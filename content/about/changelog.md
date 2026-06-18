@@ -21,6 +21,10 @@ All notable changes to IOPS are documented here.
 - Watch mode no longer recomputes per-test aggregates on every frame. The core-hours total compiled and rendered a Jinja expression once per test per redraw, costing seconds per frame on runs with thousands of executions (the dominant cause of an unresponsive UI). The compiled expression is now cached, the result is memoized per distinct parameter set, and all per-refresh aggregates are computed once on the collector thread rather than per frame.
 - Watch mode no longer scans every not-yet-started execution's folder on each refresh. The run-root status roll-up is now authoritative for coverage: when it is present, executions it does not list are treated as pending without a per-folder stat or directory glob. Previously a large upfront run could scan thousands of folders every interval despite the roll-up; the folder-scan fallback now runs only when no roll-up exists.
 
+#### Cache
+
+- The execution cache no longer fails with `sqlite3.OperationalError: disk I/O error` on NFS and HPC filesystems (Lustre, GPFS). When the cache file lives on such a filesystem, IOPS now opens it through SQLite's lock-less `unix-none` VFS and keeps the rollback journal in memory, so no POSIX `fcntl()` locks are taken and no on-disk journal file is created. The previous NFS-compatible mode only set `journal_mode=DELETE`, which still relied on advisory locking that these filesystems often disable, so the first write (table creation) aborted the run. This is safe because IOPS uses single-process access to the cache.
+
 ## [3.5.7] - 2026-06-11
 
 ### Added
