@@ -44,6 +44,7 @@ Homepage = "https://gitlab.inria.fr/lgouveia/iops"
 Documentation = "https://gitlab.inria.fr/lgouveia/iops"
 Repository = "https://gitlab.inria.fr/lgouveia/iops"
 Issues = "https://gitlab.inria.fr/lgouveia/iops/-/issues"
+Changelog = "https://gitlab.inria.fr/lgouveia/iops/-/blob/main/content/about/changelog.md"
 
 [project.scripts]
 iops = "iops.main:main"
