@@ -5,7 +5,7 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
-## [3.5.8] - 2026-06-17
+## [3.5.8] - 2026-06-20
 
 ### Added
 
@@ -24,6 +24,14 @@ All notable changes to IOPS are documented here.
 #### Cache
 
 - The execution cache no longer fails with `sqlite3.OperationalError: disk I/O error` on NFS and HPC filesystems (Lustre, GPFS). When the cache file lives on such a filesystem, IOPS now opens it through SQLite's lock-less `unix-none` VFS and keeps the rollback journal in memory, so no POSIX `fcntl()` locks are taken and no on-disk journal file is created. The previous NFS-compatible mode only set `journal_mode=DELETE`, which still relied on advisory locking that these filesystems often disable, so the first write (table creation) aborted the run. This is safe because IOPS uses single-process access to the cache.
+
+#### Reporting
+
+- HTML report generation no longer crashes when a swept variable is named `count`, `mean`, or `std`. The best-configurations section renamed grouped columns to the bare variable names and then appended those aggregation labels, colliding with the variable name and producing a duplicate-label reindex error. Aggregation columns now use sentinel names to avoid the clash.
+
+#### Configuration
+
+- Jinja2 templates in sweep values and conditional `when`/`default` values are now resolved instead of leaking through as literal strings. A value such as `{{ os_env.OUTPUT }}/ost_{{ ost_count }}` was previously stored verbatim and only type-cast, so it reached params, commands, and input files unrendered; conditional variables (which require `sweep`/`when`/`default` and cannot use `expr`) had no supported way to template their values. Templated string base variables are now rendered with the full context (`os_env` plus previously resolved vars) in config order and re-cast to the declared type. Unset references raise a clear `StrictUndefined` error instead of emitting the literal.
 
 ## [3.5.7] - 2026-06-11
 

@@ -33,9 +33,9 @@ setup(
     long_description=read_long_description(),
     long_description_content_type="text/markdown",
     license="BSD-3-Clause",
-    url="https://gitlab.inria.fr/lgouveia/iops",
+    url="https://iops-benchmark.com",
     project_urls={
-        "Documentation": "https://gitlab.inria.fr/lgouveia/iops",
+        "Documentation": "https://iops-benchmark.com",
         "Source": "https://gitlab.inria.fr/lgouveia/iops",
         "Bug Reports": "https://gitlab.inria.fr/lgouveia/iops/-/issues",
     },
