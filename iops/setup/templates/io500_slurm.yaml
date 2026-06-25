@@ -1,0 +1,268 @@
+# ============================================================================
+# IO500 Benchmark Configuration Template
+#
+# This file defines the configuration used to run IO500 benchmark campaigns.
+# Parameters should be adjusted to match the target cluster, storage system.
+#
+# Documentation: https://io500.org
+# ============================================================================
+
+benchmark:
+  name: "IO500 Benchmark"
+  workdir: "./"
+  repetitions: 1
+  search_method: "random"
+  
+  random_config:     # Required if search_method: "random"
+    percentage: 0.05   #   OR sample percentage of parameter space
+  
+  executor: "slurm"
+  cache_file: "./io500.db"
+  cores_expr: "{{ ntasks }}"
+
+vars:
+  
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8, 16, 32] # Adjust the values to match the size and limits of your cluster.
+
+  # MPI processes per node
+  processes_per_node:
+    type: int   
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8, 16, 32, 36] # Adjust these values according to your node architecture
+
+
+  # Total dataset size used for the benchmark (in GB).
+
+  # This value is chosen based on a target runtime per phase and the
+  # expected maximum bandwidth of the storage system.
+  # Therefore:
+  #   total_size_gb ≈ 12 × 300 = 3600 GB
+  total_size_gb:
+    type: int
+    expr: "3600" # decide it because max BW ~12GB/s
+
+  # This parameter defines the block size used during read/write
+  # operations in the benchmark.
+  transfer_size_mb:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8, 16, 32, 64]
+  
+
+  # This parameter controls the level of metadata and I/O pressure
+  # applied during the benchmark.
+  segment_count:
+    type: int
+    sweep:
+      mode: list
+      values: [8000000]    
+  
+
+  # This parameter controls how many storage targets participate
+  # in parallel I/O operations.
+  ost_count:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 3, 4, 5, 6, 7, 8]
+
+  file_per_proc:
+    type: bool
+    sweep: 
+      mode: list
+      values: [true, false]
+
+  unique_dir:
+    type: bool
+    sweep:
+      mode: list
+      values: [true, false]
+
+  # It represents the total number of MPI ranks launched for the benchmark.
+  # This is a key parameter controlling global parallel scalability.
+  ntasks:
+    type: int
+    expr: "{{ nodes * processes_per_node }}"
+   
+  # Size of each data block (per MPI task) in MB.
+  block_size_mb:
+    type: int
+    expr: "{{ (total_size_gb*1024) // ntasks }}"
+
+  
+  # Directory where I/O data files are stored.
+  # EX : /beegfs/YOUR_USERNAME/ior_1/datafiles
+  ost_folder:
+    type: str
+    # Base directory for BeeGFS (or any parallel filesystem mount point).
+    #
+    # IMPORTANT:
+    #   This should be adapted to the target system:
+    #     - BeeGFS: /beegfs, /mnt/beegfs, /fs/beegfs, etc.
+    #     - Lustre: /lustre, /pfs, etc.
+    expr: "/beegfs/{{ os_env.USER }}/ior_{{ ost_count }}/datafiles"
+
+ # Ensures correct alignment between block size and transfer size.
+constraints:
+  - name: "block_transfer_alignment"
+    rule: "block_size_mb % transfer_size_mb == 0"
+    violation_policy: "skip"
+    description: "Block size must be a multiple of transfer size"
+
+command:
+  template: "io500 {{ inputs.config_ini.path }}"
+
+scripts:
+  - name: "IO500"
+    inputs:
+      - name: config_ini
+        path: "{{ execution_dir }}/config.ini"
+        template: |
+          [global]
+          datadir = {{ ost_folder }}
+          timestamp-datadir = TRUE
+          resultdir = {{ execution_dir }}/results
+          timestamp-resultdir = FALSE
+          api = POSIX         
+          io-buffers-on-gpu = FALSE
+          verbosity = 1
+          scc = FALSE
+          dataPacketType = timestamp
+
+          [debug]
+          stonewall-time = 300
+          
+
+          [ior-easy]
+          transferSize = {{transfer_size_mb}}m
+          blockSize = {{ block_size_mb }}m
+          filePerProc = {% if  file_per_proc == true %}TRUE{% else %}FALSE{% endif %}
+
+          uniqueDir = {%if unique_dir == true %}TRUE{% else %}FALSE{% endif %}
+
+          run = TRUE
+
+
+        
+
+          [mdtest-easy]
+          API = POSIX
+          n = 1000000 
+          run = FALSE
+
+
+          [ior-hard]
+          API = POSIX
+          segmentCount = {{ segment_count }}
+          run = FALSE
+
+
+          [mdtest-hard]
+          API = POSIX
+          n = 500000
+          run = FALSE
+
+          [find]
+          run = FALSE
+          pfind-queue-length = 10000
+          pfind-steal-next = FALSE
+          pfind-parallelize-single-dir-access-using-hashing = FALSE
+
+          
+    script_template: |
+      #!/bin/bash
+      #SBATCH --nodes={{ nodes }}
+      #SBATCH --ntasks={{ ntasks }}
+      #SBATCH --ntasks-per-node={{ processes_per_node }}
+      #SBATCH --time=01:00:00
+      #SBATCH --exclusive
+      
+
+
+      # NOTE:
+      # The constraint below is cluster-specific.
+      # Some clusters may require:
+      #   --constraint=bora
+      #   --constraint=skylake
+      #   or no constraint at all.
+      #SBATCH --constraint=bora
+
+      #SBATCH -o batch%j.out
+      #SBATCH -e batch%j.err
+
+      set -e
+
+
+      # NOTE:
+      # MPI module depends on the cluster environment.
+      # Examples:
+      #   Mohamed cluster: mpi/openmpi/5.0.1
+      #   Luan cluster:    mpi/openmpi/4.0.1
+      #   Other clusters:  mpi/openmpi (default version)
+      module purge
+      module load mpi/openmpi/4.0.1
+
+
+      echo "Nodes allocated: $SLURM_NODELIST"
+      echo "Total tasks:     $SLURM_NTASKS"
+      echo "Tasks per node:  $SLURM_TASKS_PER_NODE"
+     
+      DATA_DIR="{{ost_folder}}"
+
+      echo "Cleaning old directories..."
+
+      # remove datafiles if exists
+      if [ -d "$DATA_DIR" ]; then
+        rm -rf "$DATA_DIR"
+      fi
+
+      mpirun -n {{ ntasks }} {{ command.template }} 
+
+    parser:
+     file: "{{ execution_dir }}/results/result.txt"
+     metrics:
+      - name: SCORE
+      - name: BW
+      - name: MD
+      - name: errors
+
+     parser_script: |
+      import re
+
+      def parse(file_path: str):
+         result = {
+             "SCORE": None,
+             "BW": None,
+             "MD": None,
+         "errors": [],
+         }
+         with open(file_path, "r") as f:
+            for x in f :
+                x = x.strip()
+                if ";" in x and "END" not in x and "START" not in x :
+                    result["errors"].append(x)
+                # SCORE
+                m = re.search(r"SCORE\s*=\s*(.+)", x)
+                if m:
+                    result["SCORE"] = m.group(1)
+
+                # BW
+                m = re.search(r"BW\s*=\s*(.+)", x)
+                if m:
+                    result["BW"] = m.group(1)
+
+                # MD
+                m = re.search(r"MD\s*=\s*(.+)", x)
+                if m:
+                    result["MD"] = m.group(1)
+         return result
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"

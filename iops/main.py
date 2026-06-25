@@ -207,6 +207,9 @@ Examples:
     benchmark_group.add_argument('--mdtest', action='store_true', dest='benchmark_mdtest',
                                  help="Generate mdtest metadata benchmark template")
 
+    benchmark_group.add_argument('--io500', action='store_true', dest='benchmark_io500',
+                                 help="Generate io500 benchmark template")
+
     # Template complexity
     generate_parser.add_argument('--full', action='store_true',
                                  help="Generate fully documented template with all options")
@@ -544,7 +547,11 @@ def main():
             executor = "local" if args.executor_local else "slurm"
 
             # Determine benchmark (default: ior)
-            benchmark = "mdtest" if args.benchmark_mdtest else "ior"
+            benchmark = "ior"
+            if args.benchmark_io500:
+                benchmark = "io500"
+            elif args.benchmark_mdtest:
+                benchmark = "mdtest"
 
             wizard = BenchmarkWizard()
             output_path = str(args.output) if args.output else None
