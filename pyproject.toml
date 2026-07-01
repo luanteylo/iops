@@ -38,6 +38,7 @@ bayesian = ["scikit-optimize"]
 parquet = ["pyarrow"]
 watch = ["rich"]
 plots = ["kaleido"]
+studio = ["nicegui"]
 
 [project.urls]
 Homepage = "https://iops-benchmark.com"
