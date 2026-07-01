@@ -48,14 +48,24 @@ class TerminalSession:
         self._fd: Optional[int] = None
         self._proc: Optional[subprocess.Popen] = None
         self._on_output: Optional[OutputFn] = None
+        self._on_exit: Optional[Callable[[], None]] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._active: Optional[dict] = None
+        self._closing: bool = False
         self.input_locked: bool = False
 
     # -- lifecycle --------------------------------------------------------- #
-    def start(self, on_output: OutputFn) -> None:
-        """Spawn the local shell and begin streaming its output to ``on_output``."""
+    def start(self, on_output: OutputFn, on_exit: Optional[Callable[[], None]] = None) -> None:
+        """Spawn the local shell and begin streaming its output to ``on_output``.
+
+        ``on_exit`` (if given) is called once when the shell dies on its own (the
+        user typed ``exit``, an ``ssh`` session dropped back to a shell that then
+        ended, the process was killed, etc.). It does not fire on an intentional
+        ``close()``/``restart()``.
+        """
         self._on_output = on_output
+        self._on_exit = on_exit
+        self._closing = False
         master, slave = pty.openpty()
         self._fd = master
         env = {**os.environ, "TERM": "xterm-256color"}
@@ -72,6 +82,7 @@ class TerminalSession:
 
     def close(self) -> None:
         """Terminate the child shell and release the PTY."""
+        self._closing = True  # suppress the on_exit callback for intentional teardown
         if self._fd is not None and self._loop is not None:
             try:
                 self._loop.remove_reader(self._fd)
@@ -93,6 +104,19 @@ class TerminalSession:
                 pass
         self._fd = None
 
+    def restart(self) -> None:
+        """Kill the current child and spawn a fresh local shell in its place.
+
+        Reuses the same ``on_output`` sink so the wired-up ``ui.xterm`` keeps
+        working. Used when resetting setup: any lingering ``ssh`` session is torn
+        down so subsequent commands run on the local machine again.
+        """
+        on_output = self._on_output
+        on_exit = self._on_exit
+        self.close()
+        if on_output is not None:
+            self.start(on_output, on_exit)
+
     @property
     def alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None and self._fd is not None
@@ -106,11 +130,22 @@ class TerminalSession:
         except OSError:
             data = b""
         if not data:
+            # EOF: the child shell has died. Stop reading and, unless this is an
+            # intentional close/restart, notify so the UI can offer to recover.
             if self._fd is not None and self._loop is not None:
                 try:
                     self._loop.remove_reader(self._fd)
                 except (ValueError, OSError):
                     pass
+            # Fail any in-flight run() so its awaiter returns now instead of
+            # blocking for the full timeout on a shell that is gone.
+            if self._active is not None:
+                fut = self._active["future"]
+                self._active = None
+                if not fut.done():
+                    fut.set_result((-1, ""))
+            if not self._closing and self._on_exit is not None:
+                self._on_exit()
             return
         if self._on_output:
             self._on_output(data)

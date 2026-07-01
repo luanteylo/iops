@@ -15,8 +15,19 @@ from nicegui import ui
 from iops.main import load_version
 from iops.studio import __version__ as STUDIO_VERSION
 from iops.studio.connections import build_connection, parse_ssh_hosts
-from iops.studio.environments import build_discovery_script, build_venv_command, parse_env_lines
-from iops.studio.installer import CLIENT_VERSION, install_iops_session
+from iops.studio.environments import (
+    PyEnv,
+    build_discovery_script,
+    build_venv_command,
+    parse_env_lines,
+)
+from iops.studio.installer import (
+    CLIENT_VERSION,
+    install_iops_session,
+    iops_version_command,
+    parse_iops_version,
+)
+from iops.studio.settings import SetupConfig, clear_setup, load_setup, save_setup
 from iops.studio.terminal import TerminalSession
 
 # Palette borrowed from the HTML report (iops/reporting/report_generator.py).
@@ -43,8 +54,13 @@ _XTERM_OPTIONS = {
 }
 
 
-def _build_wizard(session: TerminalSession, state: dict, host_options: dict, note):
-    """Build the left-pane setup wizard. ``note`` writes a line to the terminal."""
+def _build_wizard(session: TerminalSession, state: dict, host_options: dict, note, on_complete):
+    """Build the left-pane setup wizard. ``note`` writes a line to the terminal.
+
+    ``on_complete`` is called (no args) once the setup is finished, either by a
+    successful install or by finishing on an environment that already has IOPS.
+    It reads the shared ``state`` to persist and switch to the ready view.
+    """
 
     with ui.stepper().props("vertical").classes("w-full") as stepper:
 
@@ -205,6 +221,7 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                         ui.icon("info", color="warning")
                         ui.label("IOPS is not installed in the selected environment.")
                 install_btn.set_text("Reinstall IOPS" if (env and env.has_iops) else "Install IOPS")
+                finish_btn.set_enabled(bool(env and env.has_iops))
 
             async def on_install():
                 env = state["env"]
@@ -223,17 +240,15 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                                                  scp_conn=scp_conn, emit=note)
                 if res.ok:
                     env.iops_version = res.version
+                    install_btn.enable()
+                    on_complete()  # persist and switch to the ready view
+                    return
                 install_outcome.clear()
                 with install_outcome:
                     with ui.row().classes("items-center gap-2"):
-                        if res.ok:
-                            ui.icon("check_circle", color="positive")
-                            ui.label(f"IOPS {res.version} installed via {res.method}") \
-                                .classes("text-positive")
-                        else:
-                            ui.icon("error", color="negative")
-                            ui.label("Install failed. Fix it in the terminal, then retry.") \
-                                .classes("text-negative")
+                        ui.icon("error", color="negative")
+                        ui.label("Install failed. Fix it in the terminal, then retry.") \
+                            .classes("text-negative")
                     if res.steps:
                         ui.label("(" + " → ".join(res.steps) + ")").classes("text-xs text-gray-500")
                 install_btn.enable()
@@ -243,6 +258,77 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                 install_btn = ui.button("Install IOPS", icon="download", on_click=on_install)
             with ui.stepper_navigation():
                 ui.button("Back", on_click=stepper.previous).props("flat")
+                finish_btn = ui.button("Finish", icon="check", on_click=lambda: on_complete())
+                finish_btn.set_enabled(False)
+
+
+async def _validate_setup(session: TerminalSession, saved: SetupConfig) -> tuple[bool, str]:
+    """Re-probe a saved setup on the live shell. Returns ``(ok, detail)``.
+
+    Valid means the interpreter still exists and IOPS is importable there. A
+    version drift from what was saved is reported but still counts as valid.
+    """
+    _, out = await session.run(iops_version_command(saved.env_path),
+                               display="validate setup", timeout=60)
+    version = parse_iops_version(out)
+    if not version:
+        return False, f"IOPS not found in {saved.env_path}"
+    if saved.iops_version and version != saved.iops_version:
+        return True, f"IOPS {version} present (setup saved {saved.iops_version})"
+    return True, f"IOPS {version} ready in {saved.env_path}"
+
+
+def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
+                 note, on_reset, validate: bool):
+    """Left-pane view shown when a saved setup exists: summary + live validation."""
+    with ui.card().classes("studio-card w-full p-4 gap-1"):
+        ui.label("Setup ready").classes("text-lg font-semibold")
+        ui.label(saved.where).classes("text-sm text-gray-600")
+        ui.label(f"Environment: {saved.env_path}").classes("text-sm text-gray-600")
+        py = f"Python {saved.env_version}" if saved.env_version else "Python"
+        iops = f" · IOPS {saved.iops_version}" if saved.iops_version else " · IOPS (unknown)"
+        ui.label(py + iops).classes("text-sm text-gray-600")
+
+        status = ui.row().classes("items-center gap-2 min-h-8 mt-2")
+
+        def working(text: str):
+            status.clear()
+            with status:
+                ui.spinner(size="sm")
+                ui.label(text)
+
+        def result(ok: bool, text: str):
+            status.clear()
+            with status:
+                ui.icon("check_circle" if ok else "error",
+                        color="positive" if ok else "negative")
+                ui.label(text).classes("text-positive" if ok else "text-negative")
+
+        async def do_validate():
+            validate_btn.disable()
+            try:
+                if saved.target_kind == "ssh" and not state.get("ssh_started"):
+                    working(f"Reconnecting to {saved.target_alias} (authenticate in terminal if prompted)...")
+                    session.start_ssh(saved.target_alias)
+                    state["ssh_started"] = True
+                    state["connected"] = True
+                working("Validating environment...")
+                ok, detail = await _validate_setup(session, saved)
+                if ok:
+                    result(True, detail)
+                else:
+                    result(False, detail + " — re-run setup, or fix it and re-validate.")
+            finally:
+                validate_btn.enable()
+
+        with ui.row().classes("gap-2 mt-3"):
+            validate_btn = ui.button("Validate now", icon="verified", on_click=do_validate)
+            ui.button("Re-run setup", icon="refresh", on_click=on_reset).props("flat")
+
+        if validate:
+            ui.timer(0.4, do_validate, once=True)
+        else:
+            result(True, f"Setup saved. IOPS {saved.iops_version or ''} ready.".rstrip())
 
 
 def _page():
@@ -259,33 +345,107 @@ def _page():
         ui.label(f"v{STUDIO_VERSION}").classes("text-sm text-gray-500")
         ui.label(f"core {load_version()}").classes("text-xs text-gray-400")
 
-    # Two panes: wizard (left) + persistent terminal (right)
+    # Persistent recovery banner, shown when the shell session dies. Lives above
+    # the splitter so it survives left-pane view swaps.
+    disconnect_banner = ui.row().classes("w-full items-center gap-3 px-4 py-2") \
+        .style("background:#fdecea;border-bottom:1px solid #f5c6cb")
+    disconnect_banner.set_visibility(False)
+
+    # Two panes: left (wizard or ready view) + persistent terminal (right)
     with ui.splitter(value=45).classes("w-full").style("height: calc(100vh - 3rem)") as splitter:
         with splitter.before:
-            with ui.column().classes("p-4 gap-4 w-full h-full").style("overflow:auto"):
-                def note(msg: str):
-                    term.write(f"\r\n\x1b[33m# {msg}\x1b[0m\r\n")
-                _build_wizard(session, state, host_options, note)
+            left = ui.column().classes("p-4 gap-4 w-full h-full").style("overflow:auto")
         with splitter.after:
             with ui.column().classes("w-full h-full p-1").style("background:#1e1e1e"):
                 term = ui.xterm(options=_XTERM_OPTIONS).classes("w-full h-full")
 
-    # Wire the terminal to the shell session. The PTY reader fires from a bare
-    # asyncio callback (no request context), so route its writes through the
-    # client context, the supported way to update the UI from a background task.
+    # The PTY reader fires from a bare asyncio callback (no request context), so
+    # route UI updates through the client context, the supported way to update
+    # the UI from a background task.
     client = ui.context.client
 
     def on_output(data: bytes):
         with client:
             term.write(data)
 
-    session.start(on_output=on_output)
+    def note(msg: str):
+        term.write(f"\r\n\x1b[33m# {msg}\x1b[0m\r\n")
+
+    def show_ready(saved: SetupConfig, *, validate: bool):
+        left.clear()
+        with left:
+            _build_ready(session, state, saved, note, on_reset=reset, validate=validate)
+
+    def show_wizard():
+        left.clear()
+        with left:
+            _build_wizard(session, state, host_options, note, on_complete=complete)
+
+    def complete():
+        """Persist the finished setup (read from state) and show the ready view."""
+        env = state["env"]
+        cfg = SetupConfig(
+            target_kind=state["target"]["kind"],
+            target_alias=state["target"]["alias"],
+            env_path=env.path,
+            env_kind=env.kind,
+            env_version=env.version,
+            iops_version=env.iops_version,
+        )
+        save_setup(cfg)
+        show_ready(cfg, validate=False)
+
+    def _reset_state():
+        state.update(env=None, envs=[], target={"kind": "local", "alias": None},
+                     connected=False)
+        state.pop("ssh_started", None)
+
+    def reset():
+        """Delete the saved setup and return to a fresh wizard on a clean shell."""
+        clear_setup()
+        _reset_state()
+        session.restart()  # drop any ssh session so the wizard starts local again
+        show_wizard()
+
+    def on_shell_exit():
+        """The PTY shell died (exit / ssh dropped / killed). Offer to recover.
+
+        Fired from the reader callback with no request context, so wrap UI work
+        in the client context. Connection state is cleared so nothing keeps
+        assuming a live (possibly remote) shell.
+        """
+        with client:
+            _reset_state()
+            disconnect_banner.set_visibility(True)
+
+    def reconnect():
+        """Restart button: spawn a clean local shell and restart the wizard."""
+        disconnect_banner.set_visibility(False)
+        _reset_state()
+        session.restart()
+        show_wizard()
+
+    with disconnect_banner:
+        ui.icon("link_off", color="negative")
+        ui.label("Terminal disconnected. The shell session ended.") \
+            .classes("text-negative font-medium")
+        ui.button("Restart terminal", icon="restart_alt", on_click=reconnect).props("flat")
+
+    session.start(on_output=on_output, on_exit=on_shell_exit)
     term.on_data(lambda e: session.write(e.data) if not session.input_locked else None)
     term.on_resize(lambda e: session.resize(e.cols, e.rows))
     ui.timer(0.3, term.fit, once=True)
 
     # Tear down the shell when the browser tab closes
     ui.context.client.on_disconnect(session.close)
+
+    saved = load_setup()
+    if saved is not None:
+        state["target"] = {"kind": saved.target_kind, "alias": saved.target_alias}
+        state["env"] = PyEnv(saved.env_path, saved.env_kind, saved.env_version, saved.iops_version)
+        show_ready(saved, validate=True)
+    else:
+        show_wizard()
 
 
 def build_app():
