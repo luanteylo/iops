@@ -10,7 +10,10 @@ sending commands into that same shell, so everything shows up live and, on
 failure, the user can take over in the exact same context.
 """
 
+import base64
+import re
 from pathlib import Path
+from typing import Optional
 
 from nicegui import ui
 
@@ -28,6 +31,13 @@ from iops.studio.installer import (
     install_iops_session,
     iops_version_command,
     parse_iops_version,
+)
+from iops.studio.builder import build_editor, config_workdir, starter_yaml
+from iops.studio.configs import (
+    StudioConfig,
+    delete_config,
+    load_configs,
+    upsert_config,
 )
 from iops.studio.settings import (
     SetupConfig,
@@ -72,6 +82,39 @@ def _alive(element) -> bool:
         return element.id in element.client.elements
     except Exception:
         return False
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name or "").strip("_") or "config"
+
+
+async def _write_config_to_target(session: TerminalSession, note, name: str,
+                                  yaml_text: str) -> Optional[str]:
+    """Write ``yaml_text`` into the target's workdir (or a Studio dir) via the shell.
+
+    Returns the remote path, or None on failure. The config goes into
+    ``benchmark.workdir`` when that is a literal path; if it uses Jinja2 (or is
+    empty), it lands in ``$HOME/.iops-studio/configs`` and IOPS creates the
+    workdir itself from the config at run time.
+    """
+    wd = config_workdir(yaml_text)
+    if wd and "{{" not in wd:
+        target_dir = wd
+        if target_dir == "~":
+            target_dir = "$HOME"
+        elif target_dir.startswith("~/"):
+            target_dir = "$HOME/" + target_dir[2:]
+    else:
+        target_dir = "$HOME/.iops-studio/configs"
+    remote = f"{target_dir}/{_slug(name)}.yaml"
+    b64 = base64.b64encode(yaml_text.encode()).decode()
+    cmd = (f'mkdir -p "{target_dir}" && printf %s \'{b64}\' | base64 -d > "{remote}" '
+           f'&& echo __WROTE__')
+    code, out = await session.run(cmd, display=f"write {_slug(name)}.yaml", timeout=60)
+    if code != 0 or "__WROTE__" not in out:
+        note(f"could not write config to target (exit {code})")
+        return None
+    return remote
 
 
 def _suggest_name(target: dict, env) -> str:
@@ -402,8 +445,9 @@ async def _validate_setup(session: TerminalSession, saved: SetupConfig) -> tuple
 
 
 def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
-                 note, on_back, validate: bool):
-    """Left-pane view for one selected setup: summary + live validation."""
+                 note, on_back, validate: bool, *, on_new_config, on_edit_config,
+                 on_run_config, on_delete_config):
+    """Left-pane view for one selected setup: summary, live validation, configs."""
     with ui.card().classes("studio-card w-full p-4 gap-1"):
         with ui.row().classes("items-center justify-between w-full no-wrap"):
             ui.label(saved.name).classes("text-lg font-semibold")
@@ -483,6 +527,30 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
         else:
             result(True, f"Setup saved. IOPS {saved.iops_version or ''} ready.".rstrip())
 
+    # ---- configs for this target ------------------------------------------- #
+    with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
+        with ui.row().classes("items-center justify-between w-full no-wrap"):
+            ui.label("Configs for this target").classes("text-md font-semibold")
+            ui.button("New config", icon="add", on_click=on_new_config).props("flat dense")
+        cfgs = load_configs(saved.name)
+        if not cfgs:
+            ui.label("No configs yet. Build one to run a benchmark.") \
+                .classes("text-xs text-gray-400 italic")
+        for sc in cfgs:
+            with ui.card().classes("w-full p-2"):
+                with ui.row().classes("items-center justify-between w-full no-wrap"):
+                    with ui.column().classes("gap-0"):
+                        ui.label(sc.name).classes("font-medium")
+                        ui.label(config_workdir(sc.yaml_text) or "(workdir in YAML)") \
+                            .classes("text-xs text-gray-500")
+                    with ui.row().classes("items-center gap-1"):
+                        ui.button(icon="play_arrow", on_click=lambda s=sc: on_run_config(s)) \
+                            .props("flat round dense").tooltip("Run on target")
+                        ui.button(icon="edit", on_click=lambda s=sc: on_edit_config(s)) \
+                            .props("flat round dense").tooltip("Edit")
+                        ui.button(icon="delete", on_click=lambda s=sc: on_delete_config(s)) \
+                            .props("flat round dense color=negative").tooltip("Delete")
+
 
 def _page():
     ui.add_head_html(_STUDIO_HEAD)
@@ -506,12 +574,20 @@ def _page():
     disconnect_banner.set_visibility(False)
 
     # Two panes: left (wizard or ready view) + persistent terminal (right)
-    with ui.splitter(value=45).classes("w-full").style("height: calc(100vh - 3rem)") as splitter:
-        with splitter.before:
+    main_splitter = ui.splitter(value=45).classes("w-full").style("height: calc(100vh - 3rem)")
+    with main_splitter:
+        with main_splitter.before:
             left = ui.column().classes("p-4 gap-4 w-full h-full").style("overflow:auto")
-        with splitter.after:
+        with main_splitter.after:
             with ui.column().classes("w-full h-full p-1").style("background:#1e1e1e"):
                 term = ui.xterm(options=_XTERM_OPTIONS).classes("w-full h-full")
+
+    # Full-width editor area, shown in place of the split view while building a
+    # config so the form + YAML get the whole page side by side. It fills the
+    # viewport height and scrolls as a fallback if the inner panes cannot.
+    editor_area = ui.column().classes("w-full p-3") \
+        .style("height: calc(100vh - 3rem); overflow:auto")
+    editor_area.set_visibility(False)
 
     # The PTY reader fires from a bare asyncio callback (no request context), so
     # route UI updates through the client context, the supported way to update
@@ -539,7 +615,82 @@ def _page():
     def show_ready(cfg: SetupConfig, *, validate: bool):
         left.clear()
         with left:
-            _build_ready(session, state, cfg, note, on_back=show_setups, validate=validate)
+            _build_ready(
+                session, state, cfg, note, on_back=show_setups, validate=validate,
+                on_new_config=lambda: show_editor(cfg, None),
+                on_edit_config=lambda sc: show_editor(cfg, sc),
+                on_run_config=lambda sc: run_config(cfg, sc.name, sc.yaml_text),
+                on_delete_config=lambda sc: remove_config(cfg, sc),
+            )
+
+    def _exit_editor():
+        editor_area.clear()
+        editor_area.set_visibility(False)
+        main_splitter.set_visibility(True)
+
+    def show_editor(setup_cfg: SetupConfig, studio_cfg):
+        """Open the full-width config builder for a new or existing config."""
+        is_new = studio_cfg is None
+        initial = (studio_cfg.yaml_text if not is_new
+                   else starter_yaml("My benchmark", "./workdir",
+                                     "local" if setup_cfg.target_kind == "local" else "slurm"))
+        cfg_name = "" if is_new else studio_cfg.name
+
+        def save(name: str, yaml_text: str):
+            name = (name or "").strip()
+            if not name:
+                ui.notify("Give the config a name", type="warning")
+                return
+            upsert_config(StudioConfig(name, setup_cfg.name, yaml_text))
+            ui.notify(f"Saved config '{name}'", type="positive")
+            _exit_editor()
+            show_ready(setup_cfg, validate=False)
+
+        def cancel():
+            _exit_editor()
+            show_ready(setup_cfg, validate=False)
+
+        main_splitter.set_visibility(False)
+        editor_area.clear()
+        editor_area.set_visibility(True)
+        with editor_area:
+            build_editor(
+                cfg_name, initial,
+                on_save=save,
+                on_cancel=cancel,
+                on_run=lambda name, text: run_config(setup_cfg, name, text),
+                on_check=lambda name, text: check_config(setup_cfg, name, text),
+            )
+
+    async def run_config(setup_cfg: SetupConfig, name: str, yaml_text: str):
+        if not state.get("connected") and setup_cfg.target_kind == "ssh":
+            ui.notify("Select and validate this setup first", type="warning")
+            return
+        remote = await _write_config_to_target(session, note, name, yaml_text)
+        if not remote:
+            ui.notify("Could not write config to target", type="negative")
+            return
+        note(f"running {name}")
+        # Invoke IOPS through the setup's own interpreter: the `iops` console
+        # script may not be on PATH (venv not activated), but `python -m iops` is.
+        session.write(f'"{setup_cfg.env_path}" -m iops run "{remote}"\n')  # live in terminal
+        ui.notify("Running in the terminal", type="info")
+
+    async def check_config(setup_cfg: SetupConfig, name: str, yaml_text: str):
+        remote = await _write_config_to_target(session, note, name, yaml_text)
+        if not remote:
+            ui.notify("Could not write config to target", type="negative")
+            return
+        code, _ = await session.run(f'"{setup_cfg.env_path}" -m iops check "{remote}"',
+                                    display=f"iops check {name}", timeout=120)
+        ui.notify("Config valid on target" if code == 0
+                  else "Config invalid on target (see terminal)",
+                  type="positive" if code == 0 else "negative")
+
+    def remove_config(setup_cfg: SetupConfig, sc):
+        delete_config(setup_cfg.name, sc.name)
+        ui.notify(f"Deleted config '{sc.name}'", type="info")
+        show_ready(setup_cfg, validate=False)
 
     def show_wizard():
         left.clear()
