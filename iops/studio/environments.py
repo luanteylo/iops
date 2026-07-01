@@ -82,18 +82,12 @@ class PyEnv:
         return f"{self.path}  ({ver}{iops})"
 
 
-def discover_environments(
-    conn: Connection,
-    extra_paths: Optional[list[str]] = None,
-    timeout: float = 60.0,
-) -> list[PyEnv]:
-    """Discover Python environments reachable on ``conn``.
+def build_discovery_script(extra_paths: Optional[list[str]] = None) -> str:
+    """Build the POSIX-sh discovery script, including any custom scan paths.
 
     ``extra_paths`` are additional locations to scan beyond the conventional
     ones (useful for clusters where envs live in scratch/project dirs). Each may
     be a direct interpreter, a venv root, or a directory containing venvs.
-
-    Returns environments that already have IOPS first, then by path.
     """
     script = _DISCOVER_PRELUDE + _DISCOVER_DEFAULTS
     for raw in extra_paths or []:
@@ -102,9 +96,18 @@ def discover_environments(
             continue
         safe = _normalize_target_path(raw)  # ~/ -> $HOME/, rejects quote-breaking chars
         script += f'scan_base "{safe}" custom\n'
-    res = conn.run(script, timeout=timeout)
+    return script
+
+
+def parse_env_lines(text: str) -> list[PyEnv]:
+    """Parse the ``ENV\\t...`` lines emitted by the discovery script.
+
+    Tolerant of surrounding noise (shell echo, prompts), so it works whether the
+    script ran via a one-shot connection or through the shared terminal session.
+    Environments that already have IOPS sort first, then by path.
+    """
     envs: list[PyEnv] = []
-    for line in res.stdout.splitlines():
+    for line in text.splitlines():
         if not line.startswith("ENV\t"):
             continue
         parts = line.split("\t")
@@ -118,6 +121,16 @@ def discover_environments(
         ))
     envs.sort(key=lambda e: (not e.has_iops, e.path))
     return envs
+
+
+def discover_environments(
+    conn: Connection,
+    extra_paths: Optional[list[str]] = None,
+    timeout: float = 60.0,
+) -> list[PyEnv]:
+    """Discover Python environments reachable on ``conn`` (one-shot connection)."""
+    res = conn.run(build_discovery_script(extra_paths), timeout=timeout)
+    return parse_env_lines(res.stdout)
 
 
 def _normalize_target_path(path: str) -> str:
@@ -137,6 +150,12 @@ def _normalize_target_path(path: str) -> str:
     elif path == "~":
         path = "$HOME"
     return path
+
+
+def build_venv_command(path: str) -> str:
+    """Shell command to create a venv at ``path`` (sanitized). Raises ValueError."""
+    safe = _normalize_target_path(path)
+    return f'python3 -m venv "{safe}"'
 
 
 @dataclass

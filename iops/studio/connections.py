@@ -12,7 +12,6 @@ exactly like VSCode Remote-SSH. No third-party SSH library is required.
 
 from __future__ import annotations
 
-import asyncio
 import glob
 import os
 import subprocess
@@ -20,43 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-# Callback receiving one line of streamed command output at a time.
+# Callback receiving one line of output at a time (used for install progress notes).
 LineFn = Callable[[str], None]
-
-
-async def _stream_argv(argv: list[str], on_line: LineFn, timeout: Optional[float] = None) -> int:
-    """Run argv, streaming merged stdout+stderr line by line to ``on_line``.
-
-    Returns the process exit code. Designed to run on the asyncio event loop so
-    callers (e.g. a NiceGUI handler) can push each line to the UI as it arrives.
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-    except FileNotFoundError as e:
-        on_line(f"[error] {e}")
-        return 127
-
-    async def _pump() -> int:
-        assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
-            on_line(raw.decode(errors="replace").rstrip("\n"))
-        return await proc.wait()
-
-    try:
-        if timeout:
-            return await asyncio.wait_for(_pump(), timeout=timeout)
-        return await _pump()
-    except asyncio.TimeoutError:
-        proc.kill()
-        on_line(f"[error] command timed out after {int(timeout)}s")
-        return 124
 
 DEFAULT_SSH_CONFIG = Path.home() / ".ssh" / "config"
 
@@ -186,15 +150,6 @@ class Connection:
     def run(self, command: str, timeout: Optional[float] = None) -> CommandResult:
         raise NotImplementedError
 
-    async def run_stream(self, command: str, on_line: LineFn, timeout: Optional[float] = None) -> int:
-        """Run ``command`` on the target, streaming output lines to ``on_line``."""
-        raise NotImplementedError
-
-    async def stage_dir_stream(self, local_dir: str, remote_rel: str, on_line: LineFn,
-                               timeout: Optional[float] = None) -> "StagedDir":
-        """Streaming variant of stage_dir. Default: delegate to the sync version."""
-        return self.stage_dir(local_dir, remote_rel, timeout=timeout)
-
     def stage_dir(self, local_dir: str, remote_rel: str, timeout: Optional[float] = None) -> "StagedDir":
         """Make the contents of a local directory available on the target.
 
@@ -243,9 +198,6 @@ class LocalConnection(Connection):
         )
         return CommandResult(proc.returncode, proc.stdout, proc.stderr)
 
-    async def run_stream(self, command: str, on_line: LineFn, timeout: Optional[float] = None) -> int:
-        return await _stream_argv(["bash", "-lc", command], on_line, timeout)
-
     def stage_dir(self, local_dir: str, remote_rel: str, timeout: Optional[float] = None) -> StagedDir:
         # Already local: use the directory in place, no copy needed.
         return StagedDir(True, local_dir)
@@ -276,28 +228,6 @@ class SSHConnection(Connection):
             capture_output=True, text=True, timeout=timeout,
         )
         return CommandResult(proc.returncode, proc.stdout, proc.stderr)
-
-    async def run_stream(self, command: str, on_line: LineFn, timeout: Optional[float] = None) -> int:
-        return await _stream_argv(self._argv(command), on_line, timeout)
-
-    async def stage_dir_stream(self, local_dir: str, remote_rel: str, on_line: LineFn,
-                               timeout: Optional[float] = None) -> StagedDir:
-        rc = await self.run_stream(f'mkdir -p "{remote_rel}"', on_line, timeout=30)
-        if rc != 0:
-            return StagedDir(False, remote_rel, "failed to create remote directory")
-        argv = [
-            "scp", "-r",
-            "-o", "BatchMode=yes",
-            "-o", f"ConnectTimeout={self.connect_timeout}",
-            f"{local_dir}/.",
-            f"{self.alias}:{remote_rel}",
-        ]
-        on_line(f"[scp] transferring wheelhouse to {self.alias}:{remote_rel} ...")
-        rc = await _stream_argv(argv, on_line, timeout)
-        if rc != 0:
-            return StagedDir(False, remote_rel, "scp failed")
-        on_line("[scp] transfer complete")
-        return StagedDir(True, f'$HOME/{remote_rel}')
 
     def stage_dir(self, local_dir: str, remote_rel: str, timeout: Optional[float] = None) -> StagedDir:
         # remote_rel is relative to the remote home; scp and the returned path

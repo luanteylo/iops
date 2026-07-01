@@ -13,6 +13,7 @@ client and the remote runner behave identically.
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from iops.main import load_version
-from iops.studio.connections import Connection, LineFn, LocalConnection
+from iops.studio.connections import Connection, LineFn
 
 PACKAGE = "iops-benchmark"
 CLIENT_VERSION = load_version()
@@ -61,6 +62,101 @@ def installed_iops_version(conn: Connection, python_path: str, timeout: float = 
     res = conn.run(_iops_version_cmd(python_path), timeout=timeout)
     version = res.stdout.strip()
     return version if res.ok and version else None
+
+
+# --- Command builders + tagged-line parsing for the shared terminal session --- #
+# In the interactive terminal, a command's output is captured amid shell noise,
+# so structured values are emitted on a tagged "IOPSVER=" line and grepped out.
+
+def iops_version_command(python_path: str) -> str:
+    """Shell command that prints ``IOPSVER=<version>`` (nothing if not installed)."""
+    return (
+        'cd "$HOME" 2>/dev/null; '
+        f'"{python_path}" -c '
+        "'import importlib.metadata as m; print(\"IOPSVER=\"+m.version(\"iops-benchmark\"))' "
+        "2>/dev/null || true"
+    )
+
+
+def parse_iops_version(text: str) -> Optional[str]:
+    """Extract the version from an ``IOPSVER=`` line in captured output."""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("IOPSVER="):
+            version = line[len("IOPSVER="):].strip()
+            return version or None
+    return None
+
+
+def pip_install_command(python_path: str, version: Optional[str]) -> str:
+    return f'"{python_path}" -m pip install "{_spec(version)}"'
+
+
+def wheelhouse_install_command(python_path: str, find_links: str, version: Optional[str]) -> str:
+    return (
+        f'"{python_path}" -m pip install --no-index '
+        f'--find-links "{find_links}" "{_spec(version)}"'
+    )
+
+
+async def install_iops_session(session, python_path: str, *,
+                               version: Optional[str] = CLIENT_VERSION,
+                               scp_conn: Optional[Connection] = None,
+                               emit: Optional[LineFn] = None) -> InstallResult:
+    """Ensure IOPS is installed, driving commands through the shared terminal.
+
+    pip first; on failure builds a wheelhouse on the client, transfers it (scp,
+    for ssh targets) and installs offline. ``emit`` writes short notes for the
+    client-side steps (build/transfer) that don't run in the terminal itself.
+    """
+    def note(msg: str):
+        if emit:
+            emit(msg)
+
+    result = InstallResult(ok=False)
+
+    _, out = await session.run(iops_version_command(python_path), display="check for IOPS")
+    existing = parse_iops_version(out)
+    if existing and (version is None or existing == version):
+        return InstallResult(True, "existing", existing, steps=["already installed"])
+
+    # 1) pip (runs in the terminal, output streams live)
+    code, _ = await session.run(pip_install_command(python_path, version),
+                                display=f"pip install {_spec(version)}", timeout=1800)
+    result.steps.append("pip")
+    if code == 0:
+        _, out = await session.run(iops_version_command(python_path))
+        return InstallResult(True, "pip", parse_iops_version(out) or version, steps=result.steps)
+    note("pip failed; falling back to an offline wheelhouse")
+
+    # 2a) build the wheelhouse on the client (off the event loop)
+    note("building wheelhouse on the client (pip download)...")
+    built_ok, dest, _log = await asyncio.to_thread(build_wheelhouse, version)
+    result.steps.append("build-wheelhouse")
+    if not built_ok:
+        note("wheelhouse build failed")
+        return result
+
+    # 2b) transfer to the target when remote
+    find_links = str(dest)
+    if scp_conn is not None and getattr(scp_conn, "kind", "local") == "ssh":
+        note("transferring wheelhouse to target (scp)...")
+        staged = await asyncio.to_thread(scp_conn.stage_dir, str(dest), _REMOTE_WHEELHOUSE_REL, 600)
+        result.steps.append("transfer")
+        if not staged.ok:
+            note(f"transfer failed: {staged.log}")
+            return result
+        find_links = staged.path
+
+    # 2c) offline install (runs in the terminal)
+    code, _ = await session.run(wheelhouse_install_command(python_path, find_links, version),
+                                display="pip install (offline, from wheelhouse)", timeout=1800)
+    result.steps.append("wheelhouse")
+    if code == 0:
+        _, out = await session.run(iops_version_command(python_path))
+        return InstallResult(True, "wheelhouse", parse_iops_version(out) or version, steps=result.steps)
+    note("wheelhouse install failed")
+    return result
 
 
 def pip_install(conn: Connection, python_path: str, version: Optional[str] = None,
@@ -169,69 +265,4 @@ def install_iops(conn: Connection, python_path: str, version: Optional[str] = CL
         result.version = installed_iops_version(conn, python_path) or version
     else:
         note("wheelhouse install failed")
-    return result
-
-
-async def install_iops_stream(conn: Connection, python_path: str,
-                              version: Optional[str] = CLIENT_VERSION,
-                              emit: Optional[LineFn] = None) -> InstallResult:
-    """Streaming variant of ``install_iops``: emits each command and its output
-    line by line via ``emit`` (for a live terminal in the UI). Same pip-first,
-    wheelhouse-fallback flow. Runs on the asyncio event loop.
-    """
-    def out(line: str = ""):
-        if emit:
-            emit(line)
-
-    result = InstallResult(ok=False)
-
-    existing = installed_iops_version(conn, python_path)
-    if existing and (version is None or existing == version):
-        out(f"IOPS {existing} already installed in {python_path}")
-        return InstallResult(True, "existing", existing, steps=["already installed"])
-
-    # 1) pip
-    pip_cmd = f'"{python_path}" -m pip install "{_spec(version)}"'
-    out(f"$ {pip_cmd}")
-    rc = await conn.run_stream(pip_cmd, out)
-    result.steps.append("pip")
-    if rc == 0:
-        ver = installed_iops_version(conn, python_path) or version
-        out(f"\n✓ pip install succeeded (IOPS {ver})")
-        return InstallResult(True, "pip", ver, steps=result.steps)
-    out("\n✗ pip failed, falling back to wheelhouse...\n")
-
-    # 2a) build the wheelhouse on the client (has internet)
-    local = LocalConnection()
-    dest = _LOCAL_WHEELHOUSE_ROOT / (version or "latest")
-    dest.mkdir(parents=True, exist_ok=True)
-    build_cmd = f'"{sys.executable}" -m pip download "{_spec(version)}" -d "{dest}"'
-    out(f"$ {build_cmd}")
-    rc = await local.run_stream(build_cmd, out)
-    result.steps.append("build-wheelhouse")
-    if rc != 0:
-        out("\n✗ wheelhouse build failed")
-        return result
-
-    # 2b) transfer to the target
-    out("")
-    staged = await conn.stage_dir_stream(str(dest), _REMOTE_WHEELHOUSE_REL, out, timeout=600)
-    result.steps.append("transfer")
-    if not staged.ok:
-        out(f"\n✗ transfer failed: {staged.log}")
-        return result
-
-    # 2c) offline install from the staged wheelhouse
-    wh_cmd = (
-        f'"{python_path}" -m pip install --no-index '
-        f'--find-links "{staged.path}" "{_spec(version)}"'
-    )
-    out(f"\n$ {wh_cmd}")
-    rc = await conn.run_stream(wh_cmd, out)
-    result.steps.append("wheelhouse")
-    if rc == 0:
-        ver = installed_iops_version(conn, python_path) or version
-        out(f"\n✓ wheelhouse install succeeded (IOPS {ver})")
-        return InstallResult(True, "wheelhouse", ver, steps=result.steps)
-    out("\n✗ wheelhouse install failed")
     return result
