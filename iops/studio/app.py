@@ -10,11 +10,13 @@ sending commands into that same shell, so everything shows up live and, on
 failure, the user can take over in the exact same context.
 """
 
+from pathlib import Path
+
 from nicegui import ui
 
 from iops.main import load_version
 from iops.studio import __version__ as STUDIO_VERSION
-from iops.studio.connections import build_connection, parse_ssh_hosts
+from iops.studio.connections import build_connection, parse_ssh_hosts, ssh_interactive_opts
 from iops.studio.environments import (
     PyEnv,
     build_discovery_script,
@@ -27,7 +29,12 @@ from iops.studio.installer import (
     iops_version_command,
     parse_iops_version,
 )
-from iops.studio.settings import SetupConfig, clear_setup, load_setup, save_setup
+from iops.studio.settings import (
+    SetupConfig,
+    delete_setup,
+    load_setups,
+    upsert_setup,
+)
 from iops.studio.terminal import TerminalSession
 
 # Palette borrowed from the HTML report (iops/reporting/report_generator.py).
@@ -54,13 +61,93 @@ _XTERM_OPTIONS = {
 }
 
 
-def _build_wizard(session: TerminalSession, state: dict, host_options: dict, note, on_complete):
+def _alive(element) -> bool:
+    """True while ``element`` is still mounted (not torn down by a view switch).
+
+    Async handlers can await for a while (an ssh login, an install); if the user
+    navigates meanwhile, the left pane is cleared and their elements deleted.
+    Touching a deleted element warns in NiceGUI, so guard UI writes after awaits.
+    """
+    try:
+        return element.id in element.client.elements
+    except Exception:
+        return False
+
+
+def _suggest_name(target: dict, env) -> str:
+    """A default setup name from the target and environment, e.g. ``irene:iops_env``."""
+    where = target.get("alias") if target.get("kind") == "ssh" else "local"
+    if getattr(env, "kind", None) == "system":
+        leaf = "system"
+    else:
+        # .../<venv>/bin/python -> "<venv>"
+        leaf = Path(env.path).parent.parent.name or "env"
+    return f"{where}:{leaf}"
+
+
+def _build_setup_list(setups: list, on_select, on_add, on_delete):
+    """Left-pane hub: the saved setups with select/delete, plus 'Add setup'."""
+    ui.label("Your setups").classes("text-lg font-semibold")
+    ui.label("Pick a target to validate and use, or add a new one.") \
+        .classes("text-gray-600 text-sm")
+    with ui.column().classes("gap-2 w-full mt-2"):
+        for cfg in setups:
+            with ui.card().classes("studio-card w-full p-3"):
+                with ui.row().classes("items-center justify-between w-full no-wrap"):
+                    with ui.column().classes("gap-0"):
+                        ui.label(cfg.name).classes("font-medium")
+                        ui.label(f"{cfg.where} · {cfg.env_path}").classes("text-xs text-gray-500")
+                        iops = f"IOPS {cfg.iops_version}" if cfg.iops_version else "IOPS (unknown)"
+                        extra = f" · {len(cfg.init_commands)} setup cmd(s)" if cfg.init_commands else ""
+                        ui.label(iops + extra).classes("text-xs text-gray-500")
+                    with ui.row().classes("items-center gap-1"):
+                        ui.button(icon="play_arrow", on_click=lambda c=cfg: on_select(c)) \
+                            .props("flat round").tooltip("Use this setup")
+                        ui.button(icon="delete", on_click=lambda c=cfg: on_delete(c)) \
+                            .props("flat round color=negative").tooltip("Delete this setup")
+    ui.button("Add setup", icon="add", on_click=on_add).classes("mt-2")
+
+
+def _parse_commands(text: str) -> list:
+    """Split a textarea into a clean command list: non-empty, comments dropped."""
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+async def _run_setup_commands(session: TerminalSession, commands: list, note) -> bool:
+    """Run each setup command in the persistent shell (so env changes stick).
+
+    Returns True if all succeeded. Failures are noted but not fatal: a bad
+    ``module load`` just means discovery/validation will not find the env, which
+    the user then sees and can fix.
+    """
+    ok = True
+    for cmd in commands:
+        code, _ = await session.run(cmd, display=cmd, timeout=120, subshell=False)
+        if code != 0:
+            ok = False
+            note(f"setup command failed (exit {code}): {cmd}")
+    return ok
+
+
+def _build_wizard(session: TerminalSession, state: dict, host_options: dict, note,
+                  on_complete, on_cancel=None):
     """Build the left-pane setup wizard. ``note`` writes a line to the terminal.
 
     ``on_complete`` is called (no args) once the setup is finished, either by a
     successful install or by finishing on an environment that already has IOPS.
     It reads the shared ``state`` to persist and switch to the ready view.
+    ``on_cancel`` (when other setups already exist) returns to the setups hub.
     """
+
+    if on_cancel is not None:
+        with ui.row().classes("items-center gap-2 w-full"):
+            ui.button("Back to setups", icon="arrow_back", on_click=on_cancel).props("flat dense")
+        ui.label("New setup").classes("text-lg font-semibold")
 
     with ui.stepper().props("vertical").classes("w-full") as stepper:
 
@@ -72,23 +159,46 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
             ssh_select = ui.select(host_options, label="Host from ~/.ssh/config",
                                    with_input=True).classes("w-96")
             ssh_select.bind_visibility_from(conn_type, "value", backward=lambda v: v == "ssh")
+
+            init_input = ui.textarea(
+                "Setup commands (one per line, run after connecting)",
+                value="\n".join(state.get("init_commands") or []),
+                on_change=lambda: state.update(init_commands=_parse_commands(init_input.value)),
+            ).classes("w-96").props("autogrow")
+            init_input.tooltip("Run in the shell right after connecting, before discovery. "
+                               "Use for 'module load python3/3.12', 'export PATH=...', etc. "
+                               "Their effect (PATH, modules) carries into the whole setup.")
             conn_status = ui.row().classes("items-center gap-2 min-h-8")
 
             async def do_verify():
                 code, out = await session.run(
                     'printf "WHO=%s@%s\\n" "$(whoami)" "$(hostname)"',
                     display="verify shell", timeout=30)
+                if not _alive(conn_status):
+                    return
                 who = next((l[4:] for l in out.splitlines() if l.startswith("WHO=")), None)
-                conn_status.clear()
-                with conn_status:
-                    if code == 0 and who:
-                        ui.icon("check_circle", color="positive")
-                        ui.label(f"Connected: {who}").classes("text-positive")
-                        state["connected"] = True
-                        conn_next.set_enabled(True)
-                    else:
+                if not (code == 0 and who):
+                    conn_status.clear()
+                    with conn_status:
                         ui.icon("error", color="negative")
                         ui.label("Shell not ready. Check the terminal.").classes("text-negative")
+                    return
+                state["connected"] = True
+                state["init_commands"] = _parse_commands(init_input.value)
+                if state["init_commands"]:
+                    conn_status.clear()
+                    with conn_status:
+                        ui.spinner(size="sm")
+                        ui.label("Running setup commands...")
+                    await _run_setup_commands(session, state["init_commands"], note)
+                    if not _alive(conn_status):
+                        return
+                state["init_ran"] = True  # already applied to this shell session
+                conn_status.clear()
+                with conn_status:
+                    ui.icon("check_circle", color="positive")
+                    ui.label(f"Connected: {who}").classes("text-positive")
+                    conn_next.set_enabled(True)
 
             async def on_connect():
                 if conn_type.value == "ssh":
@@ -96,7 +206,7 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                     if not alias:
                         ui.notify("Select an SSH host", type="warning")
                         return
-                    session.start_ssh(alias)
+                    session.start_ssh(alias, ssh_interactive_opts(alias))
                     state["target"] = {"kind": "ssh", "alias": alias}
                     conn_status.clear()
                     with conn_status:
@@ -152,6 +262,8 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                         ui.spinner(size="sm")
                         ui.label("Discovering environments...")
                 _, out = await session.run(script, display="discover Python environments", timeout=90)
+                if not _alive(env_area):
+                    return
                 render_envs(parse_env_lines(out))
 
             async def on_create():
@@ -207,6 +319,12 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
             version_input = ui.input("Version to install", value=CLIENT_VERSION).classes("w-64")
             version_input.tooltip("Defaults to this client's version so the remote "
                                   "runner matches. Clear to install the latest.")
+            name_input = ui.input(
+                "Save setup as",
+                on_change=lambda: state.update(setup_name=name_input.value.strip()),
+            ).classes("w-96")
+            name_input.tooltip("A name for this setup so you can pick it next time. "
+                               "Reusing a name overwrites that setup.")
             install_outcome = ui.column().classes("w-full")
 
             def refresh_install():
@@ -222,6 +340,9 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                         ui.label("IOPS is not installed in the selected environment.")
                 install_btn.set_text("Reinstall IOPS" if (env and env.has_iops) else "Install IOPS")
                 finish_btn.set_enabled(bool(env and env.has_iops))
+                if env and not name_input.value.strip():
+                    name_input.value = _suggest_name(state["target"], env)
+                    state["setup_name"] = name_input.value
 
             async def on_install():
                 env = state["env"]
@@ -238,6 +359,8 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                 scp_conn = build_connection(state["target"]["kind"], state["target"]["alias"])
                 res = await install_iops_session(session, env.path, version=version,
                                                  scp_conn=scp_conn, emit=note)
+                if not _alive(install_outcome):
+                    return
                 if res.ok:
                     env.iops_version = res.version
                     install_btn.enable()
@@ -279,15 +402,24 @@ async def _validate_setup(session: TerminalSession, saved: SetupConfig) -> tuple
 
 
 def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
-                 note, on_reset, validate: bool):
-    """Left-pane view shown when a saved setup exists: summary + live validation."""
+                 note, on_back, validate: bool):
+    """Left-pane view for one selected setup: summary + live validation."""
     with ui.card().classes("studio-card w-full p-4 gap-1"):
-        ui.label("Setup ready").classes("text-lg font-semibold")
+        with ui.row().classes("items-center justify-between w-full no-wrap"):
+            ui.label(saved.name).classes("text-lg font-semibold")
+            ui.button(icon="arrow_back", on_click=on_back).props("flat round dense") \
+                .tooltip("Back to setups")
         ui.label(saved.where).classes("text-sm text-gray-600")
         ui.label(f"Environment: {saved.env_path}").classes("text-sm text-gray-600")
         py = f"Python {saved.env_version}" if saved.env_version else "Python"
         iops = f" · IOPS {saved.iops_version}" if saved.iops_version else " · IOPS (unknown)"
         ui.label(py + iops).classes("text-sm text-gray-600")
+
+        if saved.init_commands:
+            with ui.expansion(f"Setup commands ({len(saved.init_commands)})", icon="terminal") \
+                    .classes("w-full text-sm"):
+                for cmd in saved.init_commands:
+                    ui.label(cmd).classes("text-xs font-mono text-gray-600")
 
         status = ui.row().classes("items-center gap-2 min-h-8 mt-2")
 
@@ -304,26 +436,47 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                         color="positive" if ok else "negative")
                 ui.label(text).classes("text-positive" if ok else "text-negative")
 
+        def notice(text: str):
+            status.clear()
+            with status:
+                ui.icon("info", color="warning")
+                ui.label(text)
+
         async def do_validate():
             validate_btn.disable()
             try:
+                # For ssh, open the connection and STOP: the host may prompt for a
+                # password / 2FA in the terminal, and running any command now would
+                # lock input and be typed into that prompt. The user authenticates,
+                # then clicks Validate again to run the checks (ssh_started gates it).
                 if saved.target_kind == "ssh" and not state.get("ssh_started"):
-                    working(f"Reconnecting to {saved.target_alias} (authenticate in terminal if prompted)...")
-                    session.start_ssh(saved.target_alias)
+                    session.start_ssh(saved.target_alias, ssh_interactive_opts(saved.target_alias))
                     state["ssh_started"] = True
                     state["connected"] = True
+                    notice("Authenticate in the terminal if prompted, then click Validate now.")
+                    return
+                # Restore the saved environment (modules, PATH) once per shell.
+                if saved.init_commands and not state.get("init_ran"):
+                    working("Running setup commands...")
+                    await _run_setup_commands(session, saved.init_commands, note)
+                    if not _alive(status):
+                        return
+                    state["init_ran"] = True
                 working("Validating environment...")
                 ok, detail = await _validate_setup(session, saved)
+                if not _alive(status):
+                    return
                 if ok:
                     result(True, detail)
                 else:
-                    result(False, detail + " — re-run setup, or fix it and re-validate.")
+                    result(False, detail + " — fix it and re-validate, or delete this setup.")
             finally:
-                validate_btn.enable()
+                if _alive(validate_btn):
+                    validate_btn.enable()
 
         with ui.row().classes("gap-2 mt-3"):
             validate_btn = ui.button("Validate now", icon="verified", on_click=do_validate)
-            ui.button("Re-run setup", icon="refresh", on_click=on_reset).props("flat")
+            ui.button("Back to setups", icon="arrow_back", on_click=on_back).props("flat")
 
         if validate:
             ui.timer(0.4, do_validate, once=True)
@@ -336,7 +489,8 @@ def _page():
     ui.query(".nicegui-content").classes("p-0 gap-0")
 
     session = TerminalSession()
-    state = {"env": None, "envs": [], "target": {"kind": "local", "alias": None}, "connected": False}
+    state = {"env": None, "envs": [], "target": {"kind": "local", "alias": None},
+             "connected": False, "init_commands": []}
     host_options = {h.alias: h.label for h in parse_ssh_hosts()}
 
     # Header
@@ -371,41 +525,84 @@ def _page():
     def note(msg: str):
         term.write(f"\r\n\x1b[33m# {msg}\x1b[0m\r\n")
 
-    def show_ready(saved: SetupConfig, *, validate: bool):
+    def show_setups():
+        """Hub view: the list of saved setups, or the wizard if there are none."""
+        setups = load_setups()
+        if not setups:
+            show_wizard()
+            return
         left.clear()
         with left:
-            _build_ready(session, state, saved, note, on_reset=reset, validate=validate)
+            _build_setup_list(setups, on_select=select_setup, on_add=add_setup,
+                              on_delete=remove_setup)
+
+    def show_ready(cfg: SetupConfig, *, validate: bool):
+        left.clear()
+        with left:
+            _build_ready(session, state, cfg, note, on_back=show_setups, validate=validate)
 
     def show_wizard():
         left.clear()
+        # Offer a way back to the hub only when there is something to go back to.
+        on_cancel = show_setups if load_setups() else None
         with left:
-            _build_wizard(session, state, host_options, note, on_complete=complete)
+            _build_wizard(session, state, host_options, note, on_complete=complete,
+                          on_cancel=on_cancel)
+
+    def _reset_state():
+        # Keep init_commands (the user's module/PATH setup) so a disconnect does
+        # not make them retype it; drop only the per-shell-session flags and
+        # connection state.
+        state.update(env=None, envs=[], target={"kind": "local", "alias": None},
+                     connected=False)
+        state.pop("ssh_started", None)
+        state.pop("init_ran", None)
+
+    def _load_state_from(cfg: SetupConfig):
+        state["target"] = {"kind": cfg.target_kind, "alias": cfg.target_alias}
+        state["env"] = PyEnv(cfg.env_path, cfg.env_kind, cfg.env_version, cfg.iops_version)
+        state["init_commands"] = list(cfg.init_commands)
+        state.pop("ssh_started", None)
+        state.pop("init_ran", None)
+        state["connected"] = False
 
     def complete():
-        """Persist the finished setup (read from state) and show the ready view."""
+        """Persist the finished setup (read from state) and show its ready view."""
         env = state["env"]
+        name = state.get("setup_name") or _suggest_name(state["target"], env)
         cfg = SetupConfig(
+            name=name,
             target_kind=state["target"]["kind"],
             target_alias=state["target"]["alias"],
             env_path=env.path,
             env_kind=env.kind,
             env_version=env.version,
             iops_version=env.iops_version,
+            init_commands=list(state.get("init_commands") or []),
         )
-        save_setup(cfg)
+        upsert_setup(cfg)
+        # The shell is already connected and set up for this target; do not
+        # revalidate (which would restart/reconnect it).
         show_ready(cfg, validate=False)
 
-    def _reset_state():
-        state.update(env=None, envs=[], target={"kind": "local", "alias": None},
-                     connected=False)
-        state.pop("ssh_started", None)
-
-    def reset():
-        """Delete the saved setup and return to a fresh wizard on a clean shell."""
-        clear_setup()
+    def add_setup():
+        """Start the wizard for a new setup on a clean local shell."""
+        state["init_commands"] = []
+        state.pop("setup_name", None)
         _reset_state()
-        session.restart()  # drop any ssh session so the wizard starts local again
+        session.restart()
         show_wizard()
+
+    def select_setup(cfg: SetupConfig):
+        """Open a saved setup: reconnect on a clean shell and validate live."""
+        _load_state_from(cfg)
+        session.restart()  # drop any previous target so we connect fresh
+        show_ready(cfg, validate=True)
+
+    def remove_setup(cfg: SetupConfig):
+        delete_setup(cfg.name)
+        ui.notify(f"Deleted setup '{cfg.name}'", type="info")
+        show_setups()
 
     def on_shell_exit():
         """The PTY shell died (exit / ssh dropped / killed). Offer to recover.
@@ -419,11 +616,11 @@ def _page():
             disconnect_banner.set_visibility(True)
 
     def reconnect():
-        """Restart button: spawn a clean local shell and restart the wizard."""
+        """Restart button: spawn a clean local shell and return to the setups hub."""
         disconnect_banner.set_visibility(False)
         _reset_state()
         session.restart()
-        show_wizard()
+        show_setups()
 
     with disconnect_banner:
         ui.icon("link_off", color="negative")
@@ -439,13 +636,8 @@ def _page():
     # Tear down the shell when the browser tab closes
     ui.context.client.on_disconnect(session.close)
 
-    saved = load_setup()
-    if saved is not None:
-        state["target"] = {"kind": saved.target_kind, "alias": saved.target_alias}
-        state["env"] = PyEnv(saved.env_path, saved.env_kind, saved.env_version, saved.iops_version)
-        show_ready(saved, validate=True)
-    else:
-        show_wizard()
+    # Land on the setups hub (which shows the wizard itself when none exist).
+    show_setups()
 
 
 def build_app():

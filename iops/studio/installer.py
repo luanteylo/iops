@@ -14,8 +14,10 @@ client and the remote runner behave identically.
 from __future__ import annotations
 
 import asyncio
+import io
 import subprocess
 import sys
+import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -25,6 +27,15 @@ from iops.studio.connections import Connection, LineFn
 
 PACKAGE = "iops-benchmark"
 CLIENT_VERSION = load_version()
+
+# Fail fast when the target has no route to PyPI (common on HPC login nodes):
+# one attempt, short connect timeout. pip otherwise retries 5x at a 15s timeout,
+# stalling ~75s before giving up. We have an offline wheelhouse fallback, so a
+# quick failure just gets us there sooner; a genuinely working link connects in
+# well under this timeout.
+_PIP_RETRIES = 0
+_PIP_CONNECT_TIMEOUT = 10
+_PIP_NET_OPTS = f"--retries {_PIP_RETRIES} --timeout {_PIP_CONNECT_TIMEOUT}"
 
 # Where the wheelhouse is cached locally (client side) and staged remotely.
 _LOCAL_WHEELHOUSE_ROOT = Path.home() / ".cache" / "iops-studio" / "wheelhouse"
@@ -89,7 +100,7 @@ def parse_iops_version(text: str) -> Optional[str]:
 
 
 def pip_install_command(python_path: str, version: Optional[str]) -> str:
-    return f'"{python_path}" -m pip install "{_spec(version)}"'
+    return f'"{python_path}" -m pip install {_PIP_NET_OPTS} "{_spec(version)}"'
 
 
 def wheelhouse_install_command(python_path: str, find_links: str, version: Optional[str]) -> str:
@@ -97,6 +108,20 @@ def wheelhouse_install_command(python_path: str, find_links: str, version: Optio
         f'"{python_path}" -m pip install --no-index '
         f'--find-links "{find_links}" "{_spec(version)}"'
     )
+
+
+def tar_gz_dir(src: Path) -> bytes:
+    """Pack the *contents* of ``src`` (wheel files) into a gzip tarball in memory.
+
+    Entries are stored by basename at the archive root, so extracting into the
+    remote wheelhouse directory drops the wheels straight in.
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for path in sorted(src.iterdir()):
+            if path.is_file():
+                tf.add(str(path), arcname=path.name)
+    return buf.getvalue()
 
 
 async def install_iops_session(session, python_path: str, *,
@@ -137,16 +162,20 @@ async def install_iops_session(session, python_path: str, *,
         note("wheelhouse build failed")
         return result
 
-    # 2b) transfer to the target when remote
+    # 2b) transfer to the target when remote. Stream the wheelhouse through the
+    # authenticated terminal channel rather than a background scp, so it works on
+    # hardened hosts that reject a second connection (password/2FA only, no
+    # multiplexing). Falls back to nothing: this is the one channel that works.
     find_links = str(dest)
     if scp_conn is not None and getattr(scp_conn, "kind", "local") == "ssh":
-        note("transferring wheelhouse to target (scp)...")
-        staged = await asyncio.to_thread(scp_conn.stage_dir, str(dest), _REMOTE_WHEELHOUSE_REL, 600)
+        tar_gz = await asyncio.to_thread(tar_gz_dir, dest)
+        note(f"transferring wheelhouse through the terminal ({len(tar_gz) // 1024} KiB)...")
+        rc = await session.push_tar(_REMOTE_WHEELHOUSE_REL, tar_gz, timeout=1200)
         result.steps.append("transfer")
-        if not staged.ok:
-            note(f"transfer failed: {staged.log}")
+        if rc != 0:
+            note(f"transfer failed (exit {rc})")
             return result
-        find_links = staged.path
+        find_links = f"$HOME/{_REMOTE_WHEELHOUSE_REL}"
 
     # 2c) offline install (runs in the terminal)
     code, _ = await session.run(wheelhouse_install_command(python_path, find_links, version),
@@ -162,7 +191,7 @@ async def install_iops_session(session, python_path: str, *,
 def pip_install(conn: Connection, python_path: str, version: Optional[str] = None,
                 timeout: float = 1800.0) -> tuple[bool, str]:
     """Install IOPS with a normal pip (target reaches PyPI). Returns (ok, log)."""
-    cmd = f'"{python_path}" -m pip install "{_spec(version)}"'
+    cmd = f'"{python_path}" -m pip install {_PIP_NET_OPTS} "{_spec(version)}"'
     res = conn.run(cmd, timeout=timeout)
     log = (res.stdout + res.stderr).strip()
     return res.ok, log

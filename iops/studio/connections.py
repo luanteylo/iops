@@ -13,6 +13,7 @@ exactly like VSCode Remote-SSH. No third-party SSH library is required.
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -23,6 +24,45 @@ from typing import Callable, Optional
 LineFn = Callable[[str], None]
 
 DEFAULT_SSH_CONFIG = Path.home() / ".ssh" / "config"
+
+# SSH connection multiplexing: the interactive terminal opens the *master*
+# connection (the user authenticates once, password / 2FA / agent, whatever the
+# host needs); standalone ssh/scp calls (env discovery, wheelhouse transfer)
+# then ride the same master socket with no second authentication. This is what
+# makes Studio work on login nodes that only accept an interactive password.
+_CONTROL_DIR = Path.home() / ".ssh" / "iops-studio"
+# ControlPersist keeps the master alive briefly after the interactive shell ends,
+# so a transfer started right after still finds it.
+_CONTROL_PERSIST = "600"
+
+
+def control_path(alias: str) -> str:
+    """Deterministic ControlPath socket for ``alias``.
+
+    Hashed to keep the AF_UNIX path short (the 104-char limit bites with long
+    home dirs or aliases). The interactive terminal and standalone ssh/scp both
+    derive the same path from the alias, so they share one authenticated master.
+    """
+    digest = hashlib.sha1(alias.encode()).hexdigest()[:12]
+    return str(_CONTROL_DIR / f"cm-{digest}.sock")
+
+
+def _ensure_control_dir() -> None:
+    _CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(_CONTROL_DIR, 0o700)  # ssh refuses a world-accessible control dir
+    except OSError:
+        pass
+
+
+def ssh_interactive_opts(alias: str) -> list[str]:
+    """``-o`` options for the interactive ``ssh`` that opens the master socket."""
+    _ensure_control_dir()
+    return [
+        "-o", "ControlMaster=auto",
+        "-o", f"ControlPath={control_path(alias)}",
+        "-o", f"ControlPersist={_CONTROL_PERSIST}",
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -213,11 +253,19 @@ class SSHConnection(Connection):
         self.alias = alias
         self.connect_timeout = connect_timeout
 
+    def _control_opts(self) -> list[str]:
+        # Join the master socket opened by the interactive terminal. BatchMode
+        # stays on so that if no master exists (user never connected), we fail
+        # fast instead of blocking on a password prompt we cannot answer here.
+        _ensure_control_dir()
+        return ["-o", "ControlMaster=auto", "-o", f"ControlPath={control_path(self.alias)}"]
+
     def _argv(self, command: str) -> list[str]:
         return [
             "ssh",
             "-o", "BatchMode=yes",                       # never block on a password prompt
             "-o", f"ConnectTimeout={self.connect_timeout}",
+            *self._control_opts(),
             self.alias,
             command,
         ]
@@ -239,6 +287,7 @@ class SSHConnection(Connection):
             "scp", "-r",
             "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={self.connect_timeout}",
+            *self._control_opts(),
             f"{local_dir}/.",
             f"{self.alias}:{remote_rel}",
         ]
