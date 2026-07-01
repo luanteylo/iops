@@ -51,6 +51,10 @@ class SetupConfig:
     env_kind: str = "venv"              # "system" | "venv" | "custom"
     env_version: Optional[str] = None   # python version, informational
     iops_version: Optional[str] = None  # IOPS version present at save time
+    # The folder on the target we always cd into before running IOPS. Config
+    # files live under it (<workdir>/configs/) and new configs default their
+    # benchmark.workdir to it. ``~`` is expanded to $HOME at command time.
+    workdir: str = "~/iops_workdir"
     # Commands run in the interactive shell right after connecting, before
     # anything else (e.g. "module load python3/3.12", "export PATH=..."). They
     # set up the environment so discovery / install / validation see it.
@@ -83,6 +87,7 @@ def _parse_setup(d: object) -> Optional[SetupConfig]:
             env_version=d.get("env_version"),
             iops_version=d.get("iops_version"),
             init_commands=list(d.get("init_commands") or []),
+            workdir=d.get("workdir") or "~/iops_workdir",
             studio_version=d.get("studio_version", ""),
         )
     except KeyError:

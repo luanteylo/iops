@@ -10,8 +10,12 @@ sending commands into that same shell, so everything shows up live and, on
 failure, the user can take over in the exact same context.
 """
 
+import asyncio
 import base64
 import re
+import shlex
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -39,6 +43,7 @@ from iops.studio.configs import (
     load_configs,
     upsert_config,
 )
+from iops.studio.runs import RunRecord, add_run, load_runs, remove_run
 from iops.studio.settings import (
     SetupConfig,
     delete_setup,
@@ -88,33 +93,127 @@ def _slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name or "").strip("_") or "config"
 
 
-async def _write_config_to_target(session: TerminalSession, note, name: str,
-                                  yaml_text: str) -> Optional[str]:
-    """Write ``yaml_text`` into the target's workdir (or a Studio dir) via the shell.
+def _shell_workdir(workdir: str) -> str:
+    """Make a setup workdir safe to embed in double quotes, expanding a leading ~.
 
-    Returns the remote path, or None on failure. The config goes into
-    ``benchmark.workdir`` when that is a literal path; if it uses Jinja2 (or is
-    empty), it lands in ``$HOME/.iops-studio/configs`` and IOPS creates the
-    workdir itself from the config at run time.
+    Inside ``"..."`` the shell won't expand ``~`` but will expand ``$HOME``, so
+    ``~/iops_workdir`` becomes ``$HOME/iops_workdir``.
     """
-    wd = config_workdir(yaml_text)
-    if wd and "{{" not in wd:
-        target_dir = wd
-        if target_dir == "~":
-            target_dir = "$HOME"
-        elif target_dir.startswith("~/"):
-            target_dir = "$HOME/" + target_dir[2:]
-    else:
-        target_dir = "$HOME/.iops-studio/configs"
-    remote = f"{target_dir}/{_slug(name)}.yaml"
+    wd = (workdir or "~/iops_workdir").strip()
+    if wd == "~":
+        return "$HOME"
+    if wd.startswith("~/"):
+        return "$HOME/" + wd[2:]
+    return wd
+
+
+async def _ensure_workdir(session: TerminalSession, workdir: str) -> None:
+    """Create ``<workdir>/configs`` on the target (idempotent)."""
+    d = _shell_workdir(workdir)
+    await session.run(f'mkdir -p "{d}/configs"', display=f"prepare workdir {workdir}", timeout=30)
+
+
+async def _remote_value(session: TerminalSession, expr: str, tag: str) -> str:
+    """Run ``printf 'TAG=%s' expr`` and return the captured value ("" on miss)."""
+    _, out = await session.run(f"printf '{tag}=%s\\n' \"{expr}\"", timeout=30)
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith(tag + "="):
+            return line[len(tag) + 1:].strip()
+    return ""
+
+
+async def _detach_if_attached(session: TerminalSession, state: dict) -> None:
+    """If Studio is attached to a screen, detach so the next command runs in the
+    login shell instead of being typed into the screen.
+
+    ``Ctrl-A D`` is screen's detach chord; screen intercepts it regardless of what
+    is running inside, and the detached IOPS keeps executing in the background.
+    Only sent when we know we are attached (kept accurate by watching output for
+    screen's ``[detached from ...]`` / ``[screen is terminating]`` messages).
+    """
+    if state.get("attached"):
+        session.write("\x01d")  # Ctrl-A, D -> screen detaches
+        state["attached"] = False
+        await asyncio.sleep(0.5)  # let the login shell prompt come back
+        # Ctrl-U clears any stray input: harmless at a clean prompt, and it saves
+        # us if the flag was stale (e.g. an ssh drop that never printed "detached").
+        session.write("\x15")
+
+
+async def _screen_sessions(session: TerminalSession) -> set:
+    """Names of live ``screen`` sessions on the current node (empty if none)."""
+    _, out = await session.run("screen -ls || true", timeout=30)
+    names = set()
+    for line in out.splitlines():
+        m = re.search(r"\d+\.(\S+)", line)  # lines look like: 12345.name  (Detached)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+async def _write_config_to_target(session: TerminalSession, note, workdir: str,
+                                  name: str, yaml_text: str) -> Optional[str]:
+    """Write ``yaml_text`` into ``<workdir>/configs/<name>.yaml`` on the target.
+
+    Returns the remote path (with ``$HOME`` unexpanded, safe inside double
+    quotes), or None on failure.
+    """
+    cfg_dir = f"{_shell_workdir(workdir)}/configs"
+    remote = f"{cfg_dir}/{_slug(name)}.yaml"
     b64 = base64.b64encode(yaml_text.encode()).decode()
-    cmd = (f'mkdir -p "{target_dir}" && printf %s \'{b64}\' | base64 -d > "{remote}" '
+    cmd = (f'mkdir -p "{cfg_dir}" && printf %s \'{b64}\' | base64 -d > "{remote}" '
            f'&& echo __WROTE__')
     code, out = await session.run(cmd, display=f"write {_slug(name)}.yaml", timeout=60)
     if code != 0 or "__WROTE__" not in out:
         note(f"could not write config to target (exit {code})")
         return None
     return remote
+
+
+def _node_command(setup: SetupConfig, node: str, action: str, tty: bool = False) -> str:
+    """Shell to run ``action`` on ``node``, working from local *or* the cluster.
+
+    The run's node is only reachable from inside the cluster; the ssh alias is
+    only resolvable from the local machine. So we branch in the shell itself:
+    on the node -> run directly; reachable directly (we're on the cluster) ->
+    ssh to it; otherwise (local) -> ssh the alias and hop to the node from there.
+    """
+    if setup.target_kind == "local":
+        return action
+    alias = setup.target_alias
+    opts = " ".join(ssh_interactive_opts(alias))
+    t = "-tt " if tty else ""
+    inner = (f'if [ "$(hostname)" = "{node}" ]; then {action}; '
+             f'else ssh {t}"{node}" "{action}"; fi')
+    return (
+        f'if [ "$(hostname)" = "{node}" ]; then {action}; '
+        f'elif ssh {t}"{node}" {shlex.quote(action)} 2>/dev/null; then :; '
+        f'else ssh -tt {opts} {alias} {shlex.quote(inner)}; fi'
+    )
+
+
+def _runner_script(setup: SetupConfig, remote_config: str, session_name: str) -> str:
+    """Bash the screen runs: apply setup commands, cd to workdir, run IOPS.
+
+    Writes an exit-code marker to the shared workdir when IOPS finishes, so the
+    status can be read from any login node even though the screen stays alive
+    (``exec bash``) for the user to review the output.
+    """
+    wd = _shell_workdir(setup.workdir)
+    marker = f"{wd}/.iops-studio/{session_name}.exit"
+    lines = ["#!/bin/bash"]
+    lines += list(setup.init_commands or [])
+    lines += [
+        f'cd "{wd}" || exit 1',
+        f'"{setup.env_path}" -m iops run "{remote_config}"',
+        "__ec=$?",
+        f'echo "$__ec" > "{marker}"',
+        "echo",
+        "echo \"=== iops finished (exit $__ec). Type 'exit' to close this screen. ===\"",
+        "exec bash",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _suggest_name(target: dict, env) -> str:
@@ -211,6 +310,13 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
             init_input.tooltip("Run in the shell right after connecting, before discovery. "
                                "Use for 'module load python3/3.12', 'export PATH=...', etc. "
                                "Their effect (PATH, modules) carries into the whole setup.")
+            workdir_input = ui.input(
+                "Workdir (folder to run IOPS from)",
+                value=state.get("workdir") or "~/iops_workdir",
+                on_change=lambda e: state.update(workdir=(e.value or "").strip() or "~/iops_workdir"),
+            ).classes("w-96")
+            workdir_input.tooltip("Studio always cd's here before running IOPS and saves your "
+                                  "configs under it. Created on connect if missing.")
             conn_status = ui.row().classes("items-center gap-2 min-h-8")
 
             async def do_verify():
@@ -237,6 +343,10 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                     if not _alive(conn_status):
                         return
                 state["init_ran"] = True  # already applied to this shell session
+                state["workdir"] = (workdir_input.value or "").strip() or "~/iops_workdir"
+                await _ensure_workdir(session, state["workdir"])
+                if not _alive(conn_status):
+                    return
                 conn_status.clear()
                 with conn_status:
                     ui.icon("check_circle", color="positive")
@@ -444,10 +554,21 @@ async def _validate_setup(session: TerminalSession, saved: SetupConfig) -> tuple
     return True, f"IOPS {version} ready in {saved.env_path}"
 
 
+def _run_badge(status):
+    """Small colored chip for a run's status: running / finished / unchecked."""
+    label, color = {
+        "running": ("running", "positive"),
+        "finished": ("finished", "blue"),
+        "unknown": ("status unknown", "grey"),
+    }.get(status, ("not checked", "grey"))
+    ui.badge(label, color=color).props("outline" if status != "running" else "")
+
+
 def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                  note, on_back, validate: bool, *, on_new_config, on_edit_config,
-                 on_run_config, on_delete_config):
-    """Left-pane view for one selected setup: summary, live validation, configs."""
+                 on_run_config, on_delete_config, on_reconnect_run, on_stop_run,
+                 on_dismiss_run, on_refresh_runs):
+    """Left-pane view for one selected setup: summary, validation, runs, configs."""
     with ui.card().classes("studio-card w-full p-4 gap-1"):
         with ui.row().classes("items-center justify-between w-full no-wrap"):
             ui.label(saved.name).classes("text-lg font-semibold")
@@ -455,6 +576,7 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                 .tooltip("Back to setups")
         ui.label(saved.where).classes("text-sm text-gray-600")
         ui.label(f"Environment: {saved.env_path}").classes("text-sm text-gray-600")
+        ui.label(f"Workdir: {saved.workdir}").classes("text-sm text-gray-600")
         py = f"Python {saved.env_version}" if saved.env_version else "Python"
         iops = f" · IOPS {saved.iops_version}" if saved.iops_version else " · IOPS (unknown)"
         ui.label(py + iops).classes("text-sm text-gray-600")
@@ -489,6 +611,7 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
         async def do_validate():
             validate_btn.disable()
             try:
+                await _detach_if_attached(session, state)
                 # For ssh, open the connection and STOP: the host may prompt for a
                 # password / 2FA in the terminal, and running any command now would
                 # lock input and be typed into that prompt. The user authenticates,
@@ -506,14 +629,19 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                     if not _alive(status):
                         return
                     state["init_ran"] = True
-                working("Validating environment...")
-                ok, detail = await _validate_setup(session, saved)
+                working("Preparing workdir...")
+                await _ensure_workdir(session, saved.workdir)
                 if not _alive(status):
                     return
-                if ok:
-                    result(True, detail)
-                else:
-                    result(False, detail + " — fix it and re-validate, or delete this setup.")
+                working("Validating environment...")
+                ok, detail = await _validate_setup(session, saved)
+                msg = detail if ok else detail + " — fix it and re-validate, or delete this setup."
+                state["validation"] = (ok, msg)
+                if not _alive(status):
+                    return
+                result(ok, msg)
+                # Probe active runs now that we are connected (rebuilds the view).
+                await on_refresh_runs()
             finally:
                 if _alive(validate_btn):
                     validate_btn.enable()
@@ -525,7 +653,41 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
         if validate:
             ui.timer(0.4, do_validate, once=True)
         else:
-            result(True, f"Setup saved. IOPS {saved.iops_version or ''} ready.".rstrip())
+            prev = state.get("validation")
+            if prev:
+                result(prev[0], prev[1])
+            else:
+                result(True, f"Setup saved. IOPS {saved.iops_version or ''} ready.".rstrip())
+
+    # ---- active runs (screens that may still be executing) ----------------- #
+    active_runs = load_runs(saved.name)
+    if active_runs:
+        run_status = state.get("run_status", {})
+        with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
+            with ui.row().classes("items-center justify-between w-full no-wrap"):
+                ui.label("Active runs").classes("text-md font-semibold")
+                ui.button(icon="refresh", on_click=on_refresh_runs) \
+                    .props("flat round dense").tooltip("Refresh status")
+            ui.label("Reattach hops to the run's login node if needed.") \
+                .classes("text-xs text-gray-500")
+            for run in active_runs:
+                st = run_status.get(run.screen_name)
+                with ui.card().classes("w-full p-2"):
+                    with ui.row().classes("items-center justify-between w-full no-wrap"):
+                        with ui.column().classes("gap-0"):
+                            with ui.row().classes("items-center gap-2 no-wrap"):
+                                ui.label(run.config_name).classes("font-medium")
+                                _run_badge(st)
+                            ui.label(f"screen {run.screen_name} · node {run.node}"
+                                     + (f" · {run.started_at}" if run.started_at else "")) \
+                                .classes("text-xs text-gray-500")
+                        with ui.row().classes("items-center gap-1"):
+                            ui.button(icon="cable", on_click=lambda r=run: on_reconnect_run(r)) \
+                                .props("flat round dense").tooltip("Reattach")
+                            ui.button(icon="stop_circle", on_click=lambda r=run: on_stop_run(r)) \
+                                .props("flat round dense color=negative").tooltip("Kill run")
+                            ui.button(icon="close", on_click=lambda r=run: on_dismiss_run(r)) \
+                                .props("flat round dense").tooltip("Dismiss (stop tracking)")
 
     # ---- configs for this target ------------------------------------------- #
     with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
@@ -558,7 +720,7 @@ def _page():
 
     session = TerminalSession()
     state = {"env": None, "envs": [], "target": {"kind": "local", "alias": None},
-             "connected": False, "init_commands": []}
+             "connected": False, "init_commands": [], "workdir": "~/iops_workdir"}
     host_options = {h.alias: h.label for h in parse_ssh_hosts()}
 
     # Header
@@ -595,6 +757,10 @@ def _page():
     client = ui.context.client
 
     def on_output(data: bytes):
+        # Keep the "attached to a screen" flag accurate: screen prints these when
+        # the session detaches or ends, whether triggered by us or the user.
+        if b"[detached from" in data or b"[screen is terminating" in data:
+            state["attached"] = False
         with client:
             term.write(data)
 
@@ -612,6 +778,13 @@ def _page():
             _build_setup_list(setups, on_select=select_setup, on_add=add_setup,
                               on_delete=remove_setup)
 
+    async def _guarded(coro):
+        # Run an async handler within the page's client context so its UI calls
+        # (ui.notify, view rebuilds) still work even if the element that triggered
+        # it was deleted meanwhile (e.g. the view was rebuilt).
+        with client:
+            await coro
+
     def show_ready(cfg: SetupConfig, *, validate: bool):
         left.clear()
         with left:
@@ -619,8 +792,12 @@ def _page():
                 session, state, cfg, note, on_back=show_setups, validate=validate,
                 on_new_config=lambda: show_editor(cfg, None),
                 on_edit_config=lambda sc: show_editor(cfg, sc),
-                on_run_config=lambda sc: run_config(cfg, sc.name, sc.yaml_text),
+                on_run_config=lambda sc: _guarded(run_config(cfg, sc.name, sc.yaml_text)),
                 on_delete_config=lambda sc: remove_config(cfg, sc),
+                on_reconnect_run=lambda r: _guarded(reconnect_run(cfg, r)),
+                on_stop_run=lambda r: _guarded(stop_run(cfg, r)),
+                on_dismiss_run=lambda r: dismiss_run(cfg, r),
+                on_refresh_runs=lambda: _guarded(refresh_runs(cfg)),
             )
 
     def _exit_editor():
@@ -632,7 +809,7 @@ def _page():
         """Open the full-width config builder for a new or existing config."""
         is_new = studio_cfg is None
         initial = (studio_cfg.yaml_text if not is_new
-                   else starter_yaml("My benchmark", "./workdir",
+                   else starter_yaml("My benchmark", setup_cfg.workdir,
                                      "local" if setup_cfg.target_kind == "local" else "slurm"))
         cfg_name = "" if is_new else studio_cfg.name
 
@@ -650,6 +827,21 @@ def _page():
             _exit_editor()
             show_ready(setup_cfg, validate=False)
 
+        async def run_from_editor(name: str, yaml_text: str):
+            # Save, leave the full-width editor (so the terminal is visible), then
+            # run so the user lands directly on the live run in the terminal.
+            name = (name or "").strip()
+            if not name:
+                ui.notify("Give the config a name", type="warning")
+                return
+            upsert_config(StudioConfig(name, setup_cfg.name, yaml_text))
+            _exit_editor()
+            # _exit_editor deleted the button this handler runs under, so re-enter
+            # the page's client context before touching the UI again.
+            with client:
+                show_ready(setup_cfg, validate=False)
+                await run_config(setup_cfg, name, yaml_text)
+
         main_splitter.set_visibility(False)
         editor_area.clear()
         editor_area.set_visibility(True)
@@ -658,26 +850,72 @@ def _page():
                 cfg_name, initial,
                 on_save=save,
                 on_cancel=cancel,
-                on_run=lambda name, text: run_config(setup_cfg, name, text),
+                on_run=run_from_editor,
                 on_check=lambda name, text: check_config(setup_cfg, name, text),
             )
 
+    async def _is_on_target(setup_cfg: SetupConfig) -> bool:
+        """Whether the shell is actually on the target (not fallen back to local).
+
+        Probes the live hostname rather than trusting ``state['connected']``,
+        which goes stale when the user exits ssh manually.
+        """
+        if setup_cfg.target_kind == "local":
+            return True
+        cur = await _remote_value(session, "$(hostname)", "NODE")
+        return bool(cur) and cur != state.get("local_host")
+
     async def run_config(setup_cfg: SetupConfig, name: str, yaml_text: str):
-        if not state.get("connected") and setup_cfg.target_kind == "ssh":
-            ui.notify("Select and validate this setup first", type="warning")
+        await _detach_if_attached(session, state)  # run in the login shell, not a screen
+        if not await _is_on_target(setup_cfg):
+            ui.notify("Not connected to the target. Reattach a run, or go back and "
+                      "re-select the setup to connect.", type="warning")
             return
-        remote = await _write_config_to_target(session, note, name, yaml_text)
+        await _ensure_workdir(session, setup_cfg.workdir)
+        remote = await _write_config_to_target(session, note, setup_cfg.workdir, name, yaml_text)
         if not remote:
             ui.notify("Could not write config to target", type="negative")
             return
-        note(f"running {name}")
-        # Invoke IOPS through the setup's own interpreter: the `iops` console
-        # script may not be on PATH (venv not activated), but `python -m iops` is.
-        session.write(f'"{setup_cfg.env_path}" -m iops run "{remote}"\n')  # live in terminal
-        ui.notify("Running in the terminal", type="info")
+
+        has_screen = (await _remote_value(
+            session, "$(command -v screen >/dev/null && echo yes || echo no)", "SCREEN")) == "yes"
+        if not has_screen:
+            note("screen not found in this environment; in case of interruption "
+                 "IOPS will be cancelled")
+            session.write(f'cd "{_shell_workdir(setup_cfg.workdir)}" && '
+                          f'"{setup_cfg.env_path}" -m iops run "{remote}"\n')
+            ui.notify("Running in the terminal (no screen — not resilient)", type="warning")
+            return
+
+        # Screen-wrapped, resilient run. Record the node so we can hop back.
+        node = await _remote_value(session, "$(hostname)", "NODE") or "?"
+        session_name = f"iops_{_slug(name)}_{uuid.uuid4().hex[:6]}"
+        runner = _runner_script(setup_cfg, remote, session_name)
+        rb64 = base64.b64encode(runner.encode()).decode()
+        runner_path = f"{_shell_workdir(setup_cfg.workdir)}/.iops-studio/{session_name}.sh"
+        start = (
+            f'mkdir -p "{_shell_workdir(setup_cfg.workdir)}/.iops-studio" && '
+            f"printf %s '{rb64}' | base64 -d > \"{runner_path}\" && "
+            f'screen -dmS {session_name} bash "{runner_path}" && echo __STARTED__'
+        )
+        code, out = await session.run(start, display=f"start screen {session_name}", timeout=60)
+        if code != 0 or "__STARTED__" not in out:
+            ui.notify("Could not start the screen session (see terminal)", type="negative")
+            return
+        add_run(RunRecord(setup_name=setup_cfg.name, config_name=name,
+                          screen_name=session_name, node=node,
+                          started_at=datetime.now().strftime("%Y-%m-%d %H:%M")))
+        state.setdefault("run_status", {})[session_name] = "running"
+        note(f"running '{name}' in screen {session_name} on {node}")
+        state["attached"] = True
+        session.write(f"screen -r {session_name}\n")  # attach live
+        ui.notify(f"Running in screen on {node}. Detach with Ctrl-A D; "
+                  "reattach from the setup if the connection drops.", type="info")
+        _refresh_ready(setup_cfg)
 
     async def check_config(setup_cfg: SetupConfig, name: str, yaml_text: str):
-        remote = await _write_config_to_target(session, note, name, yaml_text)
+        await _detach_if_attached(session, state)
+        remote = await _write_config_to_target(session, note, setup_cfg.workdir, name, yaml_text)
         if not remote:
             ui.notify("Could not write config to target", type="negative")
             return
@@ -686,6 +924,91 @@ def _page():
         ui.notify("Config valid on target" if code == 0
                   else "Config invalid on target (see terminal)",
                   type="positive" if code == 0 else "negative")
+
+    async def reconnect_run(setup_cfg: SetupConfig, run: RunRecord):
+        """Reattach to a run's screen.
+
+        The run's node is reachable from inside the cluster; the alias only from
+        the local machine, so ``_node_command`` figures out how to get there. We
+        detach from any current screen first so the reattach command runs in the
+        login shell rather than being typed into the screen we are watching.
+        """
+        await _detach_if_attached(session, state)
+        note(f"reattaching to {run.screen_name} on {run.node}")
+        cmd = _node_command(setup_cfg, run.node, f"screen -d -r {run.screen_name}", tty=True)
+        state["attached"] = True
+        session.write(cmd + "\n")
+        ui.notify(f"Reattaching to {run.screen_name} on {run.node} "
+                  "(authenticate if prompted)", type="info")
+
+    def dismiss_run(setup_cfg: SetupConfig, run: RunRecord):
+        remove_run(setup_cfg.name, run.screen_name)
+        ui.notify(f"Dismissed run '{run.config_name}'", type="info")
+        _refresh_ready(setup_cfg)
+
+    async def stop_run(setup_cfg: SetupConfig, run: RunRecord):
+        """Confirm, then kill the run's screen (terminating IOPS on the target)."""
+        with ui.dialog() as dialog, ui.card():
+            ui.label(f"Kill run '{run.config_name}'?").classes("font-medium")
+            ui.label(f"Terminates screen {run.screen_name} on {run.node} and the "
+                     "IOPS process it is running.").classes("text-xs text-negative")
+            with ui.row().classes("gap-2 justify-end w-full"):
+                ui.button("Cancel", on_click=lambda: dialog.submit("no")).props("flat")
+                ui.button("Kill run", color="negative", on_click=lambda: dialog.submit("yes"))
+        if await dialog != "yes":
+            return
+        await _detach_if_attached(session, state)
+        note(f"killing {run.screen_name} on {run.node}")
+        cmd = _node_command(setup_cfg, run.node, f"screen -S {run.screen_name} -X quit")
+        session.write(cmd + "\n")
+        remove_run(setup_cfg.name, run.screen_name)
+        ui.notify(f"Killing {run.screen_name} on {run.node}", type="warning")
+        _refresh_ready(setup_cfg)
+
+    async def refresh_runs(setup_cfg: SetupConfig):
+        """Recompute each run's status from two signals.
+
+        1. Completion marker ``<workdir>/.iops-studio/<screen>.exit`` written by
+           the runner when IOPS finishes. It lives on the shared filesystem, so it
+           is readable from any login node (the screen itself stays alive for
+           review, so screen presence alone is not enough).
+        2. Whether the screen is still alive on the *current* node. This catches
+           runs that finished/were killed before the marker existed.
+
+        Run this only at a shell prompt (not while attached to a screen), e.g. via
+        the Refresh button after detaching.
+        """
+        runs = load_runs(setup_cfg.name)
+        if not runs:
+            return
+        await _detach_if_attached(session, state)  # so checks run in the login shell
+        if not await _is_on_target(setup_cfg):
+            ui.notify("Reconnect to the target (Reattach, or re-select the setup) "
+                      "to refresh run status", type="warning")
+            return
+        node = await _remote_value(session, "$(hostname)", "NODE")
+        sessions = await _screen_sessions(session)
+        d = f"{_shell_workdir(setup_cfg.workdir)}/.iops-studio"
+        checks = "\n".join(
+            f'[ -f "{d}/{r.screen_name}.exit" ] && echo "DONE={r.screen_name}"'
+            for r in runs
+        )
+        _, out = await session.run(checks, display="check run status", timeout=30)
+        done = {ln[len("DONE="):].strip() for ln in out.splitlines()
+                if ln.strip().startswith("DONE=")}
+        status = {}
+        for r in runs:
+            if r.screen_name in done:
+                status[r.screen_name] = "finished"
+            elif r.node == node and r.screen_name not in sessions:
+                status[r.screen_name] = "finished"  # screen gone on this node
+            else:
+                status[r.screen_name] = "running"
+        state["run_status"] = status
+        _refresh_ready(setup_cfg)
+
+    def _refresh_ready(setup_cfg: SetupConfig):
+        show_ready(setup_cfg, validate=False)
 
     def remove_config(setup_cfg: SetupConfig, sc):
         delete_config(setup_cfg.name, sc.name)
@@ -708,13 +1031,18 @@ def _page():
                      connected=False)
         state.pop("ssh_started", None)
         state.pop("init_ran", None)
+        state.pop("attached", None)
 
     def _load_state_from(cfg: SetupConfig):
         state["target"] = {"kind": cfg.target_kind, "alias": cfg.target_alias}
         state["env"] = PyEnv(cfg.env_path, cfg.env_kind, cfg.env_version, cfg.iops_version)
         state["init_commands"] = list(cfg.init_commands)
+        state["workdir"] = cfg.workdir
         state.pop("ssh_started", None)
         state.pop("init_ran", None)
+        state.pop("run_status", None)
+        state.pop("validation", None)
+        state.pop("attached", None)
         state["connected"] = False
 
     def complete():
@@ -730,6 +1058,7 @@ def _page():
             env_version=env.version,
             iops_version=env.iops_version,
             init_commands=list(state.get("init_commands") or []),
+            workdir=state.get("workdir") or "~/iops_workdir",
         )
         upsert_setup(cfg)
         # The shell is already connected and set up for this target; do not
@@ -783,6 +1112,12 @@ def _page():
     term.on_data(lambda e: session.write(e.data) if not session.input_locked else None)
     term.on_resize(lambda e: session.resize(e.cols, e.rows))
     ui.timer(0.3, term.fit, once=True)
+
+    async def _capture_local_host():
+        # The shell starts local; record this machine's hostname so we can later
+        # tell whether the shell is on the cluster or has fallen back to local.
+        state["local_host"] = await _remote_value(session, "$(hostname)", "NODE")
+    ui.timer(0.6, _capture_local_host, once=True)
 
     # Tear down the shell when the browser tab closes
     ui.context.client.on_disconnect(session.close)
