@@ -75,6 +75,24 @@ _XTERM_OPTIONS = {
     "theme": {"background": "#1e1e1e", "foreground": "#d4d4d4"},
 }
 
+_LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
+
+
+def _logo_data_uri() -> str:
+    """Return the bundled IOPS logo as a base64 data URI ('' if unavailable).
+
+    Embedding the image inline keeps Studio self-contained: no static route to
+    register and no dependence on the process working directory.
+    """
+    try:
+        data = _LOGO_PATH.read_bytes()
+    except OSError:
+        return ""
+    return "data:image/png;base64," + base64.b64encode(data).decode()
+
+
+_STUDIO_LOGO = _logo_data_uri()
+
 
 def _alive(element) -> bool:
     """True while ``element`` is still mounted (not torn down by a view switch).
@@ -724,10 +742,12 @@ def _page():
     host_options = {h.alias: h.label for h in parse_ssh_hosts()}
 
     # Header
-    with ui.row().classes("items-baseline gap-3 px-4 py-2 w-full").style("background:#fff;border-bottom:1px solid #e0e0e0"):
+    with ui.row().classes("items-center gap-3 px-4 py-2 w-full").style("background:#fff;border-bottom:1px solid #e0e0e0"):
+        if _STUDIO_LOGO:
+            ui.image(_STUDIO_LOGO).classes("w-8 h-8").style("border-radius:6px")
         ui.label("IOPS Studio").classes("text-2xl font-bold")
-        ui.label(f"v{STUDIO_VERSION}").classes("text-sm text-gray-500")
-        ui.label(f"core {load_version()}").classes("text-xs text-gray-400")
+        ui.label(f"v{STUDIO_VERSION}").classes("text-sm text-gray-500 self-end")
+        ui.label(f"core {load_version()}").classes("text-xs text-gray-400 self-end")
 
     # Persistent recovery banner, shown when the shell session dies. Lives above
     # the splitter so it survives left-pane view swaps.

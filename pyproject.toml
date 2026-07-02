@@ -54,7 +54,7 @@ iops = "iops.main:main"
 include = ["iops*", "docs*"]
 
 [tool.setuptools.package-data]
-iops = ["VERSION", "**/*.yaml", "**/*.yml"]
+iops = ["VERSION", "**/*.yaml", "**/*.yml", "**/*.png"]
 docs = ["**/*.md", "**/*.yaml", "**/*.yml", "**/*.py", "**/*.sh", "**/*.txt"]
 
 [tool.setuptools.dynamic]

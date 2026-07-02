@@ -14,9 +14,13 @@ def launch(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = True)
     # Imported lazily: pulls in NiceGUI, so only touched once availability is confirmed.
     from nicegui import ui
 
+    from pathlib import Path
+
     from iops.studio.app import build_app
 
     build_app()
+
+    favicon = Path(__file__).parent / "assets" / "logo.png"
 
     # reload=False is required when launching from within a function (avoids
     # NiceGUI's __mp_main__ auto-reload machinery, which needs a script entry point).
@@ -27,4 +31,5 @@ def launch(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = True)
         native=False,
         reload=False,
         title="IOPS Studio",
+        favicon=str(favicon) if favicon.exists() else None,
     )
