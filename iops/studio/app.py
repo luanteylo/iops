@@ -40,9 +40,11 @@ from iops.studio.builder import build_editor, config_workdir, starter_yaml
 from iops.studio.configs import (
     StudioConfig,
     delete_config,
+    get_config,
     load_configs,
     upsert_config,
 )
+from iops.studio.filebrowser import open_yaml, save_yaml
 from iops.studio.runs import RunRecord, add_run, load_runs, remove_run
 from iops.studio.settings import (
     SetupConfig,
@@ -584,8 +586,8 @@ def _run_badge(status):
 
 def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                  note, on_back, validate: bool, *, on_new_config, on_edit_config,
-                 on_run_config, on_delete_config, on_reconnect_run, on_stop_run,
-                 on_dismiss_run, on_refresh_runs):
+                 on_run_config, on_delete_config, on_import_config, on_export_config,
+                 on_reconnect_run, on_stop_run, on_dismiss_run, on_refresh_runs):
     """Left-pane view for one selected setup: summary, validation, runs, configs."""
     with ui.card().classes("studio-card w-full p-4 gap-1"):
         with ui.row().classes("items-center justify-between w-full no-wrap"):
@@ -711,7 +713,10 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
     with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
         with ui.row().classes("items-center justify-between w-full no-wrap"):
             ui.label("Configs for this target").classes("text-md font-semibold")
-            ui.button("New config", icon="add", on_click=on_new_config).props("flat dense")
+            with ui.row().classes("items-center gap-1"):
+                ui.button("Import", icon="file_upload", on_click=on_import_config) \
+                    .props("flat dense").tooltip("Load a YAML file from the host as a new config")
+                ui.button("New config", icon="add", on_click=on_new_config).props("flat dense")
         cfgs = load_configs(saved.name)
         if not cfgs:
             ui.label("No configs yet. Build one to run a benchmark.") \
@@ -728,6 +733,8 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                             .props("flat round dense").tooltip("Run on target")
                         ui.button(icon="edit", on_click=lambda s=sc: on_edit_config(s)) \
                             .props("flat round dense").tooltip("Edit")
+                        ui.button(icon="file_download", on_click=lambda s=sc: on_export_config(s)) \
+                            .props("flat round dense").tooltip("Export to a file on the host")
                         ui.button(icon="delete", on_click=lambda s=sc: on_delete_config(s)) \
                             .props("flat round dense color=negative").tooltip("Delete")
 
@@ -814,6 +821,9 @@ def _page():
                 on_edit_config=lambda sc: show_editor(cfg, sc),
                 on_run_config=lambda sc: _guarded(run_config(cfg, sc.name, sc.yaml_text)),
                 on_delete_config=lambda sc: remove_config(cfg, sc),
+                on_import_config=lambda: _guarded(import_config(cfg)),
+                on_export_config=lambda sc: _guarded(
+                    _export_yaml(f"{_slug(sc.name)}.yaml", sc.yaml_text)),
                 on_reconnect_run=lambda r: _guarded(reconnect_run(cfg, r)),
                 on_stop_run=lambda r: _guarded(stop_run(cfg, r)),
                 on_dismiss_run=lambda r: dismiss_run(cfg, r),
@@ -872,6 +882,8 @@ def _page():
                 on_cancel=cancel,
                 on_run=run_from_editor,
                 on_check=lambda name, text: check_config(setup_cfg, name, text),
+                on_export=lambda name, text: _export_yaml(
+                    f"{_slug(name) or 'config'}.yaml", text),
             )
 
     async def _is_on_target(setup_cfg: SetupConfig) -> bool:
@@ -1034,6 +1046,43 @@ def _page():
         delete_config(setup_cfg.name, sc.name)
         ui.notify(f"Deleted config '{sc.name}'", type="info")
         show_ready(setup_cfg, validate=False)
+
+    async def import_config(setup_cfg: SetupConfig):
+        """Import a host YAML as a new config (a copy), then open it for editing.
+
+        The source file is only read: the copy is stored in Studio's config
+        library, so edits never touch the original on disk.
+        """
+        path = await open_yaml()
+        if not path:
+            return
+        try:
+            text = Path(path).read_text()
+        except (OSError, UnicodeDecodeError) as e:
+            ui.notify(f"Could not read file: {e}", type="negative")
+            return
+        base = Path(path).stem or "imported"
+        existing = {c.name for c in load_configs(setup_cfg.name)}
+        name, i = base, 2
+        while name in existing:
+            name, i = f"{base} ({i})", i + 1
+        upsert_config(StudioConfig(name, setup_cfg.name, text))
+        ui.notify(f"Imported '{Path(path).name}' as config '{name}'", type="positive")
+        show_editor(setup_cfg, get_config(setup_cfg.name, name))
+
+    async def _export_yaml(default_name: str, text: str):
+        """Write ``text`` to a host path chosen in the save dialog."""
+        dest = await save_yaml(default_name=default_name)
+        if not dest:
+            return
+        try:
+            p = Path(dest)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+        except OSError as e:
+            ui.notify(f"Could not write file: {e}", type="negative")
+            return
+        ui.notify(f"Exported to {dest}", type="positive")
 
     def show_wizard():
         left.clear()

@@ -169,8 +169,13 @@ def _csv_list(text: str) -> list:
 # Editor UI
 # --------------------------------------------------------------------------- #
 def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
-                 on_run, on_check) -> None:
-    """Render the side-by-side config editor into the current container."""
+                 on_run, on_check, on_export=None) -> None:
+    """Render the side-by-side config editor into the current container.
+
+    ``on_export`` (optional) is an async callback ``(name, yaml_text)`` that
+    writes the *current* editor text to a file on the host; when provided, an
+    Export button appears in the header.
+    """
     from nicegui import ui
 
     data, _ = parse_yaml(initial_yaml)
@@ -189,6 +194,9 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
         ui.button("Save", icon="save", on_click=lambda: _do_save()).props("unelevated")
         ui.button("Run", icon="play_arrow", on_click=lambda: _do_run()).props("outline")
         ui.button("Check on target", icon="fact_check", on_click=lambda: _do_check()).props("flat")
+        if on_export is not None:
+            ui.button("Export", icon="file_download", on_click=lambda: _do_export()) \
+                .props("flat").tooltip("Save the current YAML to a file on the host")
 
     status = ui.row().classes("items-center gap-2 min-h-6")
 
@@ -714,6 +722,9 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
 
     async def _do_check():
         await on_check(name_holder["value"], cm.value)
+
+    async def _do_export():
+        await on_export(name_holder["value"], cm.value)
 
     # ---- layout: form | yaml side by side ---------------------------------- #
     # The row flex-grows to fill the space left below the header, and
