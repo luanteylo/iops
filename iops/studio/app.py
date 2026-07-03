@@ -14,6 +14,7 @@ import asyncio
 import base64
 import re
 import shlex
+import subprocess
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -46,9 +47,18 @@ from iops.studio.configs import (
 )
 from iops.studio.filebrowser import open_yaml, save_yaml
 from iops.studio.runs import RunRecord, add_run, load_runs, remove_run
+from iops.studio.sessions import (
+    CONNECTED,
+    CONNECTING,
+    DROPPED,
+    NEW,
+    SessionRegistry,
+    StudioSession,
+)
 from iops.studio.settings import (
     SetupConfig,
     delete_setup,
+    get_setup,
     load_setups,
     upsert_setup,
 )
@@ -75,6 +85,14 @@ _XTERM_OPTIONS = {
     "scrollback": 5000,
     "fontFamily": "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
     "theme": {"background": "#1e1e1e", "foreground": "#d4d4d4"},
+}
+
+# Terminal-tab text color per session status (colors the tab's label + status dot).
+_STATUS_CLASS = {
+    NEW: "text-grey",
+    CONNECTING: "text-warning",
+    CONNECTED: "text-positive",
+    DROPPED: "text-negative",
 }
 
 _LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
@@ -297,14 +315,20 @@ async def _run_setup_commands(session: TerminalSession, commands: list, note) ->
 
 
 def _build_wizard(session: TerminalSession, state: dict, host_options: dict, note,
-                  on_complete, on_cancel=None):
+                  on_complete, on_cancel=None, on_status=None):
     """Build the left-pane setup wizard. ``note`` writes a line to the terminal.
 
     ``on_complete`` is called (no args) once the setup is finished, either by a
     successful install or by finishing on an environment that already has IOPS.
     It reads the shared ``state`` to persist and switch to the ready view.
-    ``on_cancel`` (when other setups already exist) returns to the setups hub.
+    ``on_cancel`` closes this wizard's terminal and returns to the setups hub.
+    ``on_status(status)`` (optional) reports the shell's connection status so the
+    caller can repaint this session's tab (e.g. green once verified).
     """
+
+    def _status(s):
+        if on_status is not None:
+            on_status(s)
 
     if on_cancel is not None:
         with ui.row().classes("items-center gap-2 w-full"):
@@ -372,6 +396,7 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                     ui.icon("check_circle", color="positive")
                     ui.label(f"Connected: {who}").classes("text-positive")
                     conn_next.set_enabled(True)
+                _status(CONNECTED)
 
             async def on_connect():
                 if conn_type.value == "ssh":
@@ -381,6 +406,7 @@ def _build_wizard(session: TerminalSession, state: dict, host_options: dict, not
                         return
                     session.start_ssh(alias, ssh_interactive_opts(alias))
                     state["target"] = {"kind": "ssh", "alias": alias}
+                    _status(CONNECTING)
                     conn_status.clear()
                     with conn_status:
                         ui.icon("info", color="warning")
@@ -587,13 +613,28 @@ def _run_badge(status):
 def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                  note, on_back, validate: bool, *, on_new_config, on_edit_config,
                  on_run_config, on_delete_config, on_import_config, on_export_config,
-                 on_reconnect_run, on_stop_run, on_dismiss_run, on_refresh_runs):
-    """Left-pane view for one selected setup: summary, validation, runs, configs."""
+                 on_reconnect_run, on_stop_run, on_dismiss_run, on_refresh_runs,
+                 on_close=None, on_status=None):
+    """Left-pane view for one selected setup: summary, validation, runs, configs.
+
+    ``on_back`` returns to the setups hub *without* closing this runtime's
+    terminal (it keeps running in its tab). ``on_close`` tears the terminal down.
+    ``on_status(status)`` reports connection status so the caller repaints the tab.
+    """
+
+    def _status(s):
+        if on_status is not None:
+            on_status(s)
+
     with ui.card().classes("studio-card w-full p-4 gap-1"):
         with ui.row().classes("items-center justify-between w-full no-wrap"):
             ui.label(saved.name).classes("text-lg font-semibold")
-            ui.button(icon="arrow_back", on_click=on_back).props("flat round dense") \
-                .tooltip("Back to setups")
+            with ui.row().classes("items-center gap-1 no-wrap"):
+                if on_close is not None:
+                    ui.button(icon="tab_unselected", on_click=on_close) \
+                        .props("flat round dense").tooltip("Close this terminal")
+                ui.button(icon="arrow_back", on_click=on_back).props("flat round dense") \
+                    .tooltip("Back to setups (keeps the terminal open)")
         ui.label(saved.where).classes("text-sm text-gray-600")
         ui.label(f"Environment: {saved.env_path}").classes("text-sm text-gray-600")
         ui.label(f"Workdir: {saved.workdir}").classes("text-sm text-gray-600")
@@ -640,6 +681,7 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                     session.start_ssh(saved.target_alias, ssh_interactive_opts(saved.target_alias))
                     state["ssh_started"] = True
                     state["connected"] = True
+                    _status(CONNECTING)
                     notice("Authenticate in the terminal if prompted, then click Validate now.")
                     return
                 # Restore the saved environment (modules, PATH) once per shell.
@@ -660,6 +702,8 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                 if not _alive(status):
                     return
                 result(ok, msg)
+                if ok:
+                    _status(CONNECTED)
                 # Probe active runs now that we are connected (rebuilds the view).
                 await on_refresh_runs()
             finally:
@@ -743,10 +787,22 @@ def _page():
     ui.add_head_html(_STUDIO_HEAD)
     ui.query(".nicegui-content").classes("p-0 gap-0")
 
-    session = TerminalSession()
-    state = {"env": None, "envs": [], "target": {"kind": "local", "alias": None},
-             "connected": False, "init_commands": [], "workdir": "~/iops_workdir"}
     host_options = {h.alias: h.label for h in parse_ssh_hosts()}
+
+    # Every runtime is its own StudioSession (shell + state + terminal tab). The
+    # registry is per browser tab so distinct clients never share PTYs.
+    registry = SessionRegistry()
+    active = {"key": None}                # key of the session whose tab is focused
+    suppress_tab_event = {"on": False}    # gate our own programmatic tab switches
+
+    # All shells start as a local bash before any ssh, so the local hostname is
+    # the same for every session; probe it once (matching the shell's $(hostname)
+    # so `_is_on_target` can tell "still local" from "on the cluster").
+    try:
+        page_local_host = subprocess.check_output(
+            ["bash", "-lc", "hostname"], text=True, timeout=5).strip()
+    except (OSError, subprocess.SubprocessError):
+        page_local_host = ""
 
     # Header
     with ui.row().classes("items-center gap-3 px-4 py-2 w-full").style("background:#fff;border-bottom:1px solid #e0e0e0"):
@@ -756,20 +812,24 @@ def _page():
         ui.label(f"v{STUDIO_VERSION}").classes("text-sm text-gray-500 self-end")
         ui.label(f"core {load_version()}").classes("text-xs text-gray-400 self-end")
 
-    # Persistent recovery banner, shown when the shell session dies. Lives above
-    # the splitter so it survives left-pane view swaps.
-    disconnect_banner = ui.row().classes("w-full items-center gap-3 px-4 py-2") \
-        .style("background:#fdecea;border-bottom:1px solid #f5c6cb")
-    disconnect_banner.set_visibility(False)
-
-    # Two panes: left (wizard or ready view) + persistent terminal (right)
+    # Two panes: left (wizard or ready view) + the terminal tab bar (right). Each
+    # connected runtime gets its own tab + xterm; all stay mounted so their shells
+    # and scrollback persist, and only the active one is made visible.
     main_splitter = ui.splitter(value=45).classes("w-full").style("height: calc(100vh - 3rem)")
     with main_splitter:
         with main_splitter.before:
             left = ui.column().classes("p-4 gap-4 w-full h-full").style("overflow:auto")
         with main_splitter.after:
-            with ui.column().classes("w-full h-full p-1").style("background:#1e1e1e"):
-                term = ui.xterm(options=_XTERM_OPTIONS).classes("w-full h-full")
+            with ui.column().classes("w-full h-full gap-0").style("background:#1e1e1e"):
+                term_tabs = ui.tabs().props("dense active-color=white indicator-color=cyan "
+                                            "align=left inline-label").classes("w-full") \
+                    .style("background:#2d2d2d;color:#cfcfcf;min-height:2rem")
+                term_tabs.on_value_change(lambda e: _on_tab_change())
+                terminals_stack = ui.column().classes("w-full gap-0") \
+                    .style("flex:1; min-height:0")
+                with terminals_stack:
+                    empty_hint = ui.label("Select or add a setup to open a terminal.") \
+                        .classes("text-grey text-sm p-4")
 
     # Full-width editor area, shown in place of the split view while building a
     # config so the form + YAML get the whole page side by side. It fills the
@@ -783,27 +843,165 @@ def _page():
     # the UI from a background task.
     client = ui.context.client
 
-    def on_output(data: bytes):
-        # Keep the "attached to a screen" flag accurate: screen prints these when
-        # the session detaches or ends, whether triggered by us or the user.
-        if b"[detached from" in data or b"[screen is terminating" in data:
-            state["attached"] = False
-        with client:
-            term.write(data)
+    # ---- per-session state helpers ---------------------------------------- #
+    def _clean_state() -> dict:
+        return {"env": None, "envs": [], "target": {"kind": "local", "alias": None},
+                "connected": False, "init_commands": [], "workdir": "~/iops_workdir",
+                "local_host": page_local_host}
 
-    def note(msg: str):
-        term.write(f"\r\n\x1b[33m# {msg}\x1b[0m\r\n")
+    def _reset_state(st: dict) -> None:
+        # Keep init_commands (the user's module/PATH setup) so a disconnect does
+        # not make them retype it; drop only per-shell-session flags.
+        st.update(env=None, envs=[], target={"kind": "local", "alias": None}, connected=False)
+        for k in ("ssh_started", "init_ran", "attached"):
+            st.pop(k, None)
+
+    def _state_from(cfg: SetupConfig) -> dict:
+        st = _clean_state()
+        st["target"] = {"kind": cfg.target_kind, "alias": cfg.target_alias}
+        st["env"] = PyEnv(cfg.env_path, cfg.env_kind, cfg.env_version, cfg.iops_version)
+        st["init_commands"] = list(cfg.init_commands)
+        st["workdir"] = cfg.workdir
+        return st
+
+    # ---- session / tab plumbing ------------------------------------------- #
+    def _set_status(sess: StudioSession, status: str) -> None:
+        sess.status = status
+        if sess.tab is not None:
+            sess.tab.classes(replace=_STATUS_CLASS.get(status, "text-grey"))
+
+    def _set_tab_label(sess: StudioSession, label: str) -> None:
+        if sess.tab is not None:
+            sess.tab._props["label"] = label
+            sess.tab.update()
+
+    def _make_on_output(sess: StudioSession):
+        def _out(data: bytes):
+            # Keep the "attached to a screen" flag accurate: screen prints these
+            # when the session detaches or ends, whether we or the user triggered it.
+            if b"[detached from" in data or b"[screen is terminating" in data:
+                sess.state["attached"] = False
+            with client:
+                sess.xterm.write(data)
+        return _out
+
+    def _make_note(sess: StudioSession):
+        # Called from request/`_guarded` contexts (ambient client), like the old
+        # single-session note; writes a yellow shell comment into this terminal.
+        def _note(msg: str):
+            if sess.xterm is not None:
+                sess.xterm.write(f"\r\n\x1b[33m# {msg}\x1b[0m\r\n")
+        return _note
+
+    def _update_empty_hint():
+        empty_hint.set_visibility(not registry.all())
+
+    def _fit_active():
+        sess = registry.get(active["key"])
+        if sess is not None and sess.xterm is not None:
+            sess.xterm.fit()
+
+    def _create_session(cfg: Optional[SetupConfig], label: str) -> StudioSession:
+        """Mint a runtime: shell + state + tab + terminal column, all wired up."""
+        term = TerminalSession()
+        st = _state_from(cfg) if cfg is not None else _clean_state()
+        sess = StudioSession(key=uuid.uuid4().hex, term=term, state=st,
+                             setup_name=(cfg.name if cfg is not None else None))
+        with term_tabs:
+            sess.tab = ui.tab(name=sess.key, label=label, icon="circle") \
+                .classes(_STATUS_CLASS[NEW]).props("no-caps")
+        with terminals_stack:
+            sess.column = ui.column().classes("w-full h-full gap-0 p-1")
+            sess.column.set_visibility(False)  # focus() reveals the right one
+            with sess.column:
+                sess.drop_banner = ui.row().classes("w-full items-center gap-2 px-2 py-1 rounded") \
+                    .style("background:#fdecea")
+                sess.drop_banner.set_visibility(False)
+                with sess.drop_banner:
+                    ui.icon("link_off", color="negative")
+                    ui.label("Terminal disconnected.").classes("text-negative text-sm")
+                    ui.button("Reconnect", icon="restart_alt",
+                              on_click=lambda s=sess: reconnect(s)).props("flat dense")
+                sess.xterm = ui.xterm(options=_XTERM_OPTIONS).classes("w-full") \
+                    .style("flex:1; min-height:0")
+        sess.note = _make_note(sess)
+        sess.xterm.on_data(lambda e, s=sess: s.term.write(e.data)
+                           if not s.term.input_locked else None)
+        sess.xterm.on_resize(lambda e, s=sess: s.term.resize(e.cols, e.rows))
+        sess.term.start(on_output=_make_on_output(sess),
+                        on_exit=lambda s=sess: _on_shell_exit(s))
+        registry.add(sess)
+        _update_empty_hint()
+        return sess
+
+    def _on_tab_change():
+        # User clicked a tab. Programmatic switches suppress this and drive focus()
+        # directly (so they can pass validate=True for a first connect).
+        if suppress_tab_event["on"]:
+            return
+        focus(term_tabs.value, validate=False)
+
+    def focus(key: Optional[str], *, validate: bool) -> None:
+        """Make ``key`` the active tab: show its terminal and sync the left pane."""
+        active["key"] = key
+        for s in registry.all():
+            s.column.set_visibility(s.key == key)
+        sess = registry.get(key)
+        if sess is None:
+            return
+        if sess.setup_name is None:
+            show_wizard(sess)
+        else:
+            cfg = get_setup(sess.setup_name)
+            if cfg is None:
+                show_setups()
+            else:
+                show_ready(cfg, validate=validate)
+        ui.timer(0.05, _fit_active, once=True)
+
+    def _focus_programmatic(key: str, *, validate: bool) -> None:
+        # Update the tab-bar highlight without re-triggering our click handler.
+        suppress_tab_event["on"] = True
+        term_tabs.value = key
+        suppress_tab_event["on"] = False
+        focus(key, validate=validate)
+
+    def _close_session(sess: StudioSession) -> None:
+        # Tear down the shell (removes its event-loop reader) before its elements.
+        # Screen-wrapped runs on the target survive: their RunRecords are kept.
+        sess.term.close()
+        for el in (sess.tab, sess.column):
+            try:
+                el.delete()
+            except Exception:
+                pass
+        registry.remove(sess.key)
+        _update_empty_hint()
+
+    def close_tab(sess: StudioSession) -> None:
+        was_active = active["key"] == sess.key
+        _close_session(sess)
+        if not was_active:
+            return
+        remaining = registry.all()
+        if remaining:
+            _focus_programmatic(remaining[-1].key, validate=False)
+        else:
+            active["key"] = None
+            show_setups()
 
     def show_setups():
-        """Hub view: the list of saved setups, or the wizard if there are none."""
-        setups = load_setups()
-        if not setups:
-            show_wizard()
-            return
+        """Hub view: the saved setups (or an empty-state prompt)."""
         left.clear()
+        setups = load_setups()
         with left:
-            _build_setup_list(setups, on_select=select_setup, on_add=add_setup,
-                              on_delete=remove_setup)
+            if not setups:
+                ui.label("No setups yet.").classes("text-lg font-semibold")
+                ui.label("Add a target to validate and use.").classes("text-gray-600 text-sm")
+                ui.button("Add setup", icon="add", on_click=add_setup).classes("mt-2")
+            else:
+                _build_setup_list(setups, on_select=select_setup, on_add=add_setup,
+                                  on_delete=remove_setup)
 
     async def _guarded(coro):
         # Run an async handler within the page's client context so its UI calls
@@ -813,10 +1011,20 @@ def _page():
             await coro
 
     def show_ready(cfg: SetupConfig, *, validate: bool):
+        sess = registry.by_setup(cfg.name)
+        if sess is None:
+            show_setups()
+            return
+        # A background handler may finish after the user switched tabs; don't let
+        # it repaint the left pane for a runtime that is no longer focused.
+        if active["key"] != sess.key:
+            return
         left.clear()
         with left:
             _build_ready(
-                session, state, cfg, note, on_back=show_setups, validate=validate,
+                sess.term, sess.state, cfg, sess.note, on_back=show_setups, validate=validate,
+                on_close=lambda s=sess: close_tab(s),
+                on_status=lambda st, s=sess: _set_status(s, st),
                 on_new_config=lambda: show_editor(cfg, None),
                 on_edit_config=lambda sc: show_editor(cfg, sc),
                 on_run_config=lambda sc: _guarded(run_config(cfg, sc.name, sc.yaml_text)),
@@ -834,6 +1042,9 @@ def _page():
         editor_area.clear()
         editor_area.set_visibility(False)
         main_splitter.set_visibility(True)
+        # The active xterm was hidden while the editor overlay was up; re-fit it
+        # now that it is visible again (a hidden xterm sizes to zero cols/rows).
+        ui.timer(0.05, _fit_active, once=True)
 
     def show_editor(setup_cfg: SetupConfig, studio_cfg):
         """Open the full-width config builder for a new or existing config."""
@@ -886,7 +1097,7 @@ def _page():
                     f"{_slug(name) or 'config'}.yaml", text),
             )
 
-    async def _is_on_target(setup_cfg: SetupConfig) -> bool:
+    async def _is_on_target(sess: StudioSession, setup_cfg: SetupConfig) -> bool:
         """Whether the shell is actually on the target (not fallen back to local).
 
         Probes the live hostname rather than trusting ``state['connected']``,
@@ -894,33 +1105,39 @@ def _page():
         """
         if setup_cfg.target_kind == "local":
             return True
-        cur = await _remote_value(session, "$(hostname)", "NODE")
-        return bool(cur) and cur != state.get("local_host")
+        cur = await _remote_value(sess.term, "$(hostname)", "NODE")
+        return bool(cur) and cur != sess.state.get("local_host")
 
     async def run_config(setup_cfg: SetupConfig, name: str, yaml_text: str):
-        await _detach_if_attached(session, state)  # run in the login shell, not a screen
-        if not await _is_on_target(setup_cfg):
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        await _detach_if_attached(sess.term, sess.state)  # run in the login shell
+        if not await _is_on_target(sess, setup_cfg):
             ui.notify("Not connected to the target. Reattach a run, or go back and "
                       "re-select the setup to connect.", type="warning")
             return
-        await _ensure_workdir(session, setup_cfg.workdir)
-        remote = await _write_config_to_target(session, note, setup_cfg.workdir, name, yaml_text)
+        await _ensure_workdir(sess.term, setup_cfg.workdir)
+        remote = await _write_config_to_target(sess.term, sess.note, setup_cfg.workdir,
+                                               name, yaml_text)
         if not remote:
             ui.notify("Could not write config to target", type="negative")
             return
 
         has_screen = (await _remote_value(
-            session, "$(command -v screen >/dev/null && echo yes || echo no)", "SCREEN")) == "yes"
+            sess.term, "$(command -v screen >/dev/null && echo yes || echo no)",
+            "SCREEN")) == "yes"
         if not has_screen:
-            note("screen not found in this environment; in case of interruption "
-                 "IOPS will be cancelled")
-            session.write(f'cd "{_shell_workdir(setup_cfg.workdir)}" && '
-                          f'"{setup_cfg.env_path}" -m iops run "{remote}"\n')
+            sess.note("screen not found in this environment; in case of interruption "
+                      "IOPS will be cancelled")
+            sess.term.write(f'cd "{_shell_workdir(setup_cfg.workdir)}" && '
+                            f'"{setup_cfg.env_path}" -m iops run "{remote}"\n')
             ui.notify("Running in the terminal (no screen — not resilient)", type="warning")
             return
 
         # Screen-wrapped, resilient run. Record the node so we can hop back.
-        node = await _remote_value(session, "$(hostname)", "NODE") or "?"
+        node = await _remote_value(sess.term, "$(hostname)", "NODE") or "?"
         session_name = f"iops_{_slug(name)}_{uuid.uuid4().hex[:6]}"
         runner = _runner_script(setup_cfg, remote, session_name)
         rb64 = base64.b64encode(runner.encode()).decode()
@@ -930,29 +1147,34 @@ def _page():
             f"printf %s '{rb64}' | base64 -d > \"{runner_path}\" && "
             f'screen -dmS {session_name} bash "{runner_path}" && echo __STARTED__'
         )
-        code, out = await session.run(start, display=f"start screen {session_name}", timeout=60)
+        code, out = await sess.term.run(start, display=f"start screen {session_name}", timeout=60)
         if code != 0 or "__STARTED__" not in out:
             ui.notify("Could not start the screen session (see terminal)", type="negative")
             return
         add_run(RunRecord(setup_name=setup_cfg.name, config_name=name,
                           screen_name=session_name, node=node,
                           started_at=datetime.now().strftime("%Y-%m-%d %H:%M")))
-        state.setdefault("run_status", {})[session_name] = "running"
-        note(f"running '{name}' in screen {session_name} on {node}")
-        state["attached"] = True
-        session.write(f"screen -r {session_name}\n")  # attach live
+        sess.state.setdefault("run_status", {})[session_name] = "running"
+        sess.note(f"running '{name}' in screen {session_name} on {node}")
+        sess.state["attached"] = True
+        sess.term.write(f"screen -r {session_name}\n")  # attach live
         ui.notify(f"Running in screen on {node}. Detach with Ctrl-A D; "
                   "reattach from the setup if the connection drops.", type="info")
         _refresh_ready(setup_cfg)
 
     async def check_config(setup_cfg: SetupConfig, name: str, yaml_text: str):
-        await _detach_if_attached(session, state)
-        remote = await _write_config_to_target(session, note, setup_cfg.workdir, name, yaml_text)
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        await _detach_if_attached(sess.term, sess.state)
+        remote = await _write_config_to_target(sess.term, sess.note, setup_cfg.workdir,
+                                               name, yaml_text)
         if not remote:
             ui.notify("Could not write config to target", type="negative")
             return
-        code, _ = await session.run(f'"{setup_cfg.env_path}" -m iops check "{remote}"',
-                                    display=f"iops check {name}", timeout=120)
+        code, _ = await sess.term.run(f'"{setup_cfg.env_path}" -m iops check "{remote}"',
+                                      display=f"iops check {name}", timeout=120)
         ui.notify("Config valid on target" if code == 0
                   else "Config invalid on target (see terminal)",
                   type="positive" if code == 0 else "negative")
@@ -965,11 +1187,15 @@ def _page():
         detach from any current screen first so the reattach command runs in the
         login shell rather than being typed into the screen we are watching.
         """
-        await _detach_if_attached(session, state)
-        note(f"reattaching to {run.screen_name} on {run.node}")
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        await _detach_if_attached(sess.term, sess.state)
+        sess.note(f"reattaching to {run.screen_name} on {run.node}")
         cmd = _node_command(setup_cfg, run.node, f"screen -d -r {run.screen_name}", tty=True)
-        state["attached"] = True
-        session.write(cmd + "\n")
+        sess.state["attached"] = True
+        sess.term.write(cmd + "\n")
         ui.notify(f"Reattaching to {run.screen_name} on {run.node} "
                   "(authenticate if prompted)", type="info")
 
@@ -980,6 +1206,10 @@ def _page():
 
     async def stop_run(setup_cfg: SetupConfig, run: RunRecord):
         """Confirm, then kill the run's screen (terminating IOPS on the target)."""
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
         with ui.dialog() as dialog, ui.card():
             ui.label(f"Kill run '{run.config_name}'?").classes("font-medium")
             ui.label(f"Terminates screen {run.screen_name} on {run.node} and the "
@@ -989,10 +1219,10 @@ def _page():
                 ui.button("Kill run", color="negative", on_click=lambda: dialog.submit("yes"))
         if await dialog != "yes":
             return
-        await _detach_if_attached(session, state)
-        note(f"killing {run.screen_name} on {run.node}")
+        await _detach_if_attached(sess.term, sess.state)
+        sess.note(f"killing {run.screen_name} on {run.node}")
         cmd = _node_command(setup_cfg, run.node, f"screen -S {run.screen_name} -X quit")
-        session.write(cmd + "\n")
+        sess.term.write(cmd + "\n")
         remove_run(setup_cfg.name, run.screen_name)
         ui.notify(f"Killing {run.screen_name} on {run.node}", type="warning")
         _refresh_ready(setup_cfg)
@@ -1010,33 +1240,36 @@ def _page():
         Run this only at a shell prompt (not while attached to a screen), e.g. via
         the Refresh button after detaching.
         """
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            return
         runs = load_runs(setup_cfg.name)
         if not runs:
             return
-        await _detach_if_attached(session, state)  # so checks run in the login shell
-        if not await _is_on_target(setup_cfg):
+        await _detach_if_attached(sess.term, sess.state)  # so checks run in the login shell
+        if not await _is_on_target(sess, setup_cfg):
             ui.notify("Reconnect to the target (Reattach, or re-select the setup) "
                       "to refresh run status", type="warning")
             return
-        node = await _remote_value(session, "$(hostname)", "NODE")
-        sessions = await _screen_sessions(session)
+        node = await _remote_value(sess.term, "$(hostname)", "NODE")
+        screens = await _screen_sessions(sess.term)
         d = f"{_shell_workdir(setup_cfg.workdir)}/.iops-studio"
         checks = "\n".join(
             f'[ -f "{d}/{r.screen_name}.exit" ] && echo "DONE={r.screen_name}"'
             for r in runs
         )
-        _, out = await session.run(checks, display="check run status", timeout=30)
+        _, out = await sess.term.run(checks, display="check run status", timeout=30)
         done = {ln[len("DONE="):].strip() for ln in out.splitlines()
                 if ln.strip().startswith("DONE=")}
         status = {}
         for r in runs:
             if r.screen_name in done:
                 status[r.screen_name] = "finished"
-            elif r.node == node and r.screen_name not in sessions:
+            elif r.node == node and r.screen_name not in screens:
                 status[r.screen_name] = "finished"  # screen gone on this node
             else:
                 status[r.screen_name] = "running"
-        state["run_status"] = status
+        sess.state["run_status"] = status
         _refresh_ready(setup_cfg)
 
     def _refresh_ready(setup_cfg: SetupConfig):
@@ -1084,115 +1317,112 @@ def _page():
             return
         ui.notify(f"Exported to {dest}", type="positive")
 
-    def show_wizard():
+    def show_wizard(sess: StudioSession):
+        # Only paint the left pane if this wizard's tab is the focused one.
+        if active["key"] != sess.key:
+            return
         left.clear()
-        # Offer a way back to the hub only when there is something to go back to.
-        on_cancel = show_setups if load_setups() else None
         with left:
-            _build_wizard(session, state, host_options, note, on_complete=complete,
-                          on_cancel=on_cancel)
+            _build_wizard(sess.term, sess.state, host_options, sess.note,
+                          on_complete=lambda: complete(sess),
+                          on_cancel=lambda: close_tab(sess),
+                          on_status=lambda st: _set_status(sess, st))
 
-    def _reset_state():
-        # Keep init_commands (the user's module/PATH setup) so a disconnect does
-        # not make them retype it; drop only the per-shell-session flags and
-        # connection state.
-        state.update(env=None, envs=[], target={"kind": "local", "alias": None},
-                     connected=False)
-        state.pop("ssh_started", None)
-        state.pop("init_ran", None)
-        state.pop("attached", None)
-
-    def _load_state_from(cfg: SetupConfig):
-        state["target"] = {"kind": cfg.target_kind, "alias": cfg.target_alias}
-        state["env"] = PyEnv(cfg.env_path, cfg.env_kind, cfg.env_version, cfg.iops_version)
-        state["init_commands"] = list(cfg.init_commands)
-        state["workdir"] = cfg.workdir
-        state.pop("ssh_started", None)
-        state.pop("init_ran", None)
-        state.pop("run_status", None)
-        state.pop("validation", None)
-        state.pop("attached", None)
-        state["connected"] = False
-
-    def complete():
-        """Persist the finished setup (read from state) and show its ready view."""
-        env = state["env"]
-        name = state.get("setup_name") or _suggest_name(state["target"], env)
+    def complete(sess: StudioSession):
+        """Persist the finished setup, bind this session to it, show its ready view."""
+        st = sess.state
+        env = st["env"]
+        name = st.get("setup_name") or _suggest_name(st["target"], env)
         cfg = SetupConfig(
             name=name,
-            target_kind=state["target"]["kind"],
-            target_alias=state["target"]["alias"],
+            target_kind=st["target"]["kind"],
+            target_alias=st["target"]["alias"],
             env_path=env.path,
             env_kind=env.kind,
             env_version=env.version,
             iops_version=env.iops_version,
-            init_commands=list(state.get("init_commands") or []),
-            workdir=state.get("workdir") or "~/iops_workdir",
+            init_commands=list(st.get("init_commands") or []),
+            workdir=st.get("workdir") or "~/iops_workdir",
         )
         upsert_setup(cfg)
+        # If another live terminal was already bound to this name (reusing a name
+        # overwrites that setup), close it so there is one tab per setup.
+        other = registry.by_setup(name)
+        if other is not None and other.key != sess.key:
+            _close_session(other)
+        sess.setup_name = name
+        _set_tab_label(sess, name)
+        _set_status(sess, CONNECTED)
+        active["key"] = sess.key
         # The shell is already connected and set up for this target; do not
         # revalidate (which would restart/reconnect it).
         show_ready(cfg, validate=False)
 
     def add_setup():
-        """Start the wizard for a new setup on a clean local shell."""
-        state["init_commands"] = []
-        state.pop("setup_name", None)
-        _reset_state()
-        session.restart()
-        show_wizard()
+        """Open a fresh terminal and run the setup wizard in it."""
+        sess = _create_session(None, label="New setup")
+        _focus_programmatic(sess.key, validate=False)  # setup_name None -> shows wizard
 
     def select_setup(cfg: SetupConfig):
-        """Open a saved setup: reconnect on a clean shell and validate live."""
-        _load_state_from(cfg)
-        session.restart()  # drop any previous target so we connect fresh
-        show_ready(cfg, validate=True)
+        """Open a saved setup: focus its live terminal, or create + connect one.
+
+        A live terminal is reused (never restarted); a first open creates the
+        session and validates once. A dropped terminal is only focused, so the
+        user reconnects deliberately.
+        """
+        existing = registry.by_setup(cfg.name)
+        if existing is not None:
+            if active["key"] == existing.key:
+                show_ready(cfg, validate=False)
+            else:
+                _focus_programmatic(existing.key, validate=False)
+            return
+        sess = _create_session(cfg, label=cfg.name)
+        _focus_programmatic(sess.key, validate=True)  # first connect
 
     def remove_setup(cfg: SetupConfig):
+        sess = registry.by_setup(cfg.name)
+        if sess is not None:
+            close_tab(sess)  # tear down its terminal; leaves any remote runs alone
         delete_setup(cfg.name)
         ui.notify(f"Deleted setup '{cfg.name}'", type="info")
         show_setups()
 
-    def on_shell_exit():
-        """The PTY shell died (exit / ssh dropped / killed). Offer to recover.
+    def _on_shell_exit(sess: StudioSession):
+        """A session's shell died (exit / ssh dropped / killed).
 
         Fired from the reader callback with no request context, so wrap UI work
-        in the client context. Connection state is cleared so nothing keeps
-        assuming a live (possibly remote) shell.
+        in the client context. Only this session is affected; other terminals
+        keep running. The user reconnects deliberately from the drop banner.
         """
         with client:
-            _reset_state()
-            disconnect_banner.set_visibility(True)
+            _reset_state(sess.state)
+            _set_status(sess, DROPPED)
+            if sess.drop_banner is not None:
+                sess.drop_banner.set_visibility(True)
 
-    def reconnect():
-        """Restart button: spawn a clean local shell and return to the setups hub."""
-        disconnect_banner.set_visibility(False)
-        _reset_state()
-        session.restart()
+    def reconnect(sess: StudioSession):
+        """Drop-banner action: spawn a clean shell and re-run this session's flow."""
+        if sess.drop_banner is not None:
+            sess.drop_banner.set_visibility(False)
+        _reset_state(sess.state)
+        sess.term.restart()  # reuses the same on_output/on_exit, so the xterm stays wired
+        _set_status(sess, CONNECTING)
+        if sess.setup_name:
+            cfg = get_setup(sess.setup_name)
+            if cfg is not None:
+                show_ready(cfg, validate=True)
+        else:
+            show_wizard(sess)
+
+    # Tear down every shell when the browser tab closes (snapshot the list first).
+    client.on_disconnect(lambda: [s.term.close() for s in registry.all()])
+
+    # Land on the setups hub, or straight into the wizard for first-time onboarding.
+    if load_setups():
         show_setups()
-
-    with disconnect_banner:
-        ui.icon("link_off", color="negative")
-        ui.label("Terminal disconnected. The shell session ended.") \
-            .classes("text-negative font-medium")
-        ui.button("Restart terminal", icon="restart_alt", on_click=reconnect).props("flat")
-
-    session.start(on_output=on_output, on_exit=on_shell_exit)
-    term.on_data(lambda e: session.write(e.data) if not session.input_locked else None)
-    term.on_resize(lambda e: session.resize(e.cols, e.rows))
-    ui.timer(0.3, term.fit, once=True)
-
-    async def _capture_local_host():
-        # The shell starts local; record this machine's hostname so we can later
-        # tell whether the shell is on the cluster or has fallen back to local.
-        state["local_host"] = await _remote_value(session, "$(hostname)", "NODE")
-    ui.timer(0.6, _capture_local_host, once=True)
-
-    # Tear down the shell when the browser tab closes
-    ui.context.client.on_disconnect(session.close)
-
-    # Land on the setups hub (which shows the wizard itself when none exist).
-    show_setups()
+    else:
+        add_setup()
 
 
 def build_app():
