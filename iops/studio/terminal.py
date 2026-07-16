@@ -52,6 +52,7 @@ class TerminalSession:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._active: Optional[dict] = None
         self._transfer: Optional[dict] = None
+        self._pull: Optional[dict] = None
         self._closing: bool = False
         self.input_locked: bool = False
 
@@ -151,8 +152,18 @@ class TerminalSession:
                     if not f.done():
                         f.set_result(-1 if key == "end_future" else False)
                 self._transfer = None
+            if self._pull is not None:
+                fut = self._pull["future"]
+                self._pull = None
+                if not fut.done():
+                    fut.set_result((-1, b""))
             if not self._closing and self._on_exit is not None:
                 self._on_exit()
+            return
+        # While pulling a file, the remote streams base64 to us; keep it out of the
+        # terminal so it does not flood the xterm. Everything else is echoed live.
+        if self._pull is not None:
+            self._scan_pull(data)
             return
         if self._on_output:
             self._on_output(data)
@@ -229,6 +240,32 @@ class TerminalSession:
             while i < len(rest) and 48 <= rest[i] <= 57:
                 i += 1
             ef.set_result(int(rest[:i]) if i else -1)
+
+    def _scan_pull(self, data: bytes) -> None:
+        """Capture a ``pull_file`` payload: the base64 between its R and E markers.
+
+        Bytes before ``R`` (the command echo) are ignored; the exit code trails
+        the ``E`` marker as decimal digits, like ``_scan``.
+        """
+        p = self._pull
+        p["buf"].extend(data)
+        buf = bytes(p["buf"])
+        s = buf.find(p["start"])
+        if s < 0:
+            return
+        e = buf.find(p["end"], s + len(p["start"]))
+        if e < 0:
+            return
+        payload = buf[s + len(p["start"]):e]
+        rest = buf[e + len(p["end"]):]
+        i = 0
+        while i < len(rest) and 48 <= rest[i] <= 57:  # digits of the exit code
+            i += 1
+        code = int(rest[:i]) if i else -1
+        fut = p["future"]
+        self._pull = None
+        if not fut.done():
+            fut.set_result((code, payload))
 
     async def _wait_writable(self) -> None:
         """Suspend until the PTY master accepts more bytes (write backpressure)."""
@@ -326,6 +363,70 @@ class TerminalSession:
             return -1
         finally:
             self._transfer = None
+            if saved_attrs is not None:
+                try:
+                    termios.tcsetattr(self._fd, termios.TCSANOW, saved_attrs)
+                except (termios.error, OSError):
+                    pass
+            self.input_locked = False
+
+    async def pull_file(self, remote_path: str, timeout: float = 600.0) -> Optional[bytes]:
+        """Read a remote file's bytes over this interactive channel (base64).
+
+        The mirror of ``push_tar``: works on hosts that reject background
+        scp/ssh, since it uses the one already-authenticated channel. The remote
+        base64-encodes the file to stdout between two sentinel markers; locally
+        we suppress terminal output for the duration (so the payload does not
+        flood the xterm), capture it, and decode. Returns the file's bytes, or
+        None on failure / missing file.
+
+        Intended for SMALL files (report HTML, result CSVs, a metadata-only
+        tarball): the whole payload is buffered in memory.
+
+        ``remote_path`` must be a trusted, shell-safe path; Studio only embeds
+        constructed workdir paths inside the double quotes.
+        """
+        if not self.alive or self._loop is None:
+            return None
+        rid = uuid.uuid4().hex[:8]
+        start = bytes([_RS]) + b"R" + rid.encode() + bytes([_RS])
+        end = bytes([_RS]) + b"E" + rid.encode() + b":"
+        future = self._loop.create_future()
+        self._pull = {"start": start, "end": end, "buf": bytearray(), "future": future}
+        # stty raw -echo: no command echo, no output post-processing to interleave
+        # with the markers. R before the payload, E:<rc> after. base64 wrap
+        # newlines are ignored by the decoder. The markers are printf'd with octal
+        # escapes so the echoed command line never contains the raw 0x1e bytes.
+        line = (
+            "stty raw -echo 2>/dev/null; printf '\\036R%s\\036'; "
+            'base64 < "%s"; __rc=$?; stty sane 2>/dev/null; '
+            "printf '\\036E%s:%%s\\036' \"$__rc\"\n"
+        ) % (rid, remote_path, rid)
+
+        self.input_locked = True
+        saved_attrs = None
+        try:
+            saved_attrs = termios.tcgetattr(self._fd)
+            quiet = list(saved_attrs)
+            quiet[3] &= ~termios.ECHO
+            termios.tcsetattr(self._fd, termios.TCSANOW, quiet)
+        except (termios.error, OSError):
+            saved_attrs = None
+        try:
+            os.write(self._fd, line.encode())
+            code, payload = await asyncio.wait_for(future, timeout=timeout)
+            if code != 0:
+                return None
+            try:
+                return base64.b64decode(payload)
+            except (ValueError, TypeError):
+                return None
+        except asyncio.TimeoutError:
+            return None
+        except OSError:
+            return None
+        finally:
+            self._pull = None
             if saved_attrs is not None:
                 try:
                     termios.tcsetattr(self._fd, termios.TCSANOW, saved_attrs)

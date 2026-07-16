@@ -12,15 +12,19 @@ failure, the user can take over in the exact same context.
 
 import asyncio
 import base64
+import io
+import os
 import re
 import shlex
+import shutil
 import subprocess
+import tarfile
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from nicegui import ui
+from nicegui import app, ui
 
 from iops.main import load_version
 from iops.studio import __version__ as STUDIO_VERSION
@@ -45,7 +49,17 @@ from iops.studio.configs import (
     load_configs,
     upsert_config,
 )
-from iops.studio.filebrowser import open_yaml, save_yaml
+from iops.studio.filebrowser import choose_dir, open_yaml, save_yaml
+from iops.studio.results import (
+    REPORT_FILENAME,
+    light_tar_command,
+    list_runs_command,
+    localize_report_html,
+    parse_run_list,
+    plotly_bundle_path,
+    report_html_path,
+    slug as _result_slug,
+)
 from iops.studio.runs import RunRecord, add_run, load_runs, remove_run
 from iops.studio.sessions import (
     CONNECTED,
@@ -614,6 +628,7 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                  note, on_back, validate: bool, *, on_new_config, on_edit_config,
                  on_run_config, on_delete_config, on_import_config, on_export_config,
                  on_reconnect_run, on_stop_run, on_dismiss_run, on_refresh_runs,
+                 on_browse_runs, on_view_report, on_pull_results,
                  on_close=None, on_status=None):
     """Left-pane view for one selected setup: summary, validation, runs, configs.
 
@@ -753,6 +768,34 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                             ui.button(icon="close", on_click=lambda r=run: on_dismiss_run(r)) \
                                 .props("flat round dense").tooltip("Dismiss (stop tracking)")
 
+    # ---- results (reports + pull) ------------------------------------------ #
+    runs_list = state.get("runs_list")
+    with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
+        with ui.row().classes("items-center justify-between w-full no-wrap"):
+            ui.label("Results").classes("text-md font-semibold")
+            ui.button("Browse runs", icon="folder_open", on_click=on_browse_runs) \
+                .props("flat dense").tooltip("List completed runs in the workdir")
+        ui.label("View a run's report in Studio, or pull its results (CSVs, "
+                 "metadata, report) to the host.").classes("text-xs text-gray-500")
+        if runs_list is None:
+            ui.label("Click 'Browse runs' to list runs under the workdir.") \
+                .classes("text-xs text-gray-400 italic")
+        elif not runs_list:
+            ui.label("No runs found under the workdir yet.") \
+                .classes("text-xs text-gray-400 italic")
+        else:
+            for rd in runs_list:
+                with ui.card().classes("w-full p-2"):
+                    with ui.row().classes("items-center justify-between w-full no-wrap"):
+                        with ui.column().classes("gap-0 min-w-0"):
+                            ui.label(Path(rd).name).classes("font-medium")
+                            ui.label(rd).classes("text-xs text-gray-500 truncate")
+                        with ui.row().classes("items-center gap-1"):
+                            ui.button(icon="assessment", on_click=lambda r=rd: on_view_report(r)) \
+                                .props("flat round dense").tooltip("Generate & view report")
+                            ui.button(icon="download", on_click=lambda r=rd: on_pull_results(r)) \
+                                .props("flat round dense").tooltip("Pull results to the host")
+
     # ---- configs for this target ------------------------------------------- #
     with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
         with ui.row().classes("items-center justify-between w-full no-wrap"):
@@ -837,6 +880,12 @@ def _page():
     editor_area = ui.column().classes("w-full p-3") \
         .style("height: calc(100vh - 3rem); overflow:auto")
     editor_area.set_visibility(False)
+
+    # Full-width report viewer, shown in place of the split view. A flex column so
+    # the iframe fills the height under its header.
+    results_area = ui.column().classes("w-full gap-0") \
+        .style("height: calc(100vh - 3rem); min-height:0")
+    results_area.set_visibility(False)
 
     # The PTY reader fires from a bare asyncio callback (no request context), so
     # route UI updates through the client context, the supported way to update
@@ -1077,6 +1126,9 @@ def _page():
                 on_stop_run=lambda r: _guarded(stop_run(cfg, r)),
                 on_dismiss_run=lambda r: dismiss_run(cfg, r),
                 on_refresh_runs=lambda: _guarded(refresh_runs(cfg)),
+                on_browse_runs=lambda: _guarded(browse_runs(cfg)),
+                on_view_report=lambda rd: _guarded(view_report(cfg, rd)),
+                on_pull_results=lambda rd: _guarded(pull_results(cfg, rd)),
             )
 
     def _exit_editor():
@@ -1357,6 +1409,125 @@ def _page():
             return
         ui.notify(f"Exported to {dest}", type="positive")
 
+    # ---- results: browse runs, view report, pull results ------------------- #
+    def _exit_report_viewer():
+        results_area.clear()
+        results_area.set_visibility(False)
+        main_splitter.set_visibility(True)
+
+    def show_report_viewer(title: str, url: str):
+        main_splitter.set_visibility(False)
+        editor_area.set_visibility(False)
+        results_area.clear()
+        results_area.set_visibility(True)
+        with results_area:
+            with ui.row().classes("items-center gap-2 w-full no-wrap px-2 py-1") \
+                    .style("border-bottom:1px solid #e0e0e0"):
+                ui.button(icon="arrow_back", on_click=_exit_report_viewer) \
+                    .props("flat round dense").tooltip("Back")
+                ui.label(title).classes("text-md font-semibold truncate")
+                ui.space()
+                ui.button("Open in new tab", icon="open_in_new",
+                          on_click=lambda: ui.navigate.to(url, new_tab=True)).props("flat dense")
+            ui.element("iframe").props(f'src="{url}"').classes("w-full") \
+                .style("flex:1; min-height:0; border:0; background:white")
+
+    async def browse_runs(setup_cfg: SetupConfig):
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        await _detach_if_attached(sess.term, sess.state)
+        if not await _is_on_target(sess, setup_cfg):
+            ui.notify("Not connected to the target. Reattach a run, or re-select the "
+                      "setup to connect.", type="warning")
+            return
+        _, out = await sess.term.run(list_runs_command(_shell_workdir(setup_cfg.workdir)),
+                                     display="list runs", timeout=60)
+        sess.state["runs_list"] = parse_run_list(out)
+        _refresh_ready(setup_cfg)
+
+    async def _fetch_remote(sess: StudioSession, target_kind: str, remote_path: str,
+                            timeout: float) -> Optional[bytes]:
+        """Read a remote artifact's bytes: off disk for local, pull_file for ssh."""
+        if target_kind == "local":
+            try:
+                return Path(remote_path).read_bytes()
+            except OSError:
+                return None
+        return await sess.term.pull_file(remote_path, timeout=timeout)
+
+    async def view_report(setup_cfg: SetupConfig, run_dir: str):
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        await _detach_if_attached(sess.term, sess.state)
+        if not await _is_on_target(sess, setup_cfg):
+            ui.notify("Not connected to the target. Reattach a run, or re-select the "
+                      "setup to connect.", type="warning")
+            return
+        ui.notify("Generating the report on the target...", type="info")
+        await sess.term.run(f'"{setup_cfg.env_path}" -m iops report "{run_dir}"',
+                            display=f"iops report {Path(run_dir).name}", timeout=300)
+        # iops report exits 0 even on failure; the real signal is the HTML's presence.
+        html = await _fetch_remote(sess, setup_cfg.target_kind,
+                                   report_html_path(run_dir), timeout=300)
+        if not html:
+            ui.notify("No report was produced (see the terminal).", type="negative")
+            return
+        html = localize_report_html(html, _PLOTLY_ASSET_URL)  # offline-render charts
+        rel = f"{_result_slug(setup_cfg.name)}/{_result_slug(Path(run_dir).name)}"
+        dest_dir = _results_root() / rel
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (dest_dir / REPORT_FILENAME).write_bytes(html)
+        except OSError as e:
+            ui.notify(f"Could not cache the report: {e}", type="negative")
+            return
+        url = f"{_RESULTS_URL}/{rel}/{REPORT_FILENAME}?v={uuid.uuid4().hex[:8]}"
+        show_report_viewer(f"{setup_cfg.name} · {Path(run_dir).name}", url)
+
+    async def pull_results(setup_cfg: SetupConfig, run_dir: str):
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        dest_parent = await choose_dir(
+            title=f"Choose where to save results for {Path(run_dir).name}")
+        if not dest_parent:
+            return
+        await _detach_if_attached(sess.term, sess.state)
+        if not await _is_on_target(sess, setup_cfg):
+            ui.notify("Not connected to the target. Reattach a run, or re-select the "
+                      "setup to connect.", type="warning")
+            return
+        # Build a small, name-filtered tar on the target (never the raw scratch data).
+        tmp_remote = (f'{_shell_workdir(setup_cfg.workdir)}/.iops-studio/'
+                      f'results_{uuid.uuid4().hex[:8]}.tar.gz')
+        await sess.term.run(f'mkdir -p "{_shell_workdir(setup_cfg.workdir)}/.iops-studio"',
+                            display="prepare results bundle", timeout=30)
+        code, _ = await sess.term.run(light_tar_command(run_dir, tmp_remote),
+                                      display=f"bundle results {Path(run_dir).name}", timeout=180)
+        if code != 0:
+            ui.notify("Could not bundle results on the target (see terminal)", type="negative")
+            return
+        ui.notify("Transferring results to the host...", type="info")
+        tar_bytes = await _fetch_remote(sess, setup_cfg.target_kind, tmp_remote, timeout=600)
+        await sess.term.run(f'rm -f "{tmp_remote}"', display="clean up bundle", timeout=30)
+        if not tar_bytes:
+            ui.notify("Could not transfer the results bundle", type="negative")
+            return
+        dest = Path(dest_parent) / _result_slug(f"{setup_cfg.name}_{Path(run_dir).name}")
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tf:
+                tf.extractall(dest, filter="data")  # path-traversal-safe (PEP 706)
+        except (OSError, tarfile.TarError) as e:
+            ui.notify(f"Could not extract results: {e}", type="negative")
+            return
+        ui.notify(f"Results saved to {dest}", type="positive")
+
     def show_wizard(sess: StudioSession):
         # Only paint the left pane if this wizard's tab is the focused one.
         if active["key"] != sess.key:
@@ -1465,8 +1636,38 @@ def _page():
         add_setup()
 
 
+# Where pulled reports are cached and served from, and the URL they mount under.
+_RESULTS_URL = "/studio-results"
+_PLOTLY_ASSET_URL = f"{_RESULTS_URL}/_assets/plotly.min.js"
+
+
+def _results_root() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(base) / "iops-studio" / "results"
+
+
+def _ensure_results_assets() -> Path:
+    """Create the results cache and drop in a local Plotly so reports render offline."""
+    root = _results_root()
+    (root / "_assets").mkdir(parents=True, exist_ok=True)
+    bundle = plotly_bundle_path()
+    if bundle is not None:
+        dest = root / "_assets" / "plotly.min.js"
+        try:
+            if not dest.exists() or dest.stat().st_size != bundle.stat().st_size:
+                shutil.copyfile(bundle, dest)
+        except OSError:
+            pass
+    return root
+
+
 def build_app():
     """Register Studio's NiceGUI pages. Call before ``ui.run``."""
+
+    # Serve pulled reports (and the bundled Plotly) so the viewer iframe can load
+    # them same-origin.
+    root = _ensure_results_assets()
+    app.add_static_files(_RESULTS_URL, str(root))
 
     @ui.page("/")
     async def index():

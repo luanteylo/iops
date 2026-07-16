@@ -129,8 +129,13 @@ async def _browse(mode: str, *, title: str, start: Optional[str],
                     for f in files:
                         if mode == "open":
                             _row("description", f.name, lambda ff=f: dialog.submit(str(ff.resolve())))
-                        else:
+                        elif mode == "save":
                             _row("description", f.name, lambda ff=f: pick_name(ff))
+                        # "dir" mode: files shown for context only, not selectable.
+                        else:
+                            with ui.row().classes("items-center gap-2 w-full no-wrap p-1 opacity-50"):
+                                ui.icon("description")
+                                ui.label(f.name).classes("truncate")
                     if not dirs and not files:
                         ui.label("(no folders or matching files here)") \
                             .classes("text-xs text-grey italic p-1")
@@ -148,6 +153,9 @@ async def _browse(mode: str, *, title: str, start: Optional[str],
             ui.button("Cancel", on_click=lambda: dialog.submit(None)).props("flat")
             if mode == "save":
                 ui.button("Save here", icon="save", on_click=_do_save).props("unelevated")
+            elif mode == "dir":
+                ui.button("Use this folder", icon="check",
+                          on_click=lambda: dialog.submit(str(state["dir"]))).props("unelevated")
 
         render()
 
@@ -165,3 +173,9 @@ async def save_yaml(default_name: str = "config.yaml",
     """Pick a folder + file name to export a config to. Returns the path, or None."""
     return await _browse("save", title="Export config to a file", start=start,
                          extensions=YAML_EXTS, default_name=default_name)
+
+
+async def choose_dir(title: str = "Choose a destination folder",
+                     start: Optional[str] = None) -> Optional[str]:
+    """Pick an existing folder on the host. Returns its path, or None."""
+    return await _browse("dir", title=title, start=start, extensions=(), default_name="")
