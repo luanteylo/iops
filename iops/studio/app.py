@@ -896,10 +896,51 @@ def _page():
     def _update_empty_hint():
         empty_hint.set_visibility(not registry.all())
 
-    def _fit_active():
-        sess = registry.get(active["key"])
-        if sess is not None and sess.xterm is not None:
-            sess.xterm.fit()
+    def _attach_autofit(sess: StudioSession):
+        """Keep this terminal sized to its container, for as long as it lives.
+
+        NiceGUI's xterm resizes only on an explicit ``fit()``, and FitAddon's fit
+        is a no-op while the element has no layout box. Terminals are created
+        inside a hidden column, so a fit scheduled at creation lands before the
+        column is laid out and the terminal stays stuck at xterm's default 80x24.
+        A ResizeObserver instead fits it the moment it gets a real size, and again
+        on every later size change (tab switch, splitter drag, window resize).
+
+        The script is injected directly rather than from a ``ui.timer``: handlers
+        run in the slot of the element that triggered them, so a timer created
+        here would be a child of the left pane and ``show_ready`` would clear it
+        away before it fired. The retry loop covers the element not being mounted
+        client-side yet; the rAF hop coalesces bursts and avoids a fit/resize loop.
+        """
+        js = f"""
+        (() => {{
+          const attach = (tries) => {{
+            const c = getElement({sess.xterm.id});
+            if (!c || !c.$el) {{
+              if (tries > 0) setTimeout(() => attach(tries - 1), 100);
+              return;
+            }}
+            if (c.__iopsAutoFit) return;
+            let pending = null;
+            const doFit = () => {{
+              pending = null;
+              const el = c.$el;
+              if (el && el.clientWidth > 0 && el.clientHeight > 0) {{
+                try {{ c.fit(); }} catch (e) {{}}
+              }}
+            }};
+            const obs = new ResizeObserver(() => {{
+              if (pending) cancelAnimationFrame(pending);
+              pending = requestAnimationFrame(doFit);
+            }});
+            obs.observe(c.$el);
+            c.__iopsAutoFit = obs;
+            doFit();
+          }};
+          attach(50);
+        }})();
+        """
+        ui.run_javascript(js)
 
     def _create_session(cfg: Optional[SetupConfig], label: str) -> StudioSession:
         """Mint a runtime: shell + state + tab + terminal column, all wired up."""
@@ -930,6 +971,7 @@ def _page():
         sess.xterm.on_resize(lambda e, s=sess: s.term.resize(e.cols, e.rows))
         sess.term.start(on_output=_make_on_output(sess),
                         on_exit=lambda s=sess: _on_shell_exit(s))
+        _attach_autofit(sess)
         registry.add(sess)
         _update_empty_hint()
         return sess
@@ -957,7 +999,6 @@ def _page():
                 show_setups()
             else:
                 show_ready(cfg, validate=validate)
-        ui.timer(0.05, _fit_active, once=True)
 
     def _focus_programmatic(key: str, *, validate: bool) -> None:
         # Update the tab-bar highlight without re-triggering our click handler.
@@ -1044,7 +1085,6 @@ def _page():
         main_splitter.set_visibility(True)
         # The active xterm was hidden while the editor overlay was up; re-fit it
         # now that it is visible again (a hidden xterm sizes to zero cols/rows).
-        ui.timer(0.05, _fit_active, once=True)
 
     def show_editor(setup_cfg: SetupConfig, studio_cfg):
         """Open the full-width config builder for a new or existing config."""
