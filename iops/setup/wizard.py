@@ -15,6 +15,7 @@ class BenchmarkWizard:
         ("ior", "slurm"): "templates/ior_slurm.yaml",
         ("mdtest", "local"): "templates/mdtest_local.yaml",
         ("mdtest", "slurm"): "templates/mdtest_slurm.yaml",
+        ("io500", "slurm"): "templates/io500_slurm.yaml",
     }
 
     # Machines snippet mapping: (benchmark, executor) -> snippet file
