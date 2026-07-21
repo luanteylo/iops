@@ -925,7 +925,15 @@ class SlurmExecutor(BaseExecutor):
         if parser is not None:
             # If we already parsed during fallback, this will be a no-op (still safe)
             self.logger.debug(f"  [SlurmExec] Parsing metrics from output files")
-            self._try_parse_metrics(test, metrics)
+            if not self._try_parse_metrics(test, metrics):
+                # The SLURM job itself finished cleanly, but the parser failed
+                # (e.g. a bad variable reference in parser_script). Without
+                # metrics the execution is invalid, so it must not stay
+                # SUCCEEDED: that status is what makes the runner write a cache
+                # entry, which would then hold no metrics. _try_parse_metrics
+                # already recorded __error.
+                test.metadata["__executor_status"] = self.STATUS_FAILED
+                return
 
         metric_count = len([v for v in metrics.values() if v is not None])
         self.logger.debug(
@@ -1413,7 +1421,12 @@ class KickoffSingleAllocationExecutor(SlurmExecutor):
         if test.metadata.get("__executor_status") == self.STATUS_SUCCEEDED:
             if parser is not None:
                 self.logger.debug(f"  [{self._LOG_PREFIX}] Parsing metrics from output files")
-                self._try_parse_metrics(test, metrics)
+                if not self._try_parse_metrics(test, metrics):
+                    # Job completed but the parser failed: no metrics means the
+                    # execution is invalid, so downgrade from SUCCEEDED to avoid
+                    # caching a metric-less entry. _try_parse_metrics already
+                    # recorded __error.
+                    test.metadata["__executor_status"] = self.STATUS_FAILED
 
         metric_count = len([v for v in metrics.values() if v is not None])
         self.logger.debug(
