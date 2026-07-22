@@ -104,3 +104,22 @@ def delete_config(setup_name: str, name: str) -> bool:
         return False
     save_configs(remaining)
     return True
+
+
+def rename_setup(old_name: str, new_name: str) -> int:
+    """Re-bind every config from ``old_name`` to ``new_name``. Returns count moved.
+
+    Used when a setup is renamed: configs are keyed by (setup_name, name), so the
+    binding must follow the setup or the configs would be orphaned.
+    """
+    if old_name == new_name:
+        return 0
+    configs = load_configs()
+    moved = 0
+    for c in configs:
+        if c.setup_name == old_name:
+            c.setup_name = new_name
+            moved += 1
+    if moved:
+        save_configs(configs)
+    return moved

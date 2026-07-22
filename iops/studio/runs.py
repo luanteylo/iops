@@ -91,3 +91,21 @@ def remove_run(setup_name: str, screen_name: str) -> bool:
         return False
     save_runs(remaining)
     return True
+
+
+def rename_setup(old_name: str, new_name: str) -> int:
+    """Re-bind tracked runs from ``old_name`` to ``new_name``. Returns count moved.
+
+    Keeps a renamed setup's in-flight runs reachable (they are keyed by setup_name).
+    """
+    if old_name == new_name:
+        return 0
+    runs = load_runs()
+    moved = 0
+    for r in runs:
+        if r.setup_name == old_name:
+            r.setup_name = new_name
+            moved += 1
+    if moved:
+        save_runs(runs)
+    return moved

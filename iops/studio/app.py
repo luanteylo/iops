@@ -48,6 +48,7 @@ from iops.studio.configs import (
     delete_config,
     get_config,
     load_configs,
+    rename_setup as rename_setup_configs,
     upsert_config,
 )
 from iops.studio.filebrowser import choose_dir, open_yaml, save_yaml
@@ -61,7 +62,13 @@ from iops.studio.results import (
     report_html_path,
     slug as _result_slug,
 )
-from iops.studio.runs import RunRecord, add_run, load_runs, remove_run
+from iops.studio.runs import (
+    RunRecord,
+    add_run,
+    load_runs,
+    remove_run,
+    rename_setup as rename_setup_runs,
+)
 from iops.studio.sessions import (
     CONNECTED,
     CONNECTING,
@@ -284,8 +291,8 @@ def _suggest_name(target: dict, env) -> str:
     return f"{where}:{leaf}"
 
 
-def _build_setup_list(setups: list, on_select, on_add, on_delete):
-    """Left-pane hub: the saved setups with select/delete, plus 'Add setup'."""
+def _build_setup_list(setups: list, on_select, on_add, on_delete, on_edit):
+    """Left-pane hub: the saved setups with select/edit/delete, plus 'Add setup'."""
     ui.label("Your setups").classes("text-lg font-semibold")
     ui.label("Pick a target to validate and use, or add a new one.") \
         .classes("text-gray-600 text-sm")
@@ -302,6 +309,8 @@ def _build_setup_list(setups: list, on_select, on_add, on_delete):
                     with ui.row().classes("items-center gap-1"):
                         ui.button(icon="play_arrow", on_click=lambda c=cfg: on_select(c)) \
                             .props("flat round").tooltip("Use this setup")
+                        ui.button(icon="edit", on_click=lambda c=cfg: on_edit(c)) \
+                            .props("flat round").tooltip("Edit this setup")
                         ui.button(icon="delete", on_click=lambda c=cfg: on_delete(c)) \
                             .props("flat round color=negative").tooltip("Delete this setup")
     ui.button("Add setup", icon="add", on_click=on_add).classes("mt-2")
@@ -1098,7 +1107,8 @@ def _page():
                 ui.button("Add setup", icon="add", on_click=add_setup).classes("mt-2")
             else:
                 _build_setup_list(setups, on_select=select_setup, on_add=add_setup,
-                                  on_delete=remove_setup)
+                                  on_delete=remove_setup,
+                                  on_edit=lambda c: _guarded(edit_setup(c)))
 
     async def _guarded(coro):
         # Run an async handler within the page's client context so its UI calls
@@ -1617,6 +1627,70 @@ def _page():
             close_tab(sess)  # tear down its terminal; leaves any remote runs alone
         delete_setup(cfg.name)
         ui.notify(f"Deleted setup '{cfg.name}'", type="info")
+        show_setups()
+
+    async def edit_setup(cfg: SetupConfig):
+        """Edit a saved setup's mutable fields via a dialog.
+
+        Editable: name, interpreter path, workdir, setup commands. The target
+        (local vs which ssh host) is fixed — changing it is really a new setup.
+        Changing the interpreter clears the cached versions so the next
+        validation re-probes. Any live terminal for this setup is closed, since
+        its cached state (workdir, env, run status) would no longer match.
+        Renaming migrates this setup's saved configs and tracked runs.
+        """
+        with ui.dialog() as dialog, ui.card().classes("gap-2").style("width:560px;max-width:92vw"):
+            ui.label("Edit setup").classes("text-lg font-semibold")
+            ui.label(cfg.where).classes("text-xs text-gray-500")
+            name_in = ui.input("Name", value=cfg.name).classes("w-full")
+            env_in = ui.input("Python interpreter path", value=cfg.env_path).classes("w-full")
+            env_in.tooltip("The python that runs IOPS on the target. Changing it clears "
+                           "the saved version; use 'Validate now' afterwards to refresh.")
+            wd_in = ui.input("Workdir (folder to run IOPS from)", value=cfg.workdir).classes("w-full")
+            cmds_in = ui.textarea("Setup commands (one per line)",
+                                  value="\n".join(cfg.init_commands)) \
+                .classes("w-full").props("autogrow")
+            cmds_in.tooltip("Run in the shell after connecting (module load, export PATH, ...).")
+            with ui.row().classes("justify-end gap-2 w-full items-center"):
+                ui.space()
+                ui.button("Cancel", on_click=lambda: dialog.submit(None)).props("flat")
+                ui.button("Save", icon="save", on_click=lambda: dialog.submit("save")) \
+                    .props("unelevated")
+
+        if await dialog != "save":
+            return
+        new_name = (name_in.value or "").strip()
+        if not new_name:
+            ui.notify("Give the setup a name", type="warning")
+            return
+        if new_name != cfg.name and get_setup(new_name) is not None:
+            ui.notify(f"A setup named '{new_name}' already exists", type="negative")
+            return
+        new_env = (env_in.value or "").strip() or cfg.env_path
+        env_changed = new_env != cfg.env_path
+        updated = SetupConfig(
+            name=new_name,
+            target_kind=cfg.target_kind,
+            target_alias=cfg.target_alias,
+            env_path=new_env,
+            env_kind=cfg.env_kind,
+            env_version=None if env_changed else cfg.env_version,
+            iops_version=None if env_changed else cfg.iops_version,
+            workdir=(wd_in.value or "").strip() or "~/iops_workdir",
+            init_commands=_parse_commands(cmds_in.value),
+        )
+        # A live terminal for this setup now holds stale state; close it.
+        live = registry.by_setup(cfg.name)
+        if live is not None:
+            close_tab(live)
+        if new_name != cfg.name:
+            rename_setup_configs(cfg.name, new_name)
+            rename_setup_runs(cfg.name, new_name)
+            delete_setup(cfg.name)
+        upsert_setup(updated)
+        logger.info("edit_setup: '%s' -> '%s' (workdir=%s, env=%s)",
+                    cfg.name, new_name, updated.workdir, updated.env_path)
+        ui.notify(f"Saved setup '{new_name}'", type="positive")
         show_setups()
 
     def _on_shell_exit(sess: StudioSession):
