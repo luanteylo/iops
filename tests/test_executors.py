@@ -457,6 +457,69 @@ def test_slurm_executor_permission_denied_on_post_script(mock_test_instance, tmp
                     assert "__post_returncode" not in mock_test_instance.metadata
 
 
+def test_slurm_executor_parser_failure_marks_test_failed(mock_test_instance):
+    """A SLURM job that completes cleanly but whose parser fails must be FAILED.
+
+    Regression: SLURM reported the job COMPLETED (exit 0:0), so status was set
+    to SUCCEEDED. The parser then raised (e.g. a NameError from referencing the
+    wrong variable name in parser_script), but the success path ignored the
+    parse result and left the status SUCCEEDED. The runner then cached the
+    execution with all-None metrics, producing a cache entry without metrics for
+    an execution that was actually invalid.
+    """
+    config = Mock()
+    config.execution = Mock()
+    config.execution.status_check_delay = 1
+    config.benchmark = Mock()
+    config.benchmark.slurm_options = None
+
+    executor = SlurmExecutor(config)
+
+    metric = Mock()
+    metric.name = "bandwidth"
+    mock_test_instance.parser.metrics = [metric]
+    mock_test_instance.post_script_file = None
+    mock_test_instance.metadata["__jobid"] = "12345"
+
+    with patch.object(executor, '_squeue_state', return_value=None):
+        with patch.object(executor, '_scontrol_info',
+                          return_value={"state": "COMPLETED", "exitcode": "0:0"}):
+            # Parser fails on an otherwise-successful job.
+            with patch.object(executor, '_try_parse_metrics', return_value=False):
+                executor.wait_and_collect(mock_test_instance)
+
+    # Execution is invalid: parser failed, so it must not be reported SUCCEEDED
+    # (which is the condition under which the runner writes the cache entry).
+    assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_FAILED
+    # Metrics were never collected.
+    assert all(v is None for v in mock_test_instance.metadata["metrics"].values())
+
+
+def test_slurm_executor_parser_success_keeps_test_succeeded(mock_test_instance):
+    """A SLURM job that completes and whose parser succeeds stays SUCCEEDED."""
+    config = Mock()
+    config.execution = Mock()
+    config.execution.status_check_delay = 1
+    config.benchmark = Mock()
+    config.benchmark.slurm_options = None
+
+    executor = SlurmExecutor(config)
+
+    metric = Mock()
+    metric.name = "bandwidth"
+    mock_test_instance.parser.metrics = [metric]
+    mock_test_instance.post_script_file = None
+    mock_test_instance.metadata["__jobid"] = "12345"
+
+    with patch.object(executor, '_squeue_state', return_value=None):
+        with patch.object(executor, '_scontrol_info',
+                          return_value={"state": "COMPLETED", "exitcode": "0:0"}):
+            with patch.object(executor, '_try_parse_metrics', return_value=True):
+                executor.wait_and_collect(mock_test_instance)
+
+    assert mock_test_instance.metadata["__executor_status"] == executor.STATUS_SUCCEEDED
+
+
 def test_safe_is_file_handles_oserror():
     """Test that _safe_is_file helper handles various OSError scenarios."""
     config = Mock()
