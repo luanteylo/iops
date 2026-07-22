@@ -1032,10 +1032,10 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
         rail.set_visibility(v in ("both", "form"))
         content.set_visibility(v in ("both", "form"))
         yaml_col.set_visibility(v in ("both", "yaml"))
-        # Content is wider when the YAML pane is hidden.
-        content.style(f"flex:1; height:100%; min-height:0; overflow:auto")
-        yaml_col.style("flex:1; height:100%; min-height:0" if v == "both"
-                       else "flex:1; height:100%; min-height:0")
+        # In side-by-side, keep the form the wider pane. `min-width:0` (set on the
+        # columns) lets flexbox actually shrink the CodeMirror instead of letting
+        # its long lines dictate the width and squash the form to a sliver.
+        content.style("flex:1.4 1 0" if v == "both" else "flex:1 1 0")
 
     # ---- actions ----------------------------------------------------------- #
     def _do_save():
@@ -1052,18 +1052,22 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
         await on_export(name_holder["value"], cm.value)
 
     # ---- layout ------------------------------------------------------------ #
+    # `min-width:0` on the two flex columns is essential: without it a flex item
+    # refuses to shrink below its content's intrinsic width, so the CodeMirror
+    # (with long YAML lines) would keep its full width and squash the form.
     with ui.row().classes("w-full no-wrap gap-3 grow").style("min-height:0"):
         rail = ui.column().classes("gap-1") \
             .style("width:190px; height:100%; min-height:0; overflow:auto; flex:none")
         content = ui.column().classes("gap-2") \
-            .style("flex:1.3; height:100%; min-height:0; overflow:auto; padding-right:6px")
+            .style("flex:1.4 1 0; min-width:0; height:100%; min-height:0; overflow:auto; padding-right:6px")
         yaml_col = ui.column().classes("gap-1") \
-            .style("flex:1; height:100%; min-height:0")
+            .style("flex:1 1 0; min-width:0; height:100%; min-height:0")
         with yaml_col:
             ui.label("YAML").classes("text-xs text-grey")
             cm = ui.codemirror(value=initial_yaml, language="YAML",
                                on_change=lambda e: on_cm_change()).classes("w-full") \
-                .style("flex:1; min-height:0; overflow:auto; border:1px solid #e0e0e0; border-radius:6px")
+                .style("flex:1; min-width:0; min-height:0; overflow:auto; "
+                       "border:1px solid #e0e0e0; border-radius:6px")
 
     render_section()
     revalidate()
