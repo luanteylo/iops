@@ -1155,13 +1155,21 @@ def _page():
         # The active xterm was hidden while the editor overlay was up; re-fit it
         # now that it is visible again (a hidden xterm sizes to zero cols/rows).
 
+    def _default_config_name(setup_cfg: SetupConfig) -> str:
+        """A unique default name for a new config (benchmark, benchmark_2, ...)."""
+        existing = {c.name for c in load_configs(setup_cfg.name)}
+        base, name, i = "benchmark", "benchmark", 2
+        while name in existing:
+            name, i = f"{base}_{i}", i + 1
+        return name
+
     def show_editor(setup_cfg: SetupConfig, studio_cfg):
         """Open the full-width config builder for a new or existing config."""
         is_new = studio_cfg is None
         initial = (studio_cfg.yaml_text if not is_new
                    else starter_yaml("My benchmark", setup_cfg.workdir,
                                      "local" if setup_cfg.target_kind == "local" else "slurm"))
-        cfg_name = "" if is_new else studio_cfg.name
+        cfg_name = _default_config_name(setup_cfg) if is_new else studio_cfg.name
 
         def save(name: str, yaml_text: str):
             name = (name or "").strip()
