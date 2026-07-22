@@ -13,6 +13,7 @@ failure, the user can take over in the exact same context.
 import asyncio
 import base64
 import io
+import logging
 import os
 import re
 import shlex
@@ -77,6 +78,10 @@ from iops.studio.settings import (
     upsert_setup,
 )
 from iops.studio.terminal import TerminalSession
+
+# Tagged "studio.app" in the DEBUG log format; traces which handler is running so
+# the low-level terminal trace (studio.terminal) can be read in context.
+logger = logging.getLogger(__name__)
 
 # Palette borrowed from the HTML report (iops/reporting/report_generator.py).
 _STUDIO_HEAD = """
@@ -997,6 +1002,7 @@ def _page():
         st = _state_from(cfg) if cfg is not None else _clean_state()
         sess = StudioSession(key=uuid.uuid4().hex, term=term, state=st,
                              setup_name=(cfg.name if cfg is not None else None))
+        logger.debug("create session '%s' (key=%s)", label, sess.key[:8])
         with term_tabs:
             sess.tab = ui.tab(name=sess.key, label=label, icon="circle") \
                 .classes(_STATUS_CLASS[NEW]).props("no-caps")
@@ -1069,6 +1075,7 @@ def _page():
         _update_empty_hint()
 
     def close_tab(sess: StudioSession) -> None:
+        logger.debug("close_tab: %s", sess.setup_name or "(wizard)")
         was_active = active["key"] == sess.key
         _close_session(sess)
         if not was_active:
@@ -1205,6 +1212,7 @@ def _page():
         if sess is None:
             ui.notify("No terminal for this setup", type="warning")
             return
+        logger.info("run_config: '%s' on %s", name, setup_cfg.name)
         await _detach_if_attached(sess.term, sess.state)  # run in the login shell
         if not await _is_on_target(sess, setup_cfg):
             ui.notify("Not connected to the target. Reattach a run, or go back and "
@@ -1243,6 +1251,7 @@ def _page():
         if code != 0 or "__STARTED__" not in out:
             ui.notify("Could not start the screen session (see terminal)", type="negative")
             return
+        logger.info("run_config -> started screen %s on node %s", session_name, node)
         add_run(RunRecord(setup_name=setup_cfg.name, config_name=name,
                           screen_name=session_name, node=node,
                           started_at=datetime.now().strftime("%Y-%m-%d %H:%M")))
@@ -1437,6 +1446,7 @@ def _page():
         if sess is None:
             ui.notify("No terminal for this setup", type="warning")
             return
+        logger.debug("browse_runs: %s under %s", setup_cfg.name, setup_cfg.workdir)
         await _detach_if_attached(sess.term, sess.state)
         if not await _is_on_target(sess, setup_cfg):
             ui.notify("Not connected to the target. Reattach a run, or re-select the "
@@ -1444,7 +1454,9 @@ def _page():
             return
         _, out = await sess.term.run(list_runs_command(_shell_workdir(setup_cfg.workdir)),
                                      display="list runs", timeout=60)
-        sess.state["runs_list"] = parse_run_list(out)
+        runs = parse_run_list(out)
+        logger.debug("browse_runs -> %d run(s) found", len(runs))
+        sess.state["runs_list"] = runs
         _refresh_ready(setup_cfg)
 
     async def _fetch_remote(sess: StudioSession, target_kind: str, remote_path: str,
@@ -1462,6 +1474,7 @@ def _page():
         if sess is None:
             ui.notify("No terminal for this setup", type="warning")
             return
+        logger.debug("view_report: %s", run_dir)
         await _detach_if_attached(sess.term, sess.state)
         if not await _is_on_target(sess, setup_cfg):
             ui.notify("Not connected to the target. Reattach a run, or re-select the "
@@ -1476,6 +1489,7 @@ def _page():
         if not html:
             ui.notify("No report was produced (see the terminal).", type="negative")
             return
+        logger.debug("view_report -> report is %d bytes", len(html))
         html = localize_report_html(html, _PLOTLY_ASSET_URL)  # offline-render charts
         rel = f"{_result_slug(setup_cfg.name)}/{_result_slug(Path(run_dir).name)}"
         dest_dir = _results_root() / rel
@@ -1486,6 +1500,7 @@ def _page():
             ui.notify(f"Could not cache the report: {e}", type="negative")
             return
         url = f"{_RESULTS_URL}/{rel}/{REPORT_FILENAME}?v={uuid.uuid4().hex[:8]}"
+        logger.debug("view_report -> serving %s", url)
         show_report_viewer(f"{setup_cfg.name} · {Path(run_dir).name}", url)
 
     async def pull_results(setup_cfg: SetupConfig, run_dir: str):
@@ -1497,6 +1512,7 @@ def _page():
             title=f"Choose where to save results for {Path(run_dir).name}")
         if not dest_parent:
             return
+        logger.debug("pull_results: %s -> %s", run_dir, dest_parent)
         await _detach_if_attached(sess.term, sess.state)
         if not await _is_on_target(sess, setup_cfg):
             ui.notify("Not connected to the target. Reattach a run, or re-select the "
@@ -1555,6 +1571,8 @@ def _page():
             init_commands=list(st.get("init_commands") or []),
             workdir=st.get("workdir") or "~/iops_workdir",
         )
+        logger.info("complete: saved setup '%s' (%s, IOPS %s)",
+                    name, cfg.where, cfg.iops_version or "unknown")
         upsert_setup(cfg)
         # If another live terminal was already bound to this name (reusing a name
         # overwrites that setup), close it so there is one tab per setup.
@@ -1571,6 +1589,7 @@ def _page():
 
     def add_setup():
         """Open a fresh terminal and run the setup wizard in it."""
+        logger.debug("add_setup: starting the wizard on a new terminal")
         sess = _create_session(None, label="New setup")
         _focus_programmatic(sess.key, validate=False)  # setup_name None -> shows wizard
 
@@ -1581,6 +1600,7 @@ def _page():
         session and validates once. A dropped terminal is only focused, so the
         user reconnects deliberately.
         """
+        logger.debug("select_setup: %s (%s)", cfg.name, cfg.where)
         existing = registry.by_setup(cfg.name)
         if existing is not None:
             if active["key"] == existing.key:
@@ -1606,6 +1626,7 @@ def _page():
         in the client context. Only this session is affected; other terminals
         keep running. The user reconnects deliberately from the drop banner.
         """
+        logger.info("shell exited for %s -> marking dropped", sess.setup_name or "(wizard)")
         with client:
             _reset_state(sess.state)
             _set_status(sess, DROPPED)
@@ -1614,6 +1635,7 @@ def _page():
 
     def reconnect(sess: StudioSession):
         """Drop-banner action: spawn a clean shell and re-run this session's flow."""
+        logger.debug("reconnect: %s", sess.setup_name or "(wizard)")
         if sess.drop_banner is not None:
             sess.drop_banner.set_visibility(False)
         _reset_state(sess.state)

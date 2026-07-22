@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import fcntl
+import logging
 import os
 import pty
 import shlex
@@ -36,9 +37,20 @@ import termios
 import uuid
 from typing import Callable, Optional
 
+# Child of the "iops" logger configured by `iops.main`. At --log-level DEBUG it
+# traces every command and transfer Studio sends over the channel; otherwise the
+# calls are cheap no-ops. Tagged "studio.terminal" in the DEBUG log format.
+logger = logging.getLogger(__name__)
+
 _RS = 0x1e  # ASCII record separator, used to delimit sentinels invisibly
 
 OutputFn = Callable[[bytes], None]
+
+
+def _short(text: str, limit: int = 200) -> str:
+    """One-line, length-capped rendering of a command for a log line."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[:limit] + "..."
 
 
 class TerminalSession:
@@ -81,9 +93,12 @@ class TerminalSession:
         fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
         self._loop = asyncio.get_event_loop()
         self._loop.add_reader(master, self._on_readable)
+        logger.debug("shell started (pid=%s)", self._proc.pid)
 
     def close(self) -> None:
         """Terminate the child shell and release the PTY."""
+        if self.alive:
+            logger.debug("close shell (pid=%s)", self._proc.pid)
         self._closing = True  # suppress the on_exit callback for intentional teardown
         if self._fd is not None and self._loop is not None:
             try:
@@ -113,6 +128,7 @@ class TerminalSession:
         working. Used when resetting setup: any lingering ``ssh`` session is torn
         down so subsequent commands run on the local machine again.
         """
+        logger.debug("restart shell")
         on_output = self._on_output
         on_exit = self._on_exit
         self.close()
@@ -157,6 +173,7 @@ class TerminalSession:
                 self._pull = None
                 if not fut.done():
                     fut.set_result((-1, b""))
+            logger.debug("shell EOF (%s)", "intentional close" if self._closing else "exited")
             if not self._closing and self._on_exit is not None:
                 self._on_exit()
             return
@@ -312,6 +329,7 @@ class TerminalSession:
         """
         if not self.alive or self._loop is None:
             return -1
+        logger.debug("push_tar -> $HOME/%s (%d bytes gz)", dest_rel, len(tar_gz))
         payload = base64.b64encode(tar_gz)  # ASCII, unwrapped
         n = len(payload)
         rid = uuid.uuid4().hex[:8]
@@ -358,7 +376,9 @@ class TerminalSession:
                     return -1
             if not await self._drain_write(bytes(payload)):
                 return -1
-            return await asyncio.wait_for(end_future, timeout=timeout)
+            rc = await asyncio.wait_for(end_future, timeout=timeout)
+            logger.debug("push_tar -> exit=%s", rc)
+            return rc
         except OSError:
             return -1
         finally:
@@ -388,6 +408,7 @@ class TerminalSession:
         """
         if not self.alive or self._loop is None:
             return None
+        logger.debug("pull_file <- %s", remote_path)
         rid = uuid.uuid4().hex[:8]
         start = bytes([_RS]) + b"R" + rid.encode() + bytes([_RS])
         end = bytes([_RS]) + b"E" + rid.encode() + b":"
@@ -416,12 +437,17 @@ class TerminalSession:
             os.write(self._fd, line.encode())
             code, payload = await asyncio.wait_for(future, timeout=timeout)
             if code != 0:
+                logger.debug("pull_file -> failed (exit=%s)", code)
                 return None
             try:
-                return base64.b64decode(payload)
+                data = base64.b64decode(payload)
+                logger.debug("pull_file -> %d bytes", len(data))
+                return data
             except (ValueError, TypeError):
+                logger.debug("pull_file -> base64 decode error")
                 return None
         except asyncio.TimeoutError:
+            logger.debug("pull_file -> TIMEOUT after %.0fs", timeout)
             return None
         except OSError:
             return None
@@ -456,8 +482,11 @@ class TerminalSession:
         characters itself, so enabling tty echo would double every keystroke.
         """
         if not self.alive or self._loop is None:
+            logger.debug("run skipped (shell not alive): %s", display or _short(command))
             return (-1, "")
 
+        logger.debug("run%s: %s", "" if subshell else " (in-shell)",
+                     display or _short(command))
         rid = uuid.uuid4().hex[:8]
         start = bytes([_RS]) + b"S" + rid.encode() + bytes([_RS])
         end = bytes([_RS]) + b"E" + rid.encode() + b":"
@@ -489,10 +518,14 @@ class TerminalSession:
             saved_attrs = None
         try:
             os.write(self._fd, line.encode())
-            return await asyncio.wait_for(future, timeout=timeout)
+            code, out = await asyncio.wait_for(future, timeout=timeout)
+            logger.debug("run -> exit=%s (%d bytes)", code, len(out))
+            return code, out
         except asyncio.TimeoutError:
+            logger.debug("run -> TIMEOUT after %.0fs: %s", timeout, display or _short(command))
             return (124, "")
-        except OSError:
+        except OSError as e:
+            logger.debug("run -> OSError: %s", e)
             return (-1, "")
         finally:
             self._active = None
@@ -512,6 +545,7 @@ class TerminalSession:
         prompt is answered by the user in the terminal. Confirm readiness
         afterwards with ``run('true')``.
         """
+        logger.debug("start_ssh: ssh -tt %s", alias)
         opts = " ".join(shlex.quote(o) for o in (options or []))
         opts = f"{opts} " if opts else ""
         self.write(f"ssh -tt {opts}{shlex.quote(alias)}\n")

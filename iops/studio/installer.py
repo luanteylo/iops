@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import subprocess
 import sys
 import tarfile
@@ -24,6 +25,8 @@ from typing import Callable, Optional
 
 from iops.main import load_version
 from iops.studio.connections import Connection, LineFn
+
+logger = logging.getLogger(__name__)
 
 PACKAGE = "iops-benchmark"
 CLIENT_VERSION = load_version()
@@ -140,9 +143,11 @@ async def install_iops_session(session, python_path: str, *,
 
     result = InstallResult(ok=False)
 
+    logger.debug("install: target=%s version=%s", python_path, version or "latest")
     _, out = await session.run(iops_version_command(python_path), display="check for IOPS")
     existing = parse_iops_version(out)
     if existing and (version is None or existing == version):
+        logger.debug("install: IOPS %s already present, nothing to do", existing)
         return InstallResult(True, "existing", existing, steps=["already installed"])
 
     # 1) pip (runs in the terminal, output streams live)
@@ -151,7 +156,9 @@ async def install_iops_session(session, python_path: str, *,
     result.steps.append("pip")
     if code == 0:
         _, out = await session.run(iops_version_command(python_path))
+        logger.debug("install: pip succeeded")
         return InstallResult(True, "pip", parse_iops_version(out) or version, steps=result.steps)
+    logger.debug("install: pip failed, falling back to wheelhouse")
     note("pip failed; falling back to an offline wheelhouse")
 
     # 2a) build the wheelhouse on the client (off the event loop)
