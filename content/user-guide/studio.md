@@ -63,7 +63,7 @@ iops studio --log-level DEBUG
 
 On launch you land on the **setups hub**. A *setup* is a saved target: where IOPS runs (local or an SSH host), which Python environment to use, and the workdir to run from. Each card offers **use** (▶), **edit** (✎) and **delete**.
 
-![Studio setups hub](../../images/studio/studio-setups.jpg)
+![Studio setups hub](../../images/studio/studio-setups.png)
 
 The first time, the list is empty and Studio takes you straight into the wizard. Otherwise click **Add setup** to create a new one.
 
@@ -73,7 +73,7 @@ The first time, the list is empty and Studio takes you straight into the wizard.
 
 The wizard walks three steps in the left pane, driving everything through the terminal on the right.
 
-![Add setup wizard](../../images/studio/studio-wizard.jpg)
+![Add setup wizard](../../images/studio/studio-wizard.png)
 
 1. **Connection** - choose *Local machine* or an *SSH host* from your `~/.ssh/config`. Optionally add **setup commands** (e.g. `module load python3/3.12`, `export PATH=...`) that run right after connecting, and set the **workdir** IOPS runs from. Click **Connect**; for SSH, authenticate in the terminal if prompted, then **Verify**.
 2. **Python environment** - **Discover environments** on the target and pick one, or create a new virtualenv.
@@ -87,7 +87,7 @@ The setup is saved locally under `~/.config/iops/`. Only its durable identity is
 
 Picking a setup validates it live (re-probing the interpreter and IOPS) and opens its **ready view**: a summary, the validation status, a **Results** panel, and the **configs** saved for this target.
 
-![Setup ready view](../../images/studio/studio-ready.jpg)
+![Setup ready view](../../images/studio/studio-ready.png)
 
 The terminal on the right is this target's live session. You can type into it directly at any time.
 
@@ -97,7 +97,7 @@ The terminal on the right is this target's live session. You can type into it di
 
 Click **New config** (or **Edit** on an existing one) to open the **config builder**, the heart of Studio. A left rail lists the sections; each shows its fields in the middle pane, with the YAML kept in sync on the right.
 
-![Config builder](../../images/studio/studio-builder.jpg)
+![Config builder](../../images/studio/studio-builder.png)
 
 - The form covers **every** option IOPS accepts: benchmark settings, SLURM options and single-allocation mode, budget and core-hours, variables (sweeps, expressions, adaptive probing), command, scripts, output sink, probes, and the full reporting block (sections, plots, gallery, log axes).
 - The two panes stay **in sync both ways**: edit a field and the YAML updates; edit the YAML and the form rebuilds.
@@ -106,7 +106,7 @@ Click **New config** (or **Edit** on an existing one) to open the **config build
 
 Script templates and parser code get language-aware editors: **bash** highlighting for `script_template`, **Python** for `parser_script`.
 
-![Script and parser editors](../../images/studio/studio-scripts.jpg)
+![Script and parser editors](../../images/studio/studio-scripts.png)
 
 You can also **import** an existing YAML from the host (it is copied into Studio's library, leaving the original untouched).
 
@@ -116,7 +116,7 @@ You can also **import** an existing YAML from the host (it is copied into Studio
 
 Click **Run** (from a config card or the builder header). Studio asks which `iops run` flags to use:
 
-![Run options](../../images/studio/studio-run-options.jpg)
+![Run options](../../images/studio/studio-run-options.png)
 
 - **Use cache** (`--use-cache`) - skip tests already cached
 - **Cache only** (`--cache-only`) - read cached results, run nothing new
@@ -133,7 +133,7 @@ In the ready view, **Browse runs** lists the completed runs under the workdir. F
 
 - **View report** - Studio runs `iops report`, pulls the HTML back, and shows it in an integrated viewer (charts render offline).
 
-![Integrated report viewer](../../images/studio/studio-report.jpg)
+![Integrated report viewer](../../images/studio/studio-report.png)
 
 - **Edit report config** - from the report viewer, open the run's `report_config.yaml` in a YAML editor, tweak sections, plots or axes, and **Save & regenerate** to rebuild the report in place.
 - **Pull results** - bring a run's small artifacts (results CSV, metadata, report, logs) back to a folder on your machine. Raw scratch data is deliberately excluded, so the transfer stays small.
