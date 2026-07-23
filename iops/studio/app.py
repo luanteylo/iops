@@ -259,12 +259,14 @@ def _node_command(setup: SetupConfig, node: str, action: str, tty: bool = False)
     )
 
 
-def _runner_script(setup: SetupConfig, remote_config: str, session_name: str) -> str:
+def _runner_script(setup: SetupConfig, remote_config: str, session_name: str,
+                   flags: str = "") -> str:
     """Bash the screen runs: apply setup commands, cd to workdir, run IOPS.
 
     Writes an exit-code marker to the shared workdir when IOPS finishes, so the
     status can be read from any login node even though the screen stays alive
-    (``exec bash``) for the user to review the output.
+    (``exec bash``) for the user to review the output. ``flags`` is a leading
+    string of ``iops run`` options (e.g. " --use-cache --dry-run").
     """
     wd = _shell_workdir(setup.workdir)
     marker = f"{wd}/.iops-studio/{session_name}.exit"
@@ -272,7 +274,7 @@ def _runner_script(setup: SetupConfig, remote_config: str, session_name: str) ->
     lines += list(setup.init_commands or [])
     lines += [
         f'cd "{wd}" || exit 1',
-        f'"{setup.env_path}" -m iops run "{remote_config}"',
+        f'"{setup.env_path}" -m iops run "{remote_config}"{flags}',
         "__ec=$?",
         f'echo "$__ec" > "{marker}"',
         "echo",
@@ -1227,12 +1229,41 @@ def _page():
         cur = await _remote_value(sess.term, "$(hostname)", "NODE")
         return bool(cur) and cur != sess.state.get("local_host")
 
+    async def _ask_run_options() -> Optional[str]:
+        """Pick `iops run` flags in a dialog. Returns a leading flags string
+        (e.g. " --use-cache"), "" for a plain run, or None if cancelled."""
+        picks = {"--use-cache": False, "--cache-only": False,
+                 "--dry-run": False, "--fail-fast": False}
+        labels = {
+            "--use-cache": "Use cache: skip tests already cached (--use-cache)",
+            "--cache-only": "Cache only: read cached results, run nothing new (--cache-only)",
+            "--dry-run": "Dry run: preview the plan, execute nothing (--dry-run)",
+            "--fail-fast": "Fail fast: stop at the first failed test (--fail-fast)",
+        }
+        with ui.dialog() as dialog, ui.card().classes("gap-2").style("width:500px;max-width:92vw"):
+            ui.label("Run options").classes("text-lg font-semibold")
+            ui.label("Choose flags for this run.").classes("text-xs text-gray-500")
+            for flag, label in labels.items():
+                ui.checkbox(label, value=False,
+                            on_change=lambda e, f=flag: picks.__setitem__(f, e.value))
+            with ui.row().classes("justify-end gap-2 w-full items-center"):
+                ui.space()
+                ui.button("Cancel", on_click=lambda: dialog.submit("cancel")).props("flat")
+                ui.button("Run", icon="play_arrow",
+                          on_click=lambda: dialog.submit("run")).props("unelevated")
+        if await dialog != "run":
+            return None
+        return "".join(f" {f}" for f, on in picks.items() if on)
+
     async def run_config(setup_cfg: SetupConfig, name: str, yaml_text: str):
         sess = registry.by_setup(setup_cfg.name)
         if sess is None:
             ui.notify("No terminal for this setup", type="warning")
             return
-        logger.info("run_config: '%s' on %s", name, setup_cfg.name)
+        flags = await _ask_run_options()
+        if flags is None:
+            return
+        logger.info("run_config: '%s' on %s (flags:%s)", name, setup_cfg.name, flags or " none")
         await _detach_if_attached(sess.term, sess.state)  # run in the login shell
         if not await _is_on_target(sess, setup_cfg):
             ui.notify("Not connected to the target. Reattach a run, or go back and "
@@ -1252,14 +1283,14 @@ def _page():
             sess.note("screen not found in this environment; in case of interruption "
                       "IOPS will be cancelled")
             sess.term.write(f'cd "{_shell_workdir(setup_cfg.workdir)}" && '
-                            f'"{setup_cfg.env_path}" -m iops run "{remote}"\n')
+                            f'"{setup_cfg.env_path}" -m iops run "{remote}"{flags}\n')
             ui.notify("Running in the terminal (no screen — not resilient)", type="warning")
             return
 
         # Screen-wrapped, resilient run. Record the node so we can hop back.
         node = await _remote_value(sess.term, "$(hostname)", "NODE") or "?"
         session_name = f"iops_{_slug(name)}_{uuid.uuid4().hex[:6]}"
-        runner = _runner_script(setup_cfg, remote, session_name)
+        runner = _runner_script(setup_cfg, remote, session_name, flags)
         rb64 = base64.b64encode(runner.encode()).decode()
         runner_path = f"{_shell_workdir(setup_cfg.workdir)}/.iops-studio/{session_name}.sh"
         start = (
