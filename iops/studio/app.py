@@ -1574,8 +1574,12 @@ def _page():
                       "setup to connect.", type="warning")
             return
         ui.notify("Generating the report on the target...", type="info")
-        await sess.term.run(f'"{setup_cfg.env_path}" -m iops report "{run_dir}"',
-                            display=f"iops report {Path(run_dir).name}", timeout=300)
+        # Force the output path so the fetch below is deterministic regardless of
+        # any output_dir/output_filename set in the run's report_config.yaml.
+        await sess.term.run(
+            f'"{setup_cfg.env_path}" -m iops report "{run_dir}" '
+            f'--output "{report_html_path(run_dir)}"',
+            display=f"iops report {Path(run_dir).name}", timeout=300)
         # iops report exits 0 even on failure; the real signal is the HTML's presence.
         html = await _fetch_remote(sess, setup_cfg.target_kind,
                                    report_html_path(run_dir), timeout=300)

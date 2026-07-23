@@ -445,6 +445,7 @@ class TestReport:
 
         mock_generate.assert_called_once_with(
             Path('/path/to/workdir'),
+            output_path=None,
             report_config=None,
             export_plots=False,
             plot_format='pdf'
@@ -467,7 +468,27 @@ class TestReport:
         mock_load_config.assert_called_once_with(Path('report.yaml'))
         mock_generate.assert_called_once_with(
             Path('/path/to/workdir'),
+            output_path=None,
             report_config=mock_report_config,
+            export_plots=False,
+            plot_format='pdf'
+        )
+
+    @patch('iops.reporting.report_generator.generate_report_from_workdir')
+    def test_report_with_explicit_output(self, mock_generate):
+        """Test that --output is forwarded as output_path."""
+        mock_generate.return_value = Path('/custom/out.html')
+
+        test_args = ['report', '/path/to/workdir', '--output', '/custom/out.html']
+
+        with patch.object(sys, 'argv', ['iops'] + test_args):
+            with patch('iops.main.initialize_logger'):
+                main()
+
+        mock_generate.assert_called_once_with(
+            Path('/path/to/workdir'),
+            output_path=Path('/custom/out.html'),
+            report_config=None,
             export_plots=False,
             plot_format='pdf'
         )

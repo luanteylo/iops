@@ -517,6 +517,16 @@ reporting:
   output_filename: "benchmark_report.html"  # Custom filename
 ```
 
+`output_dir` and `output_filename` are honored both when a report is auto-generated after a run and when it is generated manually with `iops report` (including the auto-detected `report_config.yaml` in the run directory).
+
+To override the location for a single invocation without editing the config, pass `--output` (short form `-o`):
+
+```bash
+iops report ./workdir/run_001 --output /custom/path/report.html
+```
+
+The resolution order is: `--output` flag, then the config's `output_dir`/`output_filename`, then the default `<workdir>/analysis_report.html`.
+
 ### Plot Export (Optional)
 
 IOPS can export all plots as image files for publications, presentations, or external documents. This requires the `kaleido` package and is enabled via CLI options:

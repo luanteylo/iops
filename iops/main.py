@@ -181,6 +181,9 @@ Examples:
     report_parser.add_argument('path', type=Path, help="Path to the run directory (e.g., ./workdir/run_001)")
     report_parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
                                help="Custom report config YAML (auto-detects report_config.yaml in workdir)")
+    report_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                               help="Explicit output path for the HTML report "
+                                    "(overrides output_dir/output_filename from the config)")
     report_parser.add_argument('--export-plots', action='store_true',
                                help="Export plots as image files to __iops_plots folder")
     report_parser.add_argument('--plot-format', type=str, default='pdf',
@@ -675,6 +678,7 @@ def main():
         try:
             report_path = generate_report_from_workdir(
                 args.path,
+                output_path=args.output,
                 report_config=report_config,
                 export_plots=args.export_plots,
                 plot_format=args.plot_format

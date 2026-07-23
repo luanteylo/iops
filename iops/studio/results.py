@@ -20,8 +20,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
-# The report filename `iops report <run_dir>` always writes (it ignores the
-# config's output_filename on the CLI path).
+# The report filename Studio writes and fetches. Studio forces this name via
+# `iops report --output` so the fetch stays deterministic regardless of any
+# output_filename set in the run's report_config.yaml.
 REPORT_FILENAME = "analysis_report.html"
 
 # `iops report <run_dir>` auto-detects this file in the run dir and uses it to

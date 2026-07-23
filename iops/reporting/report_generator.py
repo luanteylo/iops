@@ -941,7 +941,9 @@ class ReportGenerator:
         Generate complete HTML report with all plots.
 
         Args:
-            output_path: Path for output HTML file. If None, uses workdir/analysis_report.html
+            output_path: Path for output HTML file. If None, the location is
+                taken from the reporting config (output_dir/output_filename),
+                falling back to workdir/analysis_report.html.
 
         Returns:
             Path to generated HTML file
@@ -950,7 +952,13 @@ class ReportGenerator:
             raise ValueError("Load metadata and results first")
 
         if output_path is None:
-            output_path = self.workdir / "analysis_report.html"
+            base_dir = (self.report_config.output_dir if self.report_config else None) or self.workdir
+            filename = (
+                self.report_config.output_filename
+                if self.report_config and self.report_config.output_filename
+                else "analysis_report.html"
+            )
+            output_path = Path(base_dir) / filename
 
         # Create plots directory for image exports (only if explicitly requested and kaleido is available)
         if self.export_plots:
