@@ -317,6 +317,19 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
         else:
             container.pop(key, None)
 
+    def _code_editor(label, value, on_change, language, min_height="150px"):
+        """A syntax-highlighted code field (Shell/Python/...) for the form.
+
+        Used instead of a plain textarea so script templates get Bash highlighting
+        and parser scripts get Python highlighting, right where they are edited.
+        """
+        if label:
+            ui.label(label).classes("text-xs text-grey")
+        ui.codemirror(value=value or "", language=language, on_change=on_change,
+                      line_wrapping=True).classes("w-full") \
+            .style(f"min-height:{min_height}; border:1px solid #e0e0e0; border-radius:6px; "
+                   "overflow:auto")
+
     def _dict_editor(title, parent, key):
         d = parent.get(key) or {}
         with _expansion(f"dict-{key}", f"{title} ({len(d)})"):
@@ -436,10 +449,10 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                     ui.number("test_timeout (s)", value=alloc.get("test_timeout", 3600), min=1, format="%d",
                               on_change=lambda e: (_set_nested(bench, ["slurm_options", "allocation", "test_timeout"],
                                                               int(e.value) if e.value else 3600), sync_to_yaml())).classes("w-56")
-                    ui.textarea("allocation_script (SBATCH directives + setup)",
-                                value=alloc.get("allocation_script", ""),
-                                on_change=lambda e: (_set_nested(bench, ["slurm_options", "allocation", "allocation_script"], e.value),
-                                                     sync_to_yaml())).classes("w-full").props("autogrow")
+                    _code_editor("allocation_script (bash: SBATCH directives + setup)",
+                                 alloc.get("allocation_script", ""),
+                                 lambda e: (_set_nested(bench, ["slurm_options", "allocation", "allocation_script"], e.value),
+                                            sync_to_yaml()), "Shell")
 
     def _set_nested(root, path, value):
         """Set root[path...] = value; prune empty containers when value is blank."""
@@ -634,8 +647,8 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
     def _command_section():
         cmd = model.setdefault("command", {})
         with _card():
-            ui.textarea("Command template (Jinja2)", value=cmd.get("template", ""),
-                        on_change=setter(cmd, "template")).classes("w-full").props("autogrow")
+            _code_editor("Command template (Jinja2 + shell)", cmd.get("template", ""),
+                         setter(cmd, "template"), "Shell", min_height="90px")
             _dict_editor("Labels", cmd, "labels")
             _dict_editor("Environment variables", cmd, "env")
 
@@ -662,15 +675,14 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                     .tooltip("Command to submit this script (e.g. sbatch); overrides slurm default")
                 ui.button(icon="delete", on_click=restructure(lambda e, i=idx: scripts.pop(i))) \
                     .props("flat round dense color=negative")
-            ui.textarea("Script template", value=sc.get("script_template", ""),
-                        on_change=setter(sc, "script_template")).classes("w-full").props("autogrow")
+            _code_editor("Script template (bash)", sc.get("script_template", ""),
+                         setter(sc, "script_template"), "Shell", min_height="180px")
             _parser_editor(sc, idx)
             _inputs_editor(sc, idx)
             post = sc.get("post") or {}
             with _expansion(f"post-{idx}", "Post-execution script"):
-                ui.textarea("post.script", value=post.get("script", ""),
-                            on_change=lambda e: (_set_post(sc, e.value), sync_to_yaml())) \
-                    .classes("w-full").props("autogrow")
+                _code_editor("post.script (bash)", post.get("script", ""),
+                             lambda e: (_set_post(sc, e.value), sync_to_yaml()), "Shell")
 
     def _set_post(sc, value):
         if value:
@@ -705,9 +717,9 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                             .props("flat round dense color=negative")
                 ui.button("Add metric", icon="add",
                           on_click=restructure(lambda e: metrics.append({"name": "metric"}))).props("flat dense")
-                ui.textarea("parser_script (def parse(file_path))",
-                            value=parser.get("parser_script", ""),
-                            on_change=setter(parser, "parser_script")).classes("w-full").props("autogrow")
+                _code_editor("parser_script (Python: def parse(file_path))",
+                             parser.get("parser_script", ""),
+                             setter(parser, "parser_script"), "Python", min_height="180px")
                 ui.button("Remove parser", icon="delete",
                           on_click=restructure(lambda e: sc.pop("parser", None))) \
                     .props("flat dense color=negative")
