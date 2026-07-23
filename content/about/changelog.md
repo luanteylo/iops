@@ -5,6 +5,12 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
+## [Unreleased]
+
+### Added
+
+- `log_x` and `log_y` (both default `false`) on report plots switch the corresponding axis to a logarithmic scale. Set them on any plot in `reporting.metrics.<metric>.plots` or `reporting.default_plots`; they are also exposed as checkboxes in the Studio plot editor. `log_y` applies to the numeric metric axis on every plot type and is the common case when metric values span several orders of magnitude. `log_x` is meaningful on plots whose x-axis is numeric (`scatter`, `heatmap`, `surface_3d`); on bar, line, box, and violin plots the x-axis is rendered as ordered categories, so `log_x` has no visible effect there.
+
 ## [3.5.8] - 2026-06-20
 
 ### Added
