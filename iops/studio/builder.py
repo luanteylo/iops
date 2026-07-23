@@ -942,6 +942,11 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                     with ui.row().classes("gap-2 w-full"):
                         ui.input("xaxis_label", value=p.get("xaxis_label", ""), on_change=setter(p, "xaxis_label")).classes("grow")
                         ui.input("yaxis_label", value=p.get("yaxis_label", ""), on_change=setter(p, "yaxis_label")).classes("grow")
+                    with ui.row().classes("gap-x-4 w-full").style("flex-wrap:wrap"):
+                        ui.checkbox("log_x", value=p.get("log_x", False),
+                                    on_change=setter(p, "log_x", drop_empty=False))
+                        ui.checkbox("log_y", value=p.get("log_y", False),
+                                    on_change=setter(p, "log_y", drop_empty=False))
                     with ui.row().classes("gap-2 w-full"):
                         ui.input("colorscale", value=p.get("colorscale", "Viridis"), on_change=setter(p, "colorscale")).classes("grow")
                         ui.number("height", value=p.get("height"), min=100, format="%d",

@@ -71,6 +71,13 @@ class BasePlot(ABC):
         if self.theme.colors:
             fig.update_layout(colorway=self.theme.colors)
 
+        # Apply logarithmic axis scales last so they override any per-plot
+        # axis type (e.g. 'category') set earlier in generate().
+        if getattr(self.config, "log_x", False):
+            fig.update_xaxes(type='log')
+        if getattr(self.config, "log_y", False):
+            fig.update_yaxes(type='log')
+
         return fig
 
     def _get_title(self, default: str) -> str:
