@@ -5,10 +5,16 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
-## [Unreleased]
+## [3.5.9] - Unreleased
 
 ### Added
 
+- **IOPS Studio** (experimental): a local web UI for using IOPS end to end, launched with `iops studio` (requires the optional `nicegui` dependency). See the [Getting Started guide](/iops/getting-started/studio/).
+  - **Setups**: save targets (local machine or an SSH host from `~/.ssh/config`), each with a Python environment, workdir, and setup commands. A wizard walks connection, environment discovery/creation, and IOPS install (pip, with an offline wheelhouse fallback transferred over the interactive channel for hosts with no network). Setups can be edited (renaming migrates their configs and tracked runs) and validated live.
+  - **Config builder**: the full IOPS YAML schema as a section-navigated form beside a live, two-way-synced YAML editor, with three view modes (Form + YAML, Form, YAML). Covers every option including SLURM/single-allocation, budget and core-hours, variables (sweeps/expr/adaptive), scripts, output, probes, constraints, and the whole reporting block (sections, plots, gallery, log axes). Script templates get bash highlighting and parser code gets Python highlighting. Import a host YAML as an editable copy, or export a config to the host.
+  - **Resilient runs**: benchmarks run inside a `screen` session and survive dropped connections; Studio records the login node and reattaches, hopping back if the alias load-balances. A run-options dialog exposes `--use-cache`, `--cache-only`, `--dry-run`, and `--fail-fast`.
+  - **Integrated results**: browse a target's runs, view the HTML report in-app (charts render offline via a bundled Plotly), edit the run's `report_config.yaml` and regenerate the report in place, or pull a run's small artifacts (results, metadata, report, logs) back to the host. Raw scratch data is deliberately excluded so transfers stay small.
+  - **Multiple terminals**: keep several targets connected at once, one tab each, with per-tab status and reconnect. Enable `--log-level DEBUG` to trace every command Studio sends.
 - `log_x` and `log_y` (both default `false`) on report plots switch the corresponding axis to a logarithmic scale. Set them on any plot in `reporting.metrics.<metric>.plots` or `reporting.default_plots`; they are also exposed as checkboxes in the Studio plot editor. `log_y` applies to the numeric metric axis on every plot type and is the common case when metric values span several orders of magnitude. `log_x` is meaningful on plots whose x-axis is numeric (`scatter`, `heatmap`, `surface_3d`); on bar, line, box, and violin plots the x-axis is rendered as ordered categories, so `log_x` has no visible effect there.
 - `iops report --output <path>` (short form `-o`) writes the HTML report to an explicit path, taking priority over the config's `output_dir`/`output_filename`.
 
