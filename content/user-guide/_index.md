@@ -32,10 +32,6 @@ Guides for IOPS features and capabilities.
 - **[Archiving Workdirs](exploring-executions#archiving-workdirs)** - Portable archives with `iops archive` for sharing and backup
 - **[Custom Reports & Visualization](reporting)** - Interactive HTML reports with Plotly charts
 
-## Interactive UI
-
-- **[IOPS Studio](studio)** - Build configs, run benchmarks, and view results from a local web UI (experimental)
-
 ## Migration
 
 - **[JUBE Conversion](jube-conversion)** - Convert JUBE XML benchmarks to IOPS YAML with `iops convert`
