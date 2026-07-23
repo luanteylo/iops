@@ -664,6 +664,8 @@ class ReportGenerator:
                 title=plot_data.get('title'),
                 xaxis_label=plot_data.get('xaxis_label'),
                 yaxis_label=plot_data.get('yaxis_label'),
+                log_x=plot_data.get('log_x', False),
+                log_y=plot_data.get('log_y', False),
                 colorscale=plot_data.get('colorscale', 'Viridis'),
                 show_error_bars=plot_data.get('show_error_bars', True),
                 show_outliers=plot_data.get('show_outliers', True),
@@ -939,7 +941,9 @@ class ReportGenerator:
         Generate complete HTML report with all plots.
 
         Args:
-            output_path: Path for output HTML file. If None, uses workdir/analysis_report.html
+            output_path: Path for output HTML file. If None, the location is
+                taken from the reporting config (output_dir/output_filename),
+                falling back to workdir/analysis_report.html.
 
         Returns:
             Path to generated HTML file
@@ -948,7 +952,13 @@ class ReportGenerator:
             raise ValueError("Load metadata and results first")
 
         if output_path is None:
-            output_path = self.workdir / "analysis_report.html"
+            base_dir = (self.report_config.output_dir if self.report_config else None) or self.workdir
+            filename = (
+                self.report_config.output_filename
+                if self.report_config and self.report_config.output_filename
+                else "analysis_report.html"
+            )
+            output_path = Path(base_dir) / filename
 
         # Create plots directory for image exports (only if explicitly requested and kaleido is available)
         if self.export_plots:
@@ -2821,6 +2831,8 @@ class ReportGenerator:
                             title=plot_config.title or f"{metric} vs {var}",
                             xaxis_label=plot_config.xaxis_label,
                             yaxis_label=plot_config.yaxis_label,
+                            log_x=plot_config.log_x,
+                            log_y=plot_config.log_y,
                             colorscale=plot_config.colorscale,
                             show_error_bars=plot_config.show_error_bars,
                             show_outliers=plot_config.show_outliers,

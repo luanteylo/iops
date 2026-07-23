@@ -66,7 +66,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache', 'convert'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache', 'convert', 'studio'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -118,6 +118,7 @@ Examples:
   iops find ./workdir nodes=4       Filter by parameter
   iops report ./run_001             Generate HTML report
   iops generate                     Create config template
+  iops studio                       Launch the local web UI
 """
     )
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
@@ -180,6 +181,9 @@ Examples:
     report_parser.add_argument('path', type=Path, help="Path to the run directory (e.g., ./workdir/run_001)")
     report_parser.add_argument('--report-config', type=Path, default=None, metavar='PATH',
                                help="Custom report config YAML (auto-detects report_config.yaml in workdir)")
+    report_parser.add_argument('-o', '--output', type=Path, default=None, metavar='PATH',
+                               help="Explicit output path for the HTML report "
+                                    "(overrides output_dir/output_filename from the config)")
     report_parser.add_argument('--export-plots', action='store_true',
                                help="Export plots as image files to __iops_plots folder")
     report_parser.add_argument('--plot-format', type=str, default='pdf',
@@ -361,6 +365,17 @@ Examples:
                                 help="Print converted YAML to stdout instead of writing a file")
     _add_common_args(convert_parser)
 
+    # ---- studio command ----
+    studio_parser = subparsers.add_parser('studio', help='Launch the IOPS Studio web UI',
+                                           description='Start the local IOPS Studio web client.')
+    studio_parser.add_argument('--host', type=str, default='127.0.0.1', metavar='ADDR',
+                               help="Host/address to bind the server to (default: 127.0.0.1)")
+    studio_parser.add_argument('--port', type=int, default=8080, metavar='PORT',
+                               help="Port to serve on (default: 8080)")
+    studio_parser.add_argument('--no-browser', action='store_true',
+                               help="Do not open a browser window automatically")
+    _add_common_args(studio_parser)
+
     args = parser.parse_args()
 
     # Show help if no command provided
@@ -538,6 +553,20 @@ def main():
     args = parse_arguments()
     logger = initialize_logger(args)
 
+    # ---- studio command ----
+    if args.command == 'studio':
+        try:
+            from iops.studio.server import launch
+            launch(host=args.host, port=args.port, open_browser=not args.no_browser)
+        except ImportError as e:
+            # Missing NiceGUI: show the friendly install hint, not a traceback.
+            logger.error(str(e))
+            if args.verbose:
+                raise
+        except KeyboardInterrupt:
+            logger.info("\n\nIOPS Studio stopped")
+        return
+
     # ---- generate command ----
     if args.command == 'generate':
         from iops.setup import BenchmarkWizard
@@ -649,6 +678,7 @@ def main():
         try:
             report_path = generate_report_from_workdir(
                 args.path,
+                output_path=args.output,
                 report_config=report_config,
                 export_plots=args.export_plots,
                 plot_format=args.plot_format

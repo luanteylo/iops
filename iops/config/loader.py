@@ -126,8 +126,9 @@ ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
 ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
 ALLOWED_PLOT_KEYS = {
     "type", "x_var", "y_var", "z_metric", "group_by", "color_by", "size_by",
-    "title", "xaxis_label", "yaxis_label", "colorscale", "show_error_bars",
-    "show_outliers", "height", "width", "per_variable", "include_metric",
+    "title", "xaxis_label", "yaxis_label", "log_x", "log_y", "colorscale",
+    "show_error_bars", "show_outliers", "height", "width", "per_variable",
+    "include_metric",
     "row_vars", "col_var", "aggregation", "show_missing", "sort_rows_by",
     "sort_cols_by", "sort_ascending",
 }
@@ -1779,6 +1780,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                     title=plot_data.get("title"),
                     xaxis_label=plot_data.get("xaxis_label"),
                     yaxis_label=plot_data.get("yaxis_label"),
+                    log_x=plot_data.get("log_x", False),
+                    log_y=plot_data.get("log_y", False),
                     colorscale=plot_data.get("colorscale", "Viridis"),
                     show_error_bars=plot_data.get("show_error_bars", True),
                     show_outliers=plot_data.get("show_outliers", True),
@@ -1820,6 +1823,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                 title=plot_data.get("title"),
                 xaxis_label=plot_data.get("xaxis_label"),
                 yaxis_label=plot_data.get("yaxis_label"),
+                log_x=plot_data.get("log_x", False),
+                log_y=plot_data.get("log_y", False),
                 colorscale=plot_data.get("colorscale", "Viridis"),
                 show_error_bars=plot_data.get("show_error_bars", True),
                 show_outliers=plot_data.get("show_outliers", True),

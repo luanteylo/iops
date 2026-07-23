@@ -38,6 +38,7 @@ bayesian = ["scikit-optimize"]
 parquet = ["pyarrow"]
 watch = ["rich"]
 plots = ["kaleido"]
+studio = ["nicegui"]
 
 [project.urls]
 Homepage = "https://iops-benchmark.com"
@@ -53,7 +54,7 @@ iops = "iops.main:main"
 include = ["iops*", "docs*"]
 
 [tool.setuptools.package-data]
-iops = ["VERSION", "**/*.yaml", "**/*.yml"]
+iops = ["VERSION", "**/*.yaml", "**/*.yml", "**/*.png"]
 docs = ["**/*.md", "**/*.yaml", "**/*.yml", "**/*.py", "**/*.sh", "**/*.txt"]
 
 [tool.setuptools.dynamic]

@@ -49,6 +49,8 @@ def _serialize_plot_config(plot_cfg) -> Dict[str, Any]:
         "title": plot_cfg.title,
         "xaxis_label": plot_cfg.xaxis_label,
         "yaxis_label": plot_cfg.yaxis_label,
+        "log_x": plot_cfg.log_x,
+        "log_y": plot_cfg.log_y,
         "colorscale": plot_cfg.colorscale,
         "show_error_bars": plot_cfg.show_error_bars,
         "show_outliers": plot_cfg.show_outliers,
