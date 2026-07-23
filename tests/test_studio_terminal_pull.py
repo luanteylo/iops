@@ -7,6 +7,7 @@ tests drive the coroutines with ``asyncio.run`` so no async plugin is required.
 """
 
 import asyncio
+import base64
 
 from iops.studio.terminal import TerminalSession
 
@@ -32,9 +33,13 @@ def test_pull_file_roundtrips_bytes(tmp_path):
     payload = bytes(range(256)) * 40 + b"\nhello\x00world\n"
     got, during_pull = asyncio.run(_pull(tmp_path, payload))
     assert got == payload
-    # A pull suppresses terminal output entirely, so the base64 never floods the
-    # xterm: nothing (payload nor sentinel markers) reaches on_output during it.
-    assert during_pull == b""
+    # A pull suppresses its own stream, so the base64 payload and the sentinel
+    # markers never flood the xterm. A few incidental shell-prompt control bytes
+    # (e.g. bracketed-paste "\x1b[?2004h") can arrive in the brief window before
+    # the pull begins, so assert on the flood, not on exact emptiness.
+    assert b"\x1e" not in during_pull                       # R/E sentinel markers suppressed
+    assert base64.b64encode(payload) not in during_pull     # base64 payload not echoed
+    assert len(during_pull) < 512                           # no flood (payload is ~14 KB encoded)
 
 
 def test_pull_file_missing_returns_none(tmp_path):
