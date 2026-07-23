@@ -53,12 +53,14 @@ from iops.studio.configs import (
 )
 from iops.studio.filebrowser import choose_dir, open_yaml, save_yaml
 from iops.studio.results import (
+    DEFAULT_REPORT_CONFIG,
     REPORT_FILENAME,
     light_tar_command,
     list_runs_command,
     localize_report_html,
     parse_run_list,
     plotly_bundle_path,
+    report_config_path,
     report_html_path,
     slug as _result_slug,
 )
@@ -1442,7 +1444,7 @@ def _page():
         results_area.set_visibility(False)
         main_splitter.set_visibility(True)
 
-    def show_report_viewer(title: str, url: str):
+    def show_report_viewer(setup_cfg: SetupConfig, run_dir: str, url: str):
         main_splitter.set_visibility(False)
         editor_area.set_visibility(False)
         results_area.clear()
@@ -1452,12 +1454,115 @@ def _page():
                     .style("border-bottom:1px solid #e0e0e0"):
                 ui.button(icon="arrow_back", on_click=_exit_report_viewer) \
                     .props("flat round dense").tooltip("Back")
-                ui.label(title).classes("text-md font-semibold truncate")
+                ui.label(f"{setup_cfg.name} · {Path(run_dir).name}") \
+                    .classes("text-md font-semibold truncate")
                 ui.space()
+                ui.button("Edit report config", icon="edit",
+                          on_click=lambda: _guarded(edit_report_config(setup_cfg, run_dir))) \
+                    .props("flat dense").tooltip("Edit the report YAML and regenerate")
                 ui.button("Open in new tab", icon="open_in_new",
                           on_click=lambda: ui.navigate.to(url, new_tab=True)).props("flat dense")
             ui.element("iframe").props(f'src="{url}"').classes("w-full") \
                 .style("flex:1; min-height:0; border:0; background:white")
+
+    def _show_report_config_editor(setup_cfg: SetupConfig, run_dir: str, initial: str):
+        """Full-width YAML editor for a run's report_config.yaml."""
+        main_splitter.set_visibility(False)
+        editor_area.set_visibility(False)
+        results_area.clear()
+        results_area.set_visibility(True)
+        with results_area:
+            with ui.row().classes("items-center gap-2 w-full no-wrap px-2 py-1") \
+                    .style("border-bottom:1px solid #e0e0e0"):
+                ui.button(icon="arrow_back",
+                          on_click=lambda: _guarded(view_report(setup_cfg, run_dir))) \
+                    .props("flat round dense").tooltip("Back to report (discard edits)")
+                ui.label(f"Report config · {Path(run_dir).name}") \
+                    .classes("text-md font-semibold truncate")
+                ui.space()
+                ui.button("Save & regenerate", icon="autorenew",
+                          on_click=lambda: _guarded(_save_report_config(setup_cfg, run_dir, cm.value))) \
+                    .props("unelevated")
+            cm = ui.codemirror(value=initial, language="YAML").classes("w-full") \
+                .style("flex:1; min-height:0; overflow:auto; border:1px solid #e0e0e0; "
+                       "border-radius:6px; margin:6px")
+
+    async def edit_report_config(setup_cfg: SetupConfig, run_dir: str):
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        logger.debug("edit_report_config: %s", run_dir)
+        await _detach_if_attached(sess.term, sess.state)
+        if not await _is_on_target(sess, setup_cfg):
+            ui.notify("Not connected to the target. Reattach a run, or re-select the "
+                      "setup to connect.", type="warning")
+            return
+        raw = await _fetch_remote(sess, setup_cfg.target_kind,
+                                  report_config_path(run_dir), timeout=60)
+        text = raw.decode("utf-8", "replace") if raw else DEFAULT_REPORT_CONFIG
+        _show_report_config_editor(setup_cfg, run_dir, text)
+
+    async def _write_text_to_target(sess: StudioSession, target_kind: str,
+                                    remote_path: str, text: str) -> bool:
+        """Write ``text`` to ``remote_path``: to disk for local, base64 for ssh."""
+        if target_kind == "local":
+            try:
+                Path(remote_path).write_text(text)
+                return True
+            except OSError:
+                return False
+        b64 = base64.b64encode(text.encode()).decode()
+        cmd = f'printf %s \'{b64}\' | base64 -d > "{remote_path}" && echo __WROTE__'
+        code, out = await sess.term.run(cmd, display=f"write {Path(remote_path).name}", timeout=60)
+        return code == 0 and "__WROTE__" in out
+
+    async def _save_report_config(setup_cfg: SetupConfig, run_dir: str, text: str):
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        await _detach_if_attached(sess.term, sess.state)
+        if not await _write_text_to_target(sess, setup_cfg.target_kind,
+                                           report_config_path(run_dir), text):
+            ui.notify("Could not write the report config to the target", type="negative")
+            return
+        ui.notify("Saved report config; regenerating the report...", type="info")
+        await _generate_and_show(setup_cfg, run_dir)
+
+    async def _generate_and_show(setup_cfg: SetupConfig, run_dir: str):
+        """Run `iops report` on the target (auto-detecting report_config.yaml), then
+        pull the HTML back and show it in the viewer."""
+        sess = registry.by_setup(setup_cfg.name)
+        if sess is None:
+            ui.notify("No terminal for this setup", type="warning")
+            return
+        await _detach_if_attached(sess.term, sess.state)
+        if not await _is_on_target(sess, setup_cfg):
+            ui.notify("Not connected to the target. Reattach a run, or re-select the "
+                      "setup to connect.", type="warning")
+            return
+        ui.notify("Generating the report on the target...", type="info")
+        await sess.term.run(f'"{setup_cfg.env_path}" -m iops report "{run_dir}"',
+                            display=f"iops report {Path(run_dir).name}", timeout=300)
+        # iops report exits 0 even on failure; the real signal is the HTML's presence.
+        html = await _fetch_remote(sess, setup_cfg.target_kind,
+                                   report_html_path(run_dir), timeout=300)
+        if not html:
+            ui.notify("No report was produced (see the terminal).", type="negative")
+            return
+        logger.debug("report is %d bytes", len(html))
+        html = localize_report_html(html, _PLOTLY_ASSET_URL)  # offline-render charts
+        rel = f"{_result_slug(setup_cfg.name)}/{_result_slug(Path(run_dir).name)}"
+        dest_dir = _results_root() / rel
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (dest_dir / REPORT_FILENAME).write_bytes(html)
+        except OSError as e:
+            ui.notify(f"Could not cache the report: {e}", type="negative")
+            return
+        url = f"{_RESULTS_URL}/{rel}/{REPORT_FILENAME}?v={uuid.uuid4().hex[:8]}"
+        show_report_viewer(setup_cfg, run_dir, url)
 
     async def browse_runs(setup_cfg: SetupConfig):
         sess = registry.by_setup(setup_cfg.name)
@@ -1488,38 +1593,8 @@ def _page():
         return await sess.term.pull_file(remote_path, timeout=timeout)
 
     async def view_report(setup_cfg: SetupConfig, run_dir: str):
-        sess = registry.by_setup(setup_cfg.name)
-        if sess is None:
-            ui.notify("No terminal for this setup", type="warning")
-            return
         logger.debug("view_report: %s", run_dir)
-        await _detach_if_attached(sess.term, sess.state)
-        if not await _is_on_target(sess, setup_cfg):
-            ui.notify("Not connected to the target. Reattach a run, or re-select the "
-                      "setup to connect.", type="warning")
-            return
-        ui.notify("Generating the report on the target...", type="info")
-        await sess.term.run(f'"{setup_cfg.env_path}" -m iops report "{run_dir}"',
-                            display=f"iops report {Path(run_dir).name}", timeout=300)
-        # iops report exits 0 even on failure; the real signal is the HTML's presence.
-        html = await _fetch_remote(sess, setup_cfg.target_kind,
-                                   report_html_path(run_dir), timeout=300)
-        if not html:
-            ui.notify("No report was produced (see the terminal).", type="negative")
-            return
-        logger.debug("view_report -> report is %d bytes", len(html))
-        html = localize_report_html(html, _PLOTLY_ASSET_URL)  # offline-render charts
-        rel = f"{_result_slug(setup_cfg.name)}/{_result_slug(Path(run_dir).name)}"
-        dest_dir = _results_root() / rel
-        try:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            (dest_dir / REPORT_FILENAME).write_bytes(html)
-        except OSError as e:
-            ui.notify(f"Could not cache the report: {e}", type="negative")
-            return
-        url = f"{_RESULTS_URL}/{rel}/{REPORT_FILENAME}?v={uuid.uuid4().hex[:8]}"
-        logger.debug("view_report -> serving %s", url)
-        show_report_viewer(f"{setup_cfg.name} · {Path(run_dir).name}", url)
+        await _generate_and_show(setup_cfg, run_dir)
 
     async def pull_results(setup_cfg: SetupConfig, run_dir: str):
         sess = registry.by_setup(setup_cfg.name)

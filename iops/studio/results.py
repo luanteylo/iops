@@ -24,6 +24,10 @@ from typing import Optional
 # config's output_filename on the CLI path).
 REPORT_FILENAME = "analysis_report.html"
 
+# `iops report <run_dir>` auto-detects this file in the run dir and uses it to
+# drive the report (sections, plots, ...). Editing it and re-running regenerates.
+REPORT_CONFIG_FILENAME = "report_config.yaml"
+
 # File types worth pulling back: results, metadata, report, configs, logs. Raw
 # benchmark data files (no matching suffix) are left on the target.
 _LIGHT_NAME_GLOBS = ("*.csv", "*.json", "*.html", "*.yaml", "*.yml",
@@ -70,6 +74,32 @@ def parse_run_list(output: str) -> list:
 def report_html_path(run_dir: str) -> str:
     """Remote path of the report HTML inside ``run_dir``."""
     return f'{run_dir.rstrip("/")}/{REPORT_FILENAME}'
+
+
+def report_config_path(run_dir: str) -> str:
+    """Remote path of the report config inside ``run_dir`` (auto-detected by report)."""
+    return f'{run_dir.rstrip("/")}/{REPORT_CONFIG_FILENAME}'
+
+
+# Seed used when a run has no report_config.yaml yet; the user expands it.
+DEFAULT_REPORT_CONFIG = """\
+# Report configuration. Edit and regenerate to customize the HTML report.
+# Docs: sections, default_plots, per-metric plots, gallery, theme.
+reporting:
+  enabled: true
+  sections:
+    test_summary: true
+    best_results: true
+    variable_impact: true
+    parallel_coordinates: true
+  best_results:
+    top_n: 5
+  # default_plots apply to every metric; add per-metric overrides under `metrics:`.
+  default_plots:
+    - type: line
+      # x_var: nodes
+      # log_y: true
+"""
 
 
 def light_tar_command(run_dir: str, tmp_path: str) -> str:
