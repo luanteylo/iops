@@ -60,8 +60,16 @@ class _BlockDumper(yaml.SafeDumper):
 
 
 def _represent_str(dumper, data):
-    style = "|" if "\n" in data else None
-    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+    if "\n" not in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=None)
+    # Render multi-line strings (scripts, parser code, allocation scripts, ...) as
+    # literal `|` blocks. YAML block scalars cannot carry CRLF or trailing spaces,
+    # so PyYAML would otherwise fall back to an unreadable one-line double-quoted
+    # string. Normalize newlines and strip trailing whitespace per line (never
+    # meaningful in a script; leading indentation is preserved) so `|` always applies.
+    normalized = "\n".join(line.rstrip()
+                           for line in data.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    return dumper.represent_scalar("tag:yaml.org,2002:str", normalized, style="|")
 
 
 _BlockDumper.add_representer(str, _represent_str)
