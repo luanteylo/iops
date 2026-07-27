@@ -64,6 +64,26 @@ def _get_logo_base64() -> Optional[str]:
     return None
 
 
+def _probe_stop_value(probe_data: dict) -> Any:
+    """
+    Read a probe's stop value, falling back to the pre-3.5.9 key name.
+
+    Runs recorded by IOPS 3.5.8 and earlier stored this as 'failed_value',
+    which assumed that stopping meant failure. Reports are generated from
+    stored metadata, so old runs must keep rendering.
+    """
+    if 'stop_value' in probe_data:
+        return probe_data['stop_value']
+    return probe_data.get('failed_value')
+
+
+def _probe_last_value_before_stop(probe_data: dict) -> Any:
+    """Read a probe's last value before stopping, falling back to 'found_value'."""
+    if 'last_value_before_stop' in probe_data:
+        return probe_data['last_value_before_stop']
+    return probe_data.get('found_value')
+
+
 class ReportGenerator:
     """Generates HTML reports from IOPS benchmark results."""
 
@@ -2510,20 +2530,22 @@ class ReportGenerator:
             if probe_results:
                 html += "<h3>Probe Results Summary</h3>\n"
                 html += "<table>\n"
-                html += "<tr><th>Configuration</th><th>Found Value</th><th>Failed Value</th>"
+                html += "<tr><th>Configuration</th><th>Stop Value</th><th>Last Value Before Stop</th>"
                 html += "<th>Iterations</th><th>Stop Reason</th></tr>\n"
 
                 for probe_key, probe_data in probe_results.items():
-                    found_val = probe_data.get('found_value', 'N/A')
-                    failed_val = probe_data.get('failed_value', 'N/A')
-                    if failed_val is None:
-                        failed_val = 'N/A'
+                    stop_val = _probe_stop_value(probe_data)
+                    last_val = _probe_last_value_before_stop(probe_data)
+                    if stop_val is None:
+                        stop_val = 'N/A'
+                    if last_val is None:
+                        last_val = 'N/A'
                     iterations = probe_data.get('iterations', 'N/A')
                     stop_reason = probe_data.get('stop_reason', 'N/A')
                     # Format stop_reason for display
                     stop_display = stop_reason.replace('_', ' ').title() if isinstance(stop_reason, str) else stop_reason
 
-                    html += f"<tr><td>{probe_key}</td><td>{found_val}</td><td>{failed_val}</td>"
+                    html += f"<tr><td>{probe_key}</td><td>{stop_val}</td><td>{last_val}</td>"
                     html += f"<td>{iterations}</td><td>{stop_display}</td></tr>\n"
 
                 html += "</table>\n"
@@ -2625,37 +2647,37 @@ class ReportGenerator:
                 legendgroup=group,
             ))
 
-            # Mark found value with a larger marker
+            # Mark the last value before the stop, and the value that stopped it
             probe_data = adaptive_results.get(group.replace(', ', ','))
             if probe_data:
-                found_val = probe_data.get('found_value')
-                if found_val is not None:
-                    found_rows = group_data[group_data['adaptive_val'] == found_val]
-                    if not found_rows.empty:
-                        found_y = self._to_python_list(found_rows['metric_mean'])[0]
+                last_val = _probe_last_value_before_stop(probe_data)
+                if last_val is not None:
+                    last_rows = group_data[group_data['adaptive_val'] == last_val]
+                    if not last_rows.empty:
+                        last_y = self._to_python_list(last_rows['metric_mean'])[0]
                         fig.add_trace(go.Scatter(
-                            x=[found_val],
-                            y=[found_y],
+                            x=[last_val],
+                            y=[last_y],
                             mode='markers',
-                            name=f'{group} (last passed)',
+                            name=f'{group} (last before stop)',
                             marker=dict(
                                 size=16, color=colors[i],
                                 symbol='circle',
                                 line=dict(width=3, color='#2ecc71'),
                             ),
-                            hovertemplate=f'{group}<br>{adaptive_var} = {found_val} (last passed)<br>{metric} = {found_y:.4f}<extra></extra>',
+                            hovertemplate=f'{group}<br>{adaptive_var} = {last_val} (last before stop)<br>{metric} = {last_y:.4f}<extra></extra>',
                             legendgroup=group,
                             showlegend=False,
                         ))
 
-                failed_val = probe_data.get('failed_value')
-                if failed_val is not None:
-                    failed_rows = group_data[group_data['adaptive_val'] == failed_val]
-                    if not failed_rows.empty:
-                        failed_y = self._to_python_list(failed_rows['metric_mean'])[0]
+                stop_val = _probe_stop_value(probe_data)
+                if stop_val is not None:
+                    stop_rows = group_data[group_data['adaptive_val'] == stop_val]
+                    if not stop_rows.empty:
+                        stop_y = self._to_python_list(stop_rows['metric_mean'])[0]
                         fig.add_trace(go.Scatter(
-                            x=[failed_val],
-                            y=[failed_y],
+                            x=[stop_val],
+                            y=[stop_y],
                             mode='markers',
                             name=f'{group} (stop triggered)',
                             marker=dict(
@@ -2663,7 +2685,7 @@ class ReportGenerator:
                                 symbol='x',
                                 line=dict(width=3, color='#e74c3c'),
                             ),
-                            hovertemplate=f'{group}<br>{adaptive_var} = {failed_val} (stop triggered)<br>{metric} = {failed_y:.4f}<extra></extra>',
+                            hovertemplate=f'{group}<br>{adaptive_var} = {stop_val} (stop triggered)<br>{metric} = {stop_y:.4f}<extra></extra>',
                             legendgroup=group,
                             showlegend=False,
                         ))

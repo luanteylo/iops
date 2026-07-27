@@ -3114,8 +3114,8 @@ class ProbeState:
     static_vars: Dict[str, Any]     # swept variable values for this combo
     current_value: Any              # current adaptive variable value
     iteration: int = 0             # 0-based iteration counter
-    found_value: Any = None        # last value where stop_when was False
-    failed_value: Any = None       # first value where stop_when was True
+    last_value_before_stop: Any = None  # last value where stop_when was False
+    stop_value: Any = None         # first value where stop_when was True
     finished: bool = False
     stop_reason: Optional[str] = None  # "condition_met" | "max_iterations" | "constraint_violation" | "step_error"
     pending_reps: int = 0          # reps emitted but not yet recorded
@@ -3126,11 +3126,32 @@ class ProbeState:
 
 @dataclass
 class ProbeResult:
-    """Final result for one static combination."""
-    found_value: Any
-    failed_value: Any
+    """
+    Final result for one static combination.
+
+    The field names describe the probe's progression rather than success or
+    failure, because stop_when decides what stopping means. With the usual
+    "exit_code != 0" the probe stops on the first failure, so stop_value is
+    the first failing value. With an inverted condition such as
+    "exit_code == 0" (keep stepping while it fails, stop at the first
+    success) stop_value is the value that succeeded.
+    """
+    last_value_before_stop: Any    # last value where stop_when was False
+    stop_value: Any                # value that triggered stop_when
     iterations: int
     stop_reason: str
+
+    # Deprecated in 3.5.9, remove after 3.7.0. The old names assumed that
+    # stopping meant failure, which is wrong for an inverted stop_when.
+    @property
+    def found_value(self) -> Any:
+        """Deprecated alias for last_value_before_stop."""
+        return self.last_value_before_stop
+
+    @property
+    def failed_value(self) -> Any:
+        """Deprecated alias for stop_value."""
+        return self.stop_value
 
 
 @BasePlanner.register("adaptive")
@@ -3462,19 +3483,19 @@ class AdaptivePlanner(BasePlanner, HasLogger):
         # All reps done for this value. Decide next action.
         if probe.stop_triggered_count > 0:
             # Stop condition triggered
-            probe.failed_value = probe.current_value
+            probe.stop_value = probe.current_value
             probe.finished = True
             probe.stop_reason = "condition_met"
             self.logger.info(
                 "  [Adaptive] Stop condition met at %s=%s (%s). "
-                "found_value=%s, failed_value=%s",
+                "stop_value=%s, last_value_before_stop=%s",
                 self._adaptive_var_name, probe.current_value,
                 self._static_combo_label(probe.static_vars),
-                probe.found_value, probe.failed_value,
+                probe.stop_value, probe.last_value_before_stop,
             )
         else:
-            # No stop triggered: this value succeeded
-            probe.found_value = probe.current_value
+            # Stop condition not triggered: the probe continues past this value
+            probe.last_value_before_stop = probe.current_value
             probe.iteration += 1
 
             if max_iter is not None and probe.iteration >= max_iter:
@@ -3483,10 +3504,10 @@ class AdaptivePlanner(BasePlanner, HasLogger):
                 probe.stop_reason = "max_iterations"
                 self.logger.info(
                     "  [Adaptive] Max iterations (%d) reached for %s (%s). "
-                    "Last found_value=%s",
+                    "Last value tested=%s",
                     max_iter, self._adaptive_var_name,
                     self._static_combo_label(probe.static_vars),
-                    probe.found_value,
+                    probe.last_value_before_stop,
                 )
             else:
                 # Advance to next value. A step that cannot be computed ends
@@ -3498,9 +3519,10 @@ class AdaptivePlanner(BasePlanner, HasLogger):
                     probe.finished = True
                     probe.stop_reason = "step_error"
                     self.logger.error(
-                        "  [Adaptive] %s\n  Finishing probe for %s at found_value=%s.",
+                        "  [Adaptive] %s\n  Finishing probe for %s at "
+                        "last_value_before_stop=%s.",
                         e, self._static_combo_label(probe.static_vars),
-                        probe.found_value,
+                        probe.last_value_before_stop,
                     )
                 else:
                     probe.current_value = next_val
@@ -3554,8 +3576,8 @@ class AdaptivePlanner(BasePlanner, HasLogger):
         for probe in self._probes:
             label = self._static_combo_label(probe.static_vars)
             results[label] = ProbeResult(
-                found_value=probe.found_value,
-                failed_value=probe.failed_value,
+                last_value_before_stop=probe.last_value_before_stop,
+                stop_value=probe.stop_value,
                 iterations=probe.iteration + (1 if probe.finished else 0),
                 stop_reason=probe.stop_reason or "in_progress",
             )

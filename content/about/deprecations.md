@@ -86,4 +86,35 @@ benchmark:
 - More descriptive names: `system_snapshot` vs `collect_system_info`
 - Easier to enable/disable all probing with a single section
 
+### Adaptive Probe Result Fields
+
+The per-probe result fields have been renamed to describe the probe's progression instead of assuming that stopping means failure.
+
+| Deprecated Field | New Field | Deprecated in | Remove after |
+|------------------|-----------|---------------|--------------|
+| `found_value` | `last_value_before_stop` | 3.5.9 | 3.7.0 |
+| `failed_value` | `stop_value` | 3.5.9 | 3.7.0 |
+
+The old names were correct only for the usual stop condition, `stop_when: "exit_code != 0"`, where the probe steps forward while the benchmark works and stops on the first failure. An inverted condition is equally valid: `stop_when: "exit_code == 0"` keeps stepping while the benchmark fails and stops at the first value that succeeds. In that case the value stored in `failed_value` was the one that worked, so the results read backwards.
+
+**Before:**
+```
+Adaptive probing results for 'block_size':
+  problem_size=8000: found=64, failed=128, iterations=4, stop_reason=condition_met
+```
+
+**After:**
+```
+Adaptive probing results for 'block_size':
+  problem_size=8000: stop_value=128, last_value_before_stop=64, iterations=4, stop_reason=condition_met
+```
+
+**What this affects:**
+- The run summary printed at the end of a benchmark
+- The `adaptive_results` block in `__iops_run_metadata.json`
+- The "Probe Results Summary" table in HTML reports
+- The `ProbeResult` attributes, if you drive the planner from Python
+
+**Migration:** if you post-process `__iops_run_metadata.json`, read `stop_value` and `last_value_before_stop`. Until the removal, both key sets are written to every metadata file and both attribute names resolve on `ProbeResult`, so existing scripts keep working. Reports generated from runs recorded before 3.5.9 fall back to the old keys automatically and will keep doing so.
+
 

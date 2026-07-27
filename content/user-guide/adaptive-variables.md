@@ -144,8 +144,8 @@ When the limit is reached, the probe stops even if the stop condition was never 
 
 After all probes finish, IOPS records:
 
-- **found_value**: The last adaptive value where `stop_when` was `False` (the benchmark succeeded)
-- **failed_value**: The first adaptive value where `stop_when` was `True` (the benchmark failed or degraded)
+- **last_value_before_stop**: The last adaptive value where `stop_when` was `False`, meaning the probe continued past it
+- **stop_value**: The value that triggered `stop_when`
 - **iterations**: Total number of values tested
 - **stop_reason**: `"condition_met"`, `"max_iterations"`, `"constraint_violation"`, or `"step_error"`
 
@@ -155,10 +155,14 @@ Results are stored in the run metadata file (`__iops_run_metadata.json`) under t
 
 ```
 Adaptive probing results for 'problem_size':
-  nodes=1: found=4000, failed=8000, iterations=4, stop_reason=condition_met
-  nodes=2: found=8000, failed=16000, iterations=5, stop_reason=condition_met
-  nodes=4: found=16000, iterations=10, stop_reason=max_iterations
+  nodes=1: stop_value=8000, last_value_before_stop=4000, iterations=4, stop_reason=condition_met
+  nodes=2: stop_value=16000, last_value_before_stop=8000, iterations=5, stop_reason=condition_met
+  nodes=4: last_value_before_stop=16000, iterations=10, stop_reason=max_iterations
 ```
+
+These names describe the probe's progression rather than success or failure, because `stop_when` decides what stopping means. With the usual `"exit_code != 0"`, the probe stops on the first failure, so `stop_value` is the first failing value and `last_value_before_stop` is the largest working one. With an inverted condition such as `"exit_code == 0"` (keep stepping while it fails, stop at the first success), `stop_value` is the value that succeeded.
+
+**Note:** before 3.5.9 these were named `found_value` and `failed_value`, which assumed that stopping meant failure and so read backwards for an inverted `stop_when`. Both names are still written to the metadata file and still work as attributes on the probe result; see [Deprecations](../../about/deprecations).
 
 ## Multiple Repetitions
 
@@ -287,7 +291,7 @@ A deliberate design choice that keeps the search well-defined and the results in
 
 - **Search strategy.** One adaptive variable steps forward in one dimension until it hits a wall; with two, there is no obviously correct way to advance them.
 - **Stop condition attribution.** With two adaptive variables moving at once, you cannot tell which one caused `stop_when` to trigger.
-- **Result structure.** One adaptive variable yields a simple `found_value` / `failed_value` pair per probe; two would require a 2D boundary, which is closer to what Bayesian optimization handles with a surrogate model.
+- **Result structure.** One adaptive variable yields a simple `last_value_before_stop` / `stop_value` pair per probe; two would require a 2D boundary, which is closer to what Bayesian optimization handles with a surrogate model.
 
 If you need thresholds for two variables, sweep one and probe the other:
 

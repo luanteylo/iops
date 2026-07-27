@@ -2295,23 +2295,30 @@ class IOPSRunner(HasLogger):
                 self.logger.info("")
                 self.logger.info(f"Adaptive probing results for '{adaptive_var_name}':")
                 for label, result in probe_results.items():
-                    parts = [f"found={result.found_value}"]
-                    if result.failed_value is not None:
-                        parts.append(f"failed={result.failed_value}")
+                    parts = []
+                    if result.stop_value is not None:
+                        parts.append(f"stop_value={result.stop_value}")
+                    parts.append(
+                        f"last_value_before_stop={result.last_value_before_stop}"
+                    )
                     parts.append(f"iterations={result.iterations}")
                     parts.append(f"stop_reason={result.stop_reason}")
                     prefix = f"  {label}: " if label else "  "
                     self.logger.info(f"{prefix}{', '.join(parts)}")
                 self.logger.info("")
 
-                # Serialize for metadata JSON
+                # Serialize for metadata JSON. found_value/failed_value are
+                # deprecated aliases kept for readers written against 3.5.8 and
+                # earlier; remove after 3.7.0.
                 adaptive_results = {
                     adaptive_var_name: {
                         label: {
-                            "found_value": r.found_value,
-                            "failed_value": r.failed_value,
+                            "stop_value": r.stop_value,
+                            "last_value_before_stop": r.last_value_before_stop,
                             "iterations": r.iterations,
                             "stop_reason": r.stop_reason,
+                            "found_value": r.last_value_before_stop,
+                            "failed_value": r.stop_value,
                         }
                         for label, r in probe_results.items()
                     }

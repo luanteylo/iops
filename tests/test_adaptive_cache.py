@@ -233,13 +233,13 @@ class TestAdaptiveCacheExitCode:
         for label in results_fresh:
             fresh = results_fresh[label]
             cached = results_cached[label]
-            assert fresh.found_value == cached.found_value, (
-                f"Probe '{label}': found_value mismatch "
-                f"(fresh={fresh.found_value}, cached={cached.found_value})"
+            assert fresh.last_value_before_stop == cached.last_value_before_stop, (
+                f"Probe '{label}': last_value_before_stop mismatch "
+                f"(fresh={fresh.last_value_before_stop}, cached={cached.last_value_before_stop})"
             )
-            assert fresh.failed_value == cached.failed_value, (
-                f"Probe '{label}': failed_value mismatch "
-                f"(fresh={fresh.failed_value}, cached={cached.failed_value})"
+            assert fresh.stop_value == cached.stop_value, (
+                f"Probe '{label}': stop_value mismatch "
+                f"(fresh={fresh.stop_value}, cached={cached.stop_value})"
             )
             assert fresh.iterations == cached.iterations, (
                 f"Probe '{label}': iterations mismatch "
@@ -275,8 +275,8 @@ class TestAdaptiveCacheExitCode:
 
         for label, probe_result in results.items():
             # 100 succeeds (found), 200 succeeds (found), 400 fails (failed)
-            assert probe_result.found_value == 200
-            assert probe_result.failed_value == 400
+            assert probe_result.last_value_before_stop == 200
+            assert probe_result.stop_value == 400
             assert probe_result.stop_reason == "condition_met"
             # iterations = 3 (values 100, 200, 400 were tested)
             assert probe_result.iterations == 3
@@ -328,8 +328,8 @@ class TestAdaptiveCacheMetricBased:
         for label in results_fresh:
             fresh = results_fresh[label]
             cached = results_cached[label]
-            assert fresh.found_value == cached.found_value
-            assert fresh.failed_value == cached.failed_value
+            assert fresh.last_value_before_stop == cached.last_value_before_stop
+            assert fresh.stop_value == cached.stop_value
             assert fresh.iterations == cached.iterations
             assert fresh.stop_reason == cached.stop_reason
 
@@ -356,8 +356,8 @@ class TestAdaptiveCacheMetricBased:
 
         probe = results[label]
         # 100 (200 tput, ok), 200 (100 tput, ok), 400 (50 tput, ok), 800 (25 tput, stop)
-        assert probe.found_value == 400
-        assert probe.failed_value == 800
+        assert probe.last_value_before_stop == 400
+        assert probe.stop_value == 800
         assert probe.stop_reason == "condition_met"
         assert probe.iterations == 4
 
@@ -440,14 +440,14 @@ class TestAdaptiveCacheMaxIterations:
         label = "(no swept vars)"
         fresh = results_fresh[label]
         cached = results_cached[label]
-        assert fresh.found_value == cached.found_value
-        assert fresh.failed_value == cached.failed_value
+        assert fresh.last_value_before_stop == cached.last_value_before_stop
+        assert fresh.stop_value == cached.stop_value
         assert fresh.iterations == cached.iterations
         assert fresh.stop_reason == cached.stop_reason
 
         # Verify actual values: 3 values probed (10, 20, 40), all succeed
         # probe.iteration ends at 3, get_probe_results adds +1 for finished
-        assert fresh.found_value == 40
-        assert fresh.failed_value is None
+        assert fresh.last_value_before_stop == 40
+        assert fresh.stop_value is None
         assert fresh.stop_reason == "max_iterations"
         assert fresh.iterations == 4

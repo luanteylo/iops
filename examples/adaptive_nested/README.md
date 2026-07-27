@@ -82,21 +82,26 @@ values ends with `stop_reason=step_error` and the rest of the run carries on.
 
 ## Reading the results
 
-The end-of-run summary prints the block size that **worked** under the label
-`failed`:
+The end-of-run summary reports each probe as the value that stopped it and the
+last value it continued past:
 
 ```
 Adaptive probing results for 'block_size':
-  problem_size=1000: found=None, failed=16,  iterations=1, stop_reason=condition_met
-  problem_size=2000: found=16,   failed=32,  iterations=2, stop_reason=condition_met
-  problem_size=4000: found=32,   failed=64,  iterations=3, stop_reason=condition_met
-  problem_size=8000: found=64,   failed=128, iterations=4, stop_reason=condition_met
+  problem_size=1000: stop_value=16,  iterations=1, stop_reason=condition_met
+  problem_size=2000: stop_value=32,  last_value_before_stop=16, iterations=2, stop_reason=condition_met
+  problem_size=4000: stop_value=64,  last_value_before_stop=32, iterations=3, stop_reason=condition_met
+  problem_size=8000: stop_value=128, last_value_before_stop=64, iterations=4, stop_reason=condition_met
 ```
 
-For `problem_size=8000`, the block size that succeeded is **128**. The numbers
-are right, the labels read backwards, because IOPS names them after the normal
-convention where stopping means something went wrong. The per-run `returncode`
-is also written to `results.csv` if you prefer reading it from there.
+Because this config stops at the first success, `stop_value` is the block size
+that **worked** and `last_value_before_stop` is the largest one that still
+failed. For `problem_size=8000` the answer is **128**. With the more usual
+`stop_when: "exit_code != 0"` the reading flips: `stop_value` would be the
+first value that failed. The names describe the search, not the outcome, so
+check which way your `stop_when` points before reading them.
+
+The per-run `returncode` is also written to `results.csv` if you prefer reading
+it from there.
 
 Note the run counts: 1, 2, 3 and 4 instead of 5 every time. That is the early
 exit doing its job, 10 runs in total rather than 20.
