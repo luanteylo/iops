@@ -147,7 +147,9 @@ After all probes finish, IOPS records:
 - **found_value**: The last adaptive value where `stop_when` was `False` (the benchmark succeeded)
 - **failed_value**: The first adaptive value where `stop_when` was `True` (the benchmark failed or degraded)
 - **iterations**: Total number of values tested
-- **stop_reason**: `"condition_met"`, `"max_iterations"`, or `"constraint_violation"`
+- **stop_reason**: `"condition_met"`, `"max_iterations"`, `"constraint_violation"`, or `"step_error"`
+
+A `step_error` means the next value could not be computed, most often a `step_expr` that indexes a list with fewer values than the probe asked for. That probe stops and the rest of the run continues; the error naming the variable, iteration, and previous value is written to the log. When `max_iterations` is set and the expression does not reference `previous`, IOPS catches this at config load time instead, so `iops check` reports it before any test runs.
 
 Results are stored in the run metadata file (`__iops_run_metadata.json`) under the `adaptive_results` key and are displayed in the run summary logs:
 

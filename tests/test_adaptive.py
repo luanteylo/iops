@@ -950,3 +950,100 @@ class TestAdaptiveIntegration:
         assert probe_data["found_value"] == 200
         assert probe_data["failed_value"] == 400
         assert probe_data["stop_reason"] == "condition_met"
+
+
+# ------------------------------------------------------------------ #
+# Class 6: step_expr failures
+# ------------------------------------------------------------------ #
+
+
+class TestAdaptiveStepExprErrors:
+    """
+    A step_expr that indexes a literal list is the usual way to walk a fixed
+    set of values. When max_iterations exceeds the list length the expression
+    eventually indexes past the end, which must be reported clearly rather
+    than surfacing as a bare Jinja error mid-run.
+    """
+
+    def _adaptive_var(self, step_expr, max_iterations=None):
+        adaptive = {
+            "initial": 16,
+            "step_expr": step_expr,
+            "stop_when": "exit_code == 0",
+        }
+        if max_iterations is not None:
+            adaptive["max_iterations"] = max_iterations
+        return {"type": "int", "adaptive": adaptive}
+
+    def test_max_iterations_beyond_list_length_rejected(self, tmp_path):
+        """max_iterations larger than the list is caught at config load."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var(
+            "{{ [16, 32, 64, 128, 256][iteration] }}", max_iterations=6
+        )
+        workdir = tmp_path / "workdir"
+        workdir.mkdir(parents=True, exist_ok=True)
+        cfg["benchmark"]["workdir"] = str(workdir)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump(cfg))
+
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_generic_config(Path(config_file), _get_logger())
+
+        message = str(exc_info.value)
+        assert "step_expr" in message
+        assert "iteration 5" in message
+        assert "max_iterations" in message
+
+    def test_max_iterations_matching_list_length_accepted(self, tmp_path):
+        """The boundary case is valid: the last index used is length - 1."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var(
+            "{{ [16, 32, 64, 128, 256][iteration] }}", max_iterations=5
+        )
+        loaded = _build_config(tmp_path, cfg)
+        assert loaded.vars["x"].adaptive.max_iterations == 5
+
+    def test_unbounded_probe_skips_validation(self, tmp_path):
+        """Without max_iterations there is no known endpoint to check."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var("{{ [16, 32, 64][iteration] }}")
+        loaded = _build_config(tmp_path, cfg)
+        assert loaded.vars["x"].adaptive.max_iterations is None
+
+    def test_expr_using_previous_skips_validation(self, tmp_path):
+        """Expressions built from the previous value cannot be pre-rendered."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var(
+            "{{ previous * 2 + 100 }}", max_iterations=10
+        )
+        loaded = _build_config(tmp_path, cfg)
+        assert loaded.vars["x"].adaptive.max_iterations == 10
+
+    def test_runtime_step_error_finishes_probe_only(self, tmp_path):
+        """
+        An unbounded probe that walks off the end of its list must end that
+        probe, not abort the run, so other probes still report their results.
+        """
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["size"] = {
+            "type": "int",
+            "sweep": {"mode": "list", "values": [1, 2]},
+        }
+        cfg["vars"]["x"] = self._adaptive_var("{{ [16, 32, 64][iteration] }}")
+        cfg["command"]["template"] = "echo 'size={{ size }} x={{ x }}'"
+        loaded = _build_config(tmp_path, cfg)
+
+        # size=1 succeeds immediately; size=2 never succeeds and so exhausts
+        # the list, triggering the step error.
+        def simulate(test):
+            if test.base_vars["size"] == 1:
+                return _succeed_metadata()
+            return _fail_metadata()
+
+        results, _ = _run_planner_pass(loaded, simulate)
+
+        assert results["size=1"].stop_reason == "condition_met"
+        assert results["size=2"].stop_reason == "step_error"
+        # The last value reached before the list ran out is still reported.
+        assert results["size=2"].found_value == 64

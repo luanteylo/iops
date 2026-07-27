@@ -3065,6 +3065,49 @@ class BayesianPlanner(BasePlanner, HasLogger):
 # Adaptive Planner
 # ============================================================================ #
 
+class AdaptiveStepError(Exception):
+    """Raised when an adaptive probe cannot compute its next value."""
+
+
+def _step_expr_error_message(
+    var_name: str,
+    step_expr: str,
+    iteration: int,
+    previous: Any,
+    max_iterations: Optional[int],
+    error: Exception,
+) -> str:
+    """
+    Build an actionable message for a step_expr that failed to render.
+
+    The most common cause is a step_expr that indexes a literal list while
+    max_iterations allows more steps than the list has values, so point at
+    that explicitly when the error looks like an out-of-range index.
+    """
+    msg = (
+        f"Adaptive variable '{var_name}': could not compute the next value.\n"
+        f"  step_expr:      {step_expr}\n"
+        f"  iteration:      {iteration}\n"
+        f"  previous value: {previous!r}\n"
+        f"  error:          {type(error).__name__}: {error}"
+    )
+
+    if "has no element" in str(error) or "out of range" in str(error):
+        list_len = iteration if max_iterations is None else min(iteration, max_iterations)
+        msg += (
+            f"\n  This looks like a list index past the end of the list. When "
+            f"step_expr indexes a literal list, 'max_iterations' must not exceed "
+            f"the number of values in that list"
+        )
+        if max_iterations is not None:
+            msg += (
+                f" (max_iterations is {max_iterations}, but the list appears to "
+                f"hold {list_len} values)"
+            )
+        msg += "."
+    return msg
+
+
 @dataclass
 class ProbeState:
     """Tracks the adaptive probe for one static combination."""
@@ -3074,7 +3117,7 @@ class ProbeState:
     found_value: Any = None        # last value where stop_when was False
     failed_value: Any = None       # first value where stop_when was True
     finished: bool = False
-    stop_reason: Optional[str] = None  # "condition_met" | "max_iterations" | "all_succeeded"
+    stop_reason: Optional[str] = None  # "condition_met" | "max_iterations" | "constraint_violation" | "step_error"
     pending_reps: int = 0          # reps emitted but not yet recorded
     completed_reps: int = 0        # reps recorded for current value
     stop_triggered_count: int = 0  # how many reps triggered stop_when
@@ -3199,7 +3242,12 @@ class AdaptivePlanner(BasePlanner, HasLogger):
     # ------------------------------------------------------------------ #
 
     def _compute_next_value(self, probe: ProbeState) -> Any:
-        """Compute the next adaptive value based on the step config."""
+        """
+        Compute the next adaptive value based on the step config.
+
+        Raises AdaptiveStepError when step_expr cannot be rendered or the
+        result cannot be cast to the variable type.
+        """
         acfg = self._adaptive_config
         prev = probe.current_value
         iteration = probe.iteration
@@ -3210,13 +3258,28 @@ class AdaptivePlanner(BasePlanner, HasLogger):
             raw = prev + acfg.increment
         else:
             # step_expr: Jinja2 template
-            rendered = _render_template(
-                acfg.step_expr,
-                {"previous": prev, "iteration": iteration},
-            )
+            try:
+                rendered = _render_template(
+                    acfg.step_expr,
+                    {"previous": prev, "iteration": iteration},
+                )
+            except Exception as e:
+                raise AdaptiveStepError(
+                    _step_expr_error_message(
+                        self._adaptive_var_name, acfg.step_expr, iteration, prev,
+                        acfg.max_iterations, e,
+                    )
+                ) from e
             raw = rendered
 
-        return _cast_value(self._adaptive_var_type, raw)
+        try:
+            return _cast_value(self._adaptive_var_type, raw)
+        except Exception as e:
+            raise AdaptiveStepError(
+                f"Adaptive variable '{self._adaptive_var_name}': the next value "
+                f"{raw!r} (iteration {iteration}) cannot be converted to "
+                f"type '{self._adaptive_var_type}': {e}"
+            ) from e
 
     def _evaluate_stop_when(self, test: ExecutionInstance) -> bool:
         """
@@ -3426,14 +3489,26 @@ class AdaptivePlanner(BasePlanner, HasLogger):
                     probe.found_value,
                 )
             else:
-                # Advance to next value
-                next_val = self._compute_next_value(probe)
-                probe.current_value = next_val
-                self.logger.info(
-                    "  [Adaptive] Advancing %s to %s (iteration %d) for %s",
-                    self._adaptive_var_name, next_val, probe.iteration,
-                    self._static_combo_label(probe.static_vars),
-                )
+                # Advance to next value. A step that cannot be computed ends
+                # this probe rather than aborting the whole run, so the other
+                # probes still finish and results are still summarised.
+                try:
+                    next_val = self._compute_next_value(probe)
+                except AdaptiveStepError as e:
+                    probe.finished = True
+                    probe.stop_reason = "step_error"
+                    self.logger.error(
+                        "  [Adaptive] %s\n  Finishing probe for %s at found_value=%s.",
+                        e, self._static_combo_label(probe.static_vars),
+                        probe.found_value,
+                    )
+                else:
+                    probe.current_value = next_val
+                    self.logger.info(
+                        "  [Adaptive] Advancing %s to %s (iteration %d) for %s",
+                        self._adaptive_var_name, next_val, probe.iteration,
+                        self._static_combo_label(probe.static_vars),
+                    )
 
         # Reset per-value counters
         probe.pending_reps = 0

@@ -378,6 +378,56 @@ def _validate_jinja_template(
         return False, error_msg
 
 
+def _validate_step_expr_range(var_name: str, adaptive) -> None:
+    """
+    Catch an adaptive step_expr that fails before the probe reaches max_iterations.
+
+    A common pattern is a step_expr that indexes a literal list, such as
+    "{{ [16, 32, 64][iteration] }}". If max_iterations allows more steps than
+    the list has values, the run dies partway through with a bare Jinja error.
+    When the expression does not depend on 'previous', every value it will be
+    asked for is known up front, so render them all here instead.
+
+    The planner asks for iterations 1 through max_iterations - 1: the first
+    value comes from 'initial', and the probe stops once the counter reaches
+    max_iterations.
+    """
+    step_expr = adaptive.step_expr
+    max_iterations = adaptive.max_iterations
+
+    # Unbounded probes have no known endpoint, and expressions built from the
+    # previous value cannot be rendered without running the benchmark.
+    if max_iterations is None or "previous" in step_expr:
+        return
+
+    try:
+        tmpl = _jinja_env.from_string(step_expr)
+    except TemplateSyntaxError:
+        return  # already reported by _validate_jinja_template
+
+    for iteration in range(1, max_iterations):
+        try:
+            tmpl.render(iteration=iteration)
+        except UndefinedError as e:
+            detail = str(e)
+            msg = (
+                f"var '{var_name}' adaptive: 'step_expr' fails at iteration "
+                f"{iteration}, before 'max_iterations' ({max_iterations}) is "
+                f"reached: {detail}"
+            )
+            if "has no element" in detail or "out of range" in detail:
+                msg += (
+                    f"\n  'step_expr' indexes a list with fewer than "
+                    f"{max_iterations} values. Set 'max_iterations' to the "
+                    f"number of values in the list, or add values to the list."
+                )
+            raise ConfigValidationError(msg)
+        except Exception:
+            # Anything else needs runtime context to judge; the planner
+            # reports it with the probe details attached.
+            return
+
+
 def validate_parser_script(
     script: str,
     *,
@@ -2316,6 +2366,8 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 ok, err = _validate_jinja_template(v.adaptive.step_expr, f"vars['{name}'].adaptive.step_expr")
                 if not ok:
                     raise ConfigValidationError(err)
+
+                _validate_step_expr_range(name, v.adaptive)
 
         # Validate conditional variable fields (when and default)
         if v.when is not None:
