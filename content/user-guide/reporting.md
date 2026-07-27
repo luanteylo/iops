@@ -140,8 +140,8 @@ Shows which parameter values were explored at each iteration, with colors indica
 Shows adaptive probing outcomes, included automatically when using `search_method: "adaptive"` with no additional configuration:
 
 - **Probing Configuration** (collapsible): the adaptive variable settings (initial value, step method, stop condition, direction, max iterations)
-- **Probe Results Summary**: one row per swept variable combination showing the last passing value, the value that triggered the stop condition, iteration count, and stop reason
-- **Trajectory Plots**: per metric, an interactive line chart of the metric versus the adaptive variable, one trace per swept variable combination; found values are marked with green-outlined circles, stop-triggered values with red X markers
+- **Probe Results Summary**: one row per swept variable combination showing the value that triggered the stop condition, the last value the probe continued past, iteration count, and stop reason
+- **Trajectory Plots**: per metric, an interactive line chart of the metric versus the adaptive variable, one trace per swept variable combination; the last value before the stop is marked with a green-outlined circle, the stop-triggering value with a red X marker
 
 ### Resource Sampling
 

@@ -185,12 +185,12 @@ Probe 2 (nodes=4): problem_size=1000 ok
 Probe 0 (nodes=1): problem_size=2000 ok
 Probe 1 (nodes=2): problem_size=2000 ok
 Probe 2 (nodes=4): problem_size=2000 ok
-Probe 0 (nodes=1): problem_size=4000 FAIL  -> probe 0 finished (found=2000, failed=4000)
+Probe 0 (nodes=1): problem_size=4000 FAIL  -> probe 0 finished (stop_value=4000, last_value_before_stop=2000)
 Probe 1 (nodes=2): problem_size=4000 ok
 Probe 2 (nodes=4): problem_size=4000 ok
-Probe 1 (nodes=2): problem_size=8000 FAIL  -> probe 1 finished (found=4000, failed=8000)
+Probe 1 (nodes=2): problem_size=8000 FAIL  -> probe 1 finished (stop_value=8000, last_value_before_stop=4000)
 Probe 2 (nodes=4): problem_size=8000 ok
-Probe 2 (nodes=4): problem_size=16000 FAIL -> probe 2 finished (found=8000, failed=16000)
+Probe 2 (nodes=4): problem_size=16000 FAIL -> probe 2 finished (stop_value=16000, last_value_before_stop=8000)
 ```
 
 When probe 0 finishes, probes 1 and 2 keep going on their own. Each probe can reach a different threshold and run a different number of tests (here 3, 4, and 5).
