@@ -1,0 +1,16 @@
+#!/bin/bash
+# Stub benchmark for trying out the example without a real code.
+# Succeeds only when block_size * 100 >= problem_size, which imitates
+# "this problem size needs a large enough block size to fit".
+size=0
+block=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --size)  size=$2;  shift 2;;
+    --block) block=$2; shift 2;;
+    *) shift;;
+  esac
+done
+
+echo "size=$size block=$block"
+[ $(( block * 100 )) -ge "$size" ]

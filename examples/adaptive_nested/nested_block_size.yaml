@@ -1,0 +1,55 @@
+benchmark:
+  name: "Smallest working block size per problem size"
+  workdir: "./workdir"
+  executor: "local"          # change to "slurm" on a cluster
+  search_method: "adaptive"  # required whenever a variable uses 'adaptive'
+  repetitions: 1             # keep at 1: with more, ANY repetition that meets
+                             # stop_when ends the probe for that value
+
+vars:
+  # ---- OUTER loop: a plain list, no feedback needed ----------------------
+  # IOPS runs one independent inner search for every value listed here.
+  problem_size:
+    type: int
+    sweep:
+      mode: list
+      values: [1000, 2000, 4000, 8000]
+
+  # ---- INNER loop: the list of block sizes, tried in order, early exit ----
+  # This is the single "adaptive" variable IOPS allows. Two tricks:
+  #
+  #   1. step_expr just indexes a list, so instead of doubling, the variable
+  #      walks exactly the values you wrote, in order.
+  #      'initial' must repeat the first element of that list.
+  #      'max_iterations' must equal the length of that list.
+  #      The list has to be written inline here: step_expr can only see
+  #      'previous' and 'iteration', not your other variables.
+  #
+  #   2. stop_when is inverted. The usual "exit_code != 0" means "keep going
+  #      while it works". Here "exit_code == 0" means "keep going while it
+  #      fails, stop at the first block size that succeeds".
+  block_size:
+    type: int
+    adaptive:
+      initial: 16
+      step_expr: "{{ [16, 32, 64, 128, 256][iteration] }}"
+      stop_when: "exit_code == 0"
+      max_iterations: 5
+
+command:
+  template: "/home/luan/Devel/iops/examples/adaptive_nested/my_benchmark --size {{ problem_size }} --block {{ block_size }}"
+
+scripts:
+  - name: "probe"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      {{ command.template }}
+      # The exit code is what drives the search, so let it propagate.
+      # Do not end this script with a command that always succeeds
+      # (no trailing 'echo done', no '|| true').
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
