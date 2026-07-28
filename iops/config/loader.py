@@ -877,11 +877,12 @@ def _apply_machine_override(data: Dict[str, Any], machine_name: str) -> Dict[str
 
     merged = deep_merge(base, override)
 
-    # Post-merge fixup: sweep, expr, and adaptive are mutually exclusive in vars.
-    # When a machine override provides one, the others must be cleared.
+    # Post-merge fixup: sweep, expr, adaptive, and escalate are mutually
+    # exclusive in vars. When a machine override provides one, the others
+    # must be cleared.
     override_vars = override.get("vars", {}) or {}
     merged_vars = merged.get("vars", {}) or {}
-    _var_type_keys = ("sweep", "expr", "adaptive")
+    _var_type_keys = ("sweep", "expr", "adaptive", "escalate")
     for var_name, override_var in override_vars.items():
         if not isinstance(override_var, dict) or var_name not in merged_vars:
             continue

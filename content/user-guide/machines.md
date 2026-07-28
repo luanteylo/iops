@@ -60,9 +60,9 @@ The distinction follows the Kubernetes convention: lists of **named objects** (e
 | `reporting.metrics.<m>.plots` | Anonymous objects | **Replace** |
 | `reporting.default_plots` | Anonymous objects | **Replace** |
 
-### sweep/expr/adaptive Mutual Exclusion
+### sweep/expr/adaptive/escalate Mutual Exclusion
 
-Since `sweep`, `expr`, and `adaptive` are mutually exclusive, IOPS resolves conflicts automatically after merging: whichever of the three the override provides wins, and the other two are removed from the base.
+Since `sweep`, `expr`, `adaptive`, and `escalate` are mutually exclusive, IOPS resolves conflicts automatically after merging: whichever of the four the override provides wins, and the others are removed from the base.
 
 ```yaml
 # Base: total_cores is swept
@@ -82,7 +82,7 @@ machines:
 # Result: sweep is removed, only expr remains
 ```
 
-The same applies when switching to or from an `adaptive` definition (remember to also set `benchmark.search_method: "adaptive"` in the override).
+The same applies when switching to or from an `adaptive` or `escalate` definition (remember to also set `benchmark.search_method: "adaptive"` in the override).
 
 ---
 

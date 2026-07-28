@@ -425,3 +425,51 @@ vars:
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `values` | Yes | | Ordered values to escalate through when the adaptive probe would stop |
+
+An escalating variable is always paired with an adaptive one. The adaptive variable provides the workload that grows; the escalating variable provides the resource that steps up whenever that growth stalls.
+
+```yaml
+benchmark:
+  name: "Blocks needed per problem size"
+  workdir: "./workdir"
+  executor: "local"
+  search_method: "adaptive"     # required: escalate extends an adaptive probe
+  repetitions: 1
+
+vars:
+  # Grows while the benchmark keeps working
+  problem_size:
+    type: int
+    adaptive:
+      initial: 1000
+      increment: 1000
+      stop_when: "exit_code != 0"
+      max_iterations: 20
+
+  # Steps up only when problem_size stalls
+  number_of_blocks:
+    type: int
+    escalate:
+      values: [1, 4, 16]
+
+command:
+  template: "./solver --size {{ problem_size }} --blocks {{ number_of_blocks }}"
+
+scripts:
+  - name: "probe"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      {{ command.template }}
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+```
+
+Six runs against a solver that needs more blocks for every larger problem: `(1000, 1)` works, `(2000, 1)` fails so blocks escalate to 4 and 2000 is retested, `(2000, 4)` works, and so on until `(4000, 16)` fails with no larger block count left.
+
+The same shape covers any resource-and-workload pair: MPI ranks against matrix size, memory per task against particle count, timeout against iteration count. Swap `increment` for `factor` or `step_expr` if the workload should grow multiplicatively or follow a fixed list.
+
+A runnable version with a stub benchmark is in `examples/adaptive_staircase/` in the IOPS repository.
