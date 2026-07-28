@@ -1002,7 +1002,10 @@ def create_execution_instance(
     if not cfg.constraints:
         return instance, True, []
 
-    adaptive_names = {name for name, v in cfg.vars.items() if v.adaptive is not None}
+    adaptive_names = {
+        name for name, v in cfg.vars.items()
+        if v.adaptive is not None or v.escalate is not None
+    }
     available = set(instance.vars.keys())
     applicable_constraints = []
     for constraint in cfg.constraints:
@@ -1058,9 +1061,9 @@ def build_execution_matrix(
 
     # Classify variables (adaptive vars are excluded from the matrix):
     for name, v in cfg.vars.items():
-        if v.adaptive is not None:
-            # Adaptive variables are not part of the Cartesian product.
-            # They are handled dynamically by AdaptivePlanner.
+        if v.adaptive is not None or v.escalate is not None:
+            # Adaptive and escalating variables are not part of the Cartesian
+            # product. They are handled dynamically by AdaptivePlanner.
             continue
         elif v.sweep is not None and v.expr is None:
             swept_vars.append((name, v))
@@ -1206,7 +1209,8 @@ def build_execution_matrix(
 
     if cfg.constraints:
         adaptive_var_names_set = {
-            name for name, v in cfg.vars.items() if v.adaptive is not None
+            name for name, v in cfg.vars.items()
+            if v.adaptive is not None or v.escalate is not None
         }
         matrix_constraints = []
         for constraint in cfg.constraints:

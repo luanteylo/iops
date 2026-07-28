@@ -273,6 +273,12 @@ vars:
       max_iterations: 10        # Safety limit (optional)
       direction: "ascending"    # "ascending" (default) or "descending"
 
+  # Escalating variable (paired with an adaptive variable)
+  variable_name:
+    type: int
+    escalate:
+      values: [1, 4, 16]        # Tried in order when the adaptive probe stalls
+
   # Derived variable
   variable_name:
     type: int
@@ -342,6 +348,17 @@ See [Adaptive Variables](../adaptive-variables) for a full guide with examples.
 | `stop_when` | Yes | | Python expression evaluated after each execution |
 | `max_iterations` | No | No limit | Maximum number of values to test |
 | `direction` | No | `"ascending"` | `"ascending"` or `"descending"` |
+
+</details>
+
+<details>
+<summary><strong>Escalate Configuration Fields</strong></summary>
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `values` | Yes | | Ordered values to escalate through when the adaptive probe would stop |
+
+An escalating variable turns an adaptive probe into a staircase search: instead of finishing the first time `stop_when` triggers, the escalating variable advances and the same adaptive value is retested. Requires an adaptive variable; at most one per config. See [Staircase Search](../adaptive-variables#staircase-search-with-an-escalating-variable).
 
 </details>
 

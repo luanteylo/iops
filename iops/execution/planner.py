@@ -3109,6 +3109,13 @@ def _step_expr_error_message(
 
 
 @dataclass
+class FrontierPoint:
+    """One rung of a staircase search: an escalation value and how far it got."""
+    escalate_value: Any            # the escalating variable's value
+    last_value_before_stop: Any    # furthest adaptive value it handled (None if it never did)
+
+
+@dataclass
 class ProbeState:
     """Tracks the adaptive probe for one static combination."""
     static_vars: Dict[str, Any]     # swept variable values for this combo
@@ -3117,11 +3124,20 @@ class ProbeState:
     last_value_before_stop: Any = None  # last value where stop_when was False
     stop_value: Any = None         # first value where stop_when was True
     finished: bool = False
-    stop_reason: Optional[str] = None  # "condition_met" | "max_iterations" | "constraint_violation" | "step_error"
+    stop_reason: Optional[str] = None  # "condition_met" | "max_iterations" | "constraint_violation" | "step_error" | "escalation_exhausted"
     pending_reps: int = 0          # reps emitted but not yet recorded
     completed_reps: int = 0        # reps recorded for current value
     stop_triggered_count: int = 0  # how many reps triggered stop_when
     execution_id: Optional[int] = None  # current execution_id for this probe's value
+
+    # Staircase search state (only used when an escalating variable exists)
+    escalation_index: int = 0      # position in the escalating variable's values
+    # Furthest adaptive value the CURRENT escalation level handled. Reset on
+    # every escalation, so a level is never credited with a value it did not
+    # actually run.
+    level_last_success: Any = None
+    # One entry per escalation level, recorded as each level stalls.
+    frontier: List[FrontierPoint] = field(default_factory=list)
 
 
 @dataclass
@@ -3140,6 +3156,9 @@ class ProbeResult:
     stop_value: Any                # value that triggered stop_when
     iterations: int
     stop_reason: str
+    # Populated only for a staircase search (an escalating variable present):
+    # one entry per escalation value reached, in order.
+    frontier: List[FrontierPoint] = field(default_factory=list)
 
     # Deprecated in 3.5.9, remove after 3.7.0. The old names assumed that
     # stopping meant failure, which is wrong for an inverted stop_when.
@@ -3204,10 +3223,28 @@ class AdaptivePlanner(BasePlanner, HasLogger):
                 "AdaptivePlanner requires exactly one variable with 'adaptive' config."
             )
 
+        # Identify the optional escalating variable. When present, the probe
+        # escalates instead of finishing the first time stop_when triggers.
+        self._escalate_var_name: Optional[str] = None
+        self._escalate_values: List[Any] = []
+
+        for name, vcfg in cfg.vars.items():
+            if vcfg.escalate is not None:
+                self._escalate_var_name = name
+                self._escalate_values = [
+                    _cast_value(vcfg.type, v) for v in vcfg.escalate.values
+                ]
+                break
+
         self.logger.info(
             "Adaptive planner initialized: variable='%s', initial=%s",
             self._adaptive_var_name, self._adaptive_config.initial,
         )
+        if self._escalate_var_name:
+            self.logger.info(
+                "  Staircase search: escalating '%s' through %s",
+                self._escalate_var_name, self._escalate_values,
+            )
 
         # Build static matrix (non-adaptive swept vars)
         kept_instances, skipped_instances = build_execution_matrix(cfg)
@@ -3354,12 +3391,34 @@ class AdaptivePlanner(BasePlanner, HasLogger):
             )
             return True
 
+    def _record_frontier_point(self, probe: ProbeState) -> None:
+        """
+        Close out the current escalation level, recording how far it got.
+
+        Uses level_last_success rather than last_value_before_stop so a level
+        is only credited with adaptive values it actually ran.
+        """
+        probe.frontier.append(FrontierPoint(
+            escalate_value=self._current_escalate_value(probe),
+            last_value_before_stop=probe.level_last_success,
+        ))
+
+    def _current_escalate_value(self, probe: ProbeState) -> Any:
+        """The escalating variable's value for this probe, or None if unused."""
+        if not self._escalate_var_name:
+            return None
+        if probe.escalation_index >= len(self._escalate_values):
+            return None
+        return self._escalate_values[probe.escalation_index]
+
     def _find_probe_for_test(self, test: ExecutionInstance) -> Optional[ProbeState]:
         """Find the probe that owns this test by matching static vars."""
-        # Extract just the non-adaptive vars from the test
+        # Extract just the swept vars from the test: the adaptive and
+        # escalating variables are driven per probe, not part of the combo.
+        driven = {self._adaptive_var_name, self._escalate_var_name}
         test_static = {
             k: v for k, v in test.base_vars.items()
-            if k != self._adaptive_var_name
+            if k not in driven
         }
 
         for probe in self._probes:
@@ -3407,9 +3466,11 @@ class AdaptivePlanner(BasePlanner, HasLogger):
                     probe.execution_id = self._next_exec_id
                     self._next_exec_id += 1
 
-                # Merge static vars + adaptive var
+                # Merge static vars + adaptive var + current escalation level
                 base_vars = dict(probe.static_vars)
                 base_vars[self._adaptive_var_name] = probe.current_value
+                if self._escalate_var_name:
+                    base_vars[self._escalate_var_name] = self._current_escalate_value(probe)
 
                 instance, is_valid, violations = create_execution_instance(
                     cfg=self.cfg,
@@ -3482,26 +3543,52 @@ class AdaptivePlanner(BasePlanner, HasLogger):
 
         # All reps done for this value. Decide next action.
         if probe.stop_triggered_count > 0:
-            # Stop condition triggered
+            # Stop condition triggered. Without an escalating variable the
+            # probe is done. With one, escalate and retest the same adaptive
+            # value instead: only an exhausted escalation ends the probe.
             probe.stop_value = probe.current_value
-            probe.finished = True
-            probe.stop_reason = "condition_met"
-            self.logger.info(
-                "  [Adaptive] Stop condition met at %s=%s (%s). "
-                "stop_value=%s, last_value_before_stop=%s",
-                self._adaptive_var_name, probe.current_value,
-                self._static_combo_label(probe.static_vars),
-                probe.stop_value, probe.last_value_before_stop,
-            )
+
+            if self._escalate_var_name and probe.escalation_index + 1 < len(self._escalate_values):
+                self._record_frontier_point(probe)
+                stalled_at = self._current_escalate_value(probe)
+                probe.escalation_index += 1
+                probe.level_last_success = None
+                self.logger.info(
+                    "  [Adaptive] %s=%s stalled at %s=%s (%s). Escalating to %s=%s "
+                    "and retesting.",
+                    self._adaptive_var_name, probe.current_value,
+                    self._escalate_var_name, stalled_at,
+                    self._static_combo_label(probe.static_vars),
+                    self._escalate_var_name, self._current_escalate_value(probe),
+                )
+                # current_value stays put: the same adaptive value is retested
+                # at the new escalation level.
+            else:
+                if self._escalate_var_name:
+                    self._record_frontier_point(probe)
+                probe.finished = True
+                probe.stop_reason = (
+                    "escalation_exhausted" if self._escalate_var_name else "condition_met"
+                )
+                self.logger.info(
+                    "  [Adaptive] Stop condition met at %s=%s (%s). "
+                    "stop_value=%s, last_value_before_stop=%s",
+                    self._adaptive_var_name, probe.current_value,
+                    self._static_combo_label(probe.static_vars),
+                    probe.stop_value, probe.last_value_before_stop,
+                )
         else:
             # Stop condition not triggered: the probe continues past this value
             probe.last_value_before_stop = probe.current_value
+            probe.level_last_success = probe.current_value
             probe.iteration += 1
 
             if max_iter is not None and probe.iteration >= max_iter:
                 # Max iterations reached
                 probe.finished = True
                 probe.stop_reason = "max_iterations"
+                if self._escalate_var_name:
+                    self._record_frontier_point(probe)
                 self.logger.info(
                     "  [Adaptive] Max iterations (%d) reached for %s (%s). "
                     "Last value tested=%s",
@@ -3518,6 +3605,8 @@ class AdaptivePlanner(BasePlanner, HasLogger):
                 except AdaptiveStepError as e:
                     probe.finished = True
                     probe.stop_reason = "step_error"
+                    if self._escalate_var_name:
+                        self._record_frontier_point(probe)
                     self.logger.error(
                         "  [Adaptive] %s\n  Finishing probe for %s at "
                         "last_value_before_stop=%s.",
@@ -3580,6 +3669,7 @@ class AdaptivePlanner(BasePlanner, HasLogger):
                 stop_value=probe.stop_value,
                 iterations=probe.iteration + (1 if probe.finished else 0),
                 stop_reason=probe.stop_reason or "in_progress",
+                frontier=list(probe.frontier),
             )
         return results
 
