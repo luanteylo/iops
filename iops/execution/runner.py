@@ -1155,6 +1155,7 @@ class IOPSRunner(HasLogger):
                     "type": var_config.type,
                     "swept": var_config.sweep is not None,
                     "adaptive": var_config.adaptive is not None,
+                    "escalate": var_config.escalate is not None,
                 }
                 if var_config.sweep:
                     var_info["sweep"] = {
@@ -1181,6 +1182,11 @@ class IOPSRunner(HasLogger):
                         var_info["adaptive"]["step_expr"] = var_config.adaptive.step_expr
                     if var_config.adaptive.max_iterations is not None:
                         var_info["adaptive"]["max_iterations"] = var_config.adaptive.max_iterations
+
+                if var_config.escalate:
+                    var_info["escalate"] = {
+                        "values": var_config.escalate.values,
+                    }
 
                 if var_config.expr:
                     var_info["expr"] = var_config.expr

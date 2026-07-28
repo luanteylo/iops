@@ -470,13 +470,30 @@ class ReportGenerator:
                 swept_vars.append(var_name)
         return swept_vars
 
+    def _get_search_driven_vars(self) -> List[str]:
+        """
+        Get variables whose values the search itself chooses.
+
+        Adaptive and escalating variables are not swept, so they never appear
+        in the Cartesian product, but they do vary across executions and are
+        usually the most interesting axis in an adaptive run.
+        """
+        driven = []
+        for var_name, var_info in self.metadata['variables'].items():
+            if var_info.get('adaptive') or var_info.get('escalate'):
+                driven.append(var_name)
+        return driven
+
     def _get_report_vars(self) -> List[str]:
         """
         Get list of variables to use for report generation.
 
         Priority:
         1. Use report_vars from benchmark config if specified
-        2. Otherwise, use all swept variables that are numeric (int/float/bool)
+        2. Otherwise, use numeric swept variables plus the variables driven by
+           the search (adaptive, escalating). An adaptive config need not have
+           any swept variables at all, in which case the adaptive axis is the
+           only thing there is to plot against.
         3. Exclude string variables by default (they don't plot well)
         """
         # Check if report_vars is explicitly specified
@@ -486,11 +503,13 @@ class ReportGenerator:
             # Use explicitly specified variables
             return report_vars
 
-        # Default: use numeric swept variables only (bool treated as 0/1)
-        swept_vars = self._get_swept_vars()
+        # Default: numeric variables only (bool treated as 0/1)
+        candidates = self._get_swept_vars() + self._get_search_driven_vars()
         numeric_vars = []
 
-        for var_name in swept_vars:
+        for var_name in candidates:
+            if var_name in numeric_vars:
+                continue
             var_type = self.metadata['variables'][var_name].get('type', '')
             if var_type in ['int', 'float', 'bool']:
                 numeric_vars.append(var_name)

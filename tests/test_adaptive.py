@@ -1334,3 +1334,69 @@ class TestEscalateConfigValidation:
         loaded = _build_config(tmp_path, cfg)
         assert loaded.vars["blocks"].escalate.values == [1, 4, 16]
         assert loaded.vars["problem_size"].adaptive.initial == 1000
+
+
+class TestAdaptiveReportVars:
+    """
+    Reports pick their variables from the metadata. Adaptive and escalating
+    variables are not swept, so a config with no swept variables at all used
+    to yield no report variables and fail with "No report variables found".
+    """
+
+    def _generator(self, variables, report_vars=None):
+        from iops.reporting.report_generator import ReportGenerator
+
+        gen = ReportGenerator.__new__(ReportGenerator)
+        gen.metadata = {
+            "benchmark": {"report_vars": report_vars},
+            "variables": variables,
+        }
+        return gen
+
+    def test_adaptive_var_is_a_report_var(self):
+        """An adaptive-only config still has an axis worth plotting against."""
+        gen = self._generator({
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000}, "escalate": False},
+        })
+        assert gen._get_report_vars() == ["problem_size"]
+
+    def test_escalating_var_is_a_report_var(self):
+        gen = self._generator({
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000}, "escalate": False},
+            "number_of_blocks": {"type": "int", "swept": False,
+                                 "adaptive": False, "escalate": {"values": [1, 4]}},
+        })
+        assert gen._get_report_vars() == ["problem_size", "number_of_blocks"]
+
+    def test_swept_vars_still_come_first(self):
+        gen = self._generator({
+            "nodes": {"type": "int", "swept": True, "adaptive": False, "escalate": False},
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000}, "escalate": False},
+        })
+        assert gen._get_report_vars() == ["nodes", "problem_size"]
+
+    def test_non_numeric_search_vars_excluded(self):
+        """String axes do not plot well and are excluded, as for swept vars."""
+        gen = self._generator({
+            "mode": {"type": "str", "swept": False,
+                     "adaptive": {"initial": "a"}, "escalate": False},
+        })
+        assert gen._get_report_vars() == []
+
+    def test_explicit_report_vars_still_win(self):
+        gen = self._generator(
+            {"problem_size": {"type": "int", "swept": False,
+                              "adaptive": {"initial": 1000}, "escalate": False}},
+            report_vars=["something_else"],
+        )
+        assert gen._get_report_vars() == ["something_else"]
+
+    def test_metadata_without_escalate_key_still_works(self):
+        """Runs recorded before escalating variables existed have no such key."""
+        gen = self._generator({
+            "problem_size": {"type": "int", "swept": False, "adaptive": {"initial": 1000}},
+        })
+        assert gen._get_report_vars() == ["problem_size"]
