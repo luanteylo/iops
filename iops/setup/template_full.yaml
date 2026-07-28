@@ -212,6 +212,14 @@ benchmark:
   # Used by random and bayesian search methods
   random_seed: 42
 
+  # Optional: Resolution of recorded execution timestamps (default: "seconds")
+  # Applies to metadata.submission_time, metadata.job_start, and metadata.end.
+  #   seconds:      2026-07-27 14:26:04
+  #   milliseconds: 2026-07-27 14:26:04.123
+  # Useful for short local tests where whole seconds are too coarse. Under SLURM
+  # job_start is detected by polling, so its true resolution is the poll interval.
+  # timestamp_precision: "milliseconds"
+
   # Optional: Variables to exclude from cache key computation
   # Useful for path-based derived variables that shouldn't affect caching
   # Example: ["summary_file", "output_path"] - paths vary but don't affect results

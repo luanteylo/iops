@@ -289,11 +289,16 @@ All paths are relative to the run root, making workdirs portable across systems.
 {
   "status": "SUCCEEDED",
   "error": null,
-  "end_time": "2026-01-09T14:23:45.678901",
+  "end_time": "2026-01-09 14:23:45",
   "cached": false,
-  "duration_seconds": 125.3
+  "duration_seconds": 125.3,
+  "metrics": {"bandwidth": 1024.5},
+  "submission_time": "2026-01-09 14:21:40",
+  "job_start": "2026-01-09 14:21:40"
 }
 ```
+
+The three timestamps are recorded at second resolution by default. Set [`benchmark.timestamp_precision`](/iops/user-guide/yaml-schema/#timestamp_precision-optional-default-seconds) to `milliseconds` to record them as `2026-01-09 14:23:45.678` instead.
 
 **Status values:**
 

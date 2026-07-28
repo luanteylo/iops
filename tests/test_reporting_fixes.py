@@ -25,7 +25,7 @@ from iops.config.models import (
 )
 from iops.reporting.config_template import serialize_reporting_config
 from iops.reporting.plots import ScatterPlot
-from iops.reporting.report_generator import ReportGenerator
+from iops.reporting.report_generator import ReportGenerator, _parse_timestamps
 
 
 # ============================================================================
@@ -290,3 +290,53 @@ class TestScatterStringValues:
         fig = self._make_plot(df, config).generate()
 
         assert any("bandwidth: 100.0000" in t for t in fig.data[0].text)
+
+
+# ============================================================================
+# Timestamps: mixed second/millisecond resolution in one results set
+# ============================================================================
+
+class TestMixedTimestampPrecision:
+    """A results set can hold both benchmark.timestamp_precision formats.
+
+    Cached rows keep the timestamps recorded when they first ran, so switching
+    precision (or appending to a sink an earlier run wrote) mixes
+    "2026-01-01 00:00:00" with "2026-01-01 00:00:00.500" in one column. Pandas
+    infers a single format from the first value and coerces the rest to NaT,
+    which silently dropped those rows from duration and core-hour statistics.
+    """
+
+    def test_parse_timestamps_handles_both_formats(self):
+        parsed = _parse_timestamps(pd.Series([
+            '2026-01-01 00:00:00',
+            '2026-01-01 00:00:00.500',
+        ]))
+        assert not parsed.isna().any()
+        assert (parsed[1] - parsed[0]).total_seconds() == 0.5
+
+    def test_parse_timestamps_still_coerces_garbage(self):
+        parsed = _parse_timestamps(pd.Series(['not a timestamp', None]))
+        assert parsed.isna().all()
+
+    def test_core_hours_counts_rows_of_both_precisions(self, tmp_path):
+        gen = ReportGenerator(workdir=tmp_path)
+        gen.metadata = {
+            'benchmark': {'cores_expr': '{{ cores }}'},
+            'variables': {'cores': {'type': 'int'}},
+        }
+        # Row 0 was cached from a seconds-precision run, row 1 ran under
+        # milliseconds. Both are one hour long on one core.
+        gen.df = pd.DataFrame({
+            'vars.cores': [1, 1],
+            'metadata.__job_start': [
+                '2026-01-01 00:00:00',
+                '2026-01-01 00:00:00.000',
+            ],
+            'metadata.__end': [
+                '2026-01-01 01:00:00',
+                '2026-01-01 01:00:00.000',
+            ],
+        })
+
+        # Both rows contribute; the millisecond row is not dropped as NaT.
+        assert gen._calculate_total_core_hours() == pytest.approx(2.0)

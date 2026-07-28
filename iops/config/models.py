@@ -252,6 +252,7 @@ class BenchmarkConfig:
     bayesian_config: Optional[BayesianConfig] = None  # Bayesian optimization configuration
     random_config: Optional[RandomSamplingConfig] = None  # Random sampling configuration
     probes: Optional[ProbesConfig] = None  # Probe configuration (new nested format)
+    timestamp_precision: str = "seconds"  # Resolution of recorded execution timestamps: "seconds" | "milliseconds"
     # Deprecated fields (use probes.* instead) - will be removed in 3.7.0
     collect_system_info: bool = True  # DEPRECATED: use probes.system_snapshot
     track_executions: bool = True  # DEPRECATED: use probes.execution_index

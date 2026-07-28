@@ -32,6 +32,7 @@ REQUIRED_SECTIONS = ("benchmark", "vars", "command", "scripts", "output")
 
 EXECUTORS = ["local", "slurm"]
 SEARCH_METHODS = ["exhaustive", "random", "bayesian", "adaptive"]
+TIMESTAMP_PRECISIONS = ["seconds", "milliseconds"]
 VAR_TYPES = ["int", "float", "str", "bool", "list"]
 SINK_TYPES = ["csv", "parquet", "sqlite"]
 ACQUISITION_FUNCS = ["EI", "PI", "LCB"]
@@ -397,6 +398,11 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                           on_change=setter(bench, "random_seed", cast=int)).classes("grow")
             ui.input("Cache file (optional)", value=bench.get("cache_file", ""),
                      on_change=setter(bench, "cache_file")).classes("w-full")
+            ui.select(TIMESTAMP_PRECISIONS, label="Timestamp precision",
+                      value=bench.get("timestamp_precision", "seconds"),
+                      on_change=restructure(lambda e: bench.__setitem__("timestamp_precision", e.value))) \
+                .classes("w-full") \
+                .tooltip("Resolution of recorded submission/start/end timestamps")
             ui.checkbox("Create all execution folders upfront",
                         value=bool(bench.get("create_folders_upfront")),
                         on_change=setter(bench, "create_folders_upfront", drop_empty=False)) \

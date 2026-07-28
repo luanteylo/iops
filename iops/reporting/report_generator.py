@@ -64,6 +64,21 @@ def _get_logo_base64() -> Optional[str]:
     return None
 
 
+def _parse_timestamps(values) -> pd.Series:
+    """
+    Parse execution timestamps (__submission_time, __job_start, __end).
+
+    A single results set can mix the two benchmark.timestamp_precision formats:
+    cached rows carry the timestamps recorded when they first ran, so a run
+    that switches precision (or appends to a sink written by an earlier run)
+    ends up with both "...:04" and "...:04.123" in the same column. Pandas
+    infers one format from the first non-null value and coerces everything
+    that does not match to NaT, which would silently drop those rows from
+    duration and wall-clock statistics. format='mixed' parses per element.
+    """
+    return pd.to_datetime(values, format='mixed', errors='coerce')
+
+
 def _probe_stop_value(probe_data: dict) -> Any:
     """
     Read a probe's stop value, falling back to the pre-3.5.9 key name.
@@ -810,8 +825,8 @@ class ReportGenerator:
 
             # Use submission_time for wall-clock calculation (earliest submission to latest completion)
             submission_col = 'metadata.__submission_time'
-            start_times = pd.to_datetime(df_executed.get(submission_col, pd.Series()), errors='coerce')
-            end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
+            start_times = _parse_timestamps(df_executed.get(submission_col, pd.Series()))
+            end_times = _parse_timestamps(df_executed['metadata.__end'])
 
             if start_times.isna().all() or end_times.isna().all():
                 return None, None
@@ -863,14 +878,14 @@ class ReportGenerator:
             job_start_col = 'metadata.__job_start'
             submission_col = 'metadata.__submission_time'
             if job_start_col in self.df.columns:
-                start_times = pd.to_datetime(self.df[job_start_col], errors='coerce')
+                start_times = _parse_timestamps(self.df[job_start_col])
                 # Fall back to submission_time where job_start is missing
                 if submission_col in self.df.columns:
-                    submission_times = pd.to_datetime(self.df[submission_col], errors='coerce')
+                    submission_times = _parse_timestamps(self.df[submission_col])
                     start_times = start_times.fillna(submission_times)
             else:
-                start_times = pd.to_datetime(self.df.get(submission_col, pd.Series()), errors='coerce')
-            end_times = pd.to_datetime(self.df['metadata.__end'], errors='coerce')
+                start_times = _parse_timestamps(self.df.get(submission_col, pd.Series()))
+            end_times = _parse_timestamps(self.df['metadata.__end'])
 
             # Calculate duration for each test in hours
             # Prefer sysinfo duration_seconds, fall back to timestamps
@@ -1599,9 +1614,9 @@ class ReportGenerator:
             df_executed = self.df[self.df['metadata.__cached'] != True] if 'metadata.__cached' in self.df.columns else self.df
 
             if len(df_executed) > 0:
-                submit_times = pd.to_datetime(df_executed['metadata.__submission_time'], errors='coerce')
-                job_start_times = pd.to_datetime(df_executed['metadata.__job_start'], errors='coerce')
-                end_times = pd.to_datetime(df_executed['metadata.__end'], errors='coerce')
+                submit_times = _parse_timestamps(df_executed['metadata.__submission_time'])
+                job_start_times = _parse_timestamps(df_executed['metadata.__job_start'])
+                end_times = _parse_timestamps(df_executed['metadata.__end'])
 
                 wait_times = (job_start_times - submit_times).dt.total_seconds()
                 valid_wait = wait_times[~wait_times.isna()]

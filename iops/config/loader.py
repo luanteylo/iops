@@ -70,6 +70,7 @@ ALLOWED_BENCHMARK_KEYS = {
     "random_seed", "cache_exclude_vars", "exhaustive_vars", "max_core_hours", "cores_expr",
     "estimated_time_seconds", "report_vars", "bayesian_config", "random_config",
     "probes",  # New nested probe configuration
+    "timestamp_precision",
     # Deprecated fields (use probes.* instead) - kept for backwards compatibility
     "collect_system_info", "track_executions", "create_folders_upfront",
     "trace_resources", "trace_interval",
@@ -1212,6 +1213,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         bayesian_config=bayesian_config,
         random_config=random_config,
         probes=probes_config,
+        timestamp_precision=b.get("timestamp_precision", "seconds"),
         # Keep old fields synced for backwards compatibility during transition
         collect_system_info=probes_config.system_snapshot,
         track_executions=probes_config.execution_index,
@@ -2096,6 +2098,13 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
     if cfg.benchmark.executor not in ("slurm", "local"):
         raise ConfigValidationError(
             f"benchmark.executor must be one of: slurm, local (got '{cfg.benchmark.executor}')"
+        )
+
+    # timestamp_precision validation
+    if cfg.benchmark.timestamp_precision not in ("seconds", "milliseconds"):
+        raise ConfigValidationError(
+            "benchmark.timestamp_precision must be one of: seconds, milliseconds "
+            f"(got '{cfg.benchmark.timestamp_precision}')"
         )
 
     # allocation config validation (SLURM single-allocation mode)

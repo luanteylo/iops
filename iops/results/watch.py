@@ -544,9 +544,10 @@ def _collect_execution_data(
 
                     if job_start:
                         try:
-                            fmt = "%Y-%m-%d %H:%M:%S"
-                            submit_dt = datetime.strptime(submission_time, fmt)
-                            start_dt = datetime.strptime(job_start, fmt)
+                            # fromisoformat accepts both timestamp_precision
+                            # formats ("...:04" and "...:04.123")
+                            submit_dt = datetime.fromisoformat(submission_time)
+                            start_dt = datetime.fromisoformat(job_start)
                             wait_seconds = (start_dt - submit_dt).total_seconds()
                             if wait_seconds >= 0:
                                 rep_wait_times.append(wait_seconds)

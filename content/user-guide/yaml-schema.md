@@ -87,6 +87,7 @@ benchmark:
   random_seed: integer              # Optional: seed for randomization (default: 42)
   cache_file: path                  # Optional: cache file location
   cache_exclude_vars: list          # Optional: vars to exclude from cache hash
+  timestamp_precision: string       # Optional: "seconds" | "milliseconds" (default: "seconds")
 
   probes:                           # Optional: probe configuration
     system_snapshot: boolean        #   Collect system info (default: true)
@@ -219,6 +220,23 @@ Jinja2 expression to compute cores per test (e.g., `"{{ nodes * ppn }}"`).
 
 #### `estimated_time_seconds` (optional)
 Estimated time per test. Used for dry-run budget analysis.
+
+#### `timestamp_precision` (optional, default: "seconds")
+Resolution of the execution timestamps recorded in metadata: `metadata.submission_time`, `metadata.job_start`, and `metadata.end` (the `metadata.__*` columns in `results.csv`, and the matching fields in `__iops_status.json`).
+
+| Value | Recorded as |
+|-------|-------------|
+| `seconds` | `2026-07-27 14:26:04` |
+| `milliseconds` | `2026-07-27 14:26:04.123` |
+
+Milliseconds are truncated, not rounded, so a timestamp never overshoots the instant it records. Both formats are read back transparently by reports, `iops find`, and watch mode.
+
+Use `milliseconds` for short-running local tests, where whole-second timestamps are too coarse to tell executions apart. Two caveats:
+
+- Under SLURM, `job_start` is recorded when polling observes the job leave the queue, so its real resolution is `slurm_options.poll_interval`, not the clock. The value read back from `sacct` is second-resolution because SLURM reports it that way.
+- These timestamps bracket the generated script, so they include the shell wrapper around your command. For millisecond-accurate timing of the workload itself, time it inside the script and emit it as a metric.
+
+Changing this setting does not invalidate cached results. A run that reuses a cache written under a different precision produces a results set holding both formats, which is read correctly.
 
 #### `parallel` (optional, default: 1)
 Maximum number of tests to run concurrently (thread pool). Overridable via `--parallel N`. Works with both `local` and `slurm` executors.

@@ -1,6 +1,8 @@
 """Tests for executor implementations."""
 
 import pytest
+import re
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import subprocess
@@ -556,3 +558,61 @@ def test_safe_is_file_handles_oserror():
     with patch.object(Path, 'is_file', side_effect=raise_os_error):
         test_path = Path("/error/path")
         assert executor._safe_is_file(test_path) is False
+
+
+# ---------------------------------------------------------------------------- #
+# Timestamp precision (benchmark.timestamp_precision)
+# ---------------------------------------------------------------------------- #
+
+TS_SECONDS_RE = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+TS_MILLIS_RE = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$"
+
+
+def _executor_with_precision(precision):
+    """Build a LocalExecutor whose config declares the given precision."""
+    config = Mock()
+    config.benchmark.timestamp_precision = precision
+    return LocalExecutor(config)
+
+
+def test_now_defaults_to_second_resolution():
+    """Second precision keeps the historical format with no fractional part."""
+    executor = _executor_with_precision("seconds")
+    assert re.match(TS_SECONDS_RE, executor._now())
+
+
+def test_now_millisecond_resolution():
+    """Millisecond precision appends exactly three fractional digits."""
+    executor = _executor_with_precision("milliseconds")
+    assert re.match(TS_MILLIS_RE, executor._now())
+
+
+def test_now_timestamps_are_parseable_in_both_precisions():
+    """Both formats round-trip through fromisoformat, used by runner/planner/watch."""
+    for precision in ("seconds", "milliseconds"):
+        value = _executor_with_precision(precision)._now()
+        assert isinstance(datetime.fromisoformat(value), datetime)
+
+
+def test_local_executor_records_millisecond_timestamps(mock_test_instance):
+    """Execution metadata carries sub-second timestamps when configured."""
+    executor = _executor_with_precision("milliseconds")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        executor.submit(mock_test_instance)
+
+    for key in ("__submission_time", "__job_start", "__end"):
+        assert re.match(TS_MILLIS_RE, mock_test_instance.metadata[key]), key
+
+
+def test_local_executor_records_second_timestamps(mock_test_instance):
+    """Second precision leaves the recorded timestamps unchanged."""
+    executor = _executor_with_precision("seconds")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        executor.submit(mock_test_instance)
+
+    for key in ("__submission_time", "__job_start", "__end"):
+        assert re.match(TS_SECONDS_RE, mock_test_instance.metadata[key]), key

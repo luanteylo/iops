@@ -564,3 +564,35 @@ def test_script_with_jinja_not_mistaken_for_file(tmp_path, sample_config_dict):
 
     config = load_config(config_file)
     assert "{{ var1 }}" in config.scripts[0].script_template
+
+
+# ============== timestamp_precision Tests ==============
+
+
+def test_timestamp_precision_defaults_to_seconds(sample_config_file):
+    """Omitting the field keeps the historical second resolution."""
+    config = load_config(sample_config_file)
+    assert config.benchmark.timestamp_precision == "seconds"
+
+
+@pytest.mark.parametrize("precision", ["seconds", "milliseconds"])
+def test_timestamp_precision_accepts_valid_values(tmp_path, sample_config_dict, precision):
+    """Both supported resolutions load."""
+    sample_config_dict["benchmark"]["timestamp_precision"] = precision
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    config = load_config(config_file)
+    assert config.benchmark.timestamp_precision == precision
+
+
+def test_timestamp_precision_rejects_unknown_value(tmp_path, sample_config_dict):
+    """An unsupported resolution is reported by the loader, not at runtime."""
+    sample_config_dict["benchmark"]["timestamp_precision"] = "nanoseconds"
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(sample_config_dict, f)
+
+    with pytest.raises(ConfigValidationError, match="timestamp_precision must be one of"):
+        load_config(config_file)
