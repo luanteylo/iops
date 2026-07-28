@@ -89,14 +89,62 @@ is tested.
 ## Trying it
 
 `my_benchmark` is a stub, so you can watch the search work without a real code.
-IOPS runs each test from its own execution directory, so point the command at
-an absolute path:
+Run it **from this directory**:
 
 ```bash
 mkdir -p workdir
-sed "s|\./my_benchmark|$PWD/my_benchmark|" blocks_per_problem_size.yaml > /tmp/demo.yaml
-iops run /tmp/demo.yaml
+iops run blocks_per_problem_size.yaml
+iops report workdir/run_001
 ```
+
+Each test runs from its own execution directory, so the stub is invoked through
+`{{ os_env.PWD }}/my_benchmark`: the directory you launched `iops` from. That
+keeps the example working from a fresh clone without editing paths, at the cost
+of having to launch it from here. For a real benchmark, use its install path or
+just its name if it is on `PATH`, and the working directory stops mattering.
 
 For real use, replace `command.template` with your own benchmark and adjust the
 two axes.
+
+## The fake metrics
+
+So the example produces a report, the stub also models performance for runs
+that fit: the work splits across blocks, and each block adds a little
+coordination overhead.
+
+```
+runtime_s  = (size / 100) / blocks + blocks * 0.05
+throughput = size / runtime_s
+```
+
+Along the frontier that gives:
+
+| problem_size | number_of_blocks | runtime_s | throughput |
+|--------------|------------------|-----------|------------|
+| 1000 | 1 | 10.050 | 99.5 |
+| 2000 | 4 | 5.200 | 384.6 |
+| 3000 | 16 | 2.675 | 1121.5 |
+
+A run that does **not** fit exits non-zero, prints the reason on stderr, and
+writes no result, so it records no metrics. That is deliberate: a failed run
+has nothing to measure, and the report shows metrics only for the three runs
+that produced them. The search itself is driven by the exit code, not by the
+metrics, so the failures still do their job of triggering escalation.
+
+If you want the search driven by a metric instead of the exit code, point
+`stop_when` at one, so a configuration that is merely too slow escalates
+without having to fail outright:
+
+```yaml
+stop_when: "exit_code != 0 or metrics.get('runtime_s', 0) > 8"
+```
+
+Keep both halves. A failed run produces no metrics at all, so a bare
+`runtime_s > 8` raises on those runs; IOPS catches it, treats the condition as
+triggered, and logs a warning for every failure. Reading through
+`metrics.get(...)` with a default avoids that, and the explicit `exit_code`
+check is what actually handles the failures.
+
+Note this changes the frontier: with an 8 second budget, `(1000, 1)` takes
+10.05s, so one block reaches nothing at all and the first rung reports
+`nothing` instead of 1000.

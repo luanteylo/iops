@@ -1400,3 +1400,94 @@ class TestAdaptiveReportVars:
             "problem_size": {"type": "int", "swept": False, "adaptive": {"initial": 1000}},
         })
         assert gen._get_report_vars() == ["problem_size"]
+
+
+class TestStaircaseReporting:
+    """
+    A staircase search produces a frontier. The probe summary collapses to
+    the final state only, so on its own it hides the result.
+    """
+
+    def _generator(self, frontier=True):
+        from iops.reporting.report_generator import ReportGenerator
+
+        gen = ReportGenerator.__new__(ReportGenerator)
+        variables = {
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000, "increment": 1000,
+                                          "stop_when": "exit_code != 0"},
+                             "escalate": False},
+            "number_of_blocks": {"type": "int", "swept": False, "adaptive": False,
+                                 "escalate": {"values": [1, 4, 16]}},
+        }
+        probe = {
+            "stop_value": 4000,
+            "last_value_before_stop": 3000,
+            "iterations": 4,
+            "stop_reason": "escalation_exhausted",
+        }
+        if frontier:
+            probe["escalate_var"] = "number_of_blocks"
+            probe["frontier"] = [
+                {"number_of_blocks": 1, "last_value_before_stop": 1000},
+                {"number_of_blocks": 4, "last_value_before_stop": 2000},
+                {"number_of_blocks": 16, "last_value_before_stop": 3000},
+            ]
+        gen.metadata = {
+            "benchmark": {},
+            "variables": variables,
+            "adaptive_results": {"problem_size": {"(no swept vars)": probe}},
+        }
+        return gen
+
+    def test_escalate_var_is_identified(self):
+        gen = self._generator()
+        assert gen._get_escalate_var() == "number_of_blocks"
+        assert gen._get_escalate_values() == [1, 4, 16]
+
+    def test_no_escalate_var_without_one(self):
+        gen = self._generator()
+        gen.metadata["variables"]["number_of_blocks"]["escalate"] = False
+        assert gen._get_escalate_var() is None
+        assert gen._get_escalate_values() == []
+
+    def test_frontier_table_lists_every_rung(self):
+        gen = self._generator()
+        probes = gen.metadata["adaptive_results"]["problem_size"]
+        html = gen._render_frontier_table("problem_size", "number_of_blocks", probes)
+
+        assert "Search Frontier" in html
+        for escalate_val, reached in ((1, 1000), (4, 2000), (16, 3000)):
+            assert f"<td>{escalate_val}</td><td>{reached}</td>" in html
+        # Single probe: no Configuration column to clutter it
+        assert "<th>Configuration</th>" not in html
+
+    def test_frontier_table_labels_probes_when_several(self):
+        gen = self._generator()
+        probes = gen.metadata["adaptive_results"]["problem_size"]
+        probes["variant=b"] = dict(probes["(no swept vars)"])
+        html = gen._render_frontier_table("problem_size", "number_of_blocks", probes)
+        assert "<th>Configuration</th>" in html
+        assert "variant=b" in html
+
+    def test_level_that_reached_nothing_is_marked(self):
+        """A rung that never succeeded must not read as though it reached 0."""
+        gen = self._generator()
+        probes = gen.metadata["adaptive_results"]["problem_size"]
+        probes["(no swept vars)"]["frontier"][0]["last_value_before_stop"] = None
+        html = gen._render_frontier_table("problem_size", "number_of_blocks", probes)
+        assert "<em>nothing</em>" in html
+
+    def test_plain_adaptive_run_has_no_frontier(self):
+        """Without an escalating variable there are no rungs to report."""
+        from iops.reporting.report_generator import _probe_frontier
+
+        gen = self._generator(frontier=False)
+        probe = gen.metadata["adaptive_results"]["problem_size"]["(no swept vars)"]
+        assert _probe_frontier(probe) == []
+
+    def test_pre_escalate_metadata_has_no_frontier(self):
+        """Runs recorded before escalating variables existed lack the key."""
+        from iops.reporting.report_generator import _probe_frontier
+
+        assert _probe_frontier({"found_value": 200, "failed_value": 400}) == []

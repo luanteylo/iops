@@ -31,10 +31,34 @@ scripts:
     submit: "bash"
     script_template: |
       #!/bin/bash
-      {{ command.template }}
-      # The exit code drives the search, so let it propagate.
-      # Do not end this script with a command that always succeeds
-      # (no trailing 'echo done', no '|| true').
+      # Redirecting still propagates the benchmark's exit code, which is what
+      # drives the search. Do not end this script with a command that always
+      # succeeds (no trailing 'echo done', no '|| true').
+      {{ command.template }} > {{ execution_dir }}/result.json
+
+    parser:
+      file: "{{ execution_dir }}/result.json"
+      metrics:
+        - name: runtime_s
+          type: float
+        - name: throughput
+          type: float
+      parser_script: |
+        import json
+
+        def parse(file_path):
+            # Only runs that fit produce a result. A run that failed has an
+            # empty file, and reporting no metrics for it is correct: there
+            # is no measurement to record.
+            with open(file_path) as f:
+                content = f.read().strip()
+            if not content:
+                return {}
+            data = json.loads(content)
+            return {
+                "runtime_s": data["runtime_s"],
+                "throughput": data["throughput"],
+            }
 
 output:
   sink:

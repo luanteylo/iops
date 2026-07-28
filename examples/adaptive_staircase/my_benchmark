@@ -1,7 +1,14 @@
 #!/bin/bash
 # Stub benchmark for trying out the staircase search without a real code.
-# Each problem size needs four times as many blocks as the one before it:
+#
+# Capacity model: each problem size needs four times as many blocks as the
+# one before it, so a run fails unless it was given enough blocks.
 #   1000 -> 1    2000 -> 4    3000 -> 16    4000 -> 64
+#
+# Performance model, for runs that fit: the work splits across blocks, but
+# each block adds a little coordination overhead. Successful runs print a
+# JSON result so the parser has something to read; failed runs print the
+# reason on stderr and produce no result, as a real benchmark would.
 size=0
 blocks=0
 while [ $# -gt 0 ]; do
@@ -18,5 +25,14 @@ for _ in $(seq 2 "$steps"); do
   needed=$(( needed * 4 ))
 done
 
-echo "size=$size blocks=$blocks needed=$needed"
-[ "$blocks" -ge "$needed" ]
+if [ "$blocks" -lt "$needed" ]; then
+  echo "size=$size does not fit in $blocks block(s), needs $needed" >&2
+  exit 1
+fi
+
+# runtime = work/blocks + per-block overhead, throughput = size/runtime
+awk -v size="$size" -v blocks="$blocks" 'BEGIN {
+  work    = size / 100
+  runtime = work / blocks + blocks * 0.05
+  printf "{\"runtime_s\": %.3f, \"throughput\": %.1f}\n", runtime, size / runtime
+}'
