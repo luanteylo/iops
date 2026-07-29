@@ -99,7 +99,7 @@ Click **New config** (or **Edit** on an existing one) to open the **config build
 
 ![Config builder](../../images/studio/studio-builder.png)
 
-- The form covers **every** option IOPS accepts: benchmark settings, SLURM options and single-allocation mode, budget and core-hours, variables (sweeps, expressions, adaptive probing), command, scripts, output sink, probes, and the full reporting block (sections, plots, gallery, log axes).
+- The form covers **every** option IOPS accepts: benchmark settings, SLURM options and single-allocation mode, budget and core-hours, variables (sweeps, expressions, adaptive probing, escalating values), command, scripts, output sink, probes, and the full reporting block (sections, plots, gallery, log axes).
 - The two panes stay **in sync both ways**: edit a field and the YAML updates; edit the YAML and the form rebuilds.
 - The header toggle switches between **Form + YAML** (default), **Form** only, and **YAML** only.
 - **Save**, **Run**, **Check on target** (runs `iops check`), and **Export** (write the YAML to a file on the host) are in the header.

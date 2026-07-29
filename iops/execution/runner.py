@@ -1204,6 +1204,7 @@ class IOPSRunner(HasLogger):
                     "type": var_config.type,
                     "swept": var_config.sweep is not None,
                     "adaptive": var_config.adaptive is not None,
+                    "escalate": var_config.escalate is not None,
                 }
                 if var_config.sweep:
                     var_info["sweep"] = {
@@ -1230,6 +1231,11 @@ class IOPSRunner(HasLogger):
                         var_info["adaptive"]["step_expr"] = var_config.adaptive.step_expr
                     if var_config.adaptive.max_iterations is not None:
                         var_info["adaptive"]["max_iterations"] = var_config.adaptive.max_iterations
+
+                if var_config.escalate:
+                    var_info["escalate"] = {
+                        "values": var_config.escalate.values,
+                    }
 
                 if var_config.expr:
                     var_info["expr"] = var_config.expr
@@ -2341,19 +2347,47 @@ class IOPSRunner(HasLogger):
                 probe_results = self.planner.get_probe_results()
                 adaptive_var_name = self.planner._adaptive_var_name
 
+                escalate_var_name = getattr(self.planner, '_escalate_var_name', None)
+
                 self.logger.info("")
-                self.logger.info(f"Adaptive probing results for '{adaptive_var_name}':")
-                for label, result in probe_results.items():
-                    parts = []
-                    if result.stop_value is not None:
-                        parts.append(f"stop_value={result.stop_value}")
-                    parts.append(
-                        f"last_value_before_stop={result.last_value_before_stop}"
+                if escalate_var_name:
+                    self.logger.info(
+                        f"Adaptive probing results for '{adaptive_var_name}' "
+                        f"(escalating '{escalate_var_name}'):"
                     )
-                    parts.append(f"iterations={result.iterations}")
-                    parts.append(f"stop_reason={result.stop_reason}")
+                else:
+                    self.logger.info(f"Adaptive probing results for '{adaptive_var_name}':")
+
+                for label, result in probe_results.items():
                     prefix = f"  {label}: " if label else "  "
-                    self.logger.info(f"{prefix}{', '.join(parts)}")
+                    if result.frontier:
+                        # Staircase search: the frontier is the result, so show
+                        # each rung rather than a single pair.
+                        self.logger.info(f"{prefix.rstrip(': ')}:" if label else "  frontier:")
+                        for point in result.frontier:
+                            reached = (
+                                point.last_value_before_stop
+                                if point.last_value_before_stop is not None
+                                else "nothing"
+                            )
+                            self.logger.info(
+                                f"    {escalate_var_name}={point.escalate_value}: "
+                                f"reached {adaptive_var_name}={reached}"
+                            )
+                        self.logger.info(
+                            f"    stop_reason={result.stop_reason}, "
+                            f"stopped at {adaptive_var_name}={result.stop_value}"
+                        )
+                    else:
+                        parts = []
+                        if result.stop_value is not None:
+                            parts.append(f"stop_value={result.stop_value}")
+                        parts.append(
+                            f"last_value_before_stop={result.last_value_before_stop}"
+                        )
+                        parts.append(f"iterations={result.iterations}")
+                        parts.append(f"stop_reason={result.stop_reason}")
+                        self.logger.info(f"{prefix}{', '.join(parts)}")
                 self.logger.info("")
 
                 # Serialize for metadata JSON. found_value/failed_value are
@@ -2368,6 +2402,16 @@ class IOPSRunner(HasLogger):
                             "stop_reason": r.stop_reason,
                             "found_value": r.last_value_before_stop,
                             "failed_value": r.stop_value,
+                            **({
+                                "escalate_var": escalate_var_name,
+                                "frontier": [
+                                    {
+                                        escalate_var_name: p.escalate_value,
+                                        "last_value_before_stop": p.last_value_before_stop,
+                                    }
+                                    for p in r.frontier
+                                ],
+                            } if r.frontier else {}),
                         }
                         for label, r in probe_results.items()
                     }

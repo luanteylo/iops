@@ -18,11 +18,15 @@ Adaptive variables let IOPS probe for threshold values by starting at an initial
 9. [Combining with Swept Variables](#combining-with-swept-variables)
     - [How probes advance](#how-probes-advance)
     - [Multiple swept variables](#multiple-swept-variables)
-10. [Complete Example](#complete-example)
-11. [Constraints](#constraints)
+10. [Staircase Search with an Escalating Variable](#staircase-search-with-an-escalating-variable)
+    - [How the staircase walks](#how-the-staircase-walks)
+    - [Reading the frontier](#reading-the-frontier)
+    - [When not to use it](#when-not-to-use-it)
+11. [Complete Example](#complete-example)
+12. [Constraints](#constraints)
     - [Why only one adaptive variable?](#why-only-one-adaptive-variable)
     - [Adaptive vs Bayesian optimization](#adaptive-vs-bayesian-optimization)
-12. [Configuration Reference](#configuration-reference)
+13. [Configuration Reference](#configuration-reference)
 
 ---
 
@@ -199,6 +203,72 @@ When probe 0 finishes, probes 1 and 2 keep going on their own. Each probe can re
 
 With multiple swept variables, the number of probes equals the size of the Cartesian product of all swept variables. For example, `nodes=[1, 2, 4]` and `ppn=[8, 16]` with an adaptive `matrix_size` creates 3 x 2 = 6 independent probes: `(nodes=1, ppn=8)`, `(nodes=1, ppn=16)`, `(nodes=2, ppn=8)`, and so on. Each finds its own threshold for `matrix_size`.
 
+## Staircase Search with an Escalating Variable
+
+A plain adaptive probe finishes as soon as `stop_when` triggers. Often that is not the end of the story: the run failed because some resource ran out, and giving that resource more would let the search continue. An **escalating variable** expresses exactly that.
+
+```yaml
+vars:
+  problem_size:
+    type: int
+    adaptive:                        # the workload axis
+      initial: 1000
+      increment: 1000
+      stop_when: "exit_code != 0"
+      max_iterations: 20
+
+  number_of_blocks:
+    type: int
+    escalate:                        # the resource axis
+      values: [1, 4, 16]
+```
+
+When the probe would stop, the escalating variable advances to its next value and **the same adaptive value is retested** rather than the probe finishing. The probe ends only when the escalation values run out.
+
+`escalate` is a variable kind like `sweep`, `expr`, and `adaptive`, and cannot be combined with them on the same variable. At most one escalating variable is allowed, and it requires an adaptive variable to extend. The escalation is driven by the adaptive variable's own `stop_when`, so there is only one condition to reason about.
+
+### How the staircase walks
+
+With the config above, against a benchmark where each problem size needs more blocks than the last:
+
+| Run | Result | Action |
+|-----|--------|--------|
+| `problem_size=1000, number_of_blocks=1` | works | advance `problem_size` |
+| `problem_size=2000, number_of_blocks=1` | fails | escalate, retest 2000 |
+| `problem_size=2000, number_of_blocks=4` | works | advance `problem_size` |
+| `problem_size=3000, number_of_blocks=4` | fails | escalate, retest 3000 |
+| `problem_size=3000, number_of_blocks=16` | works | advance `problem_size` |
+| `problem_size=4000, number_of_blocks=16` | fails | escalation exhausted, finish |
+
+Only one axis moves per step, which is what keeps the search well defined. The cost is `P + B - 1` runs for `P` workload values and `B` escalation values. Sweeping the resource axis instead, so each workload value restarts the search from the smallest resource, costs up to `P x B`.
+
+Each swept variable combination gets its own independent staircase, exactly as it gets its own probe without escalation.
+
+### Reading the frontier
+
+A staircase produces a frontier rather than a single threshold, reported per escalation value:
+
+```
+Adaptive probing results for 'problem_size' (escalating 'number_of_blocks'):
+  (no swept vars):
+    number_of_blocks=1: reached problem_size=1000
+    number_of_blocks=4: reached problem_size=2000
+    number_of_blocks=16: reached problem_size=3000
+    stop_reason=escalation_exhausted, stopped at problem_size=4000
+```
+
+This reads along either axis: the smallest `number_of_blocks` each `problem_size` needs, or the largest `problem_size` each `number_of_blocks` can handle. They are the same three rows.
+
+The frontier is also written to `__iops_run_metadata.json` under `adaptive_results`, as a `frontier` list alongside the usual fields, with `escalate_var` naming the escalating variable. An escalation value that never succeeded reports `null`, so a level is never credited with a value it did not actually run.
+
+`stop_reason` is `escalation_exhausted` when the search ran out of escalation values. The other reasons apply unchanged: `max_iterations` if the workload axis hit its cap first, and `constraint_violation` or `step_error` as usual.
+
+### When not to use it
+
+The staircase never goes back to an earlier escalation value. It assumes that a value which fails at one adaptive value also fails at every later one. That holds for capacity limits, where more of the resource never hurts.
+
+It does not hold if the escalating variable can fail at the top end too, for example if a high process count fails on communication overhead where a lower one succeeded. In that case the search walks past working configurations without noticing. Sweep the resource axis instead, so every combination is tested.
+
 ## Complete Example
 
 This example finds the largest matrix that a DGEMM (dense matrix multiplication) kernel can process before exceeding a time limit, for each node count:
@@ -284,16 +354,19 @@ With 4 node counts and 1 ppn value, IOPS creates 4 probes. Each doubles `matrix_
 - Adaptive probing cannot be used with SLURM [single-allocation mode](../single-allocation-mode) (`allocation.mode: "single"`), which pre-generates all tests upfront and leaves no feedback loop
 - `factor` and `increment` require numeric types (`int` or `float`); `step_expr` works with any type
 - Conditional variables (`when`) cannot reference the adaptive variable, because `when` conditions are evaluated during matrix generation before the adaptive value is known. Use only swept variables in `when` expressions.
+- At most one escalating variable per config, and it requires an adaptive variable to extend. Escalating variables are subject to the same rules as adaptive ones: excluded from `exhaustive_vars`, `cache_exclude_vars`, and `when` expressions.
 
 ### Why only one adaptive variable?
 
 A deliberate design choice that keeps the search well-defined and the results interpretable:
 
-- **Search strategy.** One adaptive variable steps forward in one dimension until it hits a wall; with two, there is no obviously correct way to advance them.
+- **Search strategy.** One adaptive variable steps forward in one dimension until it hits a wall; with two moving independently, there is no obviously correct way to advance them.
 - **Stop condition attribution.** With two adaptive variables moving at once, you cannot tell which one caused `stop_when` to trigger.
 - **Result structure.** One adaptive variable yields a simple `last_value_before_stop` / `stop_value` pair per probe; two would require a 2D boundary, which is closer to what Bayesian optimization handles with a surrogate model.
 
-If you need thresholds for two variables, sweep one and probe the other:
+If the two variables are **coupled**, meaning one should advance precisely when the other stalls, use an [escalating variable](#staircase-search-with-an-escalating-variable). That case is well defined because only one axis moves per step, which is what the objections above are really about.
+
+If they are genuinely independent, sweep one and probe the other:
 
 ```yaml
 vars:
@@ -308,7 +381,7 @@ vars:
       stop_when: "exit_code != 0"    # probe this one per block_factor
 ```
 
-This gives the threshold `matrix_size` for each `block_factor` value. Alternatively, run two separate adaptive configs (one per variable) for fully independent threshold searches.
+This gives the threshold `matrix_size` for each `block_factor` value, testing every combination. Alternatively, run two separate adaptive configs (one per variable) for fully independent threshold searches.
 
 ### Adaptive vs Bayesian optimization
 
@@ -335,6 +408,8 @@ vars:
 
 ## Configuration Reference
 
+### `adaptive`
+
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `initial` | Yes | | Starting value |
@@ -344,3 +419,57 @@ vars:
 | `stop_when` | Yes | | Python expression evaluated after each execution |
 | `max_iterations` | No | No limit | Maximum number of values to test |
 | `direction` | No | `"ascending"` | Expected progression: `"ascending"` or `"descending"` |
+
+### `escalate`
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `values` | Yes | | Ordered values to escalate through when the adaptive probe would stop |
+
+An escalating variable is always paired with an adaptive one. The adaptive variable provides the workload that grows; the escalating variable provides the resource that steps up whenever that growth stalls.
+
+```yaml
+benchmark:
+  name: "Blocks needed per problem size"
+  workdir: "./workdir"
+  executor: "local"
+  search_method: "adaptive"     # required: escalate extends an adaptive probe
+  repetitions: 1
+
+vars:
+  # Grows while the benchmark keeps working
+  problem_size:
+    type: int
+    adaptive:
+      initial: 1000
+      increment: 1000
+      stop_when: "exit_code != 0"
+      max_iterations: 20
+
+  # Steps up only when problem_size stalls
+  number_of_blocks:
+    type: int
+    escalate:
+      values: [1, 4, 16]
+
+command:
+  template: "./solver --size {{ problem_size }} --blocks {{ number_of_blocks }}"
+
+scripts:
+  - name: "probe"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      {{ command.template }}
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+```
+
+Six runs against a solver that needs more blocks for every larger problem: `(1000, 1)` works, `(2000, 1)` fails so blocks escalate to 4 and 2000 is retested, `(2000, 4)` works, and so on until `(4000, 16)` fails with no larger block count left.
+
+The same shape covers any resource-and-workload pair: MPI ranks against matrix size, memory per task against particle count, timeout against iteration count. Swap `increment` for `factor` or `step_expr` if the workload should grow multiplicatively or follow a fixed list.
+
+A runnable version with a stub benchmark is in `examples/adaptive_staircase/` in the IOPS repository.

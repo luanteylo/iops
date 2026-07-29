@@ -425,6 +425,21 @@ vars:
   #   - execution_time: elapsed time in seconds (when available)
   #   - previous: current adaptive value
   #   - iteration: 0-based iteration counter
+  #
+  # Escalating variable (staircase search, pairs with an adaptive variable):
+  # Instead of finishing the first time stop_when triggers, the escalating
+  # variable advances and the SAME adaptive value is retested. The probe ends
+  # only when the escalation values run out. Use it when a run failed because
+  # a resource ran out and more of it would let the search continue.
+  # number_of_blocks:
+  #   type: int
+  #   escalate:
+  #     values: [1, 4, 16]         # Tried in order (required, non-empty)
+  #
+  # With problem_size adaptive and number_of_blocks escalating, the search
+  # reports the smallest block count each problem size needs, equivalently the
+  # largest problem size each block count can handle. At most one escalating
+  # variable per config, and it requires an adaptive variable.
   # ---------------------------------------------------------------------------
 
   # ---------------------------------------------------------------------------
