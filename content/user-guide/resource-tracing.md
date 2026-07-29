@@ -32,7 +32,7 @@ When `probes.resource_sampling: true`, IOPS injects a resource sampler (`__iops_
 
 When `probes.gpu_sampling: true`, IOPS injects a GPU sampler (`__iops_runtime_gpu_sampler.sh`) that detects the GPU vendor at runtime (currently NVIDIA via `nvidia-smi`, designed for future AMD/Intel support), queries all GPUs in a single call per interval, and writes per-node, per-attempt GPU sample files (`__iops_gpu_trace_<hostname>_<attempt_id>.csv`). It gracefully skips if no supported GPU is detected (no errors, no empty files) and uses its own per-attempt sentinel file (`__iops_gpu_trace_running.<attempt_id>`), independent of the CPU sampler.
 
-Both samplers share the `sampling_interval` setting and support SLURM multi-node jobs.
+Both samplers share the `sampling_interval` setting and support multi-node jobs on SLURM, OAR and PBS.
 
 ## Output Files
 
@@ -42,7 +42,7 @@ Each execution produces one CSV file per node:
 
 **Location:** `workdir/run_001/exec_0001/repetition_001/__iops_trace_<hostname>_<attempt_id>.csv`
 
-`attempt_id` is the SLURM job id (or the shell PID when running locally). Including it in the filename prevents a second attempt (e.g. when SLURM requeues the job after a node failure) from truncating the first attempt's trace, and prevents one attempt's exit handler from stopping another attempt's sampler. Post-mortem aggregation picks up every matching file, so if an attempt aborts and leaves a short partial trace on disk, you may want to delete that file before running the report.
+`attempt_id` is the scheduler job id (`SLURM_JOB_ID`, `OAR_JOB_ID` or `PBS_JOBID`), falling back to the shell PID when running outside a scheduler. Every node of a job uses the same value. Including it in the filename prevents a second attempt (e.g. when SLURM requeues the job after a node failure) from truncating the first attempt's trace, and prevents one attempt's exit handler from stopping another attempt's sampler. Post-mortem aggregation picks up every matching file, so if an attempt aborts and leaves a short partial trace on disk, you may want to delete that file before running the report.
 
 **Format:**
 ```csv
@@ -183,9 +183,25 @@ benchmark:
 
 ## Multi-Node Support
 
-For SLURM multi-node jobs, IOPS automatically launches samplers on all allocated nodes. The sampler detects multi-node jobs via `SLURM_NNODES > 1` and uses `srun --overlap --ntasks-per-node=1` to start one sampler per node. All samplers share the same sentinel file on the shared filesystem; when the exit handler removes it, all node samplers stop.
+For multi-node jobs, IOPS automatically launches samplers on all allocated nodes. A shared node launcher (`__iops_node_launcher.sh`) resolves the job's node list and starts one sampler per node:
+
+| Scheduler | Node list | Launch method |
+|-----------|-----------|---------------|
+| SLURM | `scontrol show hostnames $SLURM_JOB_NODELIST` | `srun --overlap --ntasks-per-node=1` (one call covers the allocation) |
+| OAR | `$OAR_NODEFILE` | `oarsh` per remote node |
+| PBS | `$PBS_NODEFILE` | `ssh` per remote node |
+| None detected | local hostname | background process on the local node |
+
+All samplers share the same sentinel file on the shared filesystem; when the exit handler removes it, all node samplers stop.
 
 Each node produces its own sample files (`__iops_trace_node01_<attempt_id>.csv`, `__iops_gpu_trace_node01_<attempt_id>.csv`, etc.), and the aggregation combines data from all nodes. The CPU/memory sampler and the GPU sampler support multi-node operation independently.
+
+Two requirements for remote sampling to produce data:
+
+1. The execution directory must be on a filesystem shared by all nodes, since remote samplers write their traces there. When it is node-local the benchmark still runs, only the remote traces stay behind on their nodes.
+2. Passwordless remote access must work between compute nodes (`oarsh` or `ssh` in batch mode), which is the default on most clusters.
+
+Check `nodes_traced` in `__iops_resource_summary.csv` to confirm how many nodes were actually sampled. A value of 1 on a multi-node run means only the head node reported.
 
 ## Fault Tolerance
 

@@ -90,6 +90,7 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 
 | File | Purpose |
 |------|---------|
+| `__iops_node_launcher.sh` | Resolves the job's node list and starts one sampler per node |
 | `__iops_runtime_sampler.sh` | CPU/memory sampling script |
 | `__iops_trace_running` | Sentinel file (signals CPU/memory samplers to run) |
 | `__iops_trace_<host>.csv` | Per-node CPU/memory trace data |
@@ -461,13 +462,25 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 
 ---
 
+### `__iops_node_launcher.sh`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_node_launcher.sh`
+
+**Written:** When the repetition folder is created, before the test runs
+
+**Purpose:** Resolves the job's node list and starts one sampler per node. The generated benchmark script sources it after the exit handler and before any sampler. It detects SLURM (`scontrol show hostnames`, launched with `srun --overlap`), OAR (`$OAR_NODEFILE`, launched with `oarsh`) and PBS (`$PBS_NODEFILE`, launched with `ssh`), and falls back to the local node when no scheduler is detected. It also forwards the attempt id to remote nodes so every node of a job agrees on the sentinel and trace file names.
+
+**Controlled by:** `benchmark.probes.resource_sampling` or `benchmark.probes.gpu_sampling` (written when either sampler is enabled)
+
+---
+
 ### `__iops_runtime_sampler.sh`
 
 **Location:** `workdir/run_001/exec_0001/repetition_1/__iops_runtime_sampler.sh`
 
 **Written:** When the repetition folder is created, before the test runs
 
-**Purpose:** Collects CPU and memory utilization during benchmark execution. The generated benchmark script sources it after the exit handler. It creates the sentinel file `__iops_trace_running` and starts sampling: locally in the background for single-node jobs, or via `srun --overlap` on all nodes for multi-node SLURM jobs. Each node writes its own trace file (`__iops_trace_<hostname>.csv`). On exit, the exit handler removes the sentinel file, stopping all samplers.
+**Purpose:** Collects CPU and memory utilization during benchmark execution. The generated benchmark script sources it after the exit handler. It creates the sentinel file `__iops_trace_running` and starts sampling: locally in the background for single-node jobs, or on every allocated node through `__iops_node_launcher.sh` for multi-node jobs (SLURM, OAR, PBS). Each node writes its own trace file (`__iops_trace_<hostname>.csv`). On exit, the exit handler removes the sentinel file, stopping all samplers.
 
 **Controlled by:** `benchmark.probes.resource_sampling`
 
@@ -481,7 +494,7 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 
 **Removed:** When benchmark script exits (via exit handler)
 
-**Purpose:** Sentinel file that signals resource samplers to keep running. Removing it gracefully terminates all samplers, including those on remote nodes in multi-node SLURM jobs.
+**Purpose:** Sentinel file that signals resource samplers to keep running. Removing it gracefully terminates all samplers, including those on remote nodes in multi-node jobs.
 
 **Controlled by:** `benchmark.probes.resource_sampling`
 
@@ -512,7 +525,7 @@ timestamp,hostname,core,cpu_user_pct,cpu_system_pct,cpu_idle_pct,mem_total_kb,me
 
 **Written:** During artifact preparation (before benchmark runs)
 
-**Purpose:** Collects GPU metrics (utilization, memory, temperature, power draw, clock speeds) at configurable intervals. Currently supports NVIDIA GPUs via `nvidia-smi` (detected with `command -v nvidia-smi`), with vendor detection designed for future AMD and Intel support; gracefully skips if no supported GPU is detected. Follows the same architecture as the CPU/memory sampler: a sentinel file (`__iops_gpu_trace_running`), local or `srun --overlap` multi-node sampling, one trace file per node, and shutdown via the exit handler.
+**Purpose:** Collects GPU metrics (utilization, memory, temperature, power draw, clock speeds) at configurable intervals. Currently supports NVIDIA GPUs via `nvidia-smi` (detected with `command -v nvidia-smi`), with vendor detection designed for future AMD and Intel support; gracefully skips if no supported GPU is detected. Follows the same architecture as the CPU/memory sampler: a sentinel file (`__iops_gpu_trace_running`), local or multi-node sampling through the node launcher, one trace file per node, and shutdown via the exit handler.
 
 **Controlled by:** `benchmark.probes.gpu_sampling`
 

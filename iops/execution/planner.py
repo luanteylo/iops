@@ -89,15 +89,19 @@ def _limit_blas_threads(func):
 #    - Collects system information from compute nodes
 #    - Registers _iops_collect_sysinfo with exit handler
 #
+# 2b. Node Launcher (__iops_node_launcher.sh):
+#    - Resolves the job's node list and starts a per-node helper on each node
+#    - Sourced before the samplers, which use it to fan out
+#
 # 3. Resource Sampler (__iops_sampler.sh):
 #    - Collects CPU/memory utilization during execution
-#    - For SLURM multi-node: uses srun to launch on all nodes
+#    - Multi-node: fans out via the node launcher (SLURM, OAR, PBS)
 #    - Registers sentinel file cleanup with exit handler
 #
 # 4. GPU Sampler (__iops_runtime_gpu_sampler.sh):
 #    - Collects GPU utilization, memory, temperature, power, clocks
 #    - Supports NVIDIA GPUs via nvidia-smi (extensible to AMD/Intel)
-#    - For SLURM multi-node: uses srun to launch on all nodes
+#    - Multi-node: fans out via the node launcher (SLURM, OAR, PBS)
 #    - Registers sentinel file cleanup with exit handler
 #
 # Key design decisions:
@@ -156,6 +160,96 @@ _iops_run_exit_actions() {
 
 # Set the single EXIT trap for the entire script
 trap '_iops_run_exit_actions' EXIT
+'''
+
+# Filename for the node launcher script (written to execution directory)
+NODE_LAUNCHER_FILENAME = "__iops_node_launcher.sh"
+
+# Node launcher template - starts a per-node helper on every node of the job.
+# Sourced after the exit handler and before any sampler, which then calls
+# _iops_launch_on_nodes instead of implementing its own fan-out.
+# Note: This template has no placeholders - it's written as-is to the file.
+NODE_LAUNCHER_TEMPLATE = '''#!/bin/bash
+# IOPS Node Launcher - starts a per-node helper on every node of the allocation.
+# This file is auto-generated and sourced by the main script before the samplers.
+#
+# Scheduler support:
+#   SLURM : srun --overlap, one call covers the whole allocation
+#   OAR   : $OAR_NODEFILE plus oarsh
+#   PBS   : $PBS_NODEFILE plus ssh
+#   none  : the local host only
+#
+# Every step is best-effort. A scheduler we cannot detect degrades to sampling
+# the local node rather than failing the benchmark.
+
+# Print the job's unique node list, one hostname per line.
+_iops_node_list() {
+    _iops_nl_out=""
+    if [ -n "${SLURM_JOB_NODELIST:-}" ] && command -v scontrol >/dev/null 2>&1; then
+        _iops_nl_out=$(scontrol show hostnames "$SLURM_JOB_NODELIST" 2>/dev/null)
+    fi
+    if [ -z "$_iops_nl_out" ]; then
+        _iops_nl_file="${OAR_NODEFILE:-}"
+        [ -z "$_iops_nl_file" ] && _iops_nl_file="${OAR_NODE_FILE:-}"
+        [ -z "$_iops_nl_file" ] && _iops_nl_file="${PBS_NODEFILE:-}"
+        if [ -n "$_iops_nl_file" ] && [ -r "$_iops_nl_file" ]; then
+            _iops_nl_out=$(sort -u "$_iops_nl_file" 2>/dev/null)
+        fi
+    fi
+    if [ -z "$_iops_nl_out" ]; then
+        _iops_nl_out=$(hostname 2>/dev/null || echo localhost)
+    fi
+    printf '%s\\n' "$_iops_nl_out"
+}
+
+# Print the command that starts a process on another node, empty if none works.
+_iops_remote_shell() {
+    if [ -n "${OAR_JOB_ID:-}" ] && command -v oarsh >/dev/null 2>&1; then
+        echo "oarsh"
+    elif command -v ssh >/dev/null 2>&1; then
+        echo "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+    else
+        echo ""
+    fi
+}
+
+# Start one helper per node of the allocation.
+#   $1: script executed on remote nodes, invoked as "bash <script>"
+#   $2: shell function run in the background on this node
+#   $3: attempt id, forwarded so remote helpers agree on sentinel and trace names
+#
+# Remote helpers write into the execution directory, so that directory must be
+# on a shared filesystem for their output to be collected. When it is node-local
+# the run still succeeds, only the remote traces stay behind on their nodes.
+_iops_launch_on_nodes() {
+    _iops_lon_script="$1"
+    _iops_lon_local_fn="$2"
+    _iops_lon_attempt="$3"
+
+    # SLURM: a single srun starts the helper on every allocated node.
+    # --overlap lets it coexist with the benchmark's own srun steps.
+    if [ -n "${SLURM_JOB_ID:-}" ] && [ "${SLURM_NNODES:-1}" -gt 1 ]; then
+        srun --overlap --nodes="${SLURM_NNODES}" --ntasks-per-node=1 \
+            bash "$_iops_lon_script" </dev/null >/dev/null 2>&1 &
+        return 0
+    fi
+
+    _iops_lon_rsh=$(_iops_remote_shell)
+    _iops_lon_self=$(hostname 2>/dev/null || echo localhost)
+
+    while IFS= read -r _iops_lon_node; do
+        [ -z "$_iops_lon_node" ] && continue
+        # Compare short names: node files and `hostname` disagree on FQDNs.
+        if [ "${_iops_lon_node%%.*}" = "${_iops_lon_self%%.*}" ]; then
+            "$_iops_lon_local_fn" </dev/null >/dev/null 2>&1 &
+            renice -n 19 -p "$!" >/dev/null 2>&1 || true
+        elif [ -n "$_iops_lon_rsh" ]; then
+            $_iops_lon_rsh "$_iops_lon_node" \
+                "IOPS_ATTEMPT_ID='$_iops_lon_attempt' nohup bash '$_iops_lon_script'" \
+                </dev/null >/dev/null 2>&1 &
+        fi
+    done < <(_iops_node_list)
+}
 '''
 
 # System probe script template - written as a separate file and sourced by user script
@@ -241,25 +335,28 @@ TRACE_FILENAME_PREFIX = "__iops_trace_"
 # Resource sampler script template - runs in background during execution
 # Collects per-core CPU utilization and memory usage at configurable intervals
 #
-# For SLURM multi-node jobs:
-# - Launched via srun on all nodes
+# For multi-node jobs:
+# - Launched on every node by the node launcher (SLURM, OAR, PBS)
 # - Uses sentinel file for termination (removed by exit handler)
 # - Each node writes to its own trace file (hostname in filename)
 #
 # This script can be:
 # - Sourced by the main script (sets up launcher + registers cleanup)
-# - Executed standalone via srun (just runs the sampling loop)
+# - Executed standalone on a remote node (just runs the sampling loop)
 RESOURCE_SAMPLER_TEMPLATE = '''#!/bin/bash
 # IOPS Resource Sampler - Collects CPU and memory utilization during execution
 # This file is auto-generated. It can be sourced (to set up and launch) or
-# executed directly via srun (for multi-node sampling).
+# executed directly on a remote node (for multi-node sampling).
 
 _IOPS_EXEC_DIR="{execution_dir}"
-# Per-attempt id: isolates this invocation from any sibling attempt that SLURM
-# may reschedule into the same exec_dir (e.g. requeue after a node failure).
-# Without this, a second attempt's exit handler would delete the sentinel
-# used by the first attempt's still-running sampler.
-_IOPS_ATTEMPT_ID="${{SLURM_JOB_ID:-$$}}"
+# Per-attempt id: isolates this invocation from any sibling attempt that the
+# scheduler may reschedule into the same exec_dir (e.g. requeue after a node
+# failure). Without this, a second attempt's exit handler would delete the
+# sentinel used by the first attempt's still-running sampler.
+# IOPS_ATTEMPT_ID is set by the node launcher on remote nodes so that every node
+# of a job derives the same sentinel path. The $$ fallback only applies outside
+# a scheduler, where the job is single-node anyway.
+_IOPS_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
 _IOPS_TRACE_FILE="${{_IOPS_EXEC_DIR}}/{trace_prefix}$(hostname)_${{_IOPS_ATTEMPT_ID}}.csv"
 _IOPS_INTERVAL={trace_interval}
 _IOPS_SENTINEL="${{_IOPS_EXEC_DIR}}/{sentinel_filename}.${{_IOPS_ATTEMPT_ID}}"
@@ -354,7 +451,7 @@ _iops_stop_samplers() {{
 
 # Check if running standalone (executed) vs sourced
 if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
-    # Running standalone (via srun) - just run the sampling loop
+    # Running standalone on a node - just run the sampling loop
     # The sentinel file and exit handler registration are done by the sourcing script
     _iops_sampler_loop
 else
@@ -366,15 +463,13 @@ else
     # Register cleanup with the centralized exit handler
     _iops_register_exit "_iops_stop_samplers"
 
-    # Launch samplers on all nodes
-    if [[ -n "$SLURM_JOB_ID" && "${{SLURM_NNODES:-1}}" -gt 1 ]]; then
-        # SLURM multi-node: use srun to launch sampler on all nodes
-        # --overlap allows this srun to coexist with user's MPI srun
-        # --ntasks-per-node=1 runs exactly one sampler per node
-        srun --overlap --nodes=${{SLURM_NNODES}} --ntasks-per-node=1 \
-            bash "${{BASH_SOURCE[0]}}" </dev/null >/dev/null 2>&1 &
+    # Launch one sampler per node. The node launcher resolves the job's node
+    # list for SLURM, OAR and PBS and starts this same script there. When it is
+    # not available (standalone use, or probes sourced without it) fall back to
+    # sampling this node only.
+    if declare -F _iops_launch_on_nodes >/dev/null 2>&1; then
+        _iops_launch_on_nodes "${{BASH_SOURCE[0]}}" _iops_sampler_loop "$_IOPS_ATTEMPT_ID"
     else
-        # Single node (local or SLURM single-node): run sampler locally in background
         _iops_sampler_loop </dev/null >/dev/null 2>&1 &
         # Lower priority of sampler process
         renice -n 19 -p "$!" >/dev/null 2>&1 || true
@@ -469,18 +564,18 @@ GPU_SAMPLER_SENTINEL_FILENAME = "__iops_gpu_trace_running"
 # - NVIDIA: Uses nvidia-smi --query-gpu (detected via command -v nvidia-smi)
 # - AMD/Intel: Placeholder for future extension
 #
-# For SLURM multi-node jobs:
-# - Launched via srun on all nodes
+# For multi-node jobs:
+# - Launched on every node by the node launcher (SLURM, OAR, PBS)
 # - Uses sentinel file for termination (removed by exit handler)
 # - Each node writes to its own trace file (hostname in filename)
 #
 # This script can be:
 # - Sourced by the main script (sets up launcher + registers cleanup)
-# - Executed standalone via srun (just runs the sampling loop)
+# - Executed standalone on a remote node (just runs the sampling loop)
 GPU_SAMPLER_TEMPLATE = '''#!/bin/bash
 # IOPS GPU Sampler - Collects GPU metrics during execution
 # This file is auto-generated. It can be sourced (to set up and launch) or
-# executed directly via srun (for multi-node sampling).
+# executed directly on a remote node (for multi-node sampling).
 #
 # Supported vendors: NVIDIA (via nvidia-smi)
 # Future: AMD (rocm-smi), Intel (xpu-smi)
@@ -489,7 +584,7 @@ _IOPS_GPU_EXEC_DIR="{execution_dir}"
 # Per-attempt id: see the note in the CPU sampler. Prevents concurrent SLURM
 # attempts on the same exec_dir from stepping on each other's trace files and
 # sentinel files.
-_IOPS_GPU_ATTEMPT_ID="${{SLURM_JOB_ID:-$$}}"
+_IOPS_GPU_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
 _IOPS_GPU_TRACE_FILE="${{_IOPS_GPU_EXEC_DIR}}/{gpu_trace_prefix}$(hostname)_${{_IOPS_GPU_ATTEMPT_ID}}.csv"
 _IOPS_GPU_INTERVAL={gpu_trace_interval}
 _IOPS_GPU_SENTINEL="${{_IOPS_GPU_EXEC_DIR}}/{gpu_sentinel_filename}.${{_IOPS_GPU_ATTEMPT_ID}}"
@@ -544,7 +639,7 @@ _iops_stop_gpu_samplers() {{
 
 # Check if running standalone (executed) vs sourced
 if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
-    # Running standalone (via srun) - just run the sampling loop
+    # Running standalone on a node - just run the sampling loop
     _iops_gpu_sampler_loop
 else
     # Being sourced - set up and launch the GPU samplers
@@ -557,13 +652,11 @@ else
         # Register cleanup with the centralized exit handler
         _iops_register_exit "_iops_stop_gpu_samplers"
 
-        # Launch samplers on all nodes
-        if [[ -n "$SLURM_JOB_ID" && "${{SLURM_NNODES:-1}}" -gt 1 ]]; then
-            # SLURM multi-node: use srun to launch sampler on all nodes
-            srun --overlap --nodes=${{SLURM_NNODES}} --ntasks-per-node=1 \
-                bash "${{BASH_SOURCE[0]}}" </dev/null >/dev/null 2>&1 &
+        # Launch one sampler per node via the node launcher (SLURM, OAR, PBS),
+        # falling back to this node only when the launcher is not available.
+        if declare -F _iops_launch_on_nodes >/dev/null 2>&1; then
+            _iops_launch_on_nodes "${{BASH_SOURCE[0]}}" _iops_gpu_sampler_loop "$_IOPS_GPU_ATTEMPT_ID"
         else
-            # Single node: run sampler locally in background
             _iops_gpu_sampler_loop </dev/null >/dev/null 2>&1 &
             # Lower priority of sampler process
             renice -n 19 -p "$!" >/dev/null 2>&1 || true
@@ -1223,6 +1316,13 @@ class BasePlanner(ABC, HasLogger):
         with open(handler_file, "w") as f:
             f.write(EXIT_HANDLER_TEMPLATE)
         source_lines.append(f'source "{handler_file}"')
+
+        # 1b. Node launcher (needed by the samplers to fan out across nodes)
+        if resource_sampling or gpu_sampling:
+            launcher_file = exec_dir / NODE_LAUNCHER_FILENAME
+            with open(launcher_file, "w") as f:
+                f.write(NODE_LAUNCHER_TEMPLATE)
+            source_lines.append(f'source "{launcher_file}"')
 
         # 2. Runtime scripts (run during execution)
         if resource_sampling:

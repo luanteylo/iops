@@ -11,6 +11,7 @@ The probe system collects system information (CPU, memory, filesystems, etc.) fr
 
 **Key files:**
 - `__iops_exit_handler.sh` - Centralized EXIT trap coordinator
+- `__iops_node_launcher.sh` - Resolves the job's node list and starts one helper per node
 - `__iops_atexit_sysinfo.sh` - System info collection script
 - `__iops_sysinfo.json` - Collected data (generated at runtime)
 
@@ -57,14 +58,20 @@ def _inject_iops_scripts(self, script_text: str, exec_dir: Path) -> str:
     with open(handler_file, "w") as f:
         f.write(EXIT_HANDLER_TEMPLATE)
 
-    # 2. Write sysinfo script (if enabled)
+    # 2. Write node launcher (if any sampler is enabled)
+    if resource_sampling or gpu_sampling:
+        launcher_file = exec_dir / NODE_LAUNCHER_FILENAME
+        with open(launcher_file, "w") as f:
+            f.write(NODE_LAUNCHER_TEMPLATE)
+
+    # 3. Write sysinfo script (if enabled)
     if collect_system_info:
         probe_script = SYSTEM_PROBE_TEMPLATE.format(execution_dir=str(exec_dir))
         probe_file = exec_dir / ATEXIT_SYSINFO_FILENAME
         with open(probe_file, "w") as f:
             f.write(probe_script)
 
-    # 3. Inject source lines after shebang/#SBATCH
+    # 4. Inject source lines after shebang/#SBATCH
     # ... insertion logic ...
 ```
 
@@ -98,7 +105,46 @@ _iops_register_exit "_iops_collect_sysinfo"
 
 The probe therefore runs after the benchmark completes (success or failure), on the actual compute node, without affecting the script's exit code or conflicting with other features' cleanup actions.
 
-### 3. Data Collection
+### 3. Multi-Node Fan-Out
+
+The sysinfo and version probes run once, in the job script's own shell, so they describe the head node. The samplers instead need one instance per node, which is what `__iops_node_launcher.sh` provides. It is written whenever `resource_sampling` or `gpu_sampling` is enabled and sourced after the exit handler, before any sampler.
+
+It exposes three functions:
+
+| Function | Purpose |
+|----------|---------|
+| `_iops_node_list()` | Prints the job's unique node list, one hostname per line |
+| `_iops_remote_shell()` | Prints the command used to reach another node, empty when none is usable |
+| `_iops_launch_on_nodes()` | Starts one helper per node |
+
+Node list resolution tries each source in order and falls back to the local host:
+
+| Scheduler | Node list | Launch method |
+|-----------|-----------|---------------|
+| SLURM | `scontrol show hostnames $SLURM_JOB_NODELIST` | one `srun --overlap --ntasks-per-node=1` covering the allocation |
+| OAR | `$OAR_NODEFILE` (deduplicated) | `oarsh` per remote node |
+| PBS | `$PBS_NODEFILE` | `ssh -o BatchMode=yes` per remote node |
+| None detected | `hostname` | background process on the local node |
+
+```bash
+# __iops_runtime_sampler.sh, when sourced
+if declare -F _iops_launch_on_nodes >/dev/null 2>&1; then
+    _iops_launch_on_nodes "${BASH_SOURCE[0]}" _iops_sampler_loop "$_IOPS_ATTEMPT_ID"
+else
+    _iops_sampler_loop </dev/null >/dev/null 2>&1 &
+fi
+```
+
+Samplers detect whether they were sourced or executed. On the local node the launcher calls the sampling loop directly; on remote nodes it executes the same script standalone, which runs the loop only.
+
+Two details make the remote case work:
+
+- **Shared attempt id.** Sentinel and trace paths are derived from `IOPS_ATTEMPT_ID`, then `SLURM_JOB_ID`, `OAR_JOB_ID`, `PBS_JOBID`, and finally the shell PID. The launcher passes `IOPS_ATTEMPT_ID` in the remote command, because a remote helper computing its own PID would watch a sentinel path that does not exist and exit immediately.
+- **Shared execution directory.** Remote helpers write their traces into the execution directory, so it must be visible from every node. When it is node-local the benchmark still succeeds, the remote traces simply stay on their nodes.
+
+When adding a new per-node probe, call `_iops_launch_on_nodes` rather than testing scheduler variables directly, and keep the sourced-versus-executed check so the script can run standalone on a remote node.
+
+### 4. Data Collection
 
 When the script exits, `_iops_collect_sysinfo()` runs and writes JSON to `__iops_sysinfo.json`:
 
@@ -118,7 +164,7 @@ _iops_collect_sysinfo() {
 }
 ```
 
-### 4. Data Retrieval
+### 5. Data Retrieval
 
 After execution, the executor reads the sysinfo and stores it in test metadata:
 
@@ -300,8 +346,10 @@ Constants and functions for the version probe are listed in [Source Code Referen
 # iops/execution/planner.py
 EXIT_HANDLER_FILENAME = "__iops_exit_handler.sh"
 ATEXIT_SYSINFO_FILENAME = "__iops_atexit_sysinfo.sh"
+NODE_LAUNCHER_FILENAME = "__iops_node_launcher.sh"
 EXIT_HANDLER_TEMPLATE = '''...'''
 SYSTEM_PROBE_TEMPLATE = '''...'''
+NODE_LAUNCHER_TEMPLATE = '''...'''
 ATEXIT_VERSION_FILENAME = "__iops_atexit_versions.sh"
 VERSIONS_FILENAME = "__iops_versions.json"
 
@@ -316,6 +364,9 @@ SYSINFO_FILENAME = "__iops_sysinfo.json"
 | `_inject_iops_scripts()` | planner.py | Writes all IOPS scripts and modifies user script |
 | `_build_version_probe_script()` | planner.py | Builds the version capture shell script |
 | `_collect_system_info()` | executors.py | Reads sysinfo after execution |
+| `_iops_node_list()` | node launcher | Resolves the job's node list per scheduler |
+| `_iops_remote_shell()` | node launcher | Picks the remote shell (`oarsh` or `ssh`) |
+| `_iops_launch_on_nodes()` | node launcher | Starts one helper per node of the allocation |
 | `_iops_register_exit()` | exit handler | Registers cleanup action |
 | `_iops_run_exit_actions()` | exit handler | Executes all registered actions |
 | `_iops_collect_sysinfo()` | sysinfo script | Bash function that collects data |

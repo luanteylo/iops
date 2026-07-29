@@ -243,6 +243,9 @@ benchmark:
     #   - Per-execution: __iops_trace_<hostname>.csv (one per node)
     #   - Run-level: __iops_resource_summary.csv (aggregated metrics with all vars)
     # The summary CSV enables heatmap analysis correlating parameters with resource footprint.
+    # On multi-node jobs IOPS samples every allocated node (SLURM, OAR and PBS are detected).
+    # This requires the execution directory to be shared across nodes; check nodes_traced in
+    # __iops_resource_summary.csv to confirm how many nodes actually reported.
     # resource_sampling: true
 
     # gpu_sampling: Enable GPU metrics tracing during execution (default: false)
