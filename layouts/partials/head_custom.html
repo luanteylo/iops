@@ -228,6 +228,46 @@ details > *:not(summary) {
     padding-right: 15px;
   }
 }
+
+/* Click any documentation figure to view it full-screen (see footer_custom.html) */
+.docs-content img {
+  cursor: zoom-in;
+  transition: box-shadow 0.15s;
+}
+.docs-content img:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+}
+.iops-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 99998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vh 2vw;
+  background: rgba(0, 0, 0, 0.88);
+  cursor: zoom-out;
+  animation: iopsLbFade 0.18s ease-out;
+}
+.iops-lightbox img {
+  max-width: 96vw;
+  max-height: 96vh;
+  border-radius: 4px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+.iops-lightbox-close {
+  position: fixed;
+  top: 14px;
+  right: 20px;
+  color: #fff;
+  font-size: 34px;
+  line-height: 1;
+  opacity: 0.8;
+}
+@keyframes iopsLbFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 </style>
 
 {{- /* Expose the search-index URL for the active baseURL so the search page

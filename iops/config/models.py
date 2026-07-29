@@ -428,6 +428,10 @@ class PlotConfig:
     xaxis_label: Optional[str] = None
     yaxis_label: Optional[str] = None
 
+    # Axis scale
+    log_x: bool = False  # Use logarithmic scale on the x-axis
+    log_y: bool = False  # Use logarithmic scale on the y-axis
+
     # Plot-specific options
     colorscale: str = "Viridis"
     show_error_bars: bool = True

@@ -23,3 +23,7 @@ public/
 .hugo_build.lock
 resources/_gen/
 go.sum
+
+# Benchmark run artifacts from example configs
+examples/*/workdir/
+docs/examples/*/workdir/

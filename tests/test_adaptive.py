@@ -518,8 +518,8 @@ class TestAdaptivePlannerBasic:
         assert probed_values == [1000, 2000, 4000]
 
         label = "(no swept vars)"
-        assert results[label].found_value == 2000
-        assert results[label].failed_value == 4000
+        assert results[label].last_value_before_stop == 2000
+        assert results[label].stop_value == 4000
         assert results[label].stop_reason == "condition_met"
 
     def test_increment_mode_probe_sequence(self, tmp_path):
@@ -549,8 +549,8 @@ class TestAdaptivePlannerBasic:
         assert probed_values == [100, 150, 200, 250]
 
         label = "(no swept vars)"
-        assert results[label].found_value == 200
-        assert results[label].failed_value == 250
+        assert results[label].last_value_before_stop == 200
+        assert results[label].stop_value == 250
 
     def test_step_expr_mode_probe_sequence(self, tmp_path):
         """step_expr '{{ previous * 2 + 100 }}' from 100 produces 100, 300, 700."""
@@ -579,8 +579,8 @@ class TestAdaptivePlannerBasic:
         assert probed_values == [100, 300, 700]
 
         label = "(no swept vars)"
-        assert results[label].found_value == 300
-        assert results[label].failed_value == 700
+        assert results[label].last_value_before_stop == 300
+        assert results[label].stop_value == 700
 
     def test_max_iterations_stops_probe(self, tmp_path):
         """All succeed, max_iterations=3 stops after 3 values."""
@@ -609,8 +609,8 @@ class TestAdaptivePlannerBasic:
 
         label = "(no swept vars)"
         assert results[label].stop_reason == "max_iterations"
-        assert results[label].failed_value is None
-        assert results[label].found_value == 40
+        assert results[label].stop_value is None
+        assert results[label].last_value_before_stop == 40
 
     def test_stop_when_can_access_metrics_directly(self, tmp_path):
         """Metrics are unpacked into the stop_when context so they are accessible by name."""
@@ -642,8 +642,8 @@ class TestAdaptivePlannerBasic:
         label = "(no swept vars)"
         # The probe should have stopped immediately because totalTime > 5 on the first value
         assert results[label].stop_reason == "condition_met"
-        assert results[label].failed_value == 100
-        assert results[label].found_value is None
+        assert results[label].stop_value == 100
+        assert results[label].last_value_before_stop is None
         # Only one value (the initial 100) should have been probed
         assert len(recorded) == 1
 
@@ -670,8 +670,8 @@ class TestAdaptivePlannerBasic:
 
         label = "(no swept vars)"
         # 100 (500, ok), 200 (250, ok), 400 (125, ok), 800 (62.5, stop)
-        assert results[label].found_value == 400
-        assert results[label].failed_value == 800
+        assert results[label].last_value_before_stop == 400
+        assert results[label].stop_value == 800
         assert results[label].stop_reason == "condition_met"
 
 
@@ -712,8 +712,8 @@ class TestAdaptivePlannerAdvanced:
         assert probed_values == [1000, 500, 250]
 
         label = "(no swept vars)"
-        assert results[label].found_value == 500
-        assert results[label].failed_value == 250
+        assert results[label].last_value_before_stop == 500
+        assert results[label].stop_value == 250
         assert results[label].stop_reason == "condition_met"
 
     def test_with_swept_vars_independent_probes(self, tmp_path):
@@ -745,7 +745,7 @@ class TestAdaptivePlannerAdvanced:
         # Each probe runs max_iterations=2 values (100, 200) and stops
         for label, result in results.items():
             assert result.stop_reason == "max_iterations"
-            assert result.found_value == 200
+            assert result.last_value_before_stop == 200
 
     def test_multiple_repetitions(self, tmp_path):
         """repetitions=3, stop triggers when any rep has exit_code != 0."""
@@ -778,8 +778,8 @@ class TestAdaptivePlannerAdvanced:
         assert probed.count(200) == 3
 
         label = "(no swept vars)"
-        assert results[label].found_value == 100
-        assert results[label].failed_value == 200
+        assert results[label].last_value_before_stop == 100
+        assert results[label].stop_value == 200
 
     def test_first_value_triggers_stop(self, tmp_path):
         """Stop triggers on the very first adaptive value."""
@@ -800,8 +800,8 @@ class TestAdaptivePlannerAdvanced:
         results, _ = _run_planner_pass(cfg, metadata_fn)
 
         label = "(no swept vars)"
-        assert results[label].found_value is None
-        assert results[label].failed_value == 100
+        assert results[label].last_value_before_stop is None
+        assert results[label].stop_value == 100
 
     def test_probe_results_structure(self, tmp_path):
         """Verify get_probe_results() returns correct ProbeResult fields."""
@@ -830,8 +830,8 @@ class TestAdaptivePlannerAdvanced:
         # Two probes keyed by combo label
         assert len(results) == 2
         for label, result in results.items():
-            assert hasattr(result, "found_value")
-            assert hasattr(result, "failed_value")
+            assert hasattr(result, "last_value_before_stop")
+            assert hasattr(result, "stop_value")
             assert hasattr(result, "iterations")
             assert hasattr(result, "stop_reason")
             assert result.stop_reason == "max_iterations"
@@ -947,6 +947,199 @@ class TestAdaptiveIntegration:
         # Check found/failed values
         probe_key = list(adaptive["x"].keys())[0]
         probe_data = adaptive["x"][probe_key]
-        assert probe_data["found_value"] == 200
-        assert probe_data["failed_value"] == 400
+        assert probe_data["last_value_before_stop"] == 200
+        assert probe_data["stop_value"] == 400
         assert probe_data["stop_reason"] == "condition_met"
+
+
+# ------------------------------------------------------------------ #
+# Class 6: step_expr failures
+# ------------------------------------------------------------------ #
+
+
+class TestAdaptiveStepExprErrors:
+    """
+    A step_expr that indexes a literal list is the usual way to walk a fixed
+    set of values. When max_iterations exceeds the list length the expression
+    eventually indexes past the end, which must be reported clearly rather
+    than surfacing as a bare Jinja error mid-run.
+    """
+
+    def _adaptive_var(self, step_expr, max_iterations=None):
+        adaptive = {
+            "initial": 16,
+            "step_expr": step_expr,
+            "stop_when": "exit_code == 0",
+        }
+        if max_iterations is not None:
+            adaptive["max_iterations"] = max_iterations
+        return {"type": "int", "adaptive": adaptive}
+
+    def test_max_iterations_beyond_list_length_rejected(self, tmp_path):
+        """max_iterations larger than the list is caught at config load."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var(
+            "{{ [16, 32, 64, 128, 256][iteration] }}", max_iterations=6
+        )
+        workdir = tmp_path / "workdir"
+        workdir.mkdir(parents=True, exist_ok=True)
+        cfg["benchmark"]["workdir"] = str(workdir)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump(cfg))
+
+        with pytest.raises(ConfigValidationError) as exc_info:
+            load_generic_config(Path(config_file), _get_logger())
+
+        message = str(exc_info.value)
+        assert "step_expr" in message
+        assert "iteration 5" in message
+        assert "max_iterations" in message
+
+    def test_max_iterations_matching_list_length_accepted(self, tmp_path):
+        """The boundary case is valid: the last index used is length - 1."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var(
+            "{{ [16, 32, 64, 128, 256][iteration] }}", max_iterations=5
+        )
+        loaded = _build_config(tmp_path, cfg)
+        assert loaded.vars["x"].adaptive.max_iterations == 5
+
+    def test_unbounded_probe_skips_validation(self, tmp_path):
+        """Without max_iterations there is no known endpoint to check."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var("{{ [16, 32, 64][iteration] }}")
+        loaded = _build_config(tmp_path, cfg)
+        assert loaded.vars["x"].adaptive.max_iterations is None
+
+    def test_expr_using_previous_skips_validation(self, tmp_path):
+        """Expressions built from the previous value cannot be pre-rendered."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = self._adaptive_var(
+            "{{ previous * 2 + 100 }}", max_iterations=10
+        )
+        loaded = _build_config(tmp_path, cfg)
+        assert loaded.vars["x"].adaptive.max_iterations == 10
+
+    def test_runtime_step_error_finishes_probe_only(self, tmp_path):
+        """
+        An unbounded probe that walks off the end of its list must end that
+        probe, not abort the run, so other probes still report their results.
+        """
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["size"] = {
+            "type": "int",
+            "sweep": {"mode": "list", "values": [1, 2]},
+        }
+        cfg["vars"]["x"] = self._adaptive_var("{{ [16, 32, 64][iteration] }}")
+        cfg["command"]["template"] = "echo 'size={{ size }} x={{ x }}'"
+        loaded = _build_config(tmp_path, cfg)
+
+        # size=1 succeeds immediately; size=2 never succeeds and so exhausts
+        # the list, triggering the step error.
+        def simulate(test):
+            if test.base_vars["size"] == 1:
+                return _succeed_metadata()
+            return _fail_metadata()
+
+        results, _ = _run_planner_pass(loaded, simulate)
+
+        assert results["size=1"].stop_reason == "condition_met"
+        assert results["size=2"].stop_reason == "step_error"
+        # The last value reached before the list ran out is still reported.
+        assert results["size=2"].last_value_before_stop == 64
+
+
+# ------------------------------------------------------------------ #
+# Class 7: deprecated result field names
+# ------------------------------------------------------------------ #
+
+
+class TestAdaptiveResultFieldAliases:
+    """
+    found_value/failed_value were renamed in 3.5.9 because they assumed that
+    stopping meant failure, which is wrong when stop_when is inverted. The old
+    names stay readable until they are removed after 3.7.0.
+    """
+
+    def _probed_config(self, tmp_path):
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = {
+            "type": "int",
+            "adaptive": {
+                "initial": 100,
+                "factor": 2,
+                "stop_when": "exit_code != 0",
+            },
+        }
+        return _build_config(tmp_path, cfg)
+
+    def test_deprecated_aliases_mirror_new_fields(self, tmp_path):
+        """The old attribute names still resolve, to the same values."""
+        loaded = self._probed_config(tmp_path)
+
+        # x=100 and 200 continue, 400 triggers the stop condition.
+        def simulate(test):
+            if test.base_vars["x"] >= 400:
+                return _fail_metadata()
+            return _succeed_metadata()
+
+        results, _ = _run_planner_pass(loaded, simulate)
+        result = results["(no swept vars)"]
+
+        assert result.last_value_before_stop == 200
+        assert result.stop_value == 400
+        assert result.found_value == result.last_value_before_stop
+        assert result.failed_value == result.stop_value
+
+    def test_inverted_stop_when_labels_the_stopping_value(self, tmp_path):
+        """
+        With "stop at the first success", the value that succeeded is the
+        stop_value. Under the old names this landed in failed_value, which
+        read as though the successful value had failed.
+        """
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = {
+            "type": "int",
+            "adaptive": {
+                "initial": 16,
+                "factor": 2,
+                "stop_when": "exit_code == 0",
+            },
+        }
+        loaded = _build_config(tmp_path, cfg)
+
+        # Everything below 64 fails; 64 is the first value that works.
+        def simulate(test):
+            if test.base_vars["x"] >= 64:
+                return _succeed_metadata()
+            return _fail_metadata()
+
+        results, _ = _run_planner_pass(loaded, simulate)
+        result = results["(no swept vars)"]
+
+        assert result.stop_value == 64          # the value that worked
+        assert result.last_value_before_stop == 32
+
+    def test_report_reads_pre_3_6_metadata(self):
+        """
+        Reports are generated from stored metadata, so runs recorded before
+        the rename must still resolve both values.
+        """
+        from iops.reporting.report_generator import (
+            _probe_last_value_before_stop,
+            _probe_stop_value,
+        )
+
+        old_format = {"found_value": 200, "failed_value": 400}
+        assert _probe_stop_value(old_format) == 400
+        assert _probe_last_value_before_stop(old_format) == 200
+
+        new_format = {"stop_value": 400, "last_value_before_stop": 200}
+        assert _probe_stop_value(new_format) == 400
+        assert _probe_last_value_before_stop(new_format) == 200
+
+        # A probe that never triggered its stop condition records no stop
+        # value; None must survive rather than falling through to the alias.
+        no_stop = {"stop_value": None, "last_value_before_stop": 800,
+                   "failed_value": 999}
+        assert _probe_stop_value(no_stop) is None

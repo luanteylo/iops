@@ -140,8 +140,8 @@ Shows which parameter values were explored at each iteration, with colors indica
 Shows adaptive probing outcomes, included automatically when using `search_method: "adaptive"` with no additional configuration:
 
 - **Probing Configuration** (collapsible): the adaptive variable settings (initial value, step method, stop condition, direction, max iterations)
-- **Probe Results Summary**: one row per swept variable combination showing the last passing value, the value that triggered the stop condition, iteration count, and stop reason
-- **Trajectory Plots**: per metric, an interactive line chart of the metric versus the adaptive variable, one trace per swept variable combination; found values are marked with green-outlined circles, stop-triggered values with red X markers
+- **Probe Results Summary**: one row per swept variable combination showing the value that triggered the stop condition, the last value the probe continued past, iteration count, and stop reason
+- **Trajectory Plots**: per metric, an interactive line chart of the metric versus the adaptive variable, one trace per swept variable combination; the last value before the stop is marked with a green-outlined circle, the stop-triggering value with a red X marker
 
 ### Resource Sampling
 
@@ -180,7 +180,23 @@ Define custom plots per metric for detailed analysis.
 
 ### Plot Types
 
-IOPS supports 10 plot types. All types accept these optional parameters: `title` (string), `xaxis_label` (string), `yaxis_label` (string, default: metric name), `height` (pixels), and `width` (pixels). Type-specific parameters are listed below.
+IOPS supports 10 plot types. All types accept these optional parameters: `title` (string), `xaxis_label` (string), `yaxis_label` (string, default: metric name), `log_x` (boolean, default: false), `log_y` (boolean, default: false), `height` (pixels), and `width` (pixels). Type-specific parameters are listed below.
+
+### Logarithmic Axis Scales
+
+Set `log_x: true` or `log_y: true` on any plot to switch that axis to a logarithmic scale. This is most useful for `log_y` when metric values span several orders of magnitude (the metric axis is numeric on every plot type), or for `log_x`/`log_y` on scatter and heatmap plots whose axes hold numeric variable values.
+
+```yaml
+metrics:
+  bandwidth:
+    plots:
+      - type: "line"
+        x_var: "block_size"
+        log_y: true               # log scale on the metric (y) axis
+        title: "Bandwidth Scaling (log scale)"
+```
+
+> **Note:** On bar, line, box, and violin plots the x-axis is rendered as ordered categories (one tick per swept value), so `log_x` has no visible effect there; use `log_y` for the metric axis, and use `log_x`/`log_y` together on `scatter`, `heatmap`, or `surface_3d` plots where both axes are numeric.
 
 #### 1. Execution Scatter
 
@@ -500,6 +516,16 @@ reporting:
   output_dir: "/custom/path/to/reports"     # Custom directory
   output_filename: "benchmark_report.html"  # Custom filename
 ```
+
+`output_dir` and `output_filename` are honored both when a report is auto-generated after a run and when it is generated manually with `iops report` (including the auto-detected `report_config.yaml` in the run directory).
+
+To override the location for a single invocation without editing the config, pass `--output` (short form `-o`):
+
+```bash
+iops report ./workdir/run_001 --output /custom/path/report.html
+```
+
+The resolution order is: `--output` flag, then the config's `output_dir`/`output_filename`, then the default `<workdir>/analysis_report.html`.
 
 ### Plot Export (Optional)
 

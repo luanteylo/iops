@@ -1,5 +1,6 @@
 ---
 title: "Quick Start"
+weight: 20
 ---
 
 Run your first benchmark with IOPS in a few minutes.

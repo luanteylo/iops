@@ -5,6 +5,28 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
+## [3.5.9] - Unreleased
+
+### Added
+
+- **IOPS Studio** (experimental): a local web UI for using IOPS end to end, launched with `iops studio` (requires the optional `nicegui` dependency). See the [Getting Started guide](/iops/getting-started/studio/).
+  - **Setups**: save targets (local machine or an SSH host from `~/.ssh/config`), each with a Python environment, workdir, and setup commands. A wizard walks connection, environment discovery/creation, and IOPS install (pip, with an offline wheelhouse fallback transferred over the interactive channel for hosts with no network). Setups can be edited (renaming migrates their configs and tracked runs) and validated live.
+  - **Config builder**: the full IOPS YAML schema as a section-navigated form beside a live, two-way-synced YAML editor, with three view modes (Form + YAML, Form, YAML). Covers every option including SLURM/single-allocation, budget and core-hours, variables (sweeps/expr/adaptive), scripts, output, probes, constraints, and the whole reporting block (sections, plots, gallery, log axes). Script templates get bash highlighting and parser code gets Python highlighting. Import a host YAML as an editable copy, or export a config to the host.
+  - **Resilient runs**: benchmarks run inside a `screen` session and survive dropped connections; Studio records the login node and reattaches, hopping back if the alias load-balances. A run-options dialog exposes `--use-cache`, `--cache-only`, `--dry-run`, and `--fail-fast`.
+  - **Integrated results**: browse a target's runs, view the HTML report in-app (charts render offline via a bundled Plotly), edit the run's `report_config.yaml` and regenerate the report in place, or pull a run's small artifacts (results, metadata, report, logs) back to the host. Raw scratch data is deliberately excluded so transfers stay small.
+  - **Multiple terminals**: keep several targets connected at once, one tab each, with per-tab status and reconnect. Enable `--log-level DEBUG` to trace every command Studio sends.
+- `log_x` and `log_y` (both default `false`) on report plots switch the corresponding axis to a logarithmic scale. Set them on any plot in `reporting.metrics.<metric>.plots` or `reporting.default_plots`; they are also exposed as checkboxes in the Studio plot editor. `log_y` applies to the numeric metric axis on every plot type and is the common case when metric values span several orders of magnitude. `log_x` is meaningful on plots whose x-axis is numeric (`scatter`, `heatmap`, `surface_3d`); on bar, line, box, and violin plots the x-axis is rendered as ordered categories, so `log_x` has no visible effect there.
+- `iops report --output <path>` (short form `-o`) writes the HTML report to an explicit path, taking priority over the config's `output_dir`/`output_filename`.
+
+### Deprecated
+
+- The adaptive probe result fields `found_value` and `failed_value` are renamed to `last_value_before_stop` and `stop_value`. The old names assumed that stopping meant failure, which holds only for the usual `stop_when: "exit_code != 0"`. An inverted condition is equally valid: `stop_when: "exit_code == 0"` keeps stepping while the benchmark fails and stops at the first value that succeeds, and in that case the value stored under `failed_value` was the one that worked, so results read backwards. The new names describe the probe's progression instead, and are correct whichever way `stop_when` points. This affects the end-of-run summary, the `adaptive_results` block in `__iops_run_metadata.json`, the "Probe Results Summary" table in HTML reports, and the `ProbeResult` attributes. Both key sets are written to metadata and both attribute names resolve until the old ones are removed after 3.7.0; reports generated from runs recorded earlier fall back to the old keys automatically. See [Deprecations](/iops/about/deprecations/).
+
+### Fixed
+
+- An adaptive `step_expr` that cannot be rendered no longer aborts the entire benchmark. This mattered most for the common pattern of indexing a literal list (`"{{ [16, 32, 64][iteration] }}"`) to walk a fixed set of values: if `max_iterations` allowed more steps than the list held values, the probe eventually indexed past the end and the run died with a bare `jinja2.exceptions.UndefinedError: list object has no element N`, discarding every probe still in flight. Two changes address this. `iops check` now renders `step_expr` for each iteration the planner will request and reports the mismatch before anything runs (skipped when `max_iterations` is unset, since the probe has no known endpoint, or when the expression references `previous`, whose value depends on results). At runtime, a step that still cannot be computed ends that probe with the new `stop_reason` value `step_error` and logs the variable, iteration, and previous value, leaving the other probes to finish and report normally. The same handling now covers a `step_expr` whose result cannot be cast to the variable's type.
+- `iops report` now honors `reporting.output_dir` and `reporting.output_filename` from the report config (whether passed via `--report-config` or auto-detected as `report_config.yaml` in the run directory). Previously these fields were ignored on the CLI path and the report was always written to `<workdir>/analysis_report.html`. The precedence is now: explicit `--output` flag, then the config's `output_dir`/`output_filename`, then the default `<workdir>/analysis_report.html`.
+
 ## [3.5.8] - 2026-06-20
 
 ### Added

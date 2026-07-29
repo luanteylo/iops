@@ -190,8 +190,10 @@ class TestMissingMetricsHandling:
 
         # Verify report was created
         assert report_path.exists()
-        # Default report name is analysis_report.html
-        assert report_path.name == "analysis_report.html"
+        # generate_report() honors the reporting config's output_filename
+        # (set to "test_report.html" in the fixture metadata) when no explicit
+        # output_path is passed.
+        assert report_path.name == "test_report.html"
 
         # Verify warnings were logged
         warnings = [
@@ -298,6 +300,103 @@ class TestMissingMetricsHandling:
         reporting_metrics = set(metadata["reporting"]["metrics"].keys())
         assert "file_creation_rate" in reporting_metrics
         assert "file_read_rate" not in reporting_metrics  # Filtered out
+
+
+class TestReportOutputPath:
+    """generate_report() output-path resolution.
+
+    Regression coverage for the bug where output_dir/output_filename from the
+    reporting config were ignored and the report was always written to
+    workdir/analysis_report.html.
+    """
+
+    @pytest.fixture
+    def minimal_run(self, tmp_path):
+        """A minimal valid run directory with a single metric and plot."""
+        workdir = tmp_path / "run"
+        workdir.mkdir()
+
+        results_path = workdir / "results.csv"
+        pd.DataFrame(
+            {
+                "benchmark.name": ["b"] * 3,
+                "execution.execution_id": [1, 2, 3],
+                "execution.repetition": [1, 1, 1],
+                "vars.nodes": [1, 2, 4],
+                "metrics.throughput": [100.0, 200.0, 400.0],
+            }
+        ).to_csv(results_path, index=False)
+
+        metadata = {
+            "benchmark": {
+                "name": "b",
+                "workdir": str(workdir),
+                "executor": "local",
+                "repetitions": 1,
+                "report_vars": ["nodes"],
+                "timestamp": "2025-12-24T00:00:00",
+            },
+            "variables": {
+                "nodes": {
+                    "type": "int",
+                    "swept": True,
+                    "sweep": {"mode": "list", "values": [1, 2, 4]},
+                },
+            },
+            "metrics": [{"name": "throughput", "script": "b"}],
+            "output": {"type": "csv", "path": str(results_path)},
+            "command": {"template": "run --nodes {{ nodes }}", "labels": {}},
+            "reporting": {
+                "enabled": True,
+                "metrics": {
+                    "throughput": {
+                        "plots": [{"type": "line", "x_var": "nodes"}]
+                    }
+                },
+                "default_plots": [],
+            },
+        }
+        with open(workdir / "__iops_run_metadata.json", "w") as f:
+            json.dump(metadata, f)
+        return {"workdir": workdir, "metadata": metadata}
+
+    def _build(self, workdir):
+        generator = ReportGenerator(workdir=workdir)
+        generator.load_metadata()
+        generator.load_results()
+        return generator
+
+    def test_default_output_path(self, minimal_run):
+        """No output_dir/output_filename set -> workdir/analysis_report.html."""
+        report_path = self._build(minimal_run["workdir"]).generate_report()
+        assert report_path == minimal_run["workdir"] / "analysis_report.html"
+        assert report_path.exists()
+
+    def test_config_output_dir_and_filename_honored(self, minimal_run, tmp_path):
+        """output_dir + output_filename from the config drive the output path."""
+        out_dir = tmp_path / "reports"
+        out_dir.mkdir()
+        minimal_run["metadata"]["reporting"]["output_dir"] = str(out_dir)
+        minimal_run["metadata"]["reporting"]["output_filename"] = "custom.html"
+        with open(minimal_run["workdir"] / "__iops_run_metadata.json", "w") as f:
+            json.dump(minimal_run["metadata"], f)
+
+        report_path = self._build(minimal_run["workdir"]).generate_report()
+        assert report_path == out_dir / "custom.html"
+        assert report_path.exists()
+
+    def test_explicit_output_path_overrides_config(self, minimal_run, tmp_path):
+        """An explicit output_path wins over config output_dir/output_filename."""
+        minimal_run["metadata"]["reporting"]["output_dir"] = str(tmp_path / "ignored")
+        minimal_run["metadata"]["reporting"]["output_filename"] = "ignored.html"
+        with open(minimal_run["workdir"] / "__iops_run_metadata.json", "w") as f:
+            json.dump(minimal_run["metadata"], f)
+
+        forced = tmp_path / "forced" / "report.html"
+        forced.parent.mkdir()
+        report_path = self._build(minimal_run["workdir"]).generate_report(output_path=forced)
+        assert report_path == forced
+        assert report_path.exists()
 
 
 if __name__ == "__main__":

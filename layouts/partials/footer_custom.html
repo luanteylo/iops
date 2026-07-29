@@ -47,6 +47,49 @@
 </script>
 
 <script>
+/* Click any documentation figure to view it full-screen. Click anywhere,
+   press the close button, or hit Esc to dismiss. Self-contained, no deps. */
+(function () {
+  var imgs = document.querySelectorAll('.docs-content img');
+  if (!imgs.length) return;
+  var overlay = null;
+
+  function close() {
+    if (overlay) { overlay.remove(); overlay = null; }
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if ((e.key || '') === 'Escape') close(); }
+  function open(src, alt) {
+    close();
+    overlay = document.createElement('div');
+    overlay.className = 'iops-lightbox';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-label', alt || 'Enlarged figure');
+
+    var full = document.createElement('img');
+    full.src = src;
+    full.alt = alt || '';
+
+    var closeBtn = document.createElement('span');
+    closeBtn.className = 'iops-lightbox-close';
+    closeBtn.textContent = '×';  // multiplication sign as an X
+
+    overlay.appendChild(full);
+    overlay.appendChild(closeBtn);
+    overlay.addEventListener('click', close);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey);
+  }
+
+  imgs.forEach(function (img) {
+    img.addEventListener('click', function () {
+      open(img.currentSrc || img.src, img.alt);
+    });
+  });
+})();
+</script>
+
+<script>
 /* Easter egg: the Konami code summons Tristan's hand-drawn IOPS logo.
    Up Up Down Down Left Right Left Right B A */
 (function () {

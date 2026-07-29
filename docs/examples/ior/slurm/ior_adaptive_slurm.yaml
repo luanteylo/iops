@@ -183,12 +183,12 @@ output:
 #   Probe 0 (nodes=4):  volume_size_gb=32   70s  ok
 #   Probe 1 (nodes=8):  volume_size_gb=32   30s  ok
 #   Probe 2 (nodes=16): volume_size_gb=32   15s  ok
-#   Probe 0 (nodes=4):  volume_size_gb=64   150s STOP -> found=32, failed=64
+#   Probe 0 (nodes=4):  volume_size_gb=64   150s STOP -> stop_value=64, last=32
 #   Probe 1 (nodes=8):  volume_size_gb=64   70s  ok
 #   Probe 2 (nodes=16): volume_size_gb=64   30s  ok
-#   Probe 1 (nodes=8):  volume_size_gb=128  150s STOP -> found=64, failed=128
+#   Probe 1 (nodes=8):  volume_size_gb=128  150s STOP -> stop_value=128, last=64
 #   Probe 2 (nodes=16): volume_size_gb=128  70s  ok
-#   Probe 2 (nodes=16): volume_size_gb=256  150s STOP -> found=128, failed=256
+#   Probe 2 (nodes=16): volume_size_gb=256  150s STOP -> stop_value=256, last=128
 #
 # Each node count discovers the largest volume it can write within 2 minutes.
 # More nodes handle larger volumes because data is spread across more processes.
@@ -196,8 +196,8 @@ output:
 # Results appear in the run summary:
 #
 #   Adaptive probing results for 'volume_size_gb':
-#     nodes=4:  found=32,  failed=64,  iterations=4, stop_reason=condition_met
-#     nodes=8:  found=64,  failed=128, iterations=5, stop_reason=condition_met
-#     nodes=16: found=128, failed=256, iterations=6, stop_reason=condition_met
+#     nodes=4:  stop_value=64,  last_value_before_stop=32,  iterations=4, stop_reason=condition_met
+#     nodes=8:  stop_value=128, last_value_before_stop=64,  iterations=5, stop_reason=condition_met
+#     nodes=16: stop_value=256, last_value_before_stop=128, iterations=6, stop_reason=condition_met
 #
 # =============================================================================
