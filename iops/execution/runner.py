@@ -48,6 +48,33 @@ def _get_iops_version() -> str:
             return f.read().strip()
     return "unknown"
 
+
+def _parse_trace_float(value) -> Optional[float]:
+    """Parse a numeric GPU trace field, returning None when unavailable.
+
+    nvidia-smi emits "[N/A]" (or "[Not Supported]") for fields a device does
+    not expose. Unified-memory parts such as the GB10 report this for memory,
+    so an unsupported field must be dropped on its own rather than discarding
+    the valid fields sampled alongside it.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# GPU trace columns collected per GPU, mapped to their per_gpu_data key.
+_GPU_TRACE_FIELDS = (
+    ('util_gpu', 'utilization_gpu_pct'),
+    ('util_mem', 'utilization_mem_pct'),
+    ('mem_used', 'memory_used_mib'),
+    ('temp', 'temperature_c'),
+    ('power', 'power_draw_w'),
+)
+
+
 class IOPSRunner(HasLogger):
     def __init__(self, cfg: GenericBenchmarkConfig, args):
         super().__init__()
@@ -507,36 +534,37 @@ class IOPSRunner(HasLogger):
                 with open(trace_file, 'r', newline='') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        try:
-                            hostname = row.get('hostname', 'unknown')
-                            gpu_idx = row.get('gpu_index', '0')
-                            gpu_key = f"{hostname}:gpu{gpu_idx}"
-
-                            ts = float(row.get('timestamp', 0))
-                            timestamps.append(ts)
-
-                            util_gpu = float(row.get('utilization_gpu_pct', 0))
-                            util_mem = float(row.get('utilization_mem_pct', 0))
-                            mem_used = float(row.get('memory_used_mib', 0))
-                            temp = float(row.get('temperature_c', 0))
-                            power = float(row.get('power_draw_w', 0))
-
-                            if gpu_key not in per_gpu_data:
-                                per_gpu_data[gpu_key] = {
-                                    'util_gpu': [], 'util_mem': [], 'mem_used': [],
-                                    'temp': [], 'power': [], 'power_series': [],
-                                }
-                            d = per_gpu_data[gpu_key]
-                            d['util_gpu'].append(util_gpu)
-                            d['util_mem'].append(util_mem)
-                            d['mem_used'].append(mem_used)
-                            d['temp'].append(temp)
-                            d['power'].append(power)
-                            d['power_series'].append((ts, power))
-
-                        except (ValueError, KeyError) as e:
-                            self.logger.debug(f"Skipping malformed GPU trace row: {e}")
+                        # The timestamp keys the sample; without it the row
+                        # can't be placed on the power/duration timeline.
+                        ts = _parse_trace_float(row.get('timestamp'))
+                        if ts is None:
+                            self.logger.debug(
+                                f"Skipping GPU trace row with unparsable timestamp: "
+                                f"{row.get('timestamp')!r}")
                             continue
+                        timestamps.append(ts)
+
+                        hostname = row.get('hostname', 'unknown')
+                        gpu_idx = row.get('gpu_index', '0')
+                        gpu_key = f"{hostname}:gpu{gpu_idx}"
+
+                        if gpu_key not in per_gpu_data:
+                            per_gpu_data[gpu_key] = {
+                                'util_gpu': [], 'util_mem': [], 'mem_used': [],
+                                'temp': [], 'power': [], 'power_series': [],
+                            }
+                        d = per_gpu_data[gpu_key]
+
+                        # Fields are parsed independently: a device that does
+                        # not report one metric still contributes the others.
+                        for key, column in _GPU_TRACE_FIELDS:
+                            value = _parse_trace_float(row.get(column))
+                            if value is not None:
+                                d[key].append(value)
+
+                        power = _parse_trace_float(row.get('power_draw_w'))
+                        if power is not None:
+                            d['power_series'].append((ts, power))
 
             except Exception as e:
                 self.logger.debug(f"Failed to read GPU trace file {trace_file}: {e}")
@@ -571,48 +599,64 @@ class IOPSRunner(HasLogger):
             else:
                 gpu_label = gpu_part
 
-            avg_util = sum(d['util_gpu']) / len(d['util_gpu'])
-            avg_power = sum(d['power']) / len(d['power'])
-            avg_temp = sum(d['temp']) / len(d['temp'])
-            peak_mem = max(d['mem_used'])
+            # Each metric is emitted only if the device reported it, so an
+            # unsupported field costs just its own column.
+            if d['util_gpu']:
+                avg_util = sum(d['util_gpu']) / len(d['util_gpu'])
+                gpu_avg_utils.append(avg_util)
+                metrics[f"{gpu_label}_avg_utilization_pct"] = round(avg_util, 2)
 
-            gpu_avg_utils.append(avg_util)
-            gpu_avg_powers.append(avg_power)
-            gpu_avg_temps.append(avg_temp)
-            gpu_peak_mems.append(peak_mem)
+            if d['power']:
+                avg_power = sum(d['power']) / len(d['power'])
+                gpu_avg_powers.append(avg_power)
+                metrics[f"{gpu_label}_avg_power_w"] = round(avg_power, 2)
+
+            if d['temp']:
+                avg_temp = sum(d['temp']) / len(d['temp'])
+                gpu_avg_temps.append(avg_temp)
+                metrics[f"{gpu_label}_avg_temperature_c"] = round(avg_temp, 2)
+
+            if d['mem_used']:
+                peak_mem = max(d['mem_used'])
+                gpu_peak_mems.append(peak_mem)
+                metrics[f"{gpu_label}_mem_peak_mib"] = round(peak_mem, 2)
 
             # Energy: trapezoidal integration of power over time
-            energy_j = 0.0
-            series = sorted(d['power_series'], key=lambda x: x[0])
-            for i in range(1, len(series)):
-                dt = series[i][0] - series[i - 1][0]
-                avg_p = (series[i][1] + series[i - 1][1]) / 2.0
-                energy_j += avg_p * dt
-            gpu_energies.append(energy_j)
+            if d['power_series']:
+                energy_j = 0.0
+                series = sorted(d['power_series'], key=lambda x: x[0])
+                for i in range(1, len(series)):
+                    dt = series[i][0] - series[i - 1][0]
+                    avg_p = (series[i][1] + series[i - 1][1]) / 2.0
+                    energy_j += avg_p * dt
+                gpu_energies.append(energy_j)
+                metrics[f"{gpu_label}_energy_j"] = round(energy_j, 2)
 
-            # Per-GPU columns
-            metrics[f"{gpu_label}_avg_utilization_pct"] = round(avg_util, 2)
-            metrics[f"{gpu_label}_avg_power_w"] = round(avg_power, 2)
-            metrics[f"{gpu_label}_energy_j"] = round(energy_j, 2)
-            metrics[f"{gpu_label}_avg_temperature_c"] = round(avg_temp, 2)
-            metrics[f"{gpu_label}_mem_peak_mib"] = round(peak_mem, 2)
+        # Aggregate across GPUs (use max-of-averages so idle GPUs don't drag stats down).
+        # Each aggregate is skipped when no GPU reported the underlying field.
+        def peaks_of(key):
+            return [max(d[key]) for d in per_gpu_data.values() if d[key]]
 
-        # Aggregate across GPUs (use max-of-averages so idle GPUs don't drag stats down)
-        metrics["gpu_avg_utilization_pct"] = round(max(gpu_avg_utils), 2)
-        metrics["gpu_max_utilization_pct"] = round(
-            max(max(d['util_gpu']) for d in per_gpu_data.values()), 2)
-        metrics["gpu_avg_mem_utilization_pct"] = round(
-            max(sum(d['util_mem']) / len(d['util_mem']) for d in per_gpu_data.values()), 2)
-        metrics["gpu_mem_peak_mib"] = round(max(gpu_peak_mems), 2)
-        metrics["gpu_avg_temperature_c"] = round(max(gpu_avg_temps), 2)
-        metrics["gpu_max_temperature_c"] = round(
-            max(max(d['temp']) for d in per_gpu_data.values()), 2)
-        metrics["gpu_avg_power_w"] = round(max(gpu_avg_powers), 2)
-        metrics["gpu_max_power_w"] = round(
-            max(max(d['power']) for d in per_gpu_data.values()), 2)
+        mem_utils = [sum(d['util_mem']) / len(d['util_mem'])
+                     for d in per_gpu_data.values() if d['util_mem']]
+
+        if gpu_avg_utils:
+            metrics["gpu_avg_utilization_pct"] = round(max(gpu_avg_utils), 2)
+            metrics["gpu_max_utilization_pct"] = round(max(peaks_of('util_gpu')), 2)
+        if mem_utils:
+            metrics["gpu_avg_mem_utilization_pct"] = round(max(mem_utils), 2)
+        if gpu_peak_mems:
+            metrics["gpu_mem_peak_mib"] = round(max(gpu_peak_mems), 2)
+        if gpu_avg_temps:
+            metrics["gpu_avg_temperature_c"] = round(max(gpu_avg_temps), 2)
+            metrics["gpu_max_temperature_c"] = round(max(peaks_of('temp')), 2)
+        if gpu_avg_powers:
+            metrics["gpu_avg_power_w"] = round(max(gpu_avg_powers), 2)
+            metrics["gpu_max_power_w"] = round(max(peaks_of('power')), 2)
 
         # Energy: sum across all GPUs (total consumption)
-        metrics["gpu_energy_j"] = round(sum(gpu_energies), 2)
+        if gpu_energies:
+            metrics["gpu_energy_j"] = round(sum(gpu_energies), 2)
 
         # Trace duration
         if len(timestamps) >= 2:
@@ -694,8 +738,13 @@ class IOPSRunner(HasLogger):
 
             if has_data:
                 rows.append(row)
+                # Union across rows, first-seen order: executions may report
+                # different metrics (a device can expose a field in one run and
+                # report it unsupported in another).
                 if fieldnames is None:
                     fieldnames = list(row.keys())
+                else:
+                    fieldnames.extend(k for k in row.keys() if k not in fieldnames)
             else:
                 self.logger.debug(f"No trace files found for exec_{exec_id} rep_{rep}")
 
