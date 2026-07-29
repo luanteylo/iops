@@ -271,10 +271,11 @@ benchmark:
     # Counters are node-level, so they include any other activity on the node.
     # io_sampling: true
 
-    # io_paths: Restrict I/O tracing to the storage behind these paths
-    # (default: every block device and NFS mount on the node).
-    # Without this, a benchmark writing to /tmp on a node that also mounts NFS
-    # reports both. Values are Jinja2 templates rendered per execution and
+    # io_paths: REQUIRED when io_sampling is enabled. The storage behind these
+    # paths is what gets measured. There is no "measure everything" mode: a node
+    # usually has storage the benchmark never touches, and counting all of it
+    # would not describe the run.
+    # Values are Jinja2 templates rendered per execution and
     # resolved on the compute node, so they can name a directory the run creates.
     # A local path resolves to the whole block device behind it, so scoping is
     # only as precise as the device layout; an NFS path resolves to that mount

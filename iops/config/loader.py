@@ -2197,6 +2197,19 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         )
 
     # io_paths validation (probes config)
+    if probes and probes.io_sampling and not probes.io_paths:
+        raise ConfigValidationError(
+            "benchmark.probes.io_sampling requires benchmark.probes.io_paths.\n"
+            "Name the paths whose storage should be measured, for example:\n"
+            "  probes:\n"
+            "    io_sampling: true\n"
+            "    io_paths:\n"
+            '      - "{{ execution_dir }}"\n'
+            "Without them the probe would count every disk and network mount on the "
+            "node, including storage the benchmark never touches, and the resulting "
+            "numbers would not describe the run."
+        )
+
     if probes and probes.io_paths is not None:
         if not isinstance(probes.io_paths, list) or not probes.io_paths:
             raise ConfigValidationError(

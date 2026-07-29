@@ -652,6 +652,32 @@ _iops_io_resolve() {{
     fi
 }}
 
+# Register one counter key for a configured path.
+#
+# Several paths commonly share a counter: two directories on the same disk
+# resolve to the same device, and the kernel has no per-directory counters to
+# tell them apart. The device is registered once, so its traffic is counted
+# once, and the label lists every path that landed on it rather than silently
+# crediting whichever was resolved last.
+_iops_io_add_target() {{
+    local _key="$1" _path="$2"
+    local _kind="${{_key%%|*}}" _name="${{_key#*|}}"
+    local _existing="${{_iops_io_labels[$_key]:-}}"
+
+    if [ -z "$_existing" ]; then
+        _iops_io_labels["$_key"]="$_path"
+        case "$_kind" in
+            block) _IOPS_IO_DEVICES="${{_IOPS_IO_DEVICES}} ${{_name}} " ;;
+            nfs)   _IOPS_IO_NFS_MOUNTS="${{_IOPS_IO_NFS_MOUNTS}} ${{_name}} " ;;
+        esac
+    else
+        case ";$_existing;" in
+            *";$_path;"*) ;;
+            *) _iops_io_labels["$_key"]="${{_existing}};${{_path}}" ;;
+        esac
+    fi
+}}
+
 # Build the counter filters and record what each path resolved to.
 _iops_io_resolve_targets() {{
     if [ "${{#_IOPS_IO_PATHS[@]}}" -eq 0 ]; then
@@ -677,13 +703,11 @@ _iops_io_resolve_targets() {{
         case "$_kind" in
             block)
                 for _dev in $_target; do
-                    _IOPS_IO_DEVICES="${{_IOPS_IO_DEVICES}} ${{_dev}} "
-                    _iops_io_labels["block|$_dev"]="$_path"
+                    _iops_io_add_target "block|$_dev" "$_path"
                 done
                 ;;
             nfs)
-                _IOPS_IO_NFS_MOUNTS="${{_IOPS_IO_NFS_MOUNTS}} ${{_target}} "
-                _iops_io_labels["nfs|$_target"]="$_path"
+                _iops_io_add_target "nfs|$_target" "$_path"
                 ;;
         esac
 

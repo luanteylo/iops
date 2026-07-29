@@ -463,6 +463,38 @@ _iops_io_sample
         # The row is labelled with the path it was resolved from
         assert lines[0].split(",")[4] == "/mnt/data"
 
+    def test_paths_sharing_a_device_are_counted_once(self, tmp_path):
+        """
+        Two directories on the same disk resolve to the same device. The device
+        must be registered once, otherwise its traffic would be added twice, and
+        the label must name both paths rather than crediting whichever was
+        resolved last. The kernel has no per-directory counters, so this is the
+        limit of what path scoping can separate.
+        """
+        sampler = _render_sampler(tmp_path, io_paths=f"'{tmp_path}' '{tmp_path}/sub' '/'")
+        (tmp_path / "sub").mkdir()
+
+        driver = tmp_path / "shared.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+source "{sampler}"
+_iops_io_resolve_targets
+echo "DEVICES:$_IOPS_IO_DEVICES"
+for k in "${{!_iops_io_labels[@]}}"; do echo "LABEL:$k=${{_iops_io_labels[$k]}}"; done
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+
+        devices = result.stdout.split("DEVICES:")[1].split("\n")[0].split()
+        assert len(devices) == len(set(devices)), f"device registered more than once: {devices}"
+
+        labels = [ln for ln in result.stdout.split("\n") if ln.startswith("LABEL:")]
+        # tmp_path and / are on the same device in any normal test environment
+        shared = [ln for ln in labels if ";" in ln]
+        assert shared, f"paths sharing a device must be listed together, got {labels}"
+
     def test_targets_file_records_each_resolution(self, tmp_path):
         """
         The targets file is what makes a zero result explainable: it says what
@@ -584,7 +616,7 @@ class TestIoSamplingConfig:
         assert config.benchmark.probes.io_sampling is False
 
     def test_io_sampling_can_be_enabled(self, sample_config_dict, tmp_path):
-        config = self._load(sample_config_dict, tmp_path, probes={"io_sampling": True})
+        config = self._load(sample_config_dict, tmp_path, probes={"io_sampling": True, "io_paths": ["/tmp"]})
         assert config.benchmark.probes.io_sampling is True
 
     def test_unknown_probe_key_still_rejected(self, sample_config_dict, tmp_path):
@@ -599,7 +631,7 @@ class TestIoSamplingConfig:
 
         config = self._load(
             sample_config_dict, tmp_path,
-            probes={"io_sampling": True, "resource_sampling": False},
+            probes={"io_sampling": True, "io_paths": ["/tmp"], "resource_sampling": False},
             submit="sbatch", script_template="#!/bin/sh\necho hello\n",
         )
         assert config.benchmark.probes.io_sampling is True
@@ -612,15 +644,22 @@ class TestIoSamplingConfig:
 
         config = self._load(
             sample_config_dict, tmp_path,
-            probes={"io_sampling": True},
+            probes={"io_sampling": True, "io_paths": ["/tmp"]},
             script_template="#!/bin/bash\necho hello\n",
         )
         check_resource_sampler_compatibility(config, logger=None)
         assert config.benchmark.probes.io_sampling is True
 
-    def test_io_paths_defaults_to_none(self, sample_config_dict, tmp_path):
-        config = self._load(sample_config_dict, tmp_path, probes={"io_sampling": True})
-        assert config.benchmark.probes.io_paths is None
+    def test_io_sampling_requires_io_paths(self, sample_config_dict, tmp_path):
+        """
+        Without paths the probe would count every disk and mount on the node,
+        including storage the benchmark never touches, so the numbers would not
+        describe the run. Better to refuse than to report something misleading.
+        """
+        from iops.config.loader import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="requires benchmark.probes.io_paths"):
+            self._load(sample_config_dict, tmp_path, probes={"io_sampling": True})
 
     def test_io_paths_accepted(self, sample_config_dict, tmp_path):
         config = self._load(
@@ -630,12 +669,22 @@ class TestIoSamplingConfig:
         assert config.benchmark.probes.io_paths == ["/scratch", "{{ execution_dir }}"]
 
     def test_io_paths_rejects_empty_list(self, sample_config_dict, tmp_path):
+        """An empty list is the same as not naming any path."""
+        from iops.config.loader import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="requires benchmark.probes.io_paths"):
+            self._load(
+                sample_config_dict, tmp_path,
+                probes={"io_sampling": True, "io_paths": []},
+            )
+
+    def test_io_paths_rejects_non_list(self, sample_config_dict, tmp_path):
         from iops.config.loader import ConfigValidationError
 
         with pytest.raises(ConfigValidationError, match="non-empty list"):
             self._load(
                 sample_config_dict, tmp_path,
-                probes={"io_sampling": True, "io_paths": []},
+                probes={"io_sampling": True, "io_paths": "/scratch"},
             )
 
     def test_io_paths_rejects_blank_entry(self, sample_config_dict, tmp_path):
@@ -678,7 +727,7 @@ class TestIoSamplerInjection:
         from iops.execution.planner import RUNTIME_IO_SAMPLER_FILENAME, NODE_LAUNCHER_FILENAME
 
         planner = self._planner(
-            sample_config_dict, tmp_path, {"io_sampling": True, "system_snapshot": False}
+            sample_config_dict, tmp_path, {"io_sampling": True, "io_paths": ["/tmp"], "system_snapshot": False}
         )
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir(parents=True)
@@ -736,7 +785,7 @@ class TestIoSamplerInjection:
 
         planner = self._planner(
             sample_config_dict, tmp_path,
-            {"io_sampling": True, "system_snapshot": False, "io_paths": ["/mnt/my data"]},
+            {"io_sampling": True, "io_paths": ["/mnt/my data"], "system_snapshot": False},
         )
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir(parents=True)
@@ -746,11 +795,12 @@ class TestIoSamplerInjection:
         content = (exec_dir / RUNTIME_IO_SAMPLER_FILENAME).read_text()
         assert "'/mnt/my data'" in content
 
-    def test_no_paths_yields_an_empty_array(self, sample_config_dict, tmp_path):
+    def test_configured_paths_reach_the_script(self, sample_config_dict, tmp_path):
         from iops.execution.planner import RUNTIME_IO_SAMPLER_FILENAME
 
         planner = self._planner(
-            sample_config_dict, tmp_path, {"io_sampling": True, "system_snapshot": False}
+            sample_config_dict, tmp_path,
+            {"io_sampling": True, "io_paths": ["/scratch", "/data"], "system_snapshot": False},
         )
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir(parents=True)
@@ -758,14 +808,14 @@ class TestIoSamplerInjection:
         planner._inject_iops_scripts("#!/bin/bash\necho hi", exec_dir)
 
         content = (exec_dir / RUNTIME_IO_SAMPLER_FILENAME).read_text()
-        assert "_IOPS_IO_PATHS=()" in content
+        assert "_IOPS_IO_PATHS=(/scratch /data)" in content
 
     def test_sampler_uses_config_interval(self, sample_config_dict, tmp_path):
         from iops.execution.planner import RUNTIME_IO_SAMPLER_FILENAME
 
         planner = self._planner(
             sample_config_dict, tmp_path,
-            {"io_sampling": True, "sampling_interval": 2.5, "system_snapshot": False},
+            {"io_sampling": True, "io_paths": ["/tmp"], "sampling_interval": 2.5, "system_snapshot": False},
         )
         exec_dir = tmp_path / "exec_0001"
         exec_dir.mkdir(parents=True)

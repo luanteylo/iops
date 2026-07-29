@@ -20,7 +20,7 @@ benchmark:
     resource_sampling: true    # CPU/memory sampling (default: false)
     gpu_sampling: true         # GPU sampling (default: false)
     io_sampling: true          # I/O sampling (default: false)
-    io_paths:                  # Restrict I/O sampling to these paths (default: all storage)
+    io_paths:                  # Required with io_sampling: what storage to measure
       - "{{ execution_dir }}"
     sampling_interval: 1.0     # Sample every 1 second (default)
 ```
@@ -50,7 +50,7 @@ Each row is tagged with its source, so a study comparing storage backends can te
 
 #### Scoping to the storage you care about
 
-By default every block device and NFS mount on the node is counted. A node usually has storage the benchmark never touches, so a job writing to `/tmp` on a machine that also mounts NFS would report both. `io_paths` restricts the counters to the filesystems actually holding the paths you name:
+`io_paths` is **required** whenever `io_sampling` is enabled. It names the paths whose storage should be measured, and the probe counts only the filesystems holding them. There is no "measure everything" mode on purpose: a node usually has storage the benchmark never touches, so counting all of it would produce a number that does not describe the run.
 
 ```yaml
 benchmark:
@@ -72,6 +72,19 @@ Resolution maps a path to a counter:
 | tmpfs, ramfs, or anything with no backing device | Nothing countable | Reported, not counted |
 
 **Device-level is not path-level.** Scoping to `/tmp` restricts the counters to the disk holding `/tmp`. If `/` lives on that same disk, its traffic is still included. NFS scoping is exact because the kernel keeps counters per mount; block scoping is only as precise as the device layout. To measure a local filesystem cleanly, give it its own device.
+
+#### How several paths are combined
+
+`io_paths` is a filter, not a per-path breakdown. Every path is resolved to a counter, the counters are deduplicated, and the summary metrics are totals over that set. What you can separate depends on where the paths landed:
+
+| The paths land on | In the trace | In the summary |
+|-------------------|--------------|----------------|
+| Different filesystems | One row per device or mount each interval, each labelled with the path it came from | Totals, plus the `io_disk_*` and `io_nfs_*` split when one is local and the other is NFS |
+| The same filesystem | One row, labelled with every path that resolved to it, joined by `;` | Totals only |
+
+Two directories on the same disk cannot be told apart, because the kernel keeps no per-directory counters. The device is registered once so its traffic is counted once rather than twice, and the `path` column names both, which is the honest answer rather than crediting whichever path happened to be resolved last.
+
+So listing an input directory and an output directory that share a filesystem gives you their combined traffic, correctly, with no double counting. To attribute them separately they have to be on separate devices or separate NFS mounts. For finer analysis than the summary offers, read the trace CSV: it carries `source`, `device`, and `path` per sample.
 
 A path that resolves to nothing countable, such as anything on tmpfs, is not silently ignored: the run logs a warning naming the path and its filesystem type, and every node records what each path resolved to in `__iops_io_targets_<hostname>_<attempt_id>.json` next to the trace.
 
@@ -311,9 +324,9 @@ benchmark:
     # counters (/proc/self/mountstats), reporting each source separately
     io_sampling: true
 
-    # Restrict I/O sampling to the storage behind these paths
-    # (default: every block device and NFS mount on the node).
-    # Jinja2 templates, rendered per execution, resolved on the compute node.
+    # Required with io_sampling: the storage behind these paths is what
+    # gets measured. Jinja2 templates, rendered per execution, resolved on
+    # the compute node.
     io_paths:
       - "{{ execution_dir }}"
       - "/scratch/input"
