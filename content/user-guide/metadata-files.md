@@ -100,6 +100,7 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 | `__iops_runtime_io_sampler.sh` | I/O sampling script |
 | `__iops_io_trace_running` | Sentinel file (signals I/O samplers to run) |
 | `__iops_io_trace_<host>.csv` | Per-node I/O trace data |
+| `__iops_io_targets_<host>.json` | What each `io_paths` entry resolved to on that node |
 
 ## Controlling Metadata Generation
 
@@ -498,6 +499,18 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 **Purpose:** Collects read and write volume and operation counts during benchmark execution, from block devices (`/proc/diskstats`) and NFS mounts (`/proc/self/mountstats`). Each row is tagged with its source so a local disk and a network filesystem can be told apart. Follows the same architecture as the CPU/memory sampler: a sentinel file (`__iops_io_trace_running`), local or multi-node sampling through the node launcher, one trace file per node, and shutdown via the exit handler. Skips silently when neither counter source is readable.
 
 **Controlled by:** `benchmark.probes.io_sampling`
+
+---
+
+### `__iops_io_targets_<hostname>_<attempt_id>.json`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_io_targets_<hostname>_<attempt_id>.json`
+
+**Written:** Once per node when I/O sampling starts, if `probes.io_paths` is set
+
+**Purpose:** Records what each configured path resolved to on that node: the counter kind (`block`, `nfs`, or `none`), the device or export behind it, its mount point, and its filesystem type. Paths resolve per node because mount tables differ across an allocation. Check this file first when an I/O metric reads zero: a path on tmpfs has no counters to read, and shows up here as `"kind": "none"`.
+
+**Controlled by:** `benchmark.probes.io_paths`
 
 ---
 

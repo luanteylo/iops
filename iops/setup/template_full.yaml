@@ -271,6 +271,18 @@ benchmark:
     # Counters are node-level, so they include any other activity on the node.
     # io_sampling: true
 
+    # io_paths: Restrict I/O tracing to the storage behind these paths
+    # (default: every block device and NFS mount on the node).
+    # Without this, a benchmark writing to /tmp on a node that also mounts NFS
+    # reports both. Values are Jinja2 templates rendered per execution and
+    # resolved on the compute node, so they can name a directory the run creates.
+    # A local path resolves to the whole block device behind it, so scoping is
+    # only as precise as the device layout; an NFS path resolves to that mount
+    # exactly. A path on tmpfs has no counters and is reported as unresolved.
+    # io_paths:
+    #   - "{{ execution_dir }}"
+    #   - "/scratch/input"
+
     # sampling_interval: Sampling interval in seconds (default: 1.0)
     # Shared by resource_sampling, gpu_sampling and io_sampling.
     # Lower values provide finer granularity but generate more data.

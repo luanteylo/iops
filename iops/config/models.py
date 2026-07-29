@@ -220,6 +220,12 @@ class ProbesConfig:
             written). Reads block device counters from /proc/diskstats and NFS client
             counters from /proc/self/mountstats, reporting each source separately so a
             study comparing storage backends can tell them apart.
+        io_paths: Paths whose storage should be monitored, e.g. ["{{ execution_dir }}",
+            "/scratch/data"]. Each path is resolved on the compute node to the filesystem
+            holding it, and only that filesystem's counters are recorded. Without this,
+            every block device and NFS mount on the node is counted, which mixes the
+            benchmark's traffic with everything else the node is doing. Values are Jinja2
+            templates rendered per execution.
         sampling_interval: Sampling interval in seconds for resource tracing and GPU sampling.
             Corresponds to deprecated field: trace_interval
         versions: Optional mapping of component name to a shell command that prints its
@@ -233,6 +239,7 @@ class ProbesConfig:
     resource_sampling: bool = False   # Was: trace_resources
     gpu_sampling: bool = False        # GPU metrics (power, utilization, temperature, etc.)
     io_sampling: bool = False         # I/O volume and operations (block devices and NFS)
+    io_paths: Optional[List[str]] = None  # Restrict I/O sampling to the storage behind these paths
     sampling_interval: float = 1.0    # Was: trace_interval
     versions: Optional[Dict[str, str]] = None  # name -> shell command capturing a software/library version
 

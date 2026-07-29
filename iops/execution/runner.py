@@ -1,7 +1,8 @@
 
 from iops.logger import HasLogger
 from iops.execution.planner import (BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX,
-                                    GPU_TRACE_FILENAME_PREFIX, IO_TRACE_FILENAME_PREFIX)
+                                    GPU_TRACE_FILENAME_PREFIX, IO_TRACE_FILENAME_PREFIX,
+                                    IO_TARGETS_FILENAME_PREFIX)
 from iops.execution.executors import BaseExecutor
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
@@ -788,6 +789,35 @@ class IOPSRunner(HasLogger):
 
         return metrics
 
+    def _collect_unresolved_io_paths(self, execution_dir: Path) -> Dict[str, str]:
+        """
+        Read the I/O targets files an execution's nodes wrote, and return the
+        configured paths that resolved to no countable storage.
+
+        A path on tmpfs or ramfs has no block device and no NFS mount behind it,
+        so the sampler has nothing to read and the metrics come back zero. That
+        looks identical to a benchmark that did no I/O, which is why it is worth
+        saying out loud rather than leaving the user to guess.
+
+        Returns:
+            Mapping of path to the filesystem type it landed on
+        """
+        unresolved = {}
+        pattern = str(execution_dir / f"{IO_TARGETS_FILENAME_PREFIX}*.json")
+        for targets_file in glob.glob(pattern):
+            try:
+                with open(targets_file, 'r') as f:
+                    data = json.load(f)
+            except Exception as e:
+                self.logger.debug(f"Failed to read I/O targets file {targets_file}: {e}")
+                continue
+
+            for entry in data.get("paths", []):
+                if entry.get("kind") == "none":
+                    unresolved[entry.get("path", "?")] = entry.get("fstype") or "unknown"
+
+        return unresolved
+
     def _aggregate_resource_traces(self, completed_tests: List) -> None:
         """
         Aggregate resource traces from all completed executions into a summary CSV.
@@ -810,6 +840,9 @@ class IOPSRunner(HasLogger):
 
         rows = []
         fieldnames = None
+        # Configured io_paths that had no countable storage behind them, collected
+        # across executions so the warning is emitted once rather than per test
+        unresolved_io_paths = {}
 
         # Group tests by execution_id to handle repetitions
         tests_by_exec = {}
@@ -861,6 +894,7 @@ class IOPSRunner(HasLogger):
 
             # I/O trace files
             if io_sampling:
+                unresolved_io_paths.update(self._collect_unresolved_io_paths(test.execution_dir))
                 io_trace_pattern = str(test.execution_dir / f"{IO_TRACE_FILENAME_PREFIX}*.csv")
                 io_trace_files = [Path(f) for f in glob.glob(io_trace_pattern)]
                 if io_trace_files:
@@ -883,6 +917,14 @@ class IOPSRunner(HasLogger):
                     fieldnames.extend(k for k in row.keys() if k not in fieldnames)
             else:
                 self.logger.debug(f"No trace files found for exec_{exec_id} rep_{rep}")
+
+        if unresolved_io_paths:
+            details = ", ".join(f"{path} ({fstype})" for path, fstype in sorted(unresolved_io_paths.items()))
+            self.logger.warning(
+                f"I/O sampling found no countable storage behind: {details}. "
+                f"These filesystems have no block device or NFS mount to read counters from, "
+                f"so their traffic is not in the I/O metrics."
+            )
 
         if not rows:
             self.logger.info("No resource traces to aggregate")

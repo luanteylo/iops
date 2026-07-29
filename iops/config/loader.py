@@ -77,7 +77,7 @@ ALLOWED_BENCHMARK_KEYS = {
     "parallel",
 }
 
-ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "io_sampling", "sampling_interval", "versions"}
+ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "io_sampling", "io_paths", "sampling_interval", "versions"}
 
 ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
@@ -1145,6 +1145,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             resource_sampling=probes_data.get("resource_sampling", False),
             gpu_sampling=probes_data.get("gpu_sampling", False),
             io_sampling=probes_data.get("io_sampling", False),
+            io_paths=probes_data.get("io_paths"),
             sampling_interval=probes_data.get("sampling_interval", 1.0),
             versions=_parse_version_probe(probes_data.get("versions")),
         )
@@ -2194,6 +2195,23 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError(
             f"benchmark.trace_interval must be a positive number (got '{cfg.benchmark.trace_interval}')"
         )
+
+    # io_paths validation (probes config)
+    if probes and probes.io_paths is not None:
+        if not isinstance(probes.io_paths, list) or not probes.io_paths:
+            raise ConfigValidationError(
+                "benchmark.probes.io_paths must be a non-empty list of paths "
+                f"(got '{probes.io_paths}')"
+            )
+        for entry in probes.io_paths:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ConfigValidationError(
+                    f"benchmark.probes.io_paths entries must be non-empty strings (got '{entry}')"
+                )
+        if not probes.io_sampling:
+            raise ConfigValidationError(
+                "benchmark.probes.io_paths requires benchmark.probes.io_sampling: true"
+            )
 
     # random_config validation (required when search_method is "random")
     if cfg.benchmark.search_method == "random":

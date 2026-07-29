@@ -20,6 +20,8 @@ benchmark:
     resource_sampling: true    # CPU/memory sampling (default: false)
     gpu_sampling: true         # GPU sampling (default: false)
     io_sampling: true          # I/O sampling (default: false)
+    io_paths:                  # Restrict I/O sampling to these paths (default: all storage)
+      - "{{ execution_dir }}"
     sampling_interval: 1.0     # Sample every 1 second (default)
 ```
 
@@ -46,9 +48,36 @@ Two sources are needed because neither one alone describes both a local disk and
 
 Each row is tagged with its source, so a study comparing storage backends can tell them apart rather than seeing one arm report zero.
 
-Two things to know before drawing conclusions from the numbers:
+#### Scoping to the storage you care about
 
-- **The counters are node-level, not process-level.** They include anything else running on the node. On a dedicated compute node in a batch job that is what you want; on a shared machine it is noise.
+By default every block device and NFS mount on the node is counted. A node usually has storage the benchmark never touches, so a job writing to `/tmp` on a machine that also mounts NFS would report both. `io_paths` restricts the counters to the filesystems actually holding the paths you name:
+
+```yaml
+benchmark:
+  probes:
+    io_sampling: true
+    io_paths:
+      - "{{ execution_dir }}"      # where this execution writes
+      - "/scratch/shared/input"    # where it reads from
+```
+
+Paths are Jinja2 templates rendered per execution, so they can reference `{{ execution_dir }}` or any swept variable, exactly like `command.template`. Each path is resolved **on the compute node**, since mount tables differ across an allocation, and a path the benchmark has not created yet resolves through its nearest existing ancestor.
+
+Resolution maps a path to a counter:
+
+| The path lives on | Resolved to | Precision |
+|-------------------|-------------|-----------|
+| A local filesystem | The whole block device behind it (a partition resolves to its parent disk, an LVM or md volume to the disks underneath) | Device-level |
+| An NFS mount | That mount's client counters | Mount-level, exact |
+| tmpfs, ramfs, or anything with no backing device | Nothing countable | Reported, not counted |
+
+**Device-level is not path-level.** Scoping to `/tmp` restricts the counters to the disk holding `/tmp`. If `/` lives on that same disk, its traffic is still included. NFS scoping is exact because the kernel keeps counters per mount; block scoping is only as precise as the device layout. To measure a local filesystem cleanly, give it its own device.
+
+A path that resolves to nothing countable, such as anything on tmpfs, is not silently ignored: the run logs a warning naming the path and its filesystem type, and every node records what each path resolved to in `__iops_io_targets_<hostname>_<attempt_id>.json` next to the trace.
+
+Two more things to know before drawing conclusions from the numbers:
+
+- **The counters are node-level, not process-level.** They include anything else running on the node that touches the same storage. On a dedicated compute node in a batch job that is what you want; on a shared machine it is noise.
 - **NFS byte counts are what crossed the wire.** The probe reads the server-read and server-written counters, not the normal-read counters, so reads the page cache satisfied locally are excluded. Comparing an NFS arm against a local-disk arm is therefore comparing like with like: both count traffic that reached storage.
 
 Block devices are counted once. Partitions (`sda1`) are excluded because their traffic is already in the parent device, and virtual devices (`dm-*`, `md*`, `loop*`) are excluded because they would double count the disks underneath them.
@@ -123,9 +152,9 @@ When `io_sampling` is enabled, each execution produces one I/O sample CSV per no
 
 **Format:**
 ```csv
-timestamp,hostname,source,device,interval_s,read_bytes,write_bytes,read_ops,write_ops
-1705123457.1,node01,block,nvme0n1,1.002,0,536870912,0,4096
-1705123457.1,node01,nfs,server:/export,1.002,104857600,0,800,0
+timestamp,hostname,source,device,path,interval_s,read_bytes,write_bytes,read_ops,write_ops
+1705123457.1,node01,block,nvme0n1,/scratch/run,1.002,0,536870912,0,4096
+1705123457.1,node01,nfs,server:/export,/data/input,1.002,104857600,0,800,0
 ```
 
 **Fields:**
@@ -135,6 +164,7 @@ timestamp,hostname,source,device,interval_s,read_bytes,write_bytes,read_ops,writ
 | `hostname` | Node hostname |
 | `source` | Counter source: `block` or `nfs` |
 | `device` | Block device name (`nvme0n1`) or NFS mount source (`server:/export`) |
+| `path` | The configured `io_paths` entry this row was resolved from, empty when no paths were configured |
 | `interval_s` | Seconds this row covers, measured rather than assumed |
 | `read_bytes` | Bytes read during the interval |
 | `write_bytes` | Bytes written during the interval |
@@ -142,6 +172,24 @@ timestamp,hostname,source,device,interval_s,read_bytes,write_bytes,read_ops,writ
 | `write_ops` | Write operations during the interval |
 
 Values are per-interval deltas, not cumulative counters. The first sample of a run establishes the baseline and emits no row. A counter that goes backwards (a reset or a wrap) is clamped to zero rather than emitting a spurious burst. `interval_s` is recorded because `sleep` drifts under load, so rates computed from it are more accurate than rates assuming the configured interval.
+
+### Per-Execution I/O Targets Files
+
+When `io_paths` is set, each node records what the configured paths resolved to:
+
+**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_io_targets_<hostname>_<attempt_id>.json`
+
+```json
+{
+  "hostname": "node01",
+  "paths": [
+    {"path": "/scratch/run", "kind": "block", "target": "nvme0n1", "mount": "/scratch", "fstype": "ext4"},
+    {"path": "/dev/shm/cache", "kind": "none", "target": "", "mount": "/dev/shm", "fstype": "tmpfs"}
+  ]
+}
+```
+
+`kind` is `block`, `nfs`, or `none` when the filesystem has no counters to read. One file per node, because the same path can resolve differently across an allocation. This is the first thing to check when an I/O metric reads zero.
 
 ### Run-Level Summary
 
@@ -263,6 +311,13 @@ benchmark:
     # counters (/proc/self/mountstats), reporting each source separately
     io_sampling: true
 
+    # Restrict I/O sampling to the storage behind these paths
+    # (default: every block device and NFS mount on the node).
+    # Jinja2 templates, rendered per execution, resolved on the compute node.
+    io_paths:
+      - "{{ execution_dir }}"
+      - "/scratch/input"
+
     # Sampling interval in seconds (default: 1.0)
     # Shared by resource_sampling, gpu_sampling and io_sampling
     # Lower = finer granularity but more data
@@ -299,7 +354,7 @@ Resource sampling is designed to never break your benchmark:
 - Missing or malformed sample files are skipped during aggregation
 - If no sample files exist, the summary is simply not created
 - The GPU sampler gracefully skips if no supported GPU vendor is detected (no errors, no empty files)
-- The I/O sampler gracefully skips when neither counter source is readable (for example on a non-Linux host)
+- The I/O sampler gracefully skips when neither counter source is readable (for example on a non-Linux host), and when every configured path resolves to storage with no counters
 
 ## I/O Considerations
 

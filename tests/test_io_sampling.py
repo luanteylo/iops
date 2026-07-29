@@ -8,6 +8,7 @@ traces, and the configuration plumbing.
 """
 
 import csv
+import pathlib
 import subprocess
 from unittest.mock import MagicMock
 
@@ -53,17 +54,20 @@ MOUNTSTATS_AFTER = MOUNTSTATS_BASE.replace(
 )
 
 
-def _render_sampler(tmp_path, interval=0.05):
+def _render_sampler(tmp_path, interval=0.05, io_paths=""):
     from iops.execution.planner import (
-        IO_SAMPLER_TEMPLATE, IO_TRACE_FILENAME_PREFIX, IO_SAMPLER_SENTINEL_FILENAME,
+        IO_SAMPLER_TEMPLATE, IO_TRACE_FILENAME_PREFIX, IO_TARGETS_FILENAME_PREFIX,
+        IO_SAMPLER_SENTINEL_FILENAME,
     )
 
     script = tmp_path / "io_sampler.sh"
     script.write_text(IO_SAMPLER_TEMPLATE.format(
         execution_dir=str(tmp_path),
         io_trace_prefix=IO_TRACE_FILENAME_PREFIX,
+        io_targets_prefix=IO_TARGETS_FILENAME_PREFIX,
         io_trace_interval=interval,
         io_sentinel_filename=IO_SAMPLER_SENTINEL_FILENAME,
+        io_paths=io_paths,
     ))
     script.chmod(0o755)
     return script
@@ -98,6 +102,7 @@ export IOPS_IO_DISKSTATS="{tmp_path}/absent"
 export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
 export IOPS_IO_SYSBLOCK="{sysblock}"
 source "{sampler}"
+_iops_io_resolve_targets
 
 _IOPS_IO_DISKSTATS="{files['diskstats.1']}"
 _IOPS_IO_MOUNTSTATS="{files['mountstats.1']}"
@@ -119,9 +124,9 @@ _iops_io_sample
     for line in result.stdout.strip().split("\n"):
         if not line:
             continue
-        ts, host, source, device, interval_s, rb, wb, ro, wo = line.split(",")
+        ts, host, source, device, path, interval_s, rb, wb, ro, wo = line.split(",")
         rows.append({
-            "hostname": host, "source": source, "device": device,
+            "hostname": host, "source": source, "device": device, "path": path,
             "interval_s": float(interval_s), "read_bytes": int(rb),
             "write_bytes": int(wb), "read_ops": int(ro), "write_ops": int(wo),
         })
@@ -154,6 +159,7 @@ export IOPS_IO_DISKSTATS="{tmp_path}/absent"
 export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
 export IOPS_IO_SYSBLOCK="{sysblock}"
 source "{sampler}"
+_iops_io_resolve_targets
 _IOPS_IO_DISKSTATS="{diskstats}"
 _iops_io_sample
 ''')
@@ -197,6 +203,7 @@ export IOPS_IO_DISKSTATS="{tmp_path}/absent"
 export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
 export IOPS_IO_SYSBLOCK="{sysblock}"
 source "{sampler}"
+_iops_io_resolve_targets
 echo "$_IOPS_IO_DEVICES"
 ''')
         result = subprocess.run(["bash", str(driver)], capture_output=True, text=True, timeout=30)
@@ -261,6 +268,231 @@ echo "$_IOPS_IO_DEVICES"
 # Sampler Lifecycle
 # ============================================================================ #
 
+class TestIoPathScoping:
+    """
+    Tests for probes.io_paths.
+
+    Without it the sampler counts every device on the node, so a benchmark
+    writing to /tmp on a machine that also mounts NFS reports both. Scoping to a
+    path restricts the counters to the filesystem actually holding it.
+    """
+
+    def _resolve(self, tmp_path, path, sysclassblock=None):
+        """Call _iops_io_resolve for one path and return its raw result."""
+        sampler = _render_sampler(tmp_path)
+        env = ""
+        if sysclassblock is not None:
+            env = f'export IOPS_IO_SYSCLASSBLOCK="{sysclassblock}"\n'
+
+        driver = tmp_path / "resolve.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+{env}source "{sampler}"
+_iops_io_resolve "{path}"
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    def test_partition_resolves_to_its_whole_device(self, tmp_path):
+        """
+        /proc/diskstats counts whole devices, so a path on /dev/sda1 has to be
+        attributed to sda. Modelled on real sysfs, where a partition lives under
+        its parent disk.
+        """
+        sysclass = tmp_path / "sysclassblock"
+        (sysclass / "sda").mkdir(parents=True)
+        (sysclass / "sda" / "sda1").mkdir()
+        (sysclass / "sda" / "sda1" / "partition").write_text("1\n")
+        (sysclass / "sda1").symlink_to(sysclass / "sda" / "sda1")
+
+        sampler = _render_sampler(tmp_path)
+        driver = tmp_path / "walk.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+export IOPS_IO_SYSCLASSBLOCK="{sysclass}"
+source "{sampler}"
+_iops_io_whole_device sda1
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+        assert result.stdout.strip() == "sda"
+
+    def test_device_mapper_resolves_to_underlying_devices(self, tmp_path):
+        """An LVM volume's traffic lands on the disks underneath it."""
+        sysclass = tmp_path / "sysclassblock"
+        (sysclass / "dm-0" / "slaves").mkdir(parents=True)
+        for disk in ("sda", "sdb"):
+            (sysclass / disk).mkdir()
+            (sysclass / "dm-0" / "slaves" / disk).symlink_to(sysclass / disk)
+
+        sampler = _render_sampler(tmp_path)
+        driver = tmp_path / "walk.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+export IOPS_IO_SYSCLASSBLOCK="{sysclass}"
+source "{sampler}"
+_iops_io_whole_device dm-0
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+        assert sorted(result.stdout.split()) == ["sda", "sdb"]
+
+    def test_local_path_resolves_to_a_block_device(self, tmp_path):
+        """The root filesystem is block-backed on any machine running this."""
+        resolved = self._resolve(tmp_path, "/")
+        kind, target, _mount, _fstype = resolved.split("|", 3)
+        assert kind == "block"
+        assert target, "a block-backed path must name at least one device"
+
+    def test_path_that_does_not_exist_yet_uses_its_nearest_ancestor(self, tmp_path):
+        """The benchmark usually creates its output directory itself."""
+        resolved = self._resolve(tmp_path, str(tmp_path / "not" / "created" / "yet"))
+        assert resolved.split("|", 1)[0] == "block"
+
+    def test_tmpfs_path_resolves_to_nothing_countable(self, tmp_path):
+        """
+        Writes to tmpfs never reach storage, so there is no counter to read.
+        Reporting this as 'none' is what lets the runner warn instead of
+        silently returning zero.
+        """
+        if not pathlib.Path("/dev/shm").is_dir():
+            pytest.skip("no tmpfs mount available")
+
+        resolved = self._resolve(tmp_path, "/dev/shm")
+        kind, target, _mount, fstype = resolved.split("|", 3)
+        assert kind == "none"
+        assert target == ""
+        assert fstype == "tmpfs"
+
+    def test_configured_paths_restrict_the_block_filter(self, tmp_path):
+        """Only devices behind a configured path are sampled."""
+        sysblock = tmp_path / "sysblock"
+        for entry in ("sda", "sdb"):
+            (sysblock / entry).mkdir(parents=True)
+
+        sampler = _render_sampler(tmp_path, io_paths="'/'")
+        driver = tmp_path / "targets.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+export IOPS_IO_SYSBLOCK="{sysblock}"
+source "{sampler}"
+_iops_io_resolve_targets
+echo "DEVICES:$_IOPS_IO_DEVICES"
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+        devices = result.stdout.split("DEVICES:")[1].split()
+        # The fixture devices are never picked up: only what "/" resolved to
+        assert "sda" not in devices and "sdb" not in devices
+        assert devices, "the root filesystem must resolve to some device"
+
+    def test_no_configured_paths_monitors_every_device(self, tmp_path):
+        """The default stays 'monitor everything' for backwards compatibility."""
+        sysblock = tmp_path / "sysblock"
+        for entry in ("sda", "sdb"):
+            (sysblock / entry).mkdir(parents=True)
+
+        sampler = _render_sampler(tmp_path)
+        driver = tmp_path / "targets.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+export IOPS_IO_SYSBLOCK="{sysblock}"
+source "{sampler}"
+_iops_io_resolve_targets
+echo "DEVICES:$_IOPS_IO_DEVICES"
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+        devices = result.stdout.split("DEVICES:")[1].split()
+        assert sorted(devices) == ["sda", "sdb"]
+
+    def test_nfs_filter_selects_only_the_configured_export(self, tmp_path):
+        """Rows for other NFS mounts on the node must not be emitted."""
+        sysblock = tmp_path / "sysblock"
+        (sysblock / "sda").mkdir(parents=True)
+
+        two_mounts = MOUNTSTATS_AFTER.replace(
+            "device /dev/sda1 mounted on / with fstype ext4\n\tbytes:\t99 99 99 99 99999 99999 0 0\n",
+            "device other:/vol mounted on /mnt/other with fstype nfs4 statvers=1.1\n"
+            "\tbytes:\t0 0 0 0 5000 6000 0 0\n",
+        )
+        base_two_mounts = MOUNTSTATS_BASE.replace(
+            "device /dev/sda1 mounted on / with fstype ext4\n\tbytes:\t99 99 99 99 99999 99999 0 0\n",
+            "device other:/vol mounted on /mnt/other with fstype nfs4 statvers=1.1\n"
+            "\tbytes:\t0 0 0 0 1000 1000 0 0\n",
+        )
+
+        sampler = _render_sampler(tmp_path)
+        (tmp_path / "ms.1").write_text(base_two_mounts)
+        (tmp_path / "ms.2").write_text(two_mounts)
+
+        driver = tmp_path / "driver.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+export IOPS_IO_SYSBLOCK="{sysblock}"
+source "{sampler}"
+_IOPS_IO_DEVICES=" "
+_IOPS_IO_NFS_MOUNTS=" server:/export "
+_iops_io_labels["nfs|server:/export"]="/mnt/data"
+_IOPS_IO_MOUNTSTATS="{tmp_path}/ms.1"
+_iops_io_sample > /dev/null
+sleep 0.2
+_IOPS_IO_MOUNTSTATS="{tmp_path}/ms.2"
+_iops_io_sample
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+        lines = [ln for ln in result.stdout.strip().split("\n") if ln]
+        assert len(lines) == 1, f"expected only the configured export, got {lines}"
+        assert "server:/export" in lines[0]
+        assert "other:/vol" not in lines[0]
+        # The row is labelled with the path it was resolved from
+        assert lines[0].split(",")[4] == "/mnt/data"
+
+    def test_targets_file_records_each_resolution(self, tmp_path):
+        """
+        The targets file is what makes a zero result explainable: it says what
+        each configured path turned out to be backed by.
+        """
+        import json
+
+        from iops.execution.planner import IO_TARGETS_FILENAME_PREFIX
+
+        sampler = _render_sampler(tmp_path, io_paths="'/' '/dev/shm'")
+        driver = tmp_path / "targets.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+source "{sampler}"
+_iops_io_resolve_targets
+''')
+        subprocess.run(["bash", str(driver)], capture_output=True, timeout=30)
+
+        files = list(tmp_path.glob(f"{IO_TARGETS_FILENAME_PREFIX}*.json"))
+        assert files, "the sampler must record what its paths resolved to"
+
+        data = json.loads(files[0].read_text())
+        by_path = {entry["path"]: entry for entry in data["paths"]}
+        assert set(by_path) == {"/", "/dev/shm"}
+        assert by_path["/"]["kind"] == "block"
+        if pathlib.Path("/dev/shm").is_dir():
+            assert by_path["/dev/shm"]["kind"] == "none"
+
+
 class TestIoSamplerLifecycle:
     """Tests for sentinel handling and multi-node fan-out."""
 
@@ -301,7 +533,7 @@ sleep 0.3
         traces = list(tmp_path.glob(f"{IO_TRACE_FILENAME_PREFIX}*.csv"))
         assert traces, "sampler must produce a trace file"
         assert traces[0].read_text().startswith(
-            "timestamp,hostname,source,device,interval_s,read_bytes,write_bytes,read_ops,write_ops"
+            "timestamp,hostname,source,device,path,interval_s,read_bytes,write_bytes,read_ops,write_ops"
         )
 
     def test_sampler_skips_when_no_counter_source(self, tmp_path):
@@ -386,6 +618,45 @@ class TestIoSamplingConfig:
         check_resource_sampler_compatibility(config, logger=None)
         assert config.benchmark.probes.io_sampling is True
 
+    def test_io_paths_defaults_to_none(self, sample_config_dict, tmp_path):
+        config = self._load(sample_config_dict, tmp_path, probes={"io_sampling": True})
+        assert config.benchmark.probes.io_paths is None
+
+    def test_io_paths_accepted(self, sample_config_dict, tmp_path):
+        config = self._load(
+            sample_config_dict, tmp_path,
+            probes={"io_sampling": True, "io_paths": ["/scratch", "{{ execution_dir }}"]},
+        )
+        assert config.benchmark.probes.io_paths == ["/scratch", "{{ execution_dir }}"]
+
+    def test_io_paths_rejects_empty_list(self, sample_config_dict, tmp_path):
+        from iops.config.loader import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="non-empty list"):
+            self._load(
+                sample_config_dict, tmp_path,
+                probes={"io_sampling": True, "io_paths": []},
+            )
+
+    def test_io_paths_rejects_blank_entry(self, sample_config_dict, tmp_path):
+        from iops.config.loader import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="non-empty strings"):
+            self._load(
+                sample_config_dict, tmp_path,
+                probes={"io_sampling": True, "io_paths": ["/scratch", "  "]},
+            )
+
+    def test_io_paths_requires_io_sampling(self, sample_config_dict, tmp_path):
+        """Paths with the probe off would silently do nothing."""
+        from iops.config.loader import ConfigValidationError
+
+        with pytest.raises(ConfigValidationError, match="requires benchmark.probes.io_sampling"):
+            self._load(
+                sample_config_dict, tmp_path,
+                probes={"io_sampling": False, "io_paths": ["/scratch"]},
+            )
+
 
 # ============================================================================ #
 # Injection
@@ -432,6 +703,63 @@ class TestIoSamplerInjection:
         planner._inject_iops_scripts("#!/bin/bash\necho hi", exec_dir)
         assert not (exec_dir / RUNTIME_IO_SAMPLER_FILENAME).exists()
 
+    def test_io_paths_are_rendered_per_execution(self, sample_config_dict, tmp_path):
+        """
+        Paths are Jinja templates so they can name a directory the execution
+        creates. Writing the raw template into the script would leave the
+        sampler resolving a literal "{{ execution_dir }}".
+        """
+        from iops.execution.planner import RUNTIME_IO_SAMPLER_FILENAME
+
+        planner = self._planner(
+            sample_config_dict, tmp_path,
+            {
+                "io_sampling": True,
+                "system_snapshot": False,
+                "io_paths": ["{{ execution_dir }}/scratch"],
+            },
+        )
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir(parents=True)
+
+        test = planner.next_tests(1)[0]
+        test.execution_dir = exec_dir
+        planner._inject_iops_scripts("#!/bin/bash\necho hi", exec_dir, test)
+
+        content = (exec_dir / RUNTIME_IO_SAMPLER_FILENAME).read_text()
+        assert f"{exec_dir}/scratch" in content
+        assert "{{ execution_dir }}" not in content
+
+    def test_paths_with_spaces_are_quoted(self, sample_config_dict, tmp_path):
+        """A path is dropped into a bash array, so it has to survive quoting."""
+        from iops.execution.planner import RUNTIME_IO_SAMPLER_FILENAME
+
+        planner = self._planner(
+            sample_config_dict, tmp_path,
+            {"io_sampling": True, "system_snapshot": False, "io_paths": ["/mnt/my data"]},
+        )
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir(parents=True)
+
+        planner._inject_iops_scripts("#!/bin/bash\necho hi", exec_dir)
+
+        content = (exec_dir / RUNTIME_IO_SAMPLER_FILENAME).read_text()
+        assert "'/mnt/my data'" in content
+
+    def test_no_paths_yields_an_empty_array(self, sample_config_dict, tmp_path):
+        from iops.execution.planner import RUNTIME_IO_SAMPLER_FILENAME
+
+        planner = self._planner(
+            sample_config_dict, tmp_path, {"io_sampling": True, "system_snapshot": False}
+        )
+        exec_dir = tmp_path / "exec_0001"
+        exec_dir.mkdir(parents=True)
+
+        planner._inject_iops_scripts("#!/bin/bash\necho hi", exec_dir)
+
+        content = (exec_dir / RUNTIME_IO_SAMPLER_FILENAME).read_text()
+        assert "_IOPS_IO_PATHS=()" in content
+
     def test_sampler_uses_config_interval(self, sample_config_dict, tmp_path):
         from iops.execution.planner import RUNTIME_IO_SAMPLER_FILENAME
 
@@ -455,7 +783,7 @@ def _write_io_trace(path, rows):
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "timestamp", "hostname", "source", "device", "interval_s",
+            "timestamp", "hostname", "source", "device", "path", "interval_s",
             "read_bytes", "write_bytes", "read_ops", "write_ops",
         ])
         writer.writerows(rows)
@@ -488,8 +816,8 @@ class TestIoTraceAggregation:
         mib = 1024 ** 2
         trace = tmp_path / "__iops_io_trace_node01_1.csv"
         _write_io_trace(trace, [
-            [100.0, "node01", "block", "sda", 1.0, 100 * mib, 200 * mib, 10, 20],
-            [100.0, "node01", "nfs", "srv:/exp", 1.0, 300 * mib, 400 * mib, 30, 40],
+            [100.0, "node01", "block", "sda", "", 1.0, 100 * mib, 200 * mib, 10, 20],
+            [100.0, "node01", "nfs", "srv:/exp", "", 1.0, 300 * mib, 400 * mib, 30, 40],
         ])
 
         metrics = self._metrics([trace])
@@ -503,7 +831,7 @@ class TestIoTraceAggregation:
     def test_absent_source_reports_zero_not_missing(self, tmp_path):
         """A local-disk run must still emit the NFS columns, holding zero."""
         trace = tmp_path / "__iops_io_trace_node01_1.csv"
-        _write_io_trace(trace, [[100.0, "node01", "block", "sda", 1.0, 1024, 2048, 1, 2]])
+        _write_io_trace(trace, [[100.0, "node01", "block", "sda", "", 1.0, 1024, 2048, 1, 2]])
 
         metrics = self._metrics([trace])
         assert metrics["io_nfs_read_gb"] == 0.0
@@ -514,8 +842,8 @@ class TestIoTraceAggregation:
         trace = tmp_path / "__iops_io_trace_node01_1.csv"
         # Two samples covering 2s in total, 300 MiB written
         _write_io_trace(trace, [
-            [100.0, "node01", "block", "sda", 1.0, 0, 100 * mib, 0, 10],
-            [101.0, "node01", "block", "sda", 1.0, 0, 200 * mib, 0, 20],
+            [100.0, "node01", "block", "sda", "", 1.0, 0, 100 * mib, 0, 10],
+            [101.0, "node01", "block", "sda", "", 1.0, 0, 200 * mib, 0, 20],
         ])
 
         metrics = self._metrics([trace])
@@ -529,8 +857,8 @@ class TestIoTraceAggregation:
         mib = 1024 ** 2
         trace = tmp_path / "__iops_io_trace_node01_1.csv"
         _write_io_trace(trace, [
-            [100.0, "node01", "block", "sda", 1.0, 0, 100 * mib, 0, 0],
-            [100.0, "node01", "block", "nvme0n1", 1.0, 0, 100 * mib, 0, 0],
+            [100.0, "node01", "block", "sda", "", 1.0, 0, 100 * mib, 0, 0],
+            [100.0, "node01", "block", "nvme0n1", "", 1.0, 0, 100 * mib, 0, 0],
         ])
 
         metrics = self._metrics([trace])
@@ -542,8 +870,8 @@ class TestIoTraceAggregation:
         mib = 1024 ** 2
         trace_a = tmp_path / "__iops_io_trace_node01_1.csv"
         trace_b = tmp_path / "__iops_io_trace_node02_1.csv"
-        _write_io_trace(trace_a, [[100.0, "node01", "block", "sda", 1.0, 0, 100 * mib, 0, 0]])
-        _write_io_trace(trace_b, [[100.0, "node02", "block", "sda", 1.0, 0, 300 * mib, 0, 0]])
+        _write_io_trace(trace_a, [[100.0, "node01", "block", "sda", "", 1.0, 0, 100 * mib, 0, 0]])
+        _write_io_trace(trace_b, [[100.0, "node02", "block", "sda", "", 1.0, 0, 300 * mib, 0, 0]])
 
         metrics = self._metrics([trace_a, trace_b])
         assert metrics["io_nodes_traced"] == 2
@@ -554,7 +882,7 @@ class TestIoTraceAggregation:
     def test_zero_interval_rows_are_skipped(self, tmp_path):
         """A row with no measurable elapsed time yields no rate."""
         trace = tmp_path / "__iops_io_trace_node01_1.csv"
-        _write_io_trace(trace, [[100.0, "node01", "block", "sda", 0.0, 1024, 1024, 1, 1]])
+        _write_io_trace(trace, [[100.0, "node01", "block", "sda", "", 0.0, 1024, 1024, 1, 1]])
 
         metrics = self._metrics([trace])
         assert metrics["io_samples_collected"] == 0
@@ -563,8 +891,8 @@ class TestIoTraceAggregation:
         mib = 1024 ** 2
         trace = tmp_path / "__iops_io_trace_node01_1.csv"
         _write_io_trace(trace, [
-            [100.0, "node01", "block", "sda", 1.0, "garbage", 0, 0, 0],
-            [101.0, "node01", "block", "sda", 1.0, 0, 100 * mib, 0, 0],
+            [100.0, "node01", "block", "sda", "", 1.0, "garbage", 0, 0, 0],
+            [101.0, "node01", "block", "sda", "", 1.0, 0, 100 * mib, 0, 0],
         ])
 
         metrics = self._metrics([trace])
@@ -602,7 +930,7 @@ class TestResourceSummaryColumns:
         runner._register_resource_metrics = MagicMock()
 
         tests = []
-        populated = [[100.0, "node01", "block", "sda", 1.0, 0, 512 * 1024 ** 2, 0, 1]]
+        populated = [[100.0, "node01", "block", "sda", "", 1.0, 0, 512 * 1024 ** 2, 0, 1]]
         for idx, rows in enumerate([[], populated], start=1):
             exec_dir = workdir / f"exec_{idx:04d}"
             exec_dir.mkdir()

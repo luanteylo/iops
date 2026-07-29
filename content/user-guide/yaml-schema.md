@@ -94,6 +94,7 @@ benchmark:
     resource_sampling: boolean      #   Enable CPU/memory sampling (default: false)
     gpu_sampling: boolean           #   Enable GPU metrics tracing (default: false)
     io_sampling: boolean            #   Enable I/O tracing (default: false)
+    io_paths: [string]              #   Restrict I/O tracing to these paths (default: all storage)
     sampling_interval: float        #   Sampling interval in seconds (default: 1.0)
     versions:                       #   Optional: capture software/library versions
       component_name: string        #   name -> shell command (e.g. "myapp --version")
@@ -200,6 +201,7 @@ Configuration for IOPS probes (system monitoring and execution tracking):
 | `resource_sampling` | `false` | Enable CPU and memory sampling during execution. See [Resource Sampling](../resource-tracing) |
 | `gpu_sampling` | `false` | Enable GPU metrics sampling (utilization, power, temperature, memory, clocks). Supports NVIDIA GPUs via nvidia-smi. See [Resource Sampling](../resource-tracing) |
 | `io_sampling` | `false` | Enable I/O sampling (bytes and operations read and written). Reads block device counters and NFS client counters, reported separately. See [Resource Sampling](../resource-tracing) |
+| `io_paths` | *(all storage)* | Restrict I/O sampling to the filesystems holding these paths, e.g. `["{{ execution_dir }}"]`. Jinja2 templates rendered per execution and resolved on the compute node. Requires `io_sampling: true`. See [Resource Sampling](../resource-tracing#scoping-to-the-storage-you-care-about) |
 | `sampling_interval` | `1.0` | Sampling interval in seconds for resource and GPU sampling |
 | `versions` | none | Capture software/library versions per execution. Mapping of component name to shell command. Captured after the benchmark body (via the exit handler, so tools loaded by the benchmark's own `module load` commands are in scope) into `__iops_versions.json`, and also written to the results sink as `version.<component>` columns. The HTML report shows a drift warning when versions differ across executions. |
 

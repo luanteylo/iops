@@ -483,6 +483,11 @@ RUNTIME_IO_SAMPLER_FILENAME = "__iops_runtime_io_sampler.sh"
 # Filename prefix for I/O trace output (written by sampler during execution)
 IO_TRACE_FILENAME_PREFIX = "__iops_io_trace_"
 
+# Filename prefix for the resolved I/O targets (written once when sampling starts).
+# Records what each configured path resolved to on that node, so a path that turned
+# out to have no countable storage behind it is visible rather than silently zero.
+IO_TARGETS_FILENAME_PREFIX = "__iops_io_targets_"
+
 # Sentinel file for the I/O sampler (signals samplers to stop)
 IO_SAMPLER_SENTINEL_FILENAME = "__iops_io_trace_running"
 
@@ -502,6 +507,13 @@ IO_SAMPLER_SENTINEL_FILENAME = "__iops_io_trace_running"
 # separate them. Future sources (Lustre llite stats, GPFS, cgroup io.stat)
 # plug in as additional counter functions.
 #
+# When probes.io_paths is set, each path is resolved on the node to the
+# filesystem holding it and only that filesystem's counters are recorded. This
+# matters because a node commonly has storage the benchmark never touches: a
+# job writing to /tmp on a machine that also mounts NFS would otherwise report
+# both. Resolution happens per node, since mount tables differ across an
+# allocation, and is recorded in a targets file next to the trace.
+#
 # For multi-node jobs:
 # - Launched on every node by the node launcher (SLURM, OAR, PBS)
 # - Uses sentinel file for termination (removed by exit handler)
@@ -515,14 +527,22 @@ _IOPS_IO_EXEC_DIR="{execution_dir}"
 # Per-attempt id: see the note in the CPU sampler.
 _IOPS_IO_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
 _IOPS_IO_TRACE_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_trace_prefix}$(hostname)_${{_IOPS_IO_ATTEMPT_ID}}.csv"
+_IOPS_IO_TARGETS_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_targets_prefix}$(hostname)_${{_IOPS_IO_ATTEMPT_ID}}.json"
 _IOPS_IO_INTERVAL={io_trace_interval}
 _IOPS_IO_SENTINEL="${{_IOPS_IO_EXEC_DIR}}/{io_sentinel_filename}.${{_IOPS_IO_ATTEMPT_ID}}"
+
+# Paths whose storage should be monitored. Empty means monitor every block
+# device and NFS mount on the node.
+_IOPS_IO_PATHS=({io_paths})
 
 # Counter sources. Overridable so the parsing can be exercised against fixtures
 # instead of live kernel counters.
 _IOPS_IO_DISKSTATS="${{IOPS_IO_DISKSTATS:-/proc/diskstats}}"
 _IOPS_IO_MOUNTSTATS="${{IOPS_IO_MOUNTSTATS:-/proc/self/mountstats}}"
 _IOPS_IO_SYSBLOCK="${{IOPS_IO_SYSBLOCK:-/sys/block}}"
+# /sys/class/block holds partitions as well as whole devices, which is what
+# resolving a path's backing device needs to walk.
+_IOPS_IO_SYSCLASSBLOCK="${{IOPS_IO_SYSCLASSBLOCK:-/sys/class/block}}"
 
 # /proc/diskstats reports sectors, fixed at 512 bytes by the kernel ABI
 # regardless of the device's physical sector size.
@@ -530,12 +550,20 @@ _IOPS_IO_SECTOR_BYTES=512
 
 # Previous counters for delta calculation (key: "source|device")
 declare -A _iops_io_prev
+# Maps a counter key back to the configured path it was resolved from, so each
+# row can say which target it belongs to.
+declare -A _iops_io_labels
 _IOPS_IO_PREV_TS=""
 
-# Whole block devices, resolved once. Partitions (sda1) are excluded because
-# their traffic is already counted in the parent device, and virtual devices
-# (dm-*, md*, loop*) are excluded because they would double count the disks
-# underneath them.
+# Space-delimited filters, set by _iops_io_resolve_targets. Empty means no
+# filtering for that source.
+_IOPS_IO_DEVICES=""
+_IOPS_IO_NFS_MOUNTS=""
+
+# Whole block devices, used when no paths were configured. Partitions (sda1)
+# are excluded because their traffic is already counted in the parent device,
+# and virtual devices (dm-*, md*, loop*) are excluded because they would double
+# count the disks underneath them.
 _iops_io_whole_devices() {{
     local _dev _name
     for _dev in "$_IOPS_IO_SYSBLOCK"/*; do
@@ -550,7 +578,134 @@ _iops_io_whole_devices() {{
         echo "$_name"
     done
 }}
-_IOPS_IO_DEVICES=" $(_iops_io_whole_devices 2>/dev/null | tr '\\n' ' ') "
+
+# Walk a block device name up to the whole device(s) that actually carry its
+# traffic: a partition resolves to its parent disk, and a device-mapper or md
+# device resolves to every device underneath it (possibly several).
+_iops_io_whole_device() {{
+    local _name="$1"
+    local _sys="$_IOPS_IO_SYSCLASSBLOCK/$_name"
+    [ -d "$_sys" ] || return 0
+
+    if [ -f "$_sys/partition" ]; then
+        basename "$(dirname "$(readlink -f "$_sys" 2>/dev/null)")" 2>/dev/null
+        return 0
+    fi
+
+    if [ -d "$_sys/slaves" ] && [ -n "$(ls -A "$_sys/slaves" 2>/dev/null)" ]; then
+        local _slave
+        for _slave in "$_sys"/slaves/*; do
+            _iops_io_whole_device "${{_slave##*/}}"
+        done
+        return 0
+    fi
+
+    echo "$_name"
+}}
+
+# Resolve one configured path to "kind|target|mount|fstype".
+#   kind: block (target is one or more device names), nfs (target is the export
+#   as mountstats names it), or none when the filesystem has no counters we can
+#   read, such as tmpfs where the writes never leave RAM.
+_iops_io_resolve() {{
+    local _path="$1"
+    local _probe="$_path"
+
+    # The benchmark may not have created the path yet. The filesystem that will
+    # hold it is the one holding its nearest existing ancestor.
+    while [ ! -e "$_probe" ] && [ "$_probe" != "/" ] && [ -n "$_probe" ]; do
+        _probe="$(dirname "$_probe")"
+    done
+
+    local _line
+    _line=$(df -PT "$_probe" 2>/dev/null | tail -n 1)
+    if [ -z "$_line" ]; then
+        echo "none|||"
+        return 0
+    fi
+
+    local _src _type _mount
+    _src=$(echo "$_line" | awk '{{print $1}}')
+    _type=$(echo "$_line" | awk '{{print $2}}')
+    _mount=$(echo "$_line" | awk '{{print $NF}}')
+
+    case "$_type" in
+        nfs*) echo "nfs|$_src|$_mount|$_type"; return 0 ;;
+    esac
+
+    local _devs=""
+    case "$_src" in
+        /dev/*)
+            local _real
+            _real=$(readlink -f "$_src" 2>/dev/null || echo "$_src")
+            _devs=$(_iops_io_whole_device "${{_real##*/}}" 2>/dev/null | tr '\\n' ' ')
+            ;;
+    esac
+
+    # Trim, then report. No backing device means tmpfs, ramfs, or an overlay
+    # with nothing countable underneath.
+    _devs=$(echo "$_devs" | tr -s ' ' | sed 's/^ //;s/ $//')
+    if [ -n "$_devs" ]; then
+        echo "block|$_devs|$_mount|$_type"
+    else
+        echo "none||$_mount|$_type"
+    fi
+}}
+
+# Build the counter filters and record what each path resolved to.
+_iops_io_resolve_targets() {{
+    if [ "${{#_IOPS_IO_PATHS[@]}}" -eq 0 ]; then
+        # No paths configured: monitor every whole block device and every NFS
+        # mount, and leave the filters for NFS open.
+        _IOPS_IO_DEVICES=" $(_iops_io_whole_devices 2>/dev/null | tr '\\n' ' ') "
+        _IOPS_IO_NFS_MOUNTS=""
+        return 0
+    fi
+
+    local _path _resolved _kind _target _mount _fstype _dev
+    local _entries=""
+
+    for _path in "${{_IOPS_IO_PATHS[@]}}"; do
+        _resolved=$(_iops_io_resolve "$_path" 2>/dev/null)
+        _kind="${{_resolved%%|*}}"
+        _resolved="${{_resolved#*|}}"
+        _target="${{_resolved%%|*}}"
+        _resolved="${{_resolved#*|}}"
+        _mount="${{_resolved%%|*}}"
+        _fstype="${{_resolved#*|}}"
+
+        case "$_kind" in
+            block)
+                for _dev in $_target; do
+                    _IOPS_IO_DEVICES="${{_IOPS_IO_DEVICES}} ${{_dev}} "
+                    _iops_io_labels["block|$_dev"]="$_path"
+                done
+                ;;
+            nfs)
+                _IOPS_IO_NFS_MOUNTS="${{_IOPS_IO_NFS_MOUNTS}} ${{_target}} "
+                _iops_io_labels["nfs|$_target"]="$_path"
+                ;;
+        esac
+
+        [ -n "$_entries" ] && _entries="${{_entries}},"
+        _entries="${{_entries}}
+    {{\\"path\\": \\"$_path\\", \\"kind\\": \\"$_kind\\", \\"target\\": \\"$_target\\", \\"mount\\": \\"$_mount\\", \\"fstype\\": \\"$_fstype\\"}}"
+    done
+
+    {{
+        echo "{{"
+        echo "  \\"hostname\\": \\"$(hostname 2>/dev/null || echo unknown)\\","
+        echo "  \\"paths\\": [${{_entries}}"
+        echo "  ]"
+        echo "}}"
+    }} > "$_IOPS_IO_TARGETS_FILE" 2>/dev/null || true
+}}
+
+# True when there is at least one counter to read.
+_iops_io_have_targets() {{
+    [ -n "$(echo "$_IOPS_IO_DEVICES" | tr -d ' ')" ] || [ -n "$(echo "$_IOPS_IO_NFS_MOUNTS" | tr -d ' ')" ] \\
+        || {{ [ "${{#_IOPS_IO_PATHS[@]}}" -eq 0 ] && [ -r "$_IOPS_IO_MOUNTSTATS" ]; }}
+}}
 
 # Emit "source device read_bytes write_bytes read_ops write_ops" per device.
 # /proc/diskstats fields: 1 major, 2 minor, 3 name, 4 reads completed,
@@ -572,7 +727,7 @@ _iops_io_block_counters() {{
 # study wants: the first two include reads the page cache satisfied locally.
 _iops_io_nfs_counters() {{
     [ -r "$_IOPS_IO_MOUNTSTATS" ] || return 0
-    awk '
+    awk -v want="$_IOPS_IO_NFS_MOUNTS" '
     /^device / {{
         dev = $2
         isnfs = 0
@@ -587,7 +742,11 @@ _iops_io_nfs_counters() {{
     isnfs && /^[ \\t]*READ:/  {{ ro[dev] = $2; next }}
     isnfs && /^[ \\t]*WRITE:/ {{ wo[dev] = $2; next }}
     END {{
-        for (d in rb) printf "nfs %s %s %s %s %s\\n", d, rb[d], wb[d], ro[d] + 0, wo[d] + 0
+        for (d in rb) {{
+            # An empty filter means every NFS mount on the node
+            if (want != "" && index(want, " " d " ") == 0) continue
+            printf "nfs %s %s %s %s %s\\n", d, rb[d], wb[d], ro[d] + 0, wo[d] + 0
+        }}
     }}' "$_IOPS_IO_MOUNTSTATS" 2>/dev/null
 }}
 
@@ -598,7 +757,7 @@ _iops_io_available() {{
 }}
 
 _iops_io_sample() {{
-    local ts elapsed host key prev deltas
+    local ts elapsed host key prev deltas label
     ts=$(date +%s.%N 2>/dev/null || date +%s)
     host=$(hostname 2>/dev/null || echo "unknown")
 
@@ -612,6 +771,7 @@ _iops_io_sample() {{
         [[ -z "$dev" ]] && continue
         key="${{src}}|${{dev}}"
         prev="${{_iops_io_prev[$key]:-}}"
+        label="${{_iops_io_labels[$key]:-}}"
 
         if [[ -n "$prev" ]]; then
             # Counters are cumulative since boot. A negative delta means the
@@ -625,7 +785,7 @@ _iops_io_sample() {{
                     printf "%.0f%s", v, (i < 4 ? "," : "")
                 }}
             }}')
-            echo "$ts,$host,$src,$dev,$elapsed,$deltas"
+            echo "$ts,$host,$src,$dev,$label,$elapsed,$deltas"
         fi
 
         _iops_io_prev[$key]="$rb $wb $ro $wo"
@@ -636,7 +796,7 @@ _iops_io_sample() {{
 
 _iops_io_sampler_loop() {{
     # Write CSV header
-    echo "timestamp,hostname,source,device,interval_s,read_bytes,write_bytes,read_ops,write_ops" > "$_IOPS_IO_TRACE_FILE"
+    echo "timestamp,hostname,source,device,path,interval_s,read_bytes,write_bytes,read_ops,write_ops" > "$_IOPS_IO_TRACE_FILE"
 
     # Initial read to populate baseline (first sample produces no output)
     _iops_io_sample > /dev/null 2>&1
@@ -655,12 +815,17 @@ _iops_stop_io_samplers() {{
 
 # Check if running standalone (executed) vs sourced
 if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
-    # Running standalone on a node - just run the sampling loop
+    # Running standalone on a node - resolve this node's own mounts, then sample.
+    # Mount tables differ across an allocation, so resolution cannot be inherited
+    # from the head node.
+    _iops_io_resolve_targets
     _iops_io_sampler_loop
 else
     # Being sourced - set up and launch the samplers
 
-    if _iops_io_available; then
+    _iops_io_resolve_targets
+
+    if _iops_io_available && _iops_io_have_targets; then
         # Create sentinel file (signals samplers to keep running)
         touch "$_IOPS_IO_SENTINEL"
 
@@ -1419,7 +1584,7 @@ class BasePlanner(ABC, HasLogger):
 
         # Inject IOPS helper scripts (exit handler, runtime monitors, atexit scripts)
         # All sources are injected at a single point after shebang/#SBATCH directives
-        script_text = self._inject_iops_scripts(script_text, exec_dir)
+        script_text = self._inject_iops_scripts(script_text, exec_dir, test)
 
         # Write script files inside repetition dir
         test.script_file = exec_dir / f"run_{test.script_name}.sh"
@@ -1467,7 +1632,30 @@ class BasePlanner(ABC, HasLogger):
 
         self.logger.debug(f"  [Prepare] Inputs written: {', '.join(written)}")
 
-    def _inject_iops_scripts(self, script_text: str, exec_dir: Path) -> str:
+    @staticmethod
+    def _render_io_paths(test: Any, probes: Any) -> str:
+        """
+        Render probes.io_paths for one execution as a bash array literal.
+
+        Paths are Jinja2 templates so they can name a location the execution
+        creates, e.g. "{{ execution_dir }}/scratch". Returns an empty string when
+        no paths are configured, which the sampler reads as "monitor everything".
+
+        When no execution is available (a caller building a script outside the
+        normal flow, as some tests do) the raw values are used, since there is
+        no context to render against.
+        """
+        if not probes or not probes.io_paths:
+            return ""
+
+        if test is not None and hasattr(test, "render_paths"):
+            paths = test.render_paths(probes.io_paths)
+        else:
+            paths = list(probes.io_paths)
+
+        return " ".join(shlex.quote(str(p)) for p in paths)
+
+    def _inject_iops_scripts(self, script_text: str, exec_dir: Path, test: Any = None) -> str:
         """
         Inject all IOPS helper scripts into a user script.
 
@@ -1564,8 +1752,10 @@ class BasePlanner(ABC, HasLogger):
             io_sampler_script = IO_SAMPLER_TEMPLATE.format(
                 execution_dir=str(exec_dir),
                 io_trace_prefix=IO_TRACE_FILENAME_PREFIX,
+                io_targets_prefix=IO_TARGETS_FILENAME_PREFIX,
                 io_trace_interval=sampling_interval,
-                io_sentinel_filename=IO_SAMPLER_SENTINEL_FILENAME
+                io_sentinel_filename=IO_SAMPLER_SENTINEL_FILENAME,
+                io_paths=self._render_io_paths(test, probes),
             )
             io_sampler_file = exec_dir / RUNTIME_IO_SAMPLER_FILENAME
             with open(io_sampler_file, "w") as f:
