@@ -555,10 +555,13 @@ declare -A _iops_io_prev
 declare -A _iops_io_labels
 _IOPS_IO_PREV_TS=""
 
-# Space-delimited filters, set by _iops_io_resolve_targets. Empty means no
-# filtering for that source.
+# Space-delimited filters, set by _iops_io_resolve_targets.
 _IOPS_IO_DEVICES=""
 _IOPS_IO_NFS_MOUNTS=""
+# 1 once paths have been resolved. An empty filter then means "nothing from this
+# source", not "everything from it": paths that all resolve to local disks must
+# not drag in every NFS mount the node happens to have.
+_IOPS_IO_FILTERED=0
 
 # Whole block devices, used when no paths were configured. Partitions (sda1)
 # are excluded because their traffic is already counted in the parent device,
@@ -688,6 +691,8 @@ _iops_io_resolve_targets() {{
         return 0
     fi
 
+    _IOPS_IO_FILTERED=1
+
     local _path _resolved _kind _target _mount _fstype _dev
     local _entries=""
 
@@ -751,7 +756,7 @@ _iops_io_block_counters() {{
 # study wants: the first two include reads the page cache satisfied locally.
 _iops_io_nfs_counters() {{
     [ -r "$_IOPS_IO_MOUNTSTATS" ] || return 0
-    awk -v want="$_IOPS_IO_NFS_MOUNTS" '
+    awk -v want="$_IOPS_IO_NFS_MOUNTS" -v filtered="$_IOPS_IO_FILTERED" '
     /^device / {{
         dev = $2
         isnfs = 0
@@ -767,8 +772,10 @@ _iops_io_nfs_counters() {{
     isnfs && /^[ \\t]*WRITE:/ {{ wo[dev] = $2; next }}
     END {{
         for (d in rb) {{
-            # An empty filter means every NFS mount on the node
-            if (want != "" && index(want, " " d " ") == 0) continue
+            # Once paths are configured, only the mounts they resolved to count.
+            # An empty filter then selects nothing, which is the correct answer
+            # for a run whose paths all live on local disks.
+            if (filtered == "1" && index(want, " " d " ") == 0) continue
             printf "nfs %s %s %s %s %s\\n", d, rb[d], wb[d], ro[d] + 0, wo[d] + 0
         }}
     }}' "$_IOPS_IO_MOUNTSTATS" 2>/dev/null

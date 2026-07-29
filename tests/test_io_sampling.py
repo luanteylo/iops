@@ -444,6 +444,7 @@ export IOPS_IO_DISKSTATS="{tmp_path}/absent"
 export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
 export IOPS_IO_SYSBLOCK="{sysblock}"
 source "{sampler}"
+_IOPS_IO_FILTERED=1
 _IOPS_IO_DEVICES=" "
 _IOPS_IO_NFS_MOUNTS=" server:/export "
 _iops_io_labels["nfs|server:/export"]="/mnt/data"
@@ -462,6 +463,49 @@ _iops_io_sample
         assert "other:/vol" not in lines[0]
         # The row is labelled with the path it was resolved from
         assert lines[0].split(",")[4] == "/mnt/data"
+
+    def test_local_only_paths_exclude_every_nfs_mount(self, tmp_path):
+        """
+        Regression: a run scoped to a local path reported every NFS mount on the
+        node. The NFS filter treated "empty" as "no filtering", but once paths
+        are configured an empty filter means the paths resolved to no NFS mount,
+        so nothing from that source should be counted.
+
+        Observed on a cluster where io_paths was ["/tmp"] and the reported reads
+        were almost entirely the package store and home directory mounts, which
+        the benchmark only touched while loading modules.
+        """
+        sysblock = tmp_path / "sysblock"
+        (sysblock / "sda").mkdir(parents=True)
+
+        sampler = _render_sampler(tmp_path, io_paths="'/'")
+        (tmp_path / "ms.1").write_text(MOUNTSTATS_BASE)
+        (tmp_path / "ms.2").write_text(MOUNTSTATS_AFTER)
+        (tmp_path / "ds.1").write_text(DISKSTATS_BASE)
+        (tmp_path / "ds.2").write_text(DISKSTATS_AFTER)
+
+        driver = tmp_path / "driver.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+export IOPS_IO_SYSBLOCK="{sysblock}"
+source "{sampler}"
+_iops_io_resolve_targets
+_IOPS_IO_DISKSTATS="{tmp_path}/ds.1"
+_IOPS_IO_MOUNTSTATS="{tmp_path}/ms.1"
+_iops_io_sample > /dev/null
+sleep 0.2
+_IOPS_IO_DISKSTATS="{tmp_path}/ds.2"
+_IOPS_IO_MOUNTSTATS="{tmp_path}/ms.2"
+_iops_io_sample
+''')
+        result = subprocess.run(
+            ["bash", str(driver)], capture_output=True, text=True, timeout=30,
+        )
+        sources = {ln.split(",")[2] for ln in result.stdout.strip().split("\n") if ln}
+        assert "nfs" not in sources, (
+            f"a run scoped to a local path must not report NFS mounts, got {result.stdout}"
+        )
 
     def test_paths_sharing_a_device_are_counted_once(self, tmp_path):
         """
