@@ -152,6 +152,8 @@ def var_kind(vardef: dict) -> str:
         return "expr"
     if "adaptive" in vardef:
         return "adaptive"
+    if "escalate" in vardef:
+        return "escalate"
     return "sweep"
 
 
@@ -569,7 +571,7 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                 nw.on("blur", rename)
                 ui.select(VAR_TYPES, label="Type", value=vardef.get("type", "int"),
                           on_change=setter(vardef, "type", drop_empty=False)).classes("w-28")
-                ui.select(["sweep", "expr", "adaptive"], label="Kind", value=var_kind(vardef),
+                ui.select(["sweep", "expr", "adaptive", "escalate"], label="Kind", value=var_kind(vardef),
                           on_change=restructure(lambda e, n=vname: _switch_kind(variables, n, e.value))).classes("w-32")
                 ui.button(icon="delete",
                           on_click=restructure(lambda e, n=vname: variables.pop(n, None))) \
@@ -581,6 +583,8 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                          on_change=setter(vardef, "expr")).classes("w-full")
             elif k == "adaptive":
                 _adaptive_fields(vardef)
+            elif k == "escalate":
+                _escalate_fields(vardef)
             else:
                 _sweep_fields(variables, vname, vardef)
 
@@ -624,14 +628,27 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                 ui.select(DIRECTIONS, label="direction", value=ad.get("direction", "ascending"),
                           on_change=setter(ad, "direction", drop_empty=False)).classes("grow")
 
+    def _escalate_fields(vardef):
+        esc = vardef.setdefault("escalate", {})
+        with ui.column().classes("w-full gap-1"):
+            ui.label("Escalates when the adaptive variable's stop_when triggers, "
+                     "retesting the same adaptive value. Requires an adaptive variable.") \
+                .classes("text-xs text-gray-500")
+            ui.input("Values (comma-separated, tried in order)",
+                     value=_values_text(esc.get("values")),
+                     on_change=lambda e: (esc.__setitem__("values", _parse_values(e.value)),
+                                          sync_to_yaml())).classes("w-full")
+
     def _switch_kind(variables, vname, new_kind):
         vardef = variables[vname]
-        for key in ("sweep", "expr", "adaptive", "when", "default"):
+        for key in ("sweep", "expr", "adaptive", "escalate", "when", "default"):
             vardef.pop(key, None)
         if new_kind == "expr":
             vardef["expr"] = ""
         elif new_kind == "adaptive":
             vardef["adaptive"] = {"initial": 1, "factor": 2, "stop_when": "exit_code != 0"}
+        elif new_kind == "escalate":
+            vardef["escalate"] = {"values": [1, 2, 4]}
         else:
             vardef["sweep"] = {"mode": "list", "values": [1, 2, 4]}
 

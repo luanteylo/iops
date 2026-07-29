@@ -143,6 +143,13 @@ Shows adaptive probing outcomes, included automatically when using `search_metho
 - **Probe Results Summary**: one row per swept variable combination showing the value that triggered the stop condition, the last value the probe continued past, iteration count, and stop reason
 - **Trajectory Plots**: per metric, an interactive line chart of the metric versus the adaptive variable, one trace per swept variable combination; the last value before the stop is marked with a green-outlined circle, the stop-triggering value with a red X marker
 
+When the config pairs the adaptive variable with an [escalating variable](../adaptive-variables#staircase-search-with-an-escalating-variable), the section adapts to the staircase:
+
+- **Search Frontier**: one row per escalation value showing the furthest adaptive value it reached, which is what a staircase search produces. The probe results summary below it reports only the final state, so on its own it would hide the frontier. A rung that never succeeded reads `nothing` rather than a number it never ran.
+- **Search Path**: a scatter of every test the search ran, the adaptive variable on the x-axis and the escalating variable on the y-axis, with successes as green circles and stop-condition hits as red crosses, plus a step line tracing the frontier. The y-axis is spaced by position rather than by value, so escalation values like 1, 4, 16 stay evenly spaced.
+- The **Probing Configuration** block also lists the escalating variable and its values.
+
+
 ### Resource Sampling
 
 Displays a summary table (min/max/mean) of resource metrics collected by IOPS probes during execution (CPU/memory utilization, GPU power, temperature, energy, etc.). Appears automatically when `__iops_resource_summary.csv` exists. Resource metrics are also available as regular metrics for custom plots (see [Resource Sampling Plots](#resource-sampling-plots)).

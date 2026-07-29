@@ -369,6 +369,39 @@ class TestApplyMachineOverride:
         assert "sweep" in result["vars"]["nodes"]
         assert "adaptive" not in result["vars"]["nodes"]
 
+    def test_sweep_to_escalate_clears_sweep(self, tmp_path):
+        """When override provides escalate for a swept var, sweep is removed."""
+        data = self._base_config(tmp_path)
+        assert "sweep" in data["vars"]["nodes"]
+        data["machines"] = {
+            "cluster_a": {
+                "vars": {
+                    "nodes": {"type": "int", "escalate": {"values": [1, 4, 16]}},
+                },
+            }
+        }
+        result = _apply_machine_override(data, "cluster_a")
+        assert result["vars"]["nodes"]["escalate"]["values"] == [1, 4, 16]
+        assert "sweep" not in result["vars"]["nodes"]
+
+    def test_escalate_to_sweep_clears_escalate(self, tmp_path):
+        """When override provides sweep for an escalating var, escalate is removed."""
+        data = self._base_config(tmp_path)
+        data["vars"]["nodes"] = {"type": "int", "escalate": {"values": [1, 4, 16]}}
+        data["machines"] = {
+            "cluster_a": {
+                "vars": {
+                    "nodes": {
+                        "type": "int",
+                        "sweep": {"mode": "list", "values": [1, 2, 4]},
+                    },
+                },
+            }
+        }
+        result = _apply_machine_override(data, "cluster_a")
+        assert "sweep" in result["vars"]["nodes"]
+        assert "escalate" not in result["vars"]["nodes"]
+
     def test_expr_to_adaptive_clears_expr(self, tmp_path):
         """When override provides adaptive for a derived var, expr is removed."""
         data = self._base_config(tmp_path)

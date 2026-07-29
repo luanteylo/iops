@@ -1143,3 +1143,351 @@ class TestAdaptiveResultFieldAliases:
         no_stop = {"stop_value": None, "last_value_before_stop": 800,
                    "failed_value": 999}
         assert _probe_stop_value(no_stop) is None
+
+
+# ------------------------------------------------------------------ #
+# Class 8: staircase search (adaptive + escalate)
+# ------------------------------------------------------------------ #
+
+
+class TestAdaptiveEscalate:
+    """
+    An escalating variable turns a probe into a staircase search: when
+    stop_when triggers, the escalating variable advances and the same
+    adaptive value is retested, instead of the probe finishing.
+    """
+
+    def _staircase_config(self, tmp_path, initial=1000, values=(1, 4, 16), extra_vars=None):
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["problem_size"] = {
+            "type": "int",
+            "adaptive": {
+                "initial": initial,
+                "increment": 1000,
+                "stop_when": "exit_code != 0",
+                "max_iterations": 20,
+            },
+        }
+        cfg["vars"]["number_of_blocks"] = {
+            "type": "int",
+            "escalate": {"values": list(values)},
+        }
+        if extra_vars:
+            cfg["vars"].update(extra_vars)
+        cfg["command"]["template"] = "echo '{{ problem_size }} {{ number_of_blocks }}'"
+        return _build_config(tmp_path, cfg)
+
+    @staticmethod
+    def _needs(problem_size):
+        """Blocks required: 1000 -> 1, 2000 -> 4, 3000 -> 16, 4000 -> 64."""
+        return 4 ** (problem_size // 1000 - 1)
+
+    def _simulate(self, test):
+        if test.base_vars["number_of_blocks"] >= self._needs(test.base_vars["problem_size"]):
+            return _succeed_metadata()
+        return _fail_metadata()
+
+    def test_walks_the_staircase(self, tmp_path):
+        """Each failure escalates and retests the same adaptive value."""
+        loaded = self._staircase_config(tmp_path)
+        results, recorded = _run_planner_pass(loaded, self._simulate)
+
+        walked = [
+            (t["base_vars"]["problem_size"], t["base_vars"]["number_of_blocks"])
+            for t in recorded
+        ]
+        assert walked == [
+            (1000, 1),      # works, advance
+            (2000, 1),      # fails, escalate
+            (2000, 4),      # works, advance
+            (3000, 4),      # fails, escalate
+            (3000, 16),     # works, advance
+            (4000, 16),     # fails, escalation exhausted
+        ]
+
+    def test_costs_fewer_runs_than_independent_probes(self, tmp_path):
+        """
+        The staircase is P + B - 1 runs. Restarting the escalation for every
+        adaptive value would cost up to P * B.
+        """
+        loaded = self._staircase_config(tmp_path)
+        _, recorded = _run_planner_pass(loaded, self._simulate)
+        assert len(recorded) == 6      # 4 problem sizes + 3 block counts - 1
+
+    def test_frontier_reports_each_level(self, tmp_path):
+        """The result is a frontier, one rung per escalation value."""
+        loaded = self._staircase_config(tmp_path)
+        results, _ = _run_planner_pass(loaded, self._simulate)
+        result = results["(no swept vars)"]
+
+        assert result.stop_reason == "escalation_exhausted"
+        assert [(p.escalate_value, p.last_value_before_stop) for p in result.frontier] == [
+            (1, 1000),
+            (4, 2000),
+            (16, 3000),
+        ]
+
+    def test_level_is_not_credited_with_untested_values(self, tmp_path):
+        """
+        A level that never succeeds reports None, not the value carried over
+        from the previous level. Starting at 2000 means blocks=1 never works.
+        """
+        loaded = self._staircase_config(tmp_path, initial=2000)
+        results, _ = _run_planner_pass(loaded, self._simulate)
+        frontier = results["(no swept vars)"].frontier
+
+        assert frontier[0].escalate_value == 1
+        assert frontier[0].last_value_before_stop is None
+        assert frontier[1].last_value_before_stop == 2000
+
+    def test_one_staircase_per_swept_combination(self, tmp_path):
+        """Swept variables still get independent probes."""
+        loaded = self._staircase_config(
+            tmp_path,
+            extra_vars={"variant": {"type": "str",
+                                    "sweep": {"mode": "list", "values": ["a", "b"]}}},
+        )
+        results, recorded = _run_planner_pass(loaded, self._simulate)
+
+        assert len(recorded) == 12     # two independent 6-run staircases
+        for label in ("variant=a", "variant=b"):
+            assert [p.last_value_before_stop for p in results[label].frontier] == [1000, 2000, 3000]
+
+    def test_without_escalate_behaviour_is_unchanged(self, tmp_path):
+        """A plain adaptive variable still finishes on the first stop."""
+        cfg = _make_base_config(tmp_path)
+        cfg["vars"]["x"] = {
+            "type": "int",
+            "adaptive": {"initial": 100, "factor": 2, "stop_when": "exit_code != 0"},
+        }
+        loaded = _build_config(tmp_path, cfg)
+
+        def simulate(test):
+            return _fail_metadata() if test.base_vars["x"] >= 400 else _succeed_metadata()
+
+        results, _ = _run_planner_pass(loaded, simulate)
+        result = results["(no swept vars)"]
+
+        assert result.stop_reason == "condition_met"
+        assert result.frontier == []
+        assert result.stop_value == 400
+
+
+class TestEscalateConfigValidation:
+    """Config-level rules for escalating variables."""
+
+    def _load_invalid(self, tmp_path, config_dict, match):
+        workdir = tmp_path / "workdir"
+        workdir.mkdir(parents=True, exist_ok=True)
+        config_dict["benchmark"]["workdir"] = str(workdir)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump(config_dict))
+        with pytest.raises(ConfigValidationError, match=match):
+            load_generic_config(Path(config_file), _get_logger())
+
+    def _with_adaptive(self, cfg):
+        cfg["vars"]["problem_size"] = {
+            "type": "int",
+            "adaptive": {"initial": 1000, "increment": 1000,
+                         "stop_when": "exit_code != 0"},
+        }
+        return cfg
+
+    def test_escalate_without_adaptive_rejected(self, tmp_path):
+        """'escalate' extends an adaptive probe, so it needs one to extend."""
+        cfg = _make_base_config(tmp_path)
+        cfg["benchmark"]["search_method"] = "exhaustive"
+        cfg["vars"]["blocks"] = {"type": "int", "escalate": {"values": [1, 4]}}
+        cfg["vars"]["size"] = {"type": "int",
+                               "sweep": {"mode": "list", "values": [1000]}}
+        self._load_invalid(tmp_path, cfg, "requires an adaptive variable")
+
+    def test_empty_values_rejected(self, tmp_path):
+        cfg = self._with_adaptive(_make_base_config(tmp_path))
+        cfg["vars"]["blocks"] = {"type": "int", "escalate": {"values": []}}
+        self._load_invalid(tmp_path, cfg, "non-empty list")
+
+    def test_two_escalating_variables_rejected(self, tmp_path):
+        cfg = self._with_adaptive(_make_base_config(tmp_path))
+        cfg["vars"]["blocks"] = {"type": "int", "escalate": {"values": [1, 4]}}
+        cfg["vars"]["tiles"] = {"type": "int", "escalate": {"values": [2, 8]}}
+        self._load_invalid(tmp_path, cfg, "Only one escalating variable")
+
+    def test_escalate_conflicts_with_other_var_kinds(self, tmp_path):
+        cfg = self._with_adaptive(_make_base_config(tmp_path))
+        cfg["vars"]["blocks"] = {
+            "type": "int",
+            "escalate": {"values": [1, 4]},
+            "sweep": {"mode": "list", "values": [1, 2]},
+        }
+        self._load_invalid(tmp_path, cfg, "only one of")
+
+    def test_escalate_rejected_in_cache_exclude_vars(self, tmp_path):
+        cfg = self._with_adaptive(_make_base_config(tmp_path))
+        cfg["vars"]["blocks"] = {"type": "int", "escalate": {"values": [1, 4]}}
+        cfg["benchmark"]["cache_exclude_vars"] = ["blocks"]
+        self._load_invalid(tmp_path, cfg, "cannot be listed in 'cache_exclude_vars'")
+
+    def test_valid_staircase_config_loads(self, tmp_path):
+        cfg = self._with_adaptive(_make_base_config(tmp_path))
+        cfg["vars"]["blocks"] = {"type": "int", "escalate": {"values": [1, 4, 16]}}
+        loaded = _build_config(tmp_path, cfg)
+        assert loaded.vars["blocks"].escalate.values == [1, 4, 16]
+        assert loaded.vars["problem_size"].adaptive.initial == 1000
+
+
+class TestAdaptiveReportVars:
+    """
+    Reports pick their variables from the metadata. Adaptive and escalating
+    variables are not swept, so a config with no swept variables at all used
+    to yield no report variables and fail with "No report variables found".
+    """
+
+    def _generator(self, variables, report_vars=None):
+        from iops.reporting.report_generator import ReportGenerator
+
+        gen = ReportGenerator.__new__(ReportGenerator)
+        gen.metadata = {
+            "benchmark": {"report_vars": report_vars},
+            "variables": variables,
+        }
+        return gen
+
+    def test_adaptive_var_is_a_report_var(self):
+        """An adaptive-only config still has an axis worth plotting against."""
+        gen = self._generator({
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000}, "escalate": False},
+        })
+        assert gen._get_report_vars() == ["problem_size"]
+
+    def test_escalating_var_is_a_report_var(self):
+        gen = self._generator({
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000}, "escalate": False},
+            "number_of_blocks": {"type": "int", "swept": False,
+                                 "adaptive": False, "escalate": {"values": [1, 4]}},
+        })
+        assert gen._get_report_vars() == ["problem_size", "number_of_blocks"]
+
+    def test_swept_vars_still_come_first(self):
+        gen = self._generator({
+            "nodes": {"type": "int", "swept": True, "adaptive": False, "escalate": False},
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000}, "escalate": False},
+        })
+        assert gen._get_report_vars() == ["nodes", "problem_size"]
+
+    def test_non_numeric_search_vars_excluded(self):
+        """String axes do not plot well and are excluded, as for swept vars."""
+        gen = self._generator({
+            "mode": {"type": "str", "swept": False,
+                     "adaptive": {"initial": "a"}, "escalate": False},
+        })
+        assert gen._get_report_vars() == []
+
+    def test_explicit_report_vars_still_win(self):
+        gen = self._generator(
+            {"problem_size": {"type": "int", "swept": False,
+                              "adaptive": {"initial": 1000}, "escalate": False}},
+            report_vars=["something_else"],
+        )
+        assert gen._get_report_vars() == ["something_else"]
+
+    def test_metadata_without_escalate_key_still_works(self):
+        """Runs recorded before escalating variables existed have no such key."""
+        gen = self._generator({
+            "problem_size": {"type": "int", "swept": False, "adaptive": {"initial": 1000}},
+        })
+        assert gen._get_report_vars() == ["problem_size"]
+
+
+class TestStaircaseReporting:
+    """
+    A staircase search produces a frontier. The probe summary collapses to
+    the final state only, so on its own it hides the result.
+    """
+
+    def _generator(self, frontier=True):
+        from iops.reporting.report_generator import ReportGenerator
+
+        gen = ReportGenerator.__new__(ReportGenerator)
+        variables = {
+            "problem_size": {"type": "int", "swept": False,
+                             "adaptive": {"initial": 1000, "increment": 1000,
+                                          "stop_when": "exit_code != 0"},
+                             "escalate": False},
+            "number_of_blocks": {"type": "int", "swept": False, "adaptive": False,
+                                 "escalate": {"values": [1, 4, 16]}},
+        }
+        probe = {
+            "stop_value": 4000,
+            "last_value_before_stop": 3000,
+            "iterations": 4,
+            "stop_reason": "escalation_exhausted",
+        }
+        if frontier:
+            probe["escalate_var"] = "number_of_blocks"
+            probe["frontier"] = [
+                {"number_of_blocks": 1, "last_value_before_stop": 1000},
+                {"number_of_blocks": 4, "last_value_before_stop": 2000},
+                {"number_of_blocks": 16, "last_value_before_stop": 3000},
+            ]
+        gen.metadata = {
+            "benchmark": {},
+            "variables": variables,
+            "adaptive_results": {"problem_size": {"(no swept vars)": probe}},
+        }
+        return gen
+
+    def test_escalate_var_is_identified(self):
+        gen = self._generator()
+        assert gen._get_escalate_var() == "number_of_blocks"
+        assert gen._get_escalate_values() == [1, 4, 16]
+
+    def test_no_escalate_var_without_one(self):
+        gen = self._generator()
+        gen.metadata["variables"]["number_of_blocks"]["escalate"] = False
+        assert gen._get_escalate_var() is None
+        assert gen._get_escalate_values() == []
+
+    def test_frontier_table_lists_every_rung(self):
+        gen = self._generator()
+        probes = gen.metadata["adaptive_results"]["problem_size"]
+        html = gen._render_frontier_table("problem_size", "number_of_blocks", probes)
+
+        assert "Search Frontier" in html
+        for escalate_val, reached in ((1, 1000), (4, 2000), (16, 3000)):
+            assert f"<td>{escalate_val}</td><td>{reached}</td>" in html
+        # Single probe: no Configuration column to clutter it
+        assert "<th>Configuration</th>" not in html
+
+    def test_frontier_table_labels_probes_when_several(self):
+        gen = self._generator()
+        probes = gen.metadata["adaptive_results"]["problem_size"]
+        probes["variant=b"] = dict(probes["(no swept vars)"])
+        html = gen._render_frontier_table("problem_size", "number_of_blocks", probes)
+        assert "<th>Configuration</th>" in html
+        assert "variant=b" in html
+
+    def test_level_that_reached_nothing_is_marked(self):
+        """A rung that never succeeded must not read as though it reached 0."""
+        gen = self._generator()
+        probes = gen.metadata["adaptive_results"]["problem_size"]
+        probes["(no swept vars)"]["frontier"][0]["last_value_before_stop"] = None
+        html = gen._render_frontier_table("problem_size", "number_of_blocks", probes)
+        assert "<em>nothing</em>" in html
+
+    def test_plain_adaptive_run_has_no_frontier(self):
+        """Without an escalating variable there are no rungs to report."""
+        from iops.reporting.report_generator import _probe_frontier
+
+        gen = self._generator(frontier=False)
+        probe = gen.metadata["adaptive_results"]["problem_size"]["(no swept vars)"]
+        assert _probe_frontier(probe) == []
+
+    def test_pre_escalate_metadata_has_no_frontier(self):
+        """Runs recorded before escalating variables existed lack the key."""
+        from iops.reporting.report_generator import _probe_frontier
+
+        assert _probe_frontier({"found_value": 200, "failed_value": 400}) == []

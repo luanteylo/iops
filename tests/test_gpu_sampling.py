@@ -691,3 +691,73 @@ class TestGpuTraceMetrics:
         metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
 
         assert metrics["gpu_samples_collected"] == 2
+
+    def test_unsupported_field_does_not_drop_other_metrics(self, tmp_path):
+        """Devices with unified memory report "[N/A]" for the memory fields.
+
+        Only the memory columns should be missing; power, temperature,
+        utilization and energy must still be reported.
+        """
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_gx10.csv"
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,gx10,0,NVIDIA GB10,80.0,[N/A],[N/A],[N/A],62,20.0,1410,[N/A]\n"
+            + "1001.0,gx10,0,NVIDIA GB10,90.0,[N/A],[N/A],[N/A],64,20.0,1410,[N/A]\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_count"] == 1
+        assert metrics["gpu_samples_collected"] == 2
+        assert metrics["gpu_avg_utilization_pct"] == 85.0
+        assert metrics["gpu_max_utilization_pct"] == 90.0
+        assert metrics["gpu_avg_temperature_c"] == 63.0
+        assert metrics["gpu_max_temperature_c"] == 64.0
+        assert metrics["gpu_avg_power_w"] == 20.0
+        assert metrics["gpu_energy_j"] == 20.0  # 20W over 1s
+        assert metrics["gpu0_avg_power_w"] == 20.0
+
+        # Unreported fields are omitted rather than reported as zero, so a
+        # missing measurement is never mistaken for an idle device.
+        assert "gpu_mem_peak_mib" not in metrics
+        assert "gpu0_mem_peak_mib" not in metrics
+        assert "gpu_avg_mem_utilization_pct" not in metrics
+
+    def test_partially_unsupported_field_uses_valid_samples(self, tmp_path):
+        """A field that is unavailable for only some samples keeps the rest."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU,80.0,40.0,[N/A],81920,60,200.0,1410,1215\n"
+            + "1001.0,node01,0,GPU,90.0,50.0,40000,81920,70,300.0,1410,1215\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_samples_collected"] == 2
+        assert metrics["gpu_mem_peak_mib"] == 40000.0
+        assert metrics["gpu_avg_utilization_pct"] == 85.0
+
+    def test_all_gpu_fields_unsupported(self, tmp_path):
+        """A GPU reporting nothing usable still counts, without fake zeros."""
+        from iops.execution.runner import IOPSRunner
+
+        runner = self._make_runner()
+        trace_file = tmp_path / "__iops_gpu_trace_node1.csv"
+        trace_file.write_text(
+            GPU_TRACE_HEADER
+            + "1000.0,node01,0,GPU,[N/A],[N/A],[N/A],[N/A],[N/A],[N/A],[N/A],[N/A]\n"
+        )
+
+        metrics = IOPSRunner._compute_gpu_trace_metrics(runner, [trace_file])
+
+        assert metrics["gpu_count"] == 1
+        assert metrics["gpu_samples_collected"] == 1
+        assert "gpu_avg_power_w" not in metrics
+        assert "gpu_energy_j" not in metrics

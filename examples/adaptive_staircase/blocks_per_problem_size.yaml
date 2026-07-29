@@ -1,0 +1,66 @@
+benchmark:
+  name: "Smallest block count each problem size needs"
+  workdir: "./workdir"
+  executor: "local"          # change to "slurm" on a cluster
+  search_method: "adaptive"
+  repetitions: 1
+
+vars:
+  # ---- WORKLOAD axis: grows while the benchmark keeps working -----------
+  problem_size:
+    type: int
+    adaptive:
+      initial: 1000
+      increment: 1000
+      stop_when: "exit_code != 0"   # "this configuration is exhausted"
+      max_iterations: 20            # safety cap on the workload axis
+
+  # ---- RESOURCE axis: advances only when the workload axis stalls -------
+  # When stop_when triggers, number_of_blocks moves to its next value and
+  # the SAME problem_size is retested. The search ends when these run out.
+  number_of_blocks:
+    type: int
+    escalate:
+      values: [1, 4, 16]
+
+command:
+  template: "./my_benchmark --size {{ problem_size }} --blocks {{ number_of_blocks }}"
+
+scripts:
+  - name: "probe"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      # Redirecting still propagates the benchmark's exit code, which is what
+      # drives the search. Do not end this script with a command that always
+      # succeeds (no trailing 'echo done', no '|| true').
+      {{ command.template }} > {{ execution_dir }}/result.json
+
+    parser:
+      file: "{{ execution_dir }}/result.json"
+      metrics:
+        - name: runtime_s
+          type: float
+        - name: throughput
+          type: float
+      parser_script: |
+        import json
+
+        def parse(file_path):
+            # Only runs that fit produce a result. A run that failed has an
+            # empty file, and reporting no metrics for it is correct: there
+            # is no measurement to record.
+            with open(file_path) as f:
+                content = f.read().strip()
+            if not content:
+                return {}
+            data = json.loads(content)
+            return {
+                "runtime_s": data["runtime_s"],
+                "throughput": data["throughput"],
+            }
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"

@@ -304,10 +304,37 @@ class AdaptiveConfig:
     direction: str = "ascending"
 
 @dataclass
+class EscalateConfig:
+    """
+    Configuration for an escalating variable, used with an adaptive variable.
+
+    An adaptive variable on its own finishes its probe as soon as stop_when
+    triggers. Pairing it with an escalating variable turns that into a
+    staircase search: when the probe would stop, the escalating variable
+    advances to its next value and the same adaptive value is retested. The
+    probe finishes only once the escalation values run out.
+
+    This finds the frontier between the two variables. With problem_size
+    adaptive and number_of_blocks escalating over [1, 4, 16], the search
+    reports the smallest block count each problem size needs, equivalently
+    the largest problem size each block count can handle.
+
+    The search never goes back to an earlier escalation value, so it assumes
+    that a value which fails at one adaptive value also fails at every later
+    one.
+
+    Attributes:
+        values: Ordered values to escalate through (required, non-empty)
+    """
+    values: List[Any] = field(default_factory=list)
+
+
+@dataclass
 class VarConfig:
     type: str                 # "int", "float", "str", etc.
     sweep: Optional[SweepConfig] = None
     adaptive: Optional[AdaptiveConfig] = None
+    escalate: Optional[EscalateConfig] = None
     expr: Optional[str] = None  # for derived vars
     when: Optional[str] = None  # condition for conditional variables
     default: Optional[Any] = None  # value when condition is false

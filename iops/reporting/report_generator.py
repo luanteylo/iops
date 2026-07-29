@@ -84,6 +84,17 @@ def _probe_last_value_before_stop(probe_data: dict) -> Any:
     return probe_data.get('found_value')
 
 
+def _probe_frontier(probe_data: dict) -> List[dict]:
+    """
+    Read a staircase probe's frontier: one entry per escalation value.
+
+    Empty for a plain adaptive probe, which has a single threshold rather
+    than a frontier, and for runs recorded before escalating variables.
+    """
+    frontier = probe_data.get('frontier')
+    return frontier if isinstance(frontier, list) else []
+
+
 class ReportGenerator:
     """Generates HTML reports from IOPS benchmark results."""
 
@@ -470,13 +481,30 @@ class ReportGenerator:
                 swept_vars.append(var_name)
         return swept_vars
 
+    def _get_search_driven_vars(self) -> List[str]:
+        """
+        Get variables whose values the search itself chooses.
+
+        Adaptive and escalating variables are not swept, so they never appear
+        in the Cartesian product, but they do vary across executions and are
+        usually the most interesting axis in an adaptive run.
+        """
+        driven = []
+        for var_name, var_info in self.metadata['variables'].items():
+            if var_info.get('adaptive') or var_info.get('escalate'):
+                driven.append(var_name)
+        return driven
+
     def _get_report_vars(self) -> List[str]:
         """
         Get list of variables to use for report generation.
 
         Priority:
         1. Use report_vars from benchmark config if specified
-        2. Otherwise, use all swept variables that are numeric (int/float/bool)
+        2. Otherwise, use numeric swept variables plus the variables driven by
+           the search (adaptive, escalating). An adaptive config need not have
+           any swept variables at all, in which case the adaptive axis is the
+           only thing there is to plot against.
         3. Exclude string variables by default (they don't plot well)
         """
         # Check if report_vars is explicitly specified
@@ -486,11 +514,13 @@ class ReportGenerator:
             # Use explicitly specified variables
             return report_vars
 
-        # Default: use numeric swept variables only (bool treated as 0/1)
-        swept_vars = self._get_swept_vars()
+        # Default: numeric variables only (bool treated as 0/1)
+        candidates = self._get_swept_vars() + self._get_search_driven_vars()
         numeric_vars = []
 
-        for var_name in swept_vars:
+        for var_name in candidates:
+            if var_name in numeric_vars:
+                continue
             var_type = self.metadata['variables'][var_name].get('type', '')
             if var_type in ['int', 'float', 'bool']:
                 numeric_vars.append(var_name)
@@ -2500,10 +2530,29 @@ class ReportGenerator:
             html += "<p><em>No adaptive variable configuration found.</em></p>\n"
             return html
 
+        escalate_var = self._get_escalate_var()
+        escalate_values = self._get_escalate_values()
+
         for adaptive_var, adaptive_config in adaptive_vars.items():
-            html += f"<p>Shows the results of adaptive probing for <strong>{adaptive_var}</strong>. "
-            html += "Each swept variable combination gets an independent probe that advances the "
-            html += "adaptive value until the stop condition is met.</p>\n"
+            probe_results = adaptive_results.get(adaptive_var, {})
+            is_staircase = bool(escalate_var) and any(
+                _probe_frontier(p) for p in probe_results.values()
+            )
+
+            if is_staircase:
+                html += (
+                    f"<p>Shows the results of a staircase search over "
+                    f"<strong>{adaptive_var}</strong> and <strong>{escalate_var}</strong>. "
+                    f"{adaptive_var} advances while the stop condition stays false; when it "
+                    f"triggers, {escalate_var} moves to its next value and the same "
+                    f"{adaptive_var} is retested. The search ends when the "
+                    f"{escalate_var} values run out, so the result is a frontier rather "
+                    f"than a single threshold.</p>\n"
+                )
+            else:
+                html += f"<p>Shows the results of adaptive probing for <strong>{adaptive_var}</strong>. "
+                html += "Each swept variable combination gets an independent probe that advances the "
+                html += "adaptive value until the stop condition is met.</p>\n"
 
             # Probing configuration (collapsible)
             html += "<details>\n<summary>Probing Configuration</summary>\n"
@@ -2523,10 +2572,33 @@ class ReportGenerator:
 
             html += f"<tr><td><strong>Stop Condition</strong></td><td><code>{adaptive_config.get('stop_when', 'N/A')}</code></td></tr>\n"
             html += f"<tr><td><strong>Max Iterations</strong></td><td>{adaptive_config.get('max_iterations', 'N/A')}</td></tr>\n"
+            if is_staircase:
+                values_str = ", ".join(html_module.escape(str(v)) for v in escalate_values)
+                html += f"<tr><td><strong>Escalating Variable</strong></td><td>{escalate_var}</td></tr>\n"
+                html += f"<tr><td><strong>Escalation Values</strong></td><td>{values_str}</td></tr>\n"
             html += "</table>\n</div>\n</details>\n"
 
+            # Frontier: for a staircase this is the result, so lead with it
+            if is_staircase:
+                html += self._render_frontier_table(
+                    adaptive_var, escalate_var, probe_results
+                )
+                try:
+                    fig = self._create_staircase_plot(
+                        adaptive_var, escalate_var, probe_results
+                    )
+                    if fig is not None:
+                        html += f"<h3>Search Path</h3>\n"
+                        html += (
+                            f"<p>Every test the search ran, and the frontier it traced. "
+                            f"Each failure steps up {escalate_var}; each success advances "
+                            f"{adaptive_var}.</p>\n"
+                        )
+                        html += f"<div>{self._fig_to_html(fig, div_id=f'staircase_{adaptive_var}', plot_name='staircase_path')}</div>\n"
+                except Exception as e:
+                    html += f'<p class="error">Error generating staircase plot: {str(e)}</p>\n'
+
             # Probe results summary table
-            probe_results = adaptive_results.get(adaptive_var, {})
             if probe_results:
                 html += "<h3>Probe Results Summary</h3>\n"
                 html += "<table>\n"
@@ -2563,6 +2635,184 @@ class ReportGenerator:
                     html += f'<p class="error">Error generating trajectory plot for {metric}: {str(e)}</p>\n'
 
         return html
+
+    def _get_escalate_var(self) -> Optional[str]:
+        """Name of the escalating variable, or None if the run had none."""
+        for var_name, var_info in self.metadata.get('variables', {}).items():
+            if isinstance(var_info.get('escalate'), dict):
+                return var_name
+        return None
+
+    def _get_escalate_values(self) -> List[Any]:
+        """The escalation values in configured order."""
+        name = self._get_escalate_var()
+        if not name:
+            return []
+        escalate = self.metadata['variables'][name].get('escalate') or {}
+        return list(escalate.get('values') or [])
+
+    def _render_frontier_table(
+        self, adaptive_var: str, escalate_var: str, probe_results: dict
+    ) -> str:
+        """
+        Render the staircase frontier: how far each escalation value got.
+
+        This is what a staircase search actually produces. The probe summary
+        below it collapses to the final state only, which on its own hides
+        the result.
+        """
+        multi_probe = len(probe_results) > 1
+        html = "<h3>Search Frontier</h3>\n"
+        html += (
+            f"<p>The furthest <strong>{adaptive_var}</strong> each "
+            f"<strong>{escalate_var}</strong> value reached. Read the other way, "
+            f"the smallest {escalate_var} each {adaptive_var} needs.</p>\n"
+        )
+        html += "<table>\n<tr>"
+        if multi_probe:
+            html += "<th>Configuration</th>"
+        html += (
+            f"<th>{html_module.escape(escalate_var)}</th>"
+            f"<th>Reached {html_module.escape(adaptive_var)}</th></tr>\n"
+        )
+
+        for probe_key, probe_data in probe_results.items():
+            for point in _probe_frontier(probe_data):
+                reached = point.get('last_value_before_stop')
+                reached_str = (
+                    "<em>nothing</em>" if reached is None
+                    else html_module.escape(str(reached))
+                )
+                escalate_val = point.get(escalate_var, 'N/A')
+                html += "<tr>"
+                if multi_probe:
+                    html += f"<td>{html_module.escape(str(probe_key))}</td>"
+                html += (
+                    f"<td>{html_module.escape(str(escalate_val))}</td>"
+                    f"<td>{reached_str}</td></tr>\n"
+                )
+
+        html += "</table>\n"
+        return html
+
+    def _create_staircase_plot(
+        self, adaptive_var: str, escalate_var: str, probe_results: dict
+    ) -> Optional[go.Figure]:
+        """
+        Plot the search path: every test run, plus the frontier it traced.
+
+        The escalation axis is drawn by position rather than by value, so
+        rungs stay evenly spaced no matter how the values are distributed
+        (1, 4, 16 would otherwise crowd the bottom of a linear axis).
+        """
+        adaptive_col = self._get_var_column(adaptive_var)
+        escalate_col = self._get_var_column(escalate_var)
+        if adaptive_col not in self.df.columns or escalate_col not in self.df.columns:
+            return None
+
+        values = self._get_escalate_values()
+        if not values:
+            return None
+        position = {v: i for i, v in enumerate(values)}
+
+        def _rung(value):
+            if value in position:
+                return position[value]
+            # Values arrive from the results file and may have changed type
+            for known, idx in position.items():
+                if str(known) == str(value):
+                    return idx
+            return None
+
+        def _succeeded(row) -> bool:
+            rc = row.get('metadata.returncode')
+            if rc is not None and not pd.isna(rc):
+                return int(rc) == 0
+            return str(row.get('metadata.executor_status', '')).upper() == 'SUCCEEDED'
+
+        passed_x, passed_y, failed_x, failed_y = [], [], [], []
+        for _, row in self.df.iterrows():
+            rung = _rung(row[escalate_col])
+            if rung is None:
+                continue
+            if _succeeded(row):
+                passed_x.append(row[adaptive_col])
+                passed_y.append(rung)
+            else:
+                failed_x.append(row[adaptive_col])
+                failed_y.append(rung)
+
+        if not passed_x and not failed_x:
+            return None
+
+        fig = go.Figure()
+
+        # Frontier first, so the markers sit on top of the line
+        colors = self.get_color_palette(max(len(probe_results), 1), self._get_user_colors())
+        for i, (probe_key, probe_data) in enumerate(probe_results.items()):
+            frontier = _probe_frontier(probe_data)
+            fx, fy = [], []
+            for point in frontier:
+                reached = point.get('last_value_before_stop')
+                rung = _rung(point.get(escalate_var))
+                if reached is None or rung is None:
+                    continue
+                fx.append(reached)
+                fy.append(rung)
+            if len(fx) < 2:
+                continue
+            label = 'Frontier' if len(probe_results) == 1 else f'Frontier ({probe_key})'
+            fig.add_trace(go.Scatter(
+                x=fx, y=fy, mode='lines',
+                name=label,
+                line=dict(width=3, color=colors[i], shape='hv'),
+                hovertemplate=(
+                    f'{escalate_var} = %{{customdata}}<br>'
+                    f'reached {adaptive_var} = %{{x}}<extra></extra>'
+                ),
+                customdata=[values[j] for j in fy],
+            ))
+
+        if passed_x:
+            fig.add_trace(go.Scatter(
+                x=passed_x, y=passed_y, mode='markers',
+                name='Succeeded',
+                marker=dict(size=13, color='#2ecc71', symbol='circle',
+                            line=dict(width=1.5, color='#1e8449')),
+                customdata=[values[j] for j in passed_y],
+                hovertemplate=(
+                    f'{adaptive_var} = %{{x}}<br>'
+                    f'{escalate_var} = %{{customdata}}<br>succeeded<extra></extra>'
+                ),
+            ))
+        if failed_x:
+            fig.add_trace(go.Scatter(
+                x=failed_x, y=failed_y, mode='markers',
+                name='Stop condition met',
+                marker=dict(size=13, color='#e74c3c', symbol='x',
+                            line=dict(width=2, color='#c0392b')),
+                customdata=[values[j] for j in failed_y],
+                hovertemplate=(
+                    f'{adaptive_var} = %{{x}}<br>'
+                    f'{escalate_var} = %{{customdata}}<br>stop condition met<extra></extra>'
+                ),
+            ))
+
+        fig.update_layout(
+            title=f'Search path: {escalate_var} vs {adaptive_var}',
+            xaxis_title=adaptive_var,
+            yaxis_title=escalate_var,
+            yaxis=dict(
+                tickmode='array',
+                tickvals=list(range(len(values))),
+                ticktext=[str(v) for v in values],
+            ),
+            hovermode='closest',
+            template='plotly_white',
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)'),
+        )
+        return fig
 
     def _create_adaptive_trajectory_plot(
         self, metric: str, adaptive_var: str, report_vars: List[str]

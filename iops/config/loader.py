@@ -40,6 +40,7 @@ from iops.config.models import (
     VarConfig,
     SweepConfig,
     AdaptiveConfig,
+    EscalateConfig,
     ConstraintConfig,
     CommandConfig,
     ScriptConfig,
@@ -82,9 +83,10 @@ ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
 ALLOWED_ALLOCATION_KEYS = {"mode", "allocation_script", "test_timeout"}
 
-ALLOWED_VAR_KEYS = {"type", "sweep", "adaptive", "expr", "when", "default"}
+ALLOWED_VAR_KEYS = {"type", "sweep", "adaptive", "escalate", "expr", "when", "default"}
 ALLOWED_SWEEP_KEYS = {"mode", "values", "start", "end", "step"}
 ALLOWED_ADAPTIVE_KEYS = {"initial", "factor", "increment", "step_expr", "stop_when", "max_iterations", "direction"}
+ALLOWED_ESCALATE_KEYS = {"values"}
 
 ALLOWED_COMMAND_KEYS = {"template", "metadata", "labels", "env"}
 
@@ -886,11 +888,12 @@ def _apply_machine_override(data: Dict[str, Any], machine_name: str) -> Dict[str
 
     merged = deep_merge(base, override)
 
-    # Post-merge fixup: sweep, expr, and adaptive are mutually exclusive in vars.
-    # When a machine override provides one, the others must be cleared.
+    # Post-merge fixup: sweep, expr, adaptive, and escalate are mutually
+    # exclusive in vars. When a machine override provides one, the others
+    # must be cleared.
     override_vars = override.get("vars", {}) or {}
     merged_vars = merged.get("vars", {}) or {}
-    _var_type_keys = ("sweep", "expr", "adaptive")
+    _var_type_keys = ("sweep", "expr", "adaptive", "escalate")
     for var_name, override_var in override_vars.items():
         if not isinstance(override_var, dict) or var_name not in merged_vars:
             continue
@@ -1293,10 +1296,26 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
                 max_iterations=s.get("max_iterations"),
                 direction=s.get("direction", "ascending"),
             )
+        escalate_cfg = None
+        if "escalate" in cfg:
+            s = cfg["escalate"]
+            _ensure_mapping(s, f"vars.{name}.escalate")
+
+            # Validate escalate keys
+            key_errors = _validate_allowed_keys(s, ALLOWED_ESCALATE_KEYS, f"vars.{name}.escalate")
+            if key_errors:
+                raise ConfigValidationError("\n".join(key_errors))
+
+            values = s.get("values")
+            if values is not None and not isinstance(values, list):
+                values = [values]
+            escalate_cfg = EscalateConfig(values=values if values is not None else [])
+
         vars_cfg[name] = VarConfig(
             type=cfg["type"],
             sweep=sweep_cfg,
             adaptive=adaptive_cfg,
+            escalate=escalate_cfg,
             expr=cfg.get("expr"),
             when=cfg.get("when"),
             default=cfg.get("default"),
@@ -2262,13 +2281,21 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 f"var '{name}' has invalid type '{v.type}'. Must be one of: {valid_var_types}"
             )
 
-        if v.sweep is None and v.expr is None and v.adaptive is None:
+        _declared_kinds = [
+            kind for kind, value in (
+                ("sweep", v.sweep), ("expr", v.expr),
+                ("adaptive", v.adaptive), ("escalate", v.escalate),
+            ) if value is not None
+        ]
+        if not _declared_kinds:
             raise ConfigValidationError(
-                f"var '{name}' must define either a 'sweep', an 'expr' or an 'adaptive'"
+                f"var '{name}' must define one of 'sweep', 'expr', 'adaptive', or 'escalate'"
             )
-        if (v.sweep is not None and v.expr is not None) or (v.sweep is not None and v.adaptive is not None) or (v.expr is not None and v.adaptive is not None):
+        if len(_declared_kinds) > 1:
             raise ConfigValidationError(
-                f"var '{name}' should use only one of 'sweep', 'expr', or 'adaptive' types; more than one type is not possible"
+                f"var '{name}' should use only one of 'sweep', 'expr', 'adaptive', or "
+                f"'escalate' types; more than one type is not possible "
+                f"(got {_declared_kinds})"
             )
 
         if v.sweep:
@@ -2451,6 +2478,45 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
             "benchmark.search_method is 'adaptive' but no variable has an 'adaptive' configuration. "
             "Define an adaptive variable or change the search_method."
         )
+
+    # ---- escalating variable constraints ----
+    escalate_var_names = [name for name, v in cfg.vars.items() if v.escalate is not None]
+    if len(escalate_var_names) > 1:
+        raise ConfigValidationError(
+            f"Only one escalating variable is supported per config, "
+            f"but found {len(escalate_var_names)}: {escalate_var_names}"
+        )
+
+    if escalate_var_names and not adaptive_var_names:
+        raise ConfigValidationError(
+            f"Escalating variable '{escalate_var_names[0]}' requires an adaptive variable. "
+            f"'escalate' extends an adaptive probe: when the probe would stop, the "
+            f"escalating variable advances instead. Define a variable with 'adaptive', "
+            f"or use a plain 'sweep' if you want every value tested."
+        )
+
+    for ename in escalate_var_names:
+        escalate = cfg.vars[ename].escalate
+        if not escalate.values:
+            raise ConfigValidationError(
+                f"var '{ename}' escalate: 'values' is required and must be a non-empty list"
+            )
+        if cfg.benchmark.exhaustive_vars and ename in cfg.benchmark.exhaustive_vars:
+            raise ConfigValidationError(
+                f"Escalating variable '{ename}' cannot be listed in 'exhaustive_vars'"
+            )
+        if cfg.benchmark.cache_exclude_vars and ename in cfg.benchmark.cache_exclude_vars:
+            raise ConfigValidationError(
+                f"Escalating variable '{ename}' cannot be listed in 'cache_exclude_vars'"
+            )
+        for vname, v in cfg.vars.items():
+            if v.when and re.search(rf'\b{re.escape(ename)}\b', v.when):
+                raise ConfigValidationError(
+                    f"Conditional variable '{vname}' has 'when' expression that references "
+                    f"escalating variable '{ename}'. Escalating variables are not available "
+                    f"during matrix generation when 'when' conditions are evaluated. "
+                    f"Use only swept variables in 'when' expressions."
+                )
 
     # ---- variable reference lists ----
     def validate_var_list(field_name: str, var_list) -> None:

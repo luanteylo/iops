@@ -78,7 +78,9 @@ vars:
       max_iterations: 15                 # Safety limit
 ```
 
-See [Adaptive Variables](../adaptive-variables) for the full guide: step methods, stop conditions, probe behavior, and the configuration reference.
+Pairing the adaptive variable with an [escalating variable](../adaptive-variables#staircase-search-with-an-escalating-variable) turns the probe into a staircase search: when the probe would stop, a second variable steps up and the same adaptive value is retested, so the run finds the frontier between the two instead of a single threshold.
+
+See [Adaptive Variables](../adaptive-variables) for the full guide: step methods, stop conditions, probe behavior, escalating variables, and the configuration reference.
 
 ## Comparison
 
