@@ -267,7 +267,9 @@ benchmark:
     #   - Per-execution: __iops_io_trace_<hostname>.csv (one per node)
     #   - Run-level: I/O metrics appended to __iops_resource_summary.csv
     # Key metrics: io_read_gb, io_write_gb, io_disk_read_gb, io_nfs_read_gb,
-    # io_read_mbs_avg, io_write_mbs_avg, io_read_iops_avg
+    # io_read_mbs_avg / io_write_mbs_avg (over the whole run) and
+    # io_read_mbs_active / io_write_mbs_active (over the time I/O was in flight),
+    # io_read_iops_avg
     # Counters are node-level, so they include any other activity on the node.
     # io_sampling: true
 

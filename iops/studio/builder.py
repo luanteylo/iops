@@ -803,6 +803,15 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                         value=probes.get("resource_sampling", False), on_change=pset("resource_sampling", False))
             ui.checkbox("gpu_sampling (GPU metrics)",
                         value=probes.get("gpu_sampling", False), on_change=pset("gpu_sampling", False))
+            ui.checkbox("io_sampling (I/O volume and operations)",
+                        value=probes.get("io_sampling", False), on_change=pset("io_sampling", False))
+            # io_paths is required whenever io_sampling is on: without it the probe
+            # would count every disk and mount on the node, including storage the
+            # benchmark never touches.
+            _text_list_input(
+                "io_paths (required with io_sampling; comma-separated, Jinja2 allowed)",
+                bench.setdefault("probes", {}), "io_paths",
+                placeholder="{{ execution_dir }}, /scratch/input")
             ui.number("sampling_interval (seconds)", value=probes.get("sampling_interval", 1.0),
                       step=0.5, on_change=lambda e: (bench.setdefault("probes", {}).__setitem__(
                           "sampling_interval", float(e.value) if e.value else 1.0), sync_to_yaml())).classes("w-56")

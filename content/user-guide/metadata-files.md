@@ -496,7 +496,7 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 
 **Written:** When the repetition folder is created, before the test runs
 
-**Purpose:** Collects read and write volume and operation counts during benchmark execution, from block devices (`/proc/diskstats`) and NFS mounts (`/proc/self/mountstats`). Each row is tagged with its source so a local disk and a network filesystem can be told apart. Follows the same architecture as the CPU/memory sampler: a sentinel file (`__iops_io_trace_running`), local or multi-node sampling through the node launcher, one trace file per node, and shutdown via the exit handler. Skips silently when neither counter source is readable.
+**Purpose:** Collects read and write volume and operation counts during benchmark execution, from block devices (`/proc/diskstats`) and NFS mounts (`/proc/self/mountstats`). Each row is tagged with its source, and with the `probes.io_paths` entry it was resolved from, so a local disk and a network filesystem can be told apart. Only the filesystems behind the configured paths are sampled. Follows the same architecture as the CPU/memory sampler: a sentinel file (`__iops_io_trace_running`), local or multi-node sampling through the node launcher, one trace file per node, and shutdown via the exit handler. Skips silently when neither counter source is readable.
 
 **Controlled by:** `benchmark.probes.io_sampling`
 
