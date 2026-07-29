@@ -290,8 +290,12 @@ When `io_sampling` is enabled, I/O metrics are added to the summary CSV. Byte to
 | `io_disk_write_gb` | Written to block devices | `sum(write_bytes where source = block) / 1024³` |
 | `io_nfs_read_gb` | Read from NFS mounts | `sum(read_bytes where source = nfs) / 1024³` |
 | `io_nfs_write_gb` | Written to NFS mounts | `sum(write_bytes where source = nfs) / 1024³` |
-| `io_read_mbs_avg` | Aggregate read throughput | `sum(read_bytes) / 1024² / duration` |
-| `io_write_mbs_avg` | Aggregate write throughput | `sum(write_bytes) / 1024² / duration` |
+| `io_read_mbs_avg` | Aggregate read throughput over the whole run | `sum(read_bytes) / 1024² / duration` |
+| `io_write_mbs_avg` | Aggregate write throughput over the whole run | `sum(write_bytes) / 1024² / duration` |
+| `io_read_mbs_active` | Read throughput while the storage was working | `sum(read_bytes) / 1024² / io_read_active_s` |
+| `io_write_mbs_active` | Write throughput while the storage was working | `sum(write_bytes) / 1024² / io_write_active_s` |
+| `io_read_active_s` | Time any read was in flight | `max(sum(interval_s) where read_bytes > 0, per node)` |
+| `io_write_active_s` | Time any write was in flight | `max(sum(interval_s) where write_bytes > 0, per node)` |
 | `io_read_mbs_peak_per_node` | Busiest single read sample on any node | `max(sum(read_bytes) per node-instant / interval_s) / 1024²` |
 | `io_write_mbs_peak_per_node` | Busiest single write sample on any node | `max(sum(write_bytes) per node-instant / interval_s) / 1024²` |
 | `io_read_iops_avg` | Average read operations per second | `sum(read_ops) / duration` |
@@ -303,6 +307,23 @@ When `io_sampling` is enabled, I/O metrics are added to the summary CSV. Byte to
 The averages are aggregate: they sum every node's traffic over the elapsed window, which is the number a storage study wants. The peaks are per node, because samples on different nodes are not clock-aligned and adding them at a supposedly shared instant would be fiction.
 
 The disk and NFS columns are always emitted, holding zero when that source saw no traffic, so a run comparing the two backends produces a complete table either way.
+
+#### Idle samples and what they do to each metric
+
+Sampling covers the whole script, and most benchmarks spend much of that doing something other than I/O: loading modules, starting MPI, computing. Those intervals are recorded as zero-byte samples, and they are load-bearing, since they are what makes `io_trace_duration_s` the real elapsed window.
+
+They affect the metrics differently:
+
+| Metric family | Affected by idle samples | Why |
+|---------------|--------------------------|-----|
+| Volumes (`io_read_gb`, `io_write_gb`, and the per-source splits) | No | Sums, and adding zero changes nothing |
+| Peaks (`io_*_mbs_peak_per_node`) | No | A maximum over samples, so idle ones are ignored |
+| `io_*_mbs_avg`, `io_*_iops_avg` | Yes | Divided by the whole window, so idle time pulls them down |
+| `io_*_mbs_active` | No | Divided by the time that direction actually moved data |
+
+Both averages are reported because they answer different questions. `io_write_mbs_avg` is what the job moved per second of runtime; `io_write_mbs_active` is how fast the storage went while in use. A job that computes for ten minutes and writes for ten seconds will show an `io_write_mbs_avg` roughly sixty times lower than its `io_write_mbs_active`, and neither number is wrong. Compare `io_write_active_s` against `io_trace_duration_s` to see the duty cycle.
+
+Quote `io_*_mbs_active` when characterising storage, and `io_*_mbs_avg` when characterising the job.
 
 Short executions undersample. If a test finishes in less time than a few sampling intervals, the totals cover only the intervals that were observed and will read low. Lower `sampling_interval` for short tests, or treat the volumes as a lower bound.
 

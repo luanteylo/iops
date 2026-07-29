@@ -704,6 +704,13 @@ class IOPSRunner(HasLogger):
         sample_write_bytes = {}
         sample_interval = {}
 
+        # Time each node actually moved data, per direction. Sampling covers the
+        # whole script, most of which is usually not I/O, so an average taken
+        # over the full window answers "how much did this job move per second of
+        # runtime" rather than "how fast was the storage while in use".
+        read_active_s = {}
+        write_active_s = {}
+
         for trace_file in trace_files:
             try:
                 with open(trace_file, 'r', newline='') as f:
@@ -751,6 +758,15 @@ class IOPSRunner(HasLogger):
         if not sample_interval:
             return metrics
 
+        # A sample counts as active for a direction when that direction moved
+        # anything, summed across the devices sampled on that node at that instant.
+        for (hostname, _ts), interval in sample_interval.items():
+            key = (hostname, _ts)
+            if sample_read_bytes.get(key, 0.0) > 0:
+                read_active_s[hostname] = read_active_s.get(hostname, 0.0) + interval
+            if sample_write_bytes.get(key, 0.0) > 0:
+                write_active_s[hostname] = write_active_s.get(hostname, 0.0) + interval
+
         total_read = sum(per_source_read.values())
         total_write = sum(per_source_write.values())
 
@@ -779,6 +795,16 @@ class IOPSRunner(HasLogger):
             metrics["io_write_mbs_avg"] = round(total_write / mib / duration, 2)
             metrics["io_read_iops_avg"] = round(total_read_ops / duration, 2)
             metrics["io_write_iops_avg"] = round(total_write_ops / duration, 2)
+
+        # Same totals over the busy window only. The pair tells you two different
+        # things: the *_avg figures are diluted by however much of the job was
+        # not doing I/O, the *_active figures are the rate while it was.
+        read_active = max(read_active_s.values()) if read_active_s else 0.0
+        write_active = max(write_active_s.values()) if write_active_s else 0.0
+        metrics["io_read_active_s"] = round(read_active, 2)
+        metrics["io_write_active_s"] = round(write_active, 2)
+        metrics["io_read_mbs_active"] = round(total_read / mib / read_active, 2) if read_active > 0 else 0.0
+        metrics["io_write_mbs_active"] = round(total_write / mib / write_active, 2) if write_active > 0 else 0.0
 
         # Peak is per node: samples on different nodes are not clock-aligned, so
         # summing them at a shared instant would be fiction.

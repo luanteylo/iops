@@ -947,6 +947,42 @@ class TestIoTraceAggregation:
         assert metrics["io_write_mbs_peak_per_node"] == pytest.approx(200.0, abs=0.1)
         assert metrics["io_write_iops_avg"] == pytest.approx(15.0, abs=0.1)
 
+    def test_idle_samples_dilute_the_average_but_not_the_active_rate(self, tmp_path):
+        """
+        Sampling covers the whole script, most of which is usually not I/O.
+        The window average answers "per second of runtime", the active average
+        answers "how fast was the storage while in use". Totals and peaks are
+        unaffected by idle samples either way.
+        """
+        mib = 1024 ** 2
+        trace = tmp_path / "__iops_io_trace_node01_1.csv"
+        # 200 MiB written in the first of four one-second samples
+        _write_io_trace(trace, [
+            [100.0, "node01", "block", "sda", "", 1.0, 0, 200 * mib, 0, 10],
+            [101.0, "node01", "block", "sda", "", 1.0, 0, 0, 0, 0],
+            [102.0, "node01", "block", "sda", "", 1.0, 0, 0, 0, 0],
+            [103.0, "node01", "block", "sda", "", 1.0, 0, 0, 0, 0],
+        ])
+
+        metrics = self._metrics([trace])
+        assert metrics["io_trace_duration_s"] == 4.0
+        assert metrics["io_write_active_s"] == 1.0
+        # Diluted four ways by the idle samples
+        assert metrics["io_write_mbs_avg"] == pytest.approx(50.0, abs=0.1)
+        # The rate while the storage was actually working
+        assert metrics["io_write_mbs_active"] == pytest.approx(200.0, abs=0.1)
+        # Totals and peaks do not care about idle samples
+        assert metrics["io_write_gb"] == pytest.approx(200 / 1024, abs=1e-3)
+        assert metrics["io_write_mbs_peak_per_node"] == pytest.approx(200.0, abs=0.1)
+
+    def test_active_seconds_are_zero_when_nothing_moved(self, tmp_path):
+        trace = tmp_path / "__iops_io_trace_node01_1.csv"
+        _write_io_trace(trace, [[100.0, "node01", "block", "sda", "", 1.0, 0, 0, 0, 0]])
+
+        metrics = self._metrics([trace])
+        assert metrics["io_write_active_s"] == 0.0
+        assert metrics["io_write_mbs_active"] == 0.0
+
     def test_devices_in_the_same_sample_are_summed(self, tmp_path):
         mib = 1024 ** 2
         trace = tmp_path / "__iops_io_trace_node01_1.csv"
