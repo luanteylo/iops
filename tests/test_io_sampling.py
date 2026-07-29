@@ -73,6 +73,46 @@ def _render_sampler(tmp_path, interval=0.05, io_paths=""):
     return script
 
 
+def _fake_df(tmp_path, table, default=("overlay", "overlay")):
+    """Write a ``df`` stub answering from ``table`` and return the PATH export.
+
+    ``_iops_io_resolve`` shells out to ``df -PT``, so what a path resolves to is
+    a property of the machine running the test: a workstation has a block-backed
+    root, a CI container has an overlay one that legitimately resolves to
+    "none". Pinning df's answers keeps these tests about the resolution logic
+    instead of about where they happen to run.
+
+    ``table`` maps a path to ``(source, fstype)``; anything else gets ``default``.
+    """
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    branches = "\n".join(
+        f'    {path}) _src="{src}"; _type="{fstype}"; _mount="{path}" ;;'
+        for path, (src, fstype) in table.items()
+    )
+    stub = bindir / "df"
+    stub.write_text(f'''#!/bin/bash
+_p="${{@: -1}}"
+_src="{default[0]}"; _type="{default[1]}"; _mount="/"
+case "$_p" in
+{branches}
+esac
+echo "Filesystem Type 1024-blocks Used Available Capacity Mounted on"
+echo "$_src $_type 1024 0 1024 0% $_mount"
+''')
+    stub.chmod(0o755)
+    return f'export PATH="{bindir}:$PATH"\n'
+
+
+def _fake_sysclass(tmp_path, disk="nvme0n1", partition="nvme0n1p1"):
+    """Build a sysfs tree where ``partition`` lives under its whole ``disk``."""
+    sysclass = tmp_path / "sysclassblock"
+    (sysclass / disk / partition).mkdir(parents=True)
+    (sysclass / disk / partition / "partition").write_text("1\n")
+    (sysclass / partition).symlink_to(sysclass / disk / partition)
+    return sysclass
+
+
 def _sample_twice(tmp_path, diskstats_pair, mountstats_pair, sysblock_entries=("sda",)):
     """
     Drive two samples against fixture counters and return the emitted CSV rows.
@@ -277,12 +317,14 @@ class TestIoPathScoping:
     path restricts the counters to the filesystem actually holding it.
     """
 
-    def _resolve(self, tmp_path, path, sysclassblock=None):
+    def _resolve(self, tmp_path, path, sysclassblock=None, df_table=None):
         """Call _iops_io_resolve for one path and return its raw result."""
         sampler = _render_sampler(tmp_path)
         env = ""
         if sysclassblock is not None:
             env = f'export IOPS_IO_SYSCLASSBLOCK="{sysclassblock}"\n'
+        if df_table is not None:
+            env += _fake_df(tmp_path, df_table)
 
         driver = tmp_path / "resolve.sh"
         driver.write_text(f'''#!/bin/bash
@@ -346,16 +388,30 @@ _iops_io_whole_device dm-0
         assert sorted(result.stdout.split()) == ["sda", "sdb"]
 
     def test_local_path_resolves_to_a_block_device(self, tmp_path):
-        """The root filesystem is block-backed on any machine running this."""
-        resolved = self._resolve(tmp_path, "/")
-        kind, target, _mount, _fstype = resolved.split("|", 3)
+        """A path on a real disk is attributed to the whole device beneath it."""
+        sysclass = _fake_sysclass(tmp_path)
+        resolved = self._resolve(
+            tmp_path, "/", sysclassblock=str(sysclass),
+            df_table={"/": ("/dev/nvme0n1p1", "ext4")},
+        )
+        kind, target, _mount, fstype = resolved.split("|", 3)
         assert kind == "block"
-        assert target, "a block-backed path must name at least one device"
+        assert target == "nvme0n1"
+        assert fstype == "ext4"
 
     def test_path_that_does_not_exist_yet_uses_its_nearest_ancestor(self, tmp_path):
         """The benchmark usually creates its output directory itself."""
-        resolved = self._resolve(tmp_path, str(tmp_path / "not" / "created" / "yet"))
-        assert resolved.split("|", 1)[0] == "block"
+        sysclass = _fake_sysclass(tmp_path)
+        resolved = self._resolve(
+            tmp_path, str(tmp_path / "not" / "created" / "yet"),
+            sysclassblock=str(sysclass),
+            # Only the existing ancestor is ever handed to df; if the walk did
+            # not back off to it, the lookup would miss and report the default.
+            df_table={str(tmp_path): ("/dev/nvme0n1p1", "ext4")},
+        )
+        kind, target, _mount, _fstype = resolved.split("|", 3)
+        assert kind == "block"
+        assert target == "nvme0n1"
 
     def test_tmpfs_path_resolves_to_nothing_countable(self, tmp_path):
         """
@@ -378,13 +434,17 @@ _iops_io_whole_device dm-0
         for entry in ("sda", "sdb"):
             (sysblock / entry).mkdir(parents=True)
 
+        sysclass = _fake_sysclass(tmp_path)
+        path_env = _fake_df(tmp_path, {"/": ("/dev/nvme0n1p1", "ext4")})
+
         sampler = _render_sampler(tmp_path, io_paths="'/'")
         driver = tmp_path / "targets.sh"
         driver.write_text(f'''#!/bin/bash
 export IOPS_IO_DISKSTATS="{tmp_path}/absent"
 export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
 export IOPS_IO_SYSBLOCK="{sysblock}"
-source "{sampler}"
+export IOPS_IO_SYSCLASSBLOCK="{sysclass}"
+{path_env}source "{sampler}"
 _iops_io_resolve_targets
 echo "DEVICES:$_IOPS_IO_DEVICES"
 ''')
@@ -392,9 +452,10 @@ echo "DEVICES:$_IOPS_IO_DEVICES"
             ["bash", str(driver)], capture_output=True, text=True, timeout=30,
         )
         devices = result.stdout.split("DEVICES:")[1].split()
-        # The fixture devices are never picked up: only what "/" resolved to
+        # The devices present on the node are never picked up wholesale: only
+        # what the one configured path resolved to.
         assert "sda" not in devices and "sdb" not in devices
-        assert devices, "the root filesystem must resolve to some device"
+        assert devices == ["nvme0n1"]
 
     def test_no_configured_paths_monitors_every_device(self, tmp_path):
         """The default stays 'monitor everything' for backwards compatibility."""
@@ -515,14 +576,28 @@ _iops_io_sample
         resolved last. The kernel has no per-directory counters, so this is the
         limit of what path scoping can separate.
         """
-        sampler = _render_sampler(tmp_path, io_paths=f"'{tmp_path}' '{tmp_path}/sub' '/'")
         (tmp_path / "sub").mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
 
+        sysclass = _fake_sysclass(tmp_path)
+        _fake_sysclass(tmp_path, disk="sda", partition="sda1")
+        # The first two paths share one device; the third is on another, so the
+        # grouping cannot be an artefact of every path resolving alike.
+        path_env = _fake_df(tmp_path, {
+            str(tmp_path): ("/dev/nvme0n1p1", "ext4"),
+            f"{tmp_path}/sub": ("/dev/nvme0n1p1", "ext4"),
+            str(elsewhere): ("/dev/sda1", "ext4"),
+        })
+
+        sampler = _render_sampler(
+            tmp_path, io_paths=f"'{tmp_path}' '{tmp_path}/sub' '{elsewhere}'")
         driver = tmp_path / "shared.sh"
         driver.write_text(f'''#!/bin/bash
 export IOPS_IO_DISKSTATS="{tmp_path}/absent"
 export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
-source "{sampler}"
+export IOPS_IO_SYSCLASSBLOCK="{sysclass}"
+{path_env}source "{sampler}"
 _iops_io_resolve_targets
 echo "DEVICES:$_IOPS_IO_DEVICES"
 for k in "${{!_iops_io_labels[@]}}"; do echo "LABEL:$k=${{_iops_io_labels[$k]}}"; done
@@ -533,11 +608,13 @@ for k in "${{!_iops_io_labels[@]}}"; do echo "LABEL:$k=${{_iops_io_labels[$k]}}"
 
         devices = result.stdout.split("DEVICES:")[1].split("\n")[0].split()
         assert len(devices) == len(set(devices)), f"device registered more than once: {devices}"
+        assert sorted(devices) == ["nvme0n1", "sda"]
 
         labels = [ln for ln in result.stdout.split("\n") if ln.startswith("LABEL:")]
-        # tmp_path and / are on the same device in any normal test environment
         shared = [ln for ln in labels if ";" in ln]
         assert shared, f"paths sharing a device must be listed together, got {labels}"
+        # The shared label names both paths, not just whichever resolved last.
+        assert str(tmp_path) in shared[0] and f"{tmp_path}/sub" in shared[0]
 
     def test_targets_file_records_each_resolution(self, tmp_path):
         """
@@ -548,12 +625,25 @@ for k in "${{!_iops_io_labels[@]}}"; do echo "LABEL:$k=${{_iops_io_labels[$k]}}"
 
         from iops.execution.planner import IO_TARGETS_FILENAME_PREFIX
 
-        sampler = _render_sampler(tmp_path, io_paths="'/' '/dev/shm'")
+        # One path on a disk and one in RAM, so the file has to record both a
+        # countable and an uncountable resolution.
+        on_disk = tmp_path / "ondisk"
+        in_ram = tmp_path / "inram"
+        on_disk.mkdir()
+        in_ram.mkdir()
+        sysclass = _fake_sysclass(tmp_path)
+        path_env = _fake_df(tmp_path, {
+            str(on_disk): ("/dev/nvme0n1p1", "ext4"),
+            str(in_ram): ("tmpfs", "tmpfs"),
+        })
+
+        sampler = _render_sampler(tmp_path, io_paths=f"'{on_disk}' '{in_ram}'")
         driver = tmp_path / "targets.sh"
         driver.write_text(f'''#!/bin/bash
 export IOPS_IO_DISKSTATS="{tmp_path}/absent"
 export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
-source "{sampler}"
+export IOPS_IO_SYSCLASSBLOCK="{sysclass}"
+{path_env}source "{sampler}"
 _iops_io_resolve_targets
 ''')
         subprocess.run(["bash", str(driver)], capture_output=True, timeout=30)
@@ -563,10 +653,9 @@ _iops_io_resolve_targets
 
         data = json.loads(files[0].read_text())
         by_path = {entry["path"]: entry for entry in data["paths"]}
-        assert set(by_path) == {"/", "/dev/shm"}
-        assert by_path["/"]["kind"] == "block"
-        if pathlib.Path("/dev/shm").is_dir():
-            assert by_path["/dev/shm"]["kind"] == "none"
+        assert set(by_path) == {str(on_disk), str(in_ram)}
+        assert by_path[str(on_disk)]["kind"] == "block"
+        assert by_path[str(in_ram)]["kind"] == "none"
 
 
 class TestIoSamplerLifecycle:
