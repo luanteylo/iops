@@ -93,6 +93,7 @@ benchmark:
     execution_index: boolean        #   Write metadata files (default: true)
     resource_sampling: boolean      #   Enable CPU/memory sampling (default: false)
     gpu_sampling: boolean           #   Enable GPU metrics tracing (default: false)
+    io_sampling: boolean            #   Enable I/O tracing (default: false)
     sampling_interval: float        #   Sampling interval in seconds (default: 1.0)
     versions:                       #   Optional: capture software/library versions
       component_name: string        #   name -> shell command (e.g. "myapp --version")
@@ -198,6 +199,7 @@ Configuration for IOPS probes (system monitoring and execution tracking):
 | `execution_index` | `true` | Write metadata files for `iops find` command |
 | `resource_sampling` | `false` | Enable CPU and memory sampling during execution. See [Resource Sampling](../resource-tracing) |
 | `gpu_sampling` | `false` | Enable GPU metrics sampling (utilization, power, temperature, memory, clocks). Supports NVIDIA GPUs via nvidia-smi. See [Resource Sampling](../resource-tracing) |
+| `io_sampling` | `false` | Enable I/O sampling (bytes and operations read and written). Reads block device counters and NFS client counters, reported separately. See [Resource Sampling](../resource-tracing) |
 | `sampling_interval` | `1.0` | Sampling interval in seconds for resource and GPU sampling |
 | `versions` | none | Capture software/library versions per execution. Mapping of component name to shell command. Captured after the benchmark body (via the exit handler, so tools loaded by the benchmark's own `module load` commands are in scope) into `__iops_versions.json`, and also written to the results sink as `version.<component>` columns. The HTML report shows a drift warning when versions differ across executions. |
 

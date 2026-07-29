@@ -258,8 +258,21 @@ benchmark:
     # Key metrics: gpu_energy_j (total energy in Joules), gpu_avg_power_w, gpu_max_temperature_c
     # gpu_sampling: true
 
+    # io_sampling: Enable I/O tracing during execution (default: false)
+    # When enabled, IOPS samples read/write volume and operation counts from two sources:
+    # block devices (/proc/diskstats) and NFS mounts (/proc/self/mountstats). Both are
+    # needed: NFS traffic never reaches a client block device, and local disk traffic
+    # never appears in the NFS counters. Each row records which source it came from.
+    # Output files:
+    #   - Per-execution: __iops_io_trace_<hostname>.csv (one per node)
+    #   - Run-level: I/O metrics appended to __iops_resource_summary.csv
+    # Key metrics: io_read_gb, io_write_gb, io_disk_read_gb, io_nfs_read_gb,
+    # io_read_mbs_avg, io_write_mbs_avg, io_read_iops_avg
+    # Counters are node-level, so they include any other activity on the node.
+    # io_sampling: true
+
     # sampling_interval: Sampling interval in seconds (default: 1.0)
-    # Shared by both resource_sampling and gpu_sampling.
+    # Shared by resource_sampling, gpu_sampling and io_sampling.
     # Lower values provide finer granularity but generate more data.
     # sampling_interval: 0.5
 

@@ -3,7 +3,7 @@ title: "Resource Sampling"
 weight: 75
 ---
 
-IOPS can optionally sample CPU, memory, and GPU utilization during benchmark execution, so you can correlate parameter configurations with resource footprint (e.g., heatmap analysis of how parameters affect resource usage).
+IOPS can optionally sample CPU, memory, GPU, and I/O activity during benchmark execution, so you can correlate parameter configurations with resource footprint (e.g., heatmap analysis of how parameters affect resource usage).
 
 **Warning: Performance Impact**
 
@@ -19,6 +19,7 @@ benchmark:
   probes:
     resource_sampling: true    # CPU/memory sampling (default: false)
     gpu_sampling: true         # GPU sampling (default: false)
+    io_sampling: true          # I/O sampling (default: false)
     sampling_interval: 1.0     # Sample every 1 second (default)
 ```
 
@@ -32,7 +33,29 @@ When `probes.resource_sampling: true`, IOPS injects a resource sampler (`__iops_
 
 When `probes.gpu_sampling: true`, IOPS injects a GPU sampler (`__iops_runtime_gpu_sampler.sh`) that detects the GPU vendor at runtime (currently NVIDIA via `nvidia-smi`, designed for future AMD/Intel support), queries all GPUs in a single call per interval, and writes per-node, per-attempt GPU sample files (`__iops_gpu_trace_<hostname>_<attempt_id>.csv`). It gracefully skips if no supported GPU is detected (no errors, no empty files) and uses its own per-attempt sentinel file (`__iops_gpu_trace_running.<attempt_id>`), independent of the CPU sampler.
 
-Both samplers share the `sampling_interval` setting and support multi-node jobs on SLURM, OAR and PBS.
+### I/O Sampling
+
+When `probes.io_sampling: true`, IOPS injects an I/O sampler (`__iops_runtime_io_sampler.sh`) that reads two independent counter sources each interval and writes per-node, per-attempt sample files (`__iops_io_trace_<hostname>_<attempt_id>.csv`), with its own sentinel (`__iops_io_trace_running.<attempt_id>`).
+
+Two sources are needed because neither one alone describes both a local disk and a network filesystem:
+
+| Source | Read from | Covers | Reports nothing for |
+|--------|-----------|--------|---------------------|
+| `block` | `/proc/diskstats` | Local disks, NVMe | NFS, whose traffic never reaches a client block device |
+| `nfs` | `/proc/self/mountstats` | NFS mounts, per mount | Local disks |
+
+Each row is tagged with its source, so a study comparing storage backends can tell them apart rather than seeing one arm report zero.
+
+Two things to know before drawing conclusions from the numbers:
+
+- **The counters are node-level, not process-level.** They include anything else running on the node. On a dedicated compute node in a batch job that is what you want; on a shared machine it is noise.
+- **NFS byte counts are what crossed the wire.** The probe reads the server-read and server-written counters, not the normal-read counters, so reads the page cache satisfied locally are excluded. Comparing an NFS arm against a local-disk arm is therefore comparing like with like: both count traffic that reached storage.
+
+Block devices are counted once. Partitions (`sda1`) are excluded because their traffic is already in the parent device, and virtual devices (`dm-*`, `md*`, `loop*`) are excluded because they would double count the disks underneath them.
+
+Other filesystems (Lustre, GPFS) are not yet read. They plug in as additional counter sources in the same way the GPU sampler is designed to gain AMD and Intel support.
+
+All three samplers share the `sampling_interval` setting and support multi-node jobs on SLURM, OAR and PBS.
 
 ## Output Files
 
@@ -92,13 +115,43 @@ timestamp,hostname,gpu_index,gpu_name,utilization_gpu_pct,utilization_mem_pct,me
 | `clock_sm_mhz` | Streaming multiprocessor clock (MHz) |
 | `clock_mem_mhz` | Memory clock (MHz) |
 
+### Per-Execution I/O Sample Files
+
+When `io_sampling` is enabled, each execution produces one I/O sample CSV per node:
+
+**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_io_trace_<hostname>_<attempt_id>.csv`
+
+**Format:**
+```csv
+timestamp,hostname,source,device,interval_s,read_bytes,write_bytes,read_ops,write_ops
+1705123457.1,node01,block,nvme0n1,1.002,0,536870912,0,4096
+1705123457.1,node01,nfs,server:/export,1.002,104857600,0,800,0
+```
+
+**Fields:**
+| Field | Description |
+|-------|-------------|
+| `timestamp` | Unix timestamp with milliseconds |
+| `hostname` | Node hostname |
+| `source` | Counter source: `block` or `nfs` |
+| `device` | Block device name (`nvme0n1`) or NFS mount source (`server:/export`) |
+| `interval_s` | Seconds this row covers, measured rather than assumed |
+| `read_bytes` | Bytes read during the interval |
+| `write_bytes` | Bytes written during the interval |
+| `read_ops` | Read operations during the interval |
+| `write_ops` | Write operations during the interval |
+
+Values are per-interval deltas, not cumulative counters. The first sample of a run establishes the baseline and emits no row. A counter that goes backwards (a reset or a wrap) is clamped to zero rather than emitting a spurious burst. `interval_s` is recorded because `sleep` drifts under load, so rates computed from it are more accurate than rates assuming the configured interval.
+
 ### Run-Level Summary
 
 After all executions complete, IOPS aggregates samples into a summary CSV:
 
 **Location:** `workdir/run_001/__iops_resource_summary.csv`
 
-This file contains one row per execution+repetition, with all user variables and aggregated metrics from both CPU/memory and GPU samples (when enabled), enabling correlation analysis between parameter configurations and resource footprint.
+This file contains one row per execution+repetition, with all user variables and aggregated metrics from the CPU/memory, GPU, and I/O samplers (whichever are enabled), enabling correlation analysis between parameter configurations and resource footprint.
+
+Columns are the union across all executions. An execution short enough that its sampler collected no usable samples reports only the counter columns, and the remaining cells are left empty.
 
 ### CPU/Memory Aggregated Metrics
 
@@ -162,6 +215,36 @@ Aggregate metrics use the **maximum of per-GPU averages** so that idle GPUs do n
 
 The `gpu_energy_j` metric provides total GPU energy consumption in Joules. Energy is computed per GPU by integrating instantaneous power draw over time using the trapezoidal rule (`E_interval = (P_i + P_{i+1}) / 2 * (t_{i+1} - t_i)` for consecutive samples), then summed across all GPUs. This gives accurate results even with varying power draw. Per-GPU energy is available via `gpu0_energy_j`, `gpu1_energy_j`, etc. To convert to kilowatt-hours: `kWh = gpu_energy_j / 3600000`.
 
+### I/O Aggregated Metrics
+
+When `io_sampling` is enabled, I/O metrics are added to the summary CSV. Byte totals sum the per-interval deltas across every device, source, and node. Volumes use 1024-based units, matching the memory metrics.
+
+`duration` below is the elapsed time a single node covered, summed over its samples. Using the first and last timestamps instead would drop the window between the baseline and the first emitted row.
+
+| Metric | Description | Formula |
+|--------|-------------|---------|
+| `io_read_gb` | Total read across all sources | `sum(read_bytes) / 1024³` |
+| `io_write_gb` | Total written across all sources | `sum(write_bytes) / 1024³` |
+| `io_disk_read_gb` | Read from block devices | `sum(read_bytes where source = block) / 1024³` |
+| `io_disk_write_gb` | Written to block devices | `sum(write_bytes where source = block) / 1024³` |
+| `io_nfs_read_gb` | Read from NFS mounts | `sum(read_bytes where source = nfs) / 1024³` |
+| `io_nfs_write_gb` | Written to NFS mounts | `sum(write_bytes where source = nfs) / 1024³` |
+| `io_read_mbs_avg` | Aggregate read throughput | `sum(read_bytes) / 1024² / duration` |
+| `io_write_mbs_avg` | Aggregate write throughput | `sum(write_bytes) / 1024² / duration` |
+| `io_read_mbs_peak_per_node` | Busiest single read sample on any node | `max(sum(read_bytes) per node-instant / interval_s) / 1024²` |
+| `io_write_mbs_peak_per_node` | Busiest single write sample on any node | `max(sum(write_bytes) per node-instant / interval_s) / 1024²` |
+| `io_read_iops_avg` | Average read operations per second | `sum(read_ops) / duration` |
+| `io_write_iops_avg` | Average write operations per second | `sum(write_ops) / duration` |
+| `io_nodes_traced` | Number of nodes with I/O sample data | `count(distinct hostname)` |
+| `io_samples_collected` | Sampling instants across all nodes | `count(distinct hostname + timestamp)` |
+| `io_trace_duration_s` | Elapsed time covered | `max(sum(interval_s) per node)` |
+
+The averages are aggregate: they sum every node's traffic over the elapsed window, which is the number a storage study wants. The peaks are per node, because samples on different nodes are not clock-aligned and adding them at a supposedly shared instant would be fiction.
+
+The disk and NFS columns are always emitted, holding zero when that source saw no traffic, so a run comparing the two backends produces a complete table either way.
+
+Short executions undersample. If a test finishes in less time than a few sampling intervals, the totals cover only the intervals that were observed and will read low. Lower `sampling_interval` for short tests, or treat the volumes as a lower bound.
+
 ## Configuration Reference
 
 ```yaml
@@ -175,8 +258,13 @@ benchmark:
     # Gracefully skips if no supported GPU is detected
     gpu_sampling: true
 
+    # Enable I/O sampling (default: false)
+    # Reads block device counters (/proc/diskstats) and NFS client
+    # counters (/proc/self/mountstats), reporting each source separately
+    io_sampling: true
+
     # Sampling interval in seconds (default: 1.0)
-    # Shared by both resource_sampling and gpu_sampling
+    # Shared by resource_sampling, gpu_sampling and io_sampling
     # Lower = finer granularity but more data
     sampling_interval: 0.5
 ```
@@ -211,6 +299,7 @@ Resource sampling is designed to never break your benchmark:
 - Missing or malformed sample files are skipped during aggregation
 - If no sample files exist, the summary is simply not created
 - The GPU sampler gracefully skips if no supported GPU vendor is detected (no errors, no empty files)
+- The I/O sampler gracefully skips when neither counter source is readable (for example on a non-Linux host)
 
 ## I/O Considerations
 

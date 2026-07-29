@@ -477,6 +477,209 @@ else
 fi
 '''
 
+# Filename for the I/O sampler script - runs during execution to collect I/O counters
+RUNTIME_IO_SAMPLER_FILENAME = "__iops_runtime_io_sampler.sh"
+
+# Filename prefix for I/O trace output (written by sampler during execution)
+IO_TRACE_FILENAME_PREFIX = "__iops_io_trace_"
+
+# Sentinel file for the I/O sampler (signals samplers to stop)
+IO_SAMPLER_SENTINEL_FILENAME = "__iops_io_trace_running"
+
+# I/O sampler script template - runs in background during execution
+# Collects read/write bytes and operation counts at configurable intervals from
+# two independent counter sources, because a single source cannot describe both
+# a local disk and a network filesystem:
+#
+# - block: /proc/diskstats, whole block devices only. Covers local disks and
+#   NVMe. Reports nothing for NFS, whose traffic never reaches a block device
+#   on the client.
+# - nfs: /proc/self/mountstats, per-mount NFS counters. The bytes reported are
+#   the server read/written counters, i.e. what actually crossed the wire, not
+#   what the page cache served.
+#
+# Rows carry the source and device so a study comparing storage backends can
+# separate them. Future sources (Lustre llite stats, GPFS, cgroup io.stat)
+# plug in as additional counter functions.
+#
+# For multi-node jobs:
+# - Launched on every node by the node launcher (SLURM, OAR, PBS)
+# - Uses sentinel file for termination (removed by exit handler)
+# - Each node writes to its own trace file (hostname in filename)
+IO_SAMPLER_TEMPLATE = '''#!/bin/bash
+# IOPS I/O Sampler - Collects read/write volume and operation counts during execution
+# This file is auto-generated. It can be sourced (to set up and launch) or
+# executed directly on a remote node (for multi-node sampling).
+
+_IOPS_IO_EXEC_DIR="{execution_dir}"
+# Per-attempt id: see the note in the CPU sampler.
+_IOPS_IO_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
+_IOPS_IO_TRACE_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_trace_prefix}$(hostname)_${{_IOPS_IO_ATTEMPT_ID}}.csv"
+_IOPS_IO_INTERVAL={io_trace_interval}
+_IOPS_IO_SENTINEL="${{_IOPS_IO_EXEC_DIR}}/{io_sentinel_filename}.${{_IOPS_IO_ATTEMPT_ID}}"
+
+# Counter sources. Overridable so the parsing can be exercised against fixtures
+# instead of live kernel counters.
+_IOPS_IO_DISKSTATS="${{IOPS_IO_DISKSTATS:-/proc/diskstats}}"
+_IOPS_IO_MOUNTSTATS="${{IOPS_IO_MOUNTSTATS:-/proc/self/mountstats}}"
+_IOPS_IO_SYSBLOCK="${{IOPS_IO_SYSBLOCK:-/sys/block}}"
+
+# /proc/diskstats reports sectors, fixed at 512 bytes by the kernel ABI
+# regardless of the device's physical sector size.
+_IOPS_IO_SECTOR_BYTES=512
+
+# Previous counters for delta calculation (key: "source|device")
+declare -A _iops_io_prev
+_IOPS_IO_PREV_TS=""
+
+# Whole block devices, resolved once. Partitions (sda1) are excluded because
+# their traffic is already counted in the parent device, and virtual devices
+# (dm-*, md*, loop*) are excluded because they would double count the disks
+# underneath them.
+_iops_io_whole_devices() {{
+    local _dev _name
+    for _dev in "$_IOPS_IO_SYSBLOCK"/*; do
+        [ -d "$_dev" ] || continue
+        # Defensive: sysfs lists partitions under their parent, not here, but a
+        # partition that did show up would double count its parent's traffic.
+        [ -f "$_dev/partition" ] && continue
+        _name="${{_dev##*/}}"
+        case "$_name" in
+            loop*|ram*|fd*|sr*|dm-*|md*) continue ;;
+        esac
+        echo "$_name"
+    done
+}}
+_IOPS_IO_DEVICES=" $(_iops_io_whole_devices 2>/dev/null | tr '\\n' ' ') "
+
+# Emit "source device read_bytes write_bytes read_ops write_ops" per device.
+# /proc/diskstats fields: 1 major, 2 minor, 3 name, 4 reads completed,
+# 5 reads merged, 6 sectors read, 7 ms reading, 8 writes completed, ...,
+# 10 sectors written.
+_iops_io_block_counters() {{
+    [ -r "$_IOPS_IO_DISKSTATS" ] || return 0
+    awk -v devs="$_IOPS_IO_DEVICES" -v sector="$_IOPS_IO_SECTOR_BYTES" '
+    {{
+        if (index(devs, " " $3 " ") == 0) next
+        printf "block %s %.0f %.0f %s %s\\n", $3, $6 * sector, $10 * sector, $4, $8
+    }}' "$_IOPS_IO_DISKSTATS" 2>/dev/null
+}}
+
+# NFS mounts from /proc/self/mountstats. The bytes line holds, in order:
+# normal-read, normal-write, direct-read, direct-write, server-read,
+# server-write, read-pages, write-pages. Fields 5 and 6 (server read/written)
+# are the bytes that actually crossed the network, which is what a storage
+# study wants: the first two include reads the page cache satisfied locally.
+_iops_io_nfs_counters() {{
+    [ -r "$_IOPS_IO_MOUNTSTATS" ] || return 0
+    awk '
+    /^device / {{
+        dev = $2
+        isnfs = 0
+        # Locate the fstype token rather than assuming a field number: mount
+        # points containing spaces would shift every field after them.
+        for (i = 1; i < NF; i++) {{
+            if ($i == "fstype") {{ isnfs = ($(i + 1) ~ /^nfs/); break }}
+        }}
+        next
+    }}
+    isnfs && /^[ \\t]*bytes:/ {{ rb[dev] = $6; wb[dev] = $7; next }}
+    isnfs && /^[ \\t]*READ:/  {{ ro[dev] = $2; next }}
+    isnfs && /^[ \\t]*WRITE:/ {{ wo[dev] = $2; next }}
+    END {{
+        for (d in rb) printf "nfs %s %s %s %s %s\\n", d, rb[d], wb[d], ro[d] + 0, wo[d] + 0
+    }}' "$_IOPS_IO_MOUNTSTATS" 2>/dev/null
+}}
+
+# True when at least one counter source is readable. Without this the sampler
+# would spin producing header-only trace files on systems that expose neither.
+_iops_io_available() {{
+    [ -r "$_IOPS_IO_DISKSTATS" ] || [ -r "$_IOPS_IO_MOUNTSTATS" ]
+}}
+
+_iops_io_sample() {{
+    local ts elapsed host key prev deltas
+    ts=$(date +%s.%N 2>/dev/null || date +%s)
+    host=$(hostname 2>/dev/null || echo "unknown")
+
+    if [[ -z "$_IOPS_IO_PREV_TS" ]]; then
+        elapsed="0"
+    else
+        elapsed=$(awk "BEGIN {{printf \\"%.3f\\", $ts - $_IOPS_IO_PREV_TS}}")
+    fi
+
+    while read -r src dev rb wb ro wo; do
+        [[ -z "$dev" ]] && continue
+        key="${{src}}|${{dev}}"
+        prev="${{_iops_io_prev[$key]:-}}"
+
+        if [[ -n "$prev" ]]; then
+            # Counters are cumulative since boot. A negative delta means the
+            # counter wrapped or the device was reset, so clamp it to zero
+            # rather than emitting a nonsense burst.
+            deltas=$(awk -v p="$prev" -v c="$rb $wb $ro $wo" 'BEGIN {{
+                split(p, a, " "); split(c, b, " ")
+                for (i = 1; i <= 4; i++) {{
+                    v = b[i] - a[i]
+                    if (v < 0) v = 0
+                    printf "%.0f%s", v, (i < 4 ? "," : "")
+                }}
+            }}')
+            echo "$ts,$host,$src,$dev,$elapsed,$deltas"
+        fi
+
+        _iops_io_prev[$key]="$rb $wb $ro $wo"
+    done < <( {{ _iops_io_block_counters; _iops_io_nfs_counters; }} 2>/dev/null )
+
+    _IOPS_IO_PREV_TS="$ts"
+}}
+
+_iops_io_sampler_loop() {{
+    # Write CSV header
+    echo "timestamp,hostname,source,device,interval_s,read_bytes,write_bytes,read_ops,write_ops" > "$_IOPS_IO_TRACE_FILE"
+
+    # Initial read to populate baseline (first sample produces no output)
+    _iops_io_sample > /dev/null 2>&1
+
+    # Main sampling loop - exits when sentinel file is removed
+    while [[ -f "$_IOPS_IO_SENTINEL" ]]; do
+        sleep "$_IOPS_IO_INTERVAL"
+        _iops_io_sample >> "$_IOPS_IO_TRACE_FILE" 2>/dev/null
+    done
+}}
+
+# Cleanup function - removes sentinel file to signal all I/O samplers to stop
+_iops_stop_io_samplers() {{
+    rm -f "$_IOPS_IO_SENTINEL" 2>/dev/null || true
+}}
+
+# Check if running standalone (executed) vs sourced
+if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
+    # Running standalone on a node - just run the sampling loop
+    _iops_io_sampler_loop
+else
+    # Being sourced - set up and launch the samplers
+
+    if _iops_io_available; then
+        # Create sentinel file (signals samplers to keep running)
+        touch "$_IOPS_IO_SENTINEL"
+
+        # Register cleanup with the centralized exit handler
+        _iops_register_exit "_iops_stop_io_samplers"
+
+        # Launch one sampler per node via the node launcher (SLURM, OAR, PBS),
+        # falling back to this node only when the launcher is not available.
+        if declare -F _iops_launch_on_nodes >/dev/null 2>&1; then
+            _iops_launch_on_nodes "${{BASH_SOURCE[0]}}" _iops_io_sampler_loop "$_IOPS_IO_ATTEMPT_ID"
+        else
+            _iops_io_sampler_loop </dev/null >/dev/null 2>&1 &
+            # Lower priority of sampler process
+            renice -n 19 -p "$!" >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+'''
+
 # Filename for the version probe script.
 # Naming convention: __iops_atexit_* for scripts that run via the EXIT trap.
 ATEXIT_VERSION_FILENAME = "__iops_atexit_versions.sh"
@@ -1298,11 +1501,13 @@ class BasePlanner(ABC, HasLogger):
         probes = self.cfg.benchmark.probes
         resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
         gpu_sampling = probes.gpu_sampling if probes else False
+        io_sampling = probes.io_sampling if probes else False
         system_snapshot = probes.system_snapshot if probes else self.cfg.benchmark.collect_system_info
         version_probe = probes.versions if probes else None
 
         # If no features enabled, return script unchanged
-        if not resource_sampling and not gpu_sampling and not system_snapshot and not version_probe:
+        if (not resource_sampling and not gpu_sampling and not io_sampling
+                and not system_snapshot and not version_probe):
             return script_text
 
         # Build list of source lines to inject
@@ -1318,7 +1523,7 @@ class BasePlanner(ABC, HasLogger):
         source_lines.append(f'source "{handler_file}"')
 
         # 1b. Node launcher (needed by the samplers to fan out across nodes)
-        if resource_sampling or gpu_sampling:
+        if resource_sampling or gpu_sampling or io_sampling:
             launcher_file = exec_dir / NODE_LAUNCHER_FILENAME
             with open(launcher_file, "w") as f:
                 f.write(NODE_LAUNCHER_TEMPLATE)
@@ -1352,6 +1557,20 @@ class BasePlanner(ABC, HasLogger):
             with open(gpu_sampler_file, "w") as f:
                 f.write(gpu_sampler_script)
             source_lines.append(f'source "{gpu_sampler_file}"  # disable: probes.gpu_sampling: false')
+
+        if io_sampling:
+            # To disable: set probes.io_sampling: false in config
+            sampling_interval = probes.sampling_interval if probes else self.cfg.benchmark.trace_interval
+            io_sampler_script = IO_SAMPLER_TEMPLATE.format(
+                execution_dir=str(exec_dir),
+                io_trace_prefix=IO_TRACE_FILENAME_PREFIX,
+                io_trace_interval=sampling_interval,
+                io_sentinel_filename=IO_SAMPLER_SENTINEL_FILENAME
+            )
+            io_sampler_file = exec_dir / RUNTIME_IO_SAMPLER_FILENAME
+            with open(io_sampler_file, "w") as f:
+                f.write(io_sampler_script)
+            source_lines.append(f'source "{io_sampler_file}"  # disable: probes.io_sampling: false')
 
         # 3. At-exit scripts (run on script exit via trap)
         if system_snapshot:

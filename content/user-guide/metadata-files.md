@@ -38,7 +38,7 @@ Located in `workdir/run_XXX/`:
 | `__iops_run_metadata.json` | Report generation (config, timing, variables) |
 | `__iops_index.json` | Fast execution lookup for `iops find` |
 | `__iops_status_rollup.json` | Aggregated per-repetition status for `iops find` and watch mode |
-| `__iops_resource_summary.csv` | Aggregated CPU/memory and GPU metrics |
+| `__iops_resource_summary.csv` | Aggregated CPU/memory, GPU, and I/O metrics |
 | `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
 | `__iops_plots/` | PDF exports of report plots (requires kaleido) |
 
@@ -97,6 +97,9 @@ Located in `workdir/run_XXX/exec_XXXX/repetition_X/`:
 | `__iops_runtime_gpu_sampler.sh` | GPU metrics sampling script |
 | `__iops_gpu_trace_running` | Sentinel file (signals GPU samplers to run) |
 | `__iops_gpu_trace_<host>.csv` | Per-node GPU trace data |
+| `__iops_runtime_io_sampler.sh` | I/O sampling script |
+| `__iops_io_trace_running` | Sentinel file (signals I/O samplers to run) |
+| `__iops_io_trace_<host>.csv` | Per-node I/O trace data |
 
 ## Controlling Metadata Generation
 
@@ -483,6 +486,18 @@ Each key is the component name defined in `benchmark.probes.versions`. The value
 **Purpose:** Collects CPU and memory utilization during benchmark execution. The generated benchmark script sources it after the exit handler. It creates the sentinel file `__iops_trace_running` and starts sampling: locally in the background for single-node jobs, or on every allocated node through `__iops_node_launcher.sh` for multi-node jobs (SLURM, OAR, PBS). Each node writes its own trace file (`__iops_trace_<hostname>.csv`). On exit, the exit handler removes the sentinel file, stopping all samplers.
 
 **Controlled by:** `benchmark.probes.resource_sampling`
+
+---
+
+### `__iops_runtime_io_sampler.sh`
+
+**Location:** `workdir/run_001/exec_0001/repetition_1/__iops_runtime_io_sampler.sh`
+
+**Written:** When the repetition folder is created, before the test runs
+
+**Purpose:** Collects read and write volume and operation counts during benchmark execution, from block devices (`/proc/diskstats`) and NFS mounts (`/proc/self/mountstats`). Each row is tagged with its source so a local disk and a network filesystem can be told apart. Follows the same architecture as the CPU/memory sampler: a sentinel file (`__iops_io_trace_running`), local or multi-node sampling through the node launcher, one trace file per node, and shutdown via the exit handler. Skips silently when neither counter source is readable.
+
+**Controlled by:** `benchmark.probes.io_sampling`
 
 ---
 

@@ -76,7 +76,7 @@ ALLOWED_BENCHMARK_KEYS = {
     "parallel",
 }
 
-ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "sampling_interval", "versions"}
+ALLOWED_PROBES_KEYS = {"system_snapshot", "execution_index", "resource_sampling", "gpu_sampling", "io_sampling", "sampling_interval", "versions"}
 
 ALLOWED_SLURM_OPTIONS_KEYS = {"commands", "poll_interval", "allocation"}
 ALLOWED_SLURM_COMMANDS_KEYS = {"submit", "status", "info", "cancel"}
@@ -782,8 +782,8 @@ def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) ->
     """
     Check if resource sampler is compatible with the configured scripts.
 
-    If any script uses a non-bash shell and resource_sampling is enabled,
-    disable it and warn the user.
+    If any script uses a non-bash shell, disable the samplers that rely on bash
+    features (resource sampling and I/O sampling) and warn the user.
 
     Args:
         cfg: The configuration object (may be modified)
@@ -791,26 +791,37 @@ def check_resource_sampler_compatibility(cfg: GenericBenchmarkConfig, logger) ->
     """
     # Check using probes config (preferred) or fall back to deprecated field
     probes = cfg.benchmark.probes
-    if probes and not probes.resource_sampling:
+    resource_sampling = probes.resource_sampling if probes else cfg.benchmark.trace_resources
+    io_sampling = probes.io_sampling if probes else False
+
+    if not resource_sampling and not io_sampling:
         return  # Already disabled, nothing to check
-    elif not probes and not cfg.benchmark.trace_resources:
-        return  # Already disabled (deprecated path), nothing to check
 
     incompatible_scripts = []
     for script in cfg.scripts:
         if not _is_bash_compatible(script.script_template):
             incompatible_scripts.append(script.name)
 
-    if incompatible_scripts:
+    if not incompatible_scripts:
+        return
+
+    disabled = []
+    if resource_sampling:
         # Update both new and deprecated fields for backwards compatibility
         if probes:
             probes.resource_sampling = False
         cfg.benchmark.trace_resources = False
-        if logger:
-            logger.warning(
-                f"Resource sampler disabled: non-bash shell detected in script(s): {incompatible_scripts}. "
-                f"The sampler requires bash features. Set probes.resource_sampling: false to silence this warning."
-            )
+        disabled.append("probes.resource_sampling")
+    if io_sampling:
+        probes.io_sampling = False
+        disabled.append("probes.io_sampling")
+
+    if logger:
+        logger.warning(
+            f"Sampler disabled ({', '.join(disabled)}): non-bash shell detected in "
+            f"script(s): {incompatible_scripts}. The samplers require bash features. "
+            f"Set {' / '.join(f'{name}: false' for name in disabled)} to silence this warning."
+        )
 
 
 # ----------------- Machine override functions ----------------- #
@@ -1130,6 +1141,7 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
             execution_index=probes_data.get("execution_index", True),
             resource_sampling=probes_data.get("resource_sampling", False),
             gpu_sampling=probes_data.get("gpu_sampling", False),
+            io_sampling=probes_data.get("io_sampling", False),
             sampling_interval=probes_data.get("sampling_interval", 1.0),
             versions=_parse_version_probe(probes_data.get("versions")),
         )

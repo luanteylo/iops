@@ -59,7 +59,7 @@ def _inject_iops_scripts(self, script_text: str, exec_dir: Path) -> str:
         f.write(EXIT_HANDLER_TEMPLATE)
 
     # 2. Write node launcher (if any sampler is enabled)
-    if resource_sampling or gpu_sampling:
+    if resource_sampling or gpu_sampling or io_sampling:
         launcher_file = exec_dir / NODE_LAUNCHER_FILENAME
         with open(launcher_file, "w") as f:
             f.write(NODE_LAUNCHER_TEMPLATE)
@@ -107,7 +107,7 @@ The probe therefore runs after the benchmark completes (success or failure), on 
 
 ### 3. Multi-Node Fan-Out
 
-The sysinfo and version probes run once, in the job script's own shell, so they describe the head node. The samplers instead need one instance per node, which is what `__iops_node_launcher.sh` provides. It is written whenever `resource_sampling` or `gpu_sampling` is enabled and sourced after the exit handler, before any sampler.
+The sysinfo and version probes run once, in the job script's own shell, so they describe the head node. The samplers instead need one instance per node, which is what `__iops_node_launcher.sh` provides. It is written whenever any sampler (`resource_sampling`, `gpu_sampling`, `io_sampling`) is enabled and sourced after the exit handler, before any sampler.
 
 It exposes three functions:
 
@@ -142,7 +142,7 @@ Two details make the remote case work:
 - **Shared attempt id.** Sentinel and trace paths are derived from `IOPS_ATTEMPT_ID`, then `SLURM_JOB_ID`, `OAR_JOB_ID`, `PBS_JOBID`, and finally the shell PID. The launcher passes `IOPS_ATTEMPT_ID` in the remote command, because a remote helper computing its own PID would watch a sentinel path that does not exist and exit immediately.
 - **Shared execution directory.** Remote helpers write their traces into the execution directory, so it must be visible from every node. When it is node-local the benchmark still succeeds, the remote traces simply stay on their nodes.
 
-When adding a new per-node probe, call `_iops_launch_on_nodes` rather than testing scheduler variables directly, and keep the sourced-versus-executed check so the script can run standalone on a remote node.
+When adding a new per-node probe, call `_iops_launch_on_nodes` rather than testing scheduler variables directly, and keep the sourced-versus-executed check so the script can run standalone on a remote node. The I/O sampler (`__iops_runtime_io_sampler.sh`) is the newest example; it also shows the counter-source pattern, where `IOPS_IO_DISKSTATS`, `IOPS_IO_MOUNTSTATS`, and `IOPS_IO_SYSBLOCK` override the `/proc` and `/sys` paths so the parsing can be tested against fixtures rather than live kernel counters.
 
 ### 4. Data Collection
 

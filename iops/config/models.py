@@ -216,6 +216,10 @@ class ProbesConfig:
         gpu_sampling: Enable GPU metrics sampling during execution (power, utilization,
             temperature, memory, clocks). Currently supports NVIDIA GPUs via nvidia-smi,
             designed for future extension to other vendors.
+        io_sampling: Enable I/O sampling during execution (bytes and operations read and
+            written). Reads block device counters from /proc/diskstats and NFS client
+            counters from /proc/self/mountstats, reporting each source separately so a
+            study comparing storage backends can tell them apart.
         sampling_interval: Sampling interval in seconds for resource tracing and GPU sampling.
             Corresponds to deprecated field: trace_interval
         versions: Optional mapping of component name to a shell command that prints its
@@ -228,6 +232,7 @@ class ProbesConfig:
     execution_index: bool = True      # Was: track_executions
     resource_sampling: bool = False   # Was: trace_resources
     gpu_sampling: bool = False        # GPU metrics (power, utilization, temperature, etc.)
+    io_sampling: bool = False         # I/O volume and operations (block devices and NFS)
     sampling_interval: float = 1.0    # Was: trace_interval
     versions: Optional[Dict[str, str]] = None  # name -> shell command capturing a software/library version
 
