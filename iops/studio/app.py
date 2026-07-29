@@ -227,11 +227,9 @@ async def _write_config_to_target(session: TerminalSession, note, workdir: str,
     """
     cfg_dir = f"{_shell_workdir(workdir)}/configs"
     remote = f"{cfg_dir}/{_slug(name)}.yaml"
-    b64 = base64.b64encode(yaml_text.encode()).decode()
-    cmd = (f'mkdir -p "{cfg_dir}" && printf %s \'{b64}\' | base64 -d > "{remote}" '
-           f'&& echo __WROTE__')
-    code, out = await session.run(cmd, display=f"write {_slug(name)}.yaml", timeout=60)
-    if code != 0 or "__WROTE__" not in out:
+    code = await session.push_text(remote, yaml_text,
+                                   display=f"write {_slug(name)}.yaml")
+    if code != 0:
         note(f"could not write config to target (exit {code})")
         return None
     return remote
@@ -1291,13 +1289,12 @@ def _page():
         node = await _remote_value(sess.term, "$(hostname)", "NODE") or "?"
         session_name = f"iops_{_slug(name)}_{uuid.uuid4().hex[:6]}"
         runner = _runner_script(setup_cfg, remote, session_name, flags)
-        rb64 = base64.b64encode(runner.encode()).decode()
         runner_path = f"{_shell_workdir(setup_cfg.workdir)}/.iops-studio/{session_name}.sh"
-        start = (
-            f'mkdir -p "{_shell_workdir(setup_cfg.workdir)}/.iops-studio" && '
-            f"printf %s '{rb64}' | base64 -d > \"{runner_path}\" && "
-            f'screen -dmS {session_name} bash "{runner_path}" && echo __STARTED__'
-        )
+        if await sess.term.push_text(runner_path, runner,
+                                     display=f"write {session_name}.sh") != 0:
+            ui.notify("Could not write the run script to the target", type="negative")
+            return
+        start = f'screen -dmS {session_name} bash "{runner_path}" && echo __STARTED__'
         code, out = await sess.term.run(start, display=f"start screen {session_name}", timeout=60)
         if code != 0 or "__STARTED__" not in out:
             ui.notify("Could not start the screen session (see terminal)", type="negative")
@@ -1543,10 +1540,9 @@ def _page():
                 return True
             except OSError:
                 return False
-        b64 = base64.b64encode(text.encode()).decode()
-        cmd = f'printf %s \'{b64}\' | base64 -d > "{remote_path}" && echo __WROTE__'
-        code, out = await sess.term.run(cmd, display=f"write {Path(remote_path).name}", timeout=60)
-        return code == 0 and "__WROTE__" in out
+        code = await sess.term.push_text(remote_path, text,
+                                        display=f"write {Path(remote_path).name}")
+        return code == 0
 
     async def _save_report_config(setup_cfg: SetupConfig, run_dir: str, text: str):
         sess = registry.by_setup(setup_cfg.name)
