@@ -130,12 +130,13 @@ class TestGpuSamplerTemplate:
         assert '[[ -f "$_IOPS_GPU_SENTINEL" ]]' in GPU_SAMPLER_TEMPLATE
         assert '_iops_register_exit "_iops_stop_gpu_samplers"' in GPU_SAMPLER_TEMPLATE
 
-    def test_gpu_sampler_template_supports_slurm_multinode(self):
-        """Test that GPU sampler supports SLURM multi-node via srun."""
-        from iops.execution.planner import GPU_SAMPLER_TEMPLATE
-        assert "SLURM_JOB_ID" in GPU_SAMPLER_TEMPLATE
-        assert "srun --overlap" in GPU_SAMPLER_TEMPLATE
-        assert "--ntasks-per-node=1" in GPU_SAMPLER_TEMPLATE
+    def test_gpu_sampler_template_delegates_multinode_launch(self):
+        """GPU sampler fans out through the node launcher, not its own srun call."""
+        from iops.execution.planner import GPU_SAMPLER_TEMPLATE, NODE_LAUNCHER_TEMPLATE
+        assert "_iops_launch_on_nodes" in GPU_SAMPLER_TEMPLATE
+        # The scheduler-specific launching lives in the shared launcher
+        assert "srun --overlap" in NODE_LAUNCHER_TEMPLATE
+        assert "--ntasks-per-node=1" in NODE_LAUNCHER_TEMPLATE
 
     def test_gpu_sampler_template_can_be_formatted(self):
         """Test that GPU sampler template can be formatted with expected placeholders."""

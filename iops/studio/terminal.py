@@ -44,6 +44,13 @@ logger = logging.getLogger(__name__)
 
 _RS = 0x1e  # ASCII record separator, used to delimit sentinels invisibly
 
+# Above this many base64 bytes a payload is streamed instead of being inlined
+# into a command line. A command line has to fit the *remote* tty's input
+# buffer; anything longer is silently never delivered and the shell then waits
+# forever for the rest of a line that cannot arrive. The real ceiling depends on
+# the host, so this stays well under the smallest one observed.
+_MAX_INLINE_B64 = 2048
+
 OutputFn = Callable[[bytes], None]
 
 
@@ -314,24 +321,23 @@ class TerminalSession:
                 return False
         return True
 
-    async def push_tar(self, dest_rel: str, tar_gz: bytes, timeout: float = 1200.0) -> int:
-        """Stream a gzip tarball into ``$HOME/dest_rel`` on the remote and extract it.
+    async def _stream_payload(self, build_line: Callable[[str, int], str],
+                              payload: bytes, timeout: float) -> int:
+        """Stream ``payload`` to the remote over this interactive channel.
 
-        Uses only this one already-authenticated interactive channel, so it works
-        on hosts that reject background scp/ssh (no key, no multiplexing, password
-        or 2FA only). The remote drops its tty to raw/no-echo, reads exactly N
-        payload bytes into a staging file (so nothing echoes back and the browser
-        is not flooded), then base64-decodes and untars. Returns the remote exit
-        code, or -1 on a local/transport failure.
+        ``build_line(rid, n)`` returns the remote shell line that must print the
+        ``R<rid>`` marker once its tty is raw/no-echo, then read exactly ``n``
+        payload bytes, and finally print ``E<rid>:<exit code>``.
 
-        ``dest_rel`` must be a trusted, metacharacter-free path (it is embedded in
-        the remote command); Studio only ever passes a fixed constant.
+        Handing the bytes over as a stream the remote *reads* is what makes the
+        payload size irrelevant: a command line has to fit the remote tty's input
+        buffer, a stream does not. Reading in raw/no-echo also keeps the payload
+        from echoing back and flooding the browser.
+
+        Returns the remote exit code, or -1 on a local/transport failure.
         """
         if not self.alive or self._loop is None:
             return -1
-        logger.debug("push_tar -> $HOME/%s (%d bytes gz)", dest_rel, len(tar_gz))
-        payload = base64.b64encode(tar_gz)  # ASCII, unwrapped
-        n = len(payload)
         rid = uuid.uuid4().hex[:8]
         ready = bytes([_RS]) + b"R" + rid.encode() + bytes([_RS])
         end = bytes([_RS]) + b"E" + rid.encode() + b":"
@@ -341,16 +347,7 @@ class TerminalSession:
             "ready": ready, "end": end, "buf": bytearray(),
             "ready_future": ready_future, "end_future": end_future,
         }
-        # The remote reads N bytes into a staging file *inside* the destination
-        # (avoids /tmp size limits and a broken-pipe short read), restores the
-        # tty, then decodes + extracts. R is emitted only after raw/-echo is set.
-        line = (
-            'D="$HOME/%s"; mkdir -p "$D" && __t="$D/.iops_incoming" && '
-            "stty raw -echo 2>/dev/null && printf '\\036R%s\\036' && "
-            'head -c %d > "$__t"; stty sane 2>/dev/null; '
-            'base64 -d "$__t" 2>/dev/null | tar xzf - -C "$D"; __rc=$?; rm -f "$__t"; '
-            "printf '\\036E%s:%%s\\036' \"$__rc\"\n"
-        ) % (dest_rel, rid, n, rid)
+        line = build_line(rid, len(payload))
 
         self.input_locked = True
         saved_attrs = None
@@ -376,10 +373,8 @@ class TerminalSession:
                     return -1
             if not await self._drain_write(bytes(payload)):
                 return -1
-            rc = await asyncio.wait_for(end_future, timeout=timeout)
-            logger.debug("push_tar -> exit=%s", rc)
-            return rc
-        except OSError:
+            return await asyncio.wait_for(end_future, timeout=timeout)
+        except (OSError, asyncio.TimeoutError):
             return -1
         finally:
             self._transfer = None
@@ -389,6 +384,81 @@ class TerminalSession:
                 except (termios.error, OSError):
                     pass
             self.input_locked = False
+
+    async def push_tar(self, dest_rel: str, tar_gz: bytes, timeout: float = 1200.0) -> int:
+        """Stream a gzip tarball into ``$HOME/dest_rel`` on the remote and extract it.
+
+        Uses only this one already-authenticated interactive channel, so it works
+        on hosts that reject background scp/ssh (no key, no multiplexing, password
+        or 2FA only). Returns the remote exit code, or -1 on a local/transport
+        failure.
+
+        ``dest_rel`` must be a trusted, metacharacter-free path (it is embedded in
+        the remote command); Studio only ever passes a fixed constant.
+        """
+        logger.debug("push_tar -> $HOME/%s (%d bytes gz)", dest_rel, len(tar_gz))
+
+        def build_line(rid: str, n: int) -> str:
+            # The remote reads N bytes into a staging file *inside* the destination
+            # (avoids /tmp size limits and a broken-pipe short read), restores the
+            # tty, then decodes + extracts.
+            return (
+                'D="$HOME/%s"; mkdir -p "$D" && __t="$D/.iops_incoming" && '
+                "stty raw -echo 2>/dev/null && printf '\\036R%s\\036' && "
+                'head -c %d > "$__t"; stty sane 2>/dev/null; '
+                'base64 -d "$__t" 2>/dev/null | tar xzf - -C "$D"; __rc=$?; rm -f "$__t"; '
+                "printf '\\036E%s:%%s\\036' \"$__rc\"\n"
+            ) % (dest_rel, rid, n, rid)
+
+        rc = await self._stream_payload(build_line, base64.b64encode(tar_gz), timeout)
+        logger.debug("push_tar -> exit=%s", rc)
+        return rc
+
+    async def push_text(self, remote_path: str, text: str,
+                        display: Optional[str] = None,
+                        timeout: float = 600.0) -> int:
+        """Write ``text`` to ``remote_path`` on the target, at any size.
+
+        The write counterpart to ``pull_file``. Small payloads ride inline on a
+        single command line (one round trip, works on any shell); larger ones are
+        streamed, because an inlined payload has to fit the remote tty's input
+        buffer and a big one would otherwise hang until the caller's timeout.
+
+        ``remote_path`` must be a trusted, shell-safe path (it is embedded in the
+        remote command inside double quotes); Studio only passes paths it builds
+        from a setup's workdir. Returns the remote exit code, or -1 on failure.
+        """
+        payload = base64.b64encode(text.encode())
+        logger.debug("push_text -> %s (%d bytes, b64 %d)",
+                     remote_path, len(text.encode()), len(payload))
+
+        if len(payload) <= _MAX_INLINE_B64:
+            b64 = payload.decode()
+            code, out = await self.run(
+                f'mkdir -p "$(dirname "{remote_path}")" && '
+                f"printf %s '{b64}' | base64 -d > \"{remote_path}\" && echo __WROTE__",
+                display=display, timeout=60)
+            # The marker guards against a garbled capture reporting a false success.
+            return code if code != 0 or "__WROTE__" in out else -1
+
+        if display and self._on_output:
+            self._on_output((f"\r\n\x1b[36m$ {display} ({len(payload) // 1024 + 1} KiB, "
+                             f"streamed)\x1b[0m\r\n").encode())
+
+        def build_line(rid: str, n: int) -> str:
+            # Stage the base64 beside the destination and only then decode it into
+            # place, so an interrupted transfer cannot leave a half-written file.
+            return (
+                'F="%s"; mkdir -p "$(dirname "$F")" && __t="$F.iops_incoming" && '
+                "stty raw -echo 2>/dev/null && printf '\\036R%s\\036' && "
+                'head -c %d > "$__t"; stty sane 2>/dev/null; '
+                'base64 -d "$__t" > "$F" 2>/dev/null; __rc=$?; rm -f "$__t"; '
+                "printf '\\036E%s:%%s\\036' \"$__rc\"\n"
+            ) % (remote_path, rid, n, rid)
+
+        rc = await self._stream_payload(build_line, payload, timeout)
+        logger.debug("push_text -> exit=%s", rc)
+        return rc
 
     async def pull_file(self, remote_path: str, timeout: float = 600.0) -> Optional[bytes]:
         """Read a remote file's bytes over this interactive channel (base64).

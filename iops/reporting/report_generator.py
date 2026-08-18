@@ -2984,6 +2984,23 @@ class ReportGenerator:
         ("gpu_mem_peak_mib", "Peak GPU Memory", "MiB"),
     ]
 
+    _IO_METRICS = [
+        ("io_read_gb", "Total Read", "GB"),
+        ("io_write_gb", "Total Written", "GB"),
+        ("io_disk_read_gb", "Read from Block Devices", "GB"),
+        ("io_disk_write_gb", "Written to Block Devices", "GB"),
+        ("io_nfs_read_gb", "Read from NFS", "GB"),
+        ("io_nfs_write_gb", "Written to NFS", "GB"),
+        ("io_read_mbs_avg", "Avg Read Throughput (whole run)", "MB/s"),
+        ("io_write_mbs_avg", "Avg Write Throughput (whole run)", "MB/s"),
+        ("io_read_mbs_active", "Avg Read Throughput (while active)", "MB/s"),
+        ("io_write_mbs_active", "Avg Write Throughput (while active)", "MB/s"),
+        ("io_read_mbs_peak_per_node", "Peak Read Throughput (per node)", "MB/s"),
+        ("io_write_mbs_peak_per_node", "Peak Write Throughput (per node)", "MB/s"),
+        ("io_read_iops_avg", "Avg Read Operations", "ops/s"),
+        ("io_write_iops_avg", "Avg Write Operations", "ops/s"),
+    ]
+
     def _generate_resource_sampling_section(self, report_vars: List[str]) -> str:
         """
         Generate Resource Sampling section with a summary table.
@@ -3015,8 +3032,9 @@ class ReportGenerator:
         # Detect available metric categories
         cpu_metrics = [(col, label, unit) for col, label, unit in self._CPU_MEMORY_METRICS if col in df.columns]
         gpu_metrics = [(col, label, unit) for col, label, unit in self._GPU_METRICS if col in df.columns]
+        io_metrics = [(col, label, unit) for col, label, unit in self._IO_METRICS if col in df.columns]
 
-        if not cpu_metrics and not gpu_metrics:
+        if not cpu_metrics and not gpu_metrics and not io_metrics:
             return ""
 
         html = '<div class="metric-section">\n'
@@ -3030,7 +3048,7 @@ class ReportGenerator:
         html += '<div class="details-content">\n<table>\n'
         html += "<tr><th>Metric</th><th>Min</th><th>Max</th><th>Mean</th><th>Unit</th></tr>\n"
 
-        for col, label, unit in cpu_metrics + gpu_metrics:
+        for col, label, unit in cpu_metrics + gpu_metrics + io_metrics:
             if col not in df.columns:
                 continue
             series = pd.to_numeric(df[col], errors='coerce').dropna()

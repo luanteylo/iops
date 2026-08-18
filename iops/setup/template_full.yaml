@@ -243,6 +243,9 @@ benchmark:
     #   - Per-execution: __iops_trace_<hostname>.csv (one per node)
     #   - Run-level: __iops_resource_summary.csv (aggregated metrics with all vars)
     # The summary CSV enables heatmap analysis correlating parameters with resource footprint.
+    # On multi-node jobs IOPS samples every allocated node (SLURM, OAR and PBS are detected).
+    # This requires the execution directory to be shared across nodes; check nodes_traced in
+    # __iops_resource_summary.csv to confirm how many nodes actually reported.
     # resource_sampling: true
 
     # gpu_sampling: Enable GPU metrics tracing during execution (default: false)
@@ -255,8 +258,36 @@ benchmark:
     # Key metrics: gpu_energy_j (total energy in Joules), gpu_avg_power_w, gpu_max_temperature_c
     # gpu_sampling: true
 
+    # io_sampling: Enable I/O tracing during execution (default: false)
+    # When enabled, IOPS samples read/write volume and operation counts from two sources:
+    # block devices (/proc/diskstats) and NFS mounts (/proc/self/mountstats). Both are
+    # needed: NFS traffic never reaches a client block device, and local disk traffic
+    # never appears in the NFS counters. Each row records which source it came from.
+    # Output files:
+    #   - Per-execution: __iops_io_trace_<hostname>.csv (one per node)
+    #   - Run-level: I/O metrics appended to __iops_resource_summary.csv
+    # Key metrics: io_read_gb, io_write_gb, io_disk_read_gb, io_nfs_read_gb,
+    # io_read_mbs_avg / io_write_mbs_avg (over the whole run) and
+    # io_read_mbs_active / io_write_mbs_active (over the time I/O was in flight),
+    # io_read_iops_avg
+    # Counters are node-level, so they include any other activity on the node.
+    # io_sampling: true
+
+    # io_paths: REQUIRED when io_sampling is enabled. The storage behind these
+    # paths is what gets measured. There is no "measure everything" mode: a node
+    # usually has storage the benchmark never touches, and counting all of it
+    # would not describe the run.
+    # Values are Jinja2 templates rendered per execution and
+    # resolved on the compute node, so they can name a directory the run creates.
+    # A local path resolves to the whole block device behind it, so scoping is
+    # only as precise as the device layout; an NFS path resolves to that mount
+    # exactly. A path on tmpfs has no counters and is reported as unresolved.
+    # io_paths:
+    #   - "{{ execution_dir }}"
+    #   - "/scratch/input"
+
     # sampling_interval: Sampling interval in seconds (default: 1.0)
-    # Shared by both resource_sampling and gpu_sampling.
+    # Shared by resource_sampling, gpu_sampling and io_sampling.
     # Lower values provide finer granularity but generate more data.
     # sampling_interval: 0.5
 

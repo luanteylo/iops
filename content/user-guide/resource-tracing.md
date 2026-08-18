@@ -3,7 +3,7 @@ title: "Resource Sampling"
 weight: 75
 ---
 
-IOPS can optionally sample CPU, memory, and GPU utilization during benchmark execution, so you can correlate parameter configurations with resource footprint (e.g., heatmap analysis of how parameters affect resource usage).
+IOPS can optionally sample CPU, memory, GPU, and I/O activity during benchmark execution, so you can correlate parameter configurations with resource footprint (e.g., heatmap analysis of how parameters affect resource usage).
 
 **Warning: Performance Impact**
 
@@ -19,6 +19,9 @@ benchmark:
   probes:
     resource_sampling: true    # CPU/memory sampling (default: false)
     gpu_sampling: true         # GPU sampling (default: false)
+    io_sampling: true          # I/O sampling (default: false)
+    io_paths:                  # Required with io_sampling: what storage to measure
+      - "{{ execution_dir }}"
     sampling_interval: 1.0     # Sample every 1 second (default)
 ```
 
@@ -32,7 +35,69 @@ When `probes.resource_sampling: true`, IOPS injects a resource sampler (`__iops_
 
 When `probes.gpu_sampling: true`, IOPS injects a GPU sampler (`__iops_runtime_gpu_sampler.sh`) that detects the GPU vendor at runtime (currently NVIDIA via `nvidia-smi`, designed for future AMD/Intel support), queries all GPUs in a single call per interval, and writes per-node, per-attempt GPU sample files (`__iops_gpu_trace_<hostname>_<attempt_id>.csv`). It gracefully skips if no supported GPU is detected (no errors, no empty files) and uses its own per-attempt sentinel file (`__iops_gpu_trace_running.<attempt_id>`), independent of the CPU sampler.
 
-Both samplers share the `sampling_interval` setting and support SLURM multi-node jobs.
+### I/O Sampling
+
+When `probes.io_sampling: true`, IOPS injects an I/O sampler (`__iops_runtime_io_sampler.sh`) that reads two independent counter sources each interval and writes per-node, per-attempt sample files (`__iops_io_trace_<hostname>_<attempt_id>.csv`), with its own sentinel (`__iops_io_trace_running.<attempt_id>`).
+
+Two sources are needed because neither one alone describes both a local disk and a network filesystem:
+
+| Source | Read from | Covers | Reports nothing for |
+|--------|-----------|--------|---------------------|
+| `block` | `/proc/diskstats` | Local disks, NVMe | NFS, whose traffic never reaches a client block device |
+| `nfs` | `/proc/self/mountstats` | NFS mounts, per mount | Local disks |
+
+Each row is tagged with its source, so a study comparing storage backends can tell them apart rather than seeing one arm report zero.
+
+#### Scoping to the storage you care about
+
+`io_paths` is **required** whenever `io_sampling` is enabled. It names the paths whose storage should be measured, and the probe counts only the filesystems holding them. There is no "measure everything" mode on purpose: a node usually has storage the benchmark never touches, so counting all of it would produce a number that does not describe the run.
+
+```yaml
+benchmark:
+  probes:
+    io_sampling: true
+    io_paths:
+      - "{{ execution_dir }}"      # where this execution writes
+      - "/scratch/shared/input"    # where it reads from
+```
+
+Paths are Jinja2 templates rendered per execution, so they can reference `{{ execution_dir }}` or any swept variable, exactly like `command.template`. Each path is resolved **on the compute node**, since mount tables differ across an allocation, and a path the benchmark has not created yet resolves through its nearest existing ancestor.
+
+Resolution maps a path to a counter:
+
+| The path lives on | Resolved to | Precision |
+|-------------------|-------------|-----------|
+| A local filesystem | The whole block device behind it (a partition resolves to its parent disk, an LVM or md volume to the disks underneath) | Device-level |
+| An NFS mount | That mount's client counters | Mount-level, exact |
+| tmpfs, ramfs, or anything with no backing device | Nothing countable | Reported, not counted |
+
+**Device-level is not path-level.** Scoping to `/tmp` restricts the counters to the disk holding `/tmp`. If `/` lives on that same disk, its traffic is still included. NFS scoping is exact because the kernel keeps counters per mount; block scoping is only as precise as the device layout. To measure a local filesystem cleanly, give it its own device.
+
+#### How several paths are combined
+
+`io_paths` is a filter, not a per-path breakdown. Every path is resolved to a counter, the counters are deduplicated, and the summary metrics are totals over that set. What you can separate depends on where the paths landed:
+
+| The paths land on | In the trace | In the summary |
+|-------------------|--------------|----------------|
+| Different filesystems | One row per device or mount each interval, each labelled with the path it came from | Totals, plus the `io_disk_*` and `io_nfs_*` split when one is local and the other is NFS |
+| The same filesystem | One row, labelled with every path that resolved to it, joined by `;` | Totals only |
+
+Two directories on the same disk cannot be told apart, because the kernel keeps no per-directory counters. The device is registered once so its traffic is counted once rather than twice, and the `path` column names both, which is the honest answer rather than crediting whichever path happened to be resolved last.
+
+So listing an input directory and an output directory that share a filesystem gives you their combined traffic, correctly, with no double counting. To attribute them separately they have to be on separate devices or separate NFS mounts. For finer analysis than the summary offers, read the trace CSV: it carries `source`, `device`, and `path` per sample.
+
+A path that resolves to nothing countable, such as anything on tmpfs, is not silently ignored: the run logs a warning naming the path and its filesystem type, and every node records what each path resolved to in `__iops_io_targets_<hostname>_<attempt_id>.json` next to the trace.
+
+Two more things to know before drawing conclusions from the numbers:
+
+- **The counters are node-level, not process-level.** They include anything else running on the node that touches the same storage. On a dedicated compute node in a batch job that is what you want; on a shared machine it is noise.
+- **NFS byte counts are what crossed the wire.** The probe reads the server-read and server-written counters, not the normal-read counters, so reads the page cache satisfied locally are excluded. Comparing an NFS arm against a local-disk arm is therefore comparing like with like: both count traffic that reached storage.
+
+Block devices are counted once. Partitions (`sda1`) are excluded because their traffic is already in the parent device, and virtual devices (`dm-*`, `md*`, `loop*`) are excluded because they would double count the disks underneath them.
+
+Other filesystems (Lustre, GPFS) are not yet read. They plug in as additional counter sources in the same way the GPU sampler is designed to gain AMD and Intel support.
+
+All three samplers share the `sampling_interval` setting and support multi-node jobs on SLURM, OAR and PBS.
 
 ## Output Files
 
@@ -42,7 +107,7 @@ Each execution produces one CSV file per node:
 
 **Location:** `workdir/run_001/exec_0001/repetition_001/__iops_trace_<hostname>_<attempt_id>.csv`
 
-`attempt_id` is the SLURM job id (or the shell PID when running locally). Including it in the filename prevents a second attempt (e.g. when SLURM requeues the job after a node failure) from truncating the first attempt's trace, and prevents one attempt's exit handler from stopping another attempt's sampler. Post-mortem aggregation picks up every matching file, so if an attempt aborts and leaves a short partial trace on disk, you may want to delete that file before running the report.
+`attempt_id` is the scheduler job id (`SLURM_JOB_ID`, `OAR_JOB_ID` or `PBS_JOBID`), falling back to the shell PID when running outside a scheduler. Every node of a job uses the same value. Including it in the filename prevents a second attempt (e.g. when SLURM requeues the job after a node failure) from truncating the first attempt's trace, and prevents one attempt's exit handler from stopping another attempt's sampler. Post-mortem aggregation picks up every matching file, so if an attempt aborts and leaves a short partial trace on disk, you may want to delete that file before running the report.
 
 **Format:**
 ```csv
@@ -92,13 +157,62 @@ timestamp,hostname,gpu_index,gpu_name,utilization_gpu_pct,utilization_mem_pct,me
 | `clock_sm_mhz` | Streaming multiprocessor clock (MHz) |
 | `clock_mem_mhz` | Memory clock (MHz) |
 
+### Per-Execution I/O Sample Files
+
+When `io_sampling` is enabled, each execution produces one I/O sample CSV per node:
+
+**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_io_trace_<hostname>_<attempt_id>.csv`
+
+**Format:**
+```csv
+timestamp,hostname,source,device,path,interval_s,read_bytes,write_bytes,read_ops,write_ops
+1705123457.1,node01,block,nvme0n1,/scratch/run,1.002,0,536870912,0,4096
+1705123457.1,node01,nfs,server:/export,/data/input,1.002,104857600,0,800,0
+```
+
+**Fields:**
+| Field | Description |
+|-------|-------------|
+| `timestamp` | Unix timestamp with milliseconds |
+| `hostname` | Node hostname |
+| `source` | Counter source: `block` or `nfs` |
+| `device` | Block device name (`nvme0n1`) or NFS mount source (`server:/export`) |
+| `path` | The configured `io_paths` entry this row was resolved from, empty when no paths were configured |
+| `interval_s` | Seconds this row covers, measured rather than assumed |
+| `read_bytes` | Bytes read during the interval |
+| `write_bytes` | Bytes written during the interval |
+| `read_ops` | Read operations during the interval |
+| `write_ops` | Write operations during the interval |
+
+Values are per-interval deltas, not cumulative counters. The first sample of a run establishes the baseline and emits no row. A counter that goes backwards (a reset or a wrap) is clamped to zero rather than emitting a spurious burst. `interval_s` is recorded because `sleep` drifts under load, so rates computed from it are more accurate than rates assuming the configured interval.
+
+### Per-Execution I/O Targets Files
+
+When `io_paths` is set, each node records what the configured paths resolved to:
+
+**Location:** `workdir/run_001/exec_0001/repetition_001/__iops_io_targets_<hostname>_<attempt_id>.json`
+
+```json
+{
+  "hostname": "node01",
+  "paths": [
+    {"path": "/scratch/run", "kind": "block", "target": "nvme0n1", "mount": "/scratch", "fstype": "ext4"},
+    {"path": "/dev/shm/cache", "kind": "none", "target": "", "mount": "/dev/shm", "fstype": "tmpfs"}
+  ]
+}
+```
+
+`kind` is `block`, `nfs`, or `none` when the filesystem has no counters to read. One file per node, because the same path can resolve differently across an allocation. This is the first thing to check when an I/O metric reads zero.
+
 ### Run-Level Summary
 
 After all executions complete, IOPS aggregates samples into a summary CSV:
 
 **Location:** `workdir/run_001/__iops_resource_summary.csv`
 
-This file contains one row per execution+repetition, with all user variables and aggregated metrics from both CPU/memory and GPU samples (when enabled), enabling correlation analysis between parameter configurations and resource footprint.
+This file contains one row per execution+repetition, with all user variables and aggregated metrics from the CPU/memory, GPU, and I/O samplers (whichever are enabled), enabling correlation analysis between parameter configurations and resource footprint.
+
+Columns are the union across all executions. An execution short enough that its sampler collected no usable samples reports only the counter columns, and the remaining cells are left empty.
 
 ### CPU/Memory Aggregated Metrics
 
@@ -162,6 +276,57 @@ Aggregate metrics use the **maximum of per-GPU averages** so that idle GPUs do n
 
 The `gpu_energy_j` metric provides total GPU energy consumption in Joules. Energy is computed per GPU by integrating instantaneous power draw over time using the trapezoidal rule (`E_interval = (P_i + P_{i+1}) / 2 * (t_{i+1} - t_i)` for consecutive samples), then summed across all GPUs. This gives accurate results even with varying power draw. Per-GPU energy is available via `gpu0_energy_j`, `gpu1_energy_j`, etc. To convert to kilowatt-hours: `kWh = gpu_energy_j / 3600000`.
 
+### I/O Aggregated Metrics
+
+When `io_sampling` is enabled, I/O metrics are added to the summary CSV. Byte totals sum the per-interval deltas across every device, source, and node. Volumes use 1024-based units, matching the memory metrics.
+
+`duration` below is the elapsed time a single node covered, summed over its samples. Using the first and last timestamps instead would drop the window between the baseline and the first emitted row.
+
+| Metric | Description | Formula |
+|--------|-------------|---------|
+| `io_read_gb` | Total read across all sources | `sum(read_bytes) / 1024³` |
+| `io_write_gb` | Total written across all sources | `sum(write_bytes) / 1024³` |
+| `io_disk_read_gb` | Read from block devices | `sum(read_bytes where source = block) / 1024³` |
+| `io_disk_write_gb` | Written to block devices | `sum(write_bytes where source = block) / 1024³` |
+| `io_nfs_read_gb` | Read from NFS mounts | `sum(read_bytes where source = nfs) / 1024³` |
+| `io_nfs_write_gb` | Written to NFS mounts | `sum(write_bytes where source = nfs) / 1024³` |
+| `io_read_mbs_avg` | Aggregate read throughput over the whole run | `sum(read_bytes) / 1024² / duration` |
+| `io_write_mbs_avg` | Aggregate write throughput over the whole run | `sum(write_bytes) / 1024² / duration` |
+| `io_read_mbs_active` | Read throughput while the storage was working | `sum(read_bytes) / 1024² / io_read_active_s` |
+| `io_write_mbs_active` | Write throughput while the storage was working | `sum(write_bytes) / 1024² / io_write_active_s` |
+| `io_read_active_s` | Time any read was in flight | `max(sum(interval_s) where read_bytes > 0, per node)` |
+| `io_write_active_s` | Time any write was in flight | `max(sum(interval_s) where write_bytes > 0, per node)` |
+| `io_read_mbs_peak_per_node` | Busiest single read sample on any node | `max(sum(read_bytes) per node-instant / interval_s) / 1024²` |
+| `io_write_mbs_peak_per_node` | Busiest single write sample on any node | `max(sum(write_bytes) per node-instant / interval_s) / 1024²` |
+| `io_read_iops_avg` | Average read operations per second | `sum(read_ops) / duration` |
+| `io_write_iops_avg` | Average write operations per second | `sum(write_ops) / duration` |
+| `io_nodes_traced` | Number of nodes with I/O sample data | `count(distinct hostname)` |
+| `io_samples_collected` | Sampling instants across all nodes | `count(distinct hostname + timestamp)` |
+| `io_trace_duration_s` | Elapsed time covered | `max(sum(interval_s) per node)` |
+
+The averages are aggregate: they sum every node's traffic over the elapsed window, which is the number a storage study wants. The peaks are per node, because samples on different nodes are not clock-aligned and adding them at a supposedly shared instant would be fiction.
+
+The disk and NFS columns are always emitted, holding zero when that source saw no traffic, so a run comparing the two backends produces a complete table either way.
+
+#### Idle samples and what they do to each metric
+
+Sampling covers the whole script, and most benchmarks spend much of that doing something other than I/O: loading modules, starting MPI, computing. Those intervals are recorded as zero-byte samples, and they are load-bearing, since they are what makes `io_trace_duration_s` the real elapsed window.
+
+They affect the metrics differently:
+
+| Metric family | Affected by idle samples | Why |
+|---------------|--------------------------|-----|
+| Volumes (`io_read_gb`, `io_write_gb`, and the per-source splits) | No | Sums, and adding zero changes nothing |
+| Peaks (`io_*_mbs_peak_per_node`) | No | A maximum over samples, so idle ones are ignored |
+| `io_*_mbs_avg`, `io_*_iops_avg` | Yes | Divided by the whole window, so idle time pulls them down |
+| `io_*_mbs_active` | No | Divided by the time that direction actually moved data |
+
+Both averages are reported because they answer different questions. `io_write_mbs_avg` is what the job moved per second of runtime; `io_write_mbs_active` is how fast the storage went while in use. A job that computes for ten minutes and writes for ten seconds will show an `io_write_mbs_avg` roughly sixty times lower than its `io_write_mbs_active`, and neither number is wrong. Compare `io_write_active_s` against `io_trace_duration_s` to see the duty cycle.
+
+Quote `io_*_mbs_active` when characterising storage, and `io_*_mbs_avg` when characterising the job.
+
+Short executions undersample. If a test finishes in less time than a few sampling intervals, the totals cover only the intervals that were observed and will read low. Lower `sampling_interval` for short tests, or treat the volumes as a lower bound.
+
 ## Configuration Reference
 
 ```yaml
@@ -175,17 +340,45 @@ benchmark:
     # Gracefully skips if no supported GPU is detected
     gpu_sampling: true
 
+    # Enable I/O sampling (default: false)
+    # Reads block device counters (/proc/diskstats) and NFS client
+    # counters (/proc/self/mountstats), reporting each source separately
+    io_sampling: true
+
+    # Required with io_sampling: the storage behind these paths is what
+    # gets measured. Jinja2 templates, rendered per execution, resolved on
+    # the compute node.
+    io_paths:
+      - "{{ execution_dir }}"
+      - "/scratch/input"
+
     # Sampling interval in seconds (default: 1.0)
-    # Shared by both resource_sampling and gpu_sampling
+    # Shared by resource_sampling, gpu_sampling and io_sampling
     # Lower = finer granularity but more data
     sampling_interval: 0.5
 ```
 
 ## Multi-Node Support
 
-For SLURM multi-node jobs, IOPS automatically launches samplers on all allocated nodes. The sampler detects multi-node jobs via `SLURM_NNODES > 1` and uses `srun --overlap --ntasks-per-node=1` to start one sampler per node. All samplers share the same sentinel file on the shared filesystem; when the exit handler removes it, all node samplers stop.
+For multi-node jobs, IOPS automatically launches samplers on all allocated nodes. A shared node launcher (`__iops_node_launcher.sh`) resolves the job's node list and starts one sampler per node:
+
+| Scheduler | Node list | Launch method |
+|-----------|-----------|---------------|
+| SLURM | `scontrol show hostnames $SLURM_JOB_NODELIST` | `srun --overlap --ntasks-per-node=1` (one call covers the allocation) |
+| OAR | `$OAR_NODEFILE` | `oarsh` per remote node |
+| PBS | `$PBS_NODEFILE` | `ssh` per remote node |
+| None detected | local hostname | background process on the local node |
+
+All samplers share the same sentinel file on the shared filesystem; when the exit handler removes it, all node samplers stop.
 
 Each node produces its own sample files (`__iops_trace_node01_<attempt_id>.csv`, `__iops_gpu_trace_node01_<attempt_id>.csv`, etc.), and the aggregation combines data from all nodes. The CPU/memory sampler and the GPU sampler support multi-node operation independently.
+
+Two requirements for remote sampling to produce data:
+
+1. The execution directory must be on a filesystem shared by all nodes, since remote samplers write their traces there. When it is node-local the benchmark still runs, only the remote traces stay behind on their nodes.
+2. Passwordless remote access must work between compute nodes (`oarsh` or `ssh` in batch mode), which is the default on most clusters.
+
+Check `nodes_traced` in `__iops_resource_summary.csv` to confirm how many nodes were actually sampled. A value of 1 on a multi-node run means only the head node reported.
 
 ## Fault Tolerance
 
@@ -195,6 +388,7 @@ Resource sampling is designed to never break your benchmark:
 - Missing or malformed sample files are skipped during aggregation
 - If no sample files exist, the summary is simply not created
 - The GPU sampler gracefully skips if no supported GPU vendor is detected (no errors, no empty files)
+- The I/O sampler gracefully skips when neither counter source is readable (for example on a non-Linux host), and when every configured path resolves to storage with no counters
 
 ## I/O Considerations
 

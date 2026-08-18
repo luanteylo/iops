@@ -89,15 +89,19 @@ def _limit_blas_threads(func):
 #    - Collects system information from compute nodes
 #    - Registers _iops_collect_sysinfo with exit handler
 #
+# 2b. Node Launcher (__iops_node_launcher.sh):
+#    - Resolves the job's node list and starts a per-node helper on each node
+#    - Sourced before the samplers, which use it to fan out
+#
 # 3. Resource Sampler (__iops_sampler.sh):
 #    - Collects CPU/memory utilization during execution
-#    - For SLURM multi-node: uses srun to launch on all nodes
+#    - Multi-node: fans out via the node launcher (SLURM, OAR, PBS)
 #    - Registers sentinel file cleanup with exit handler
 #
 # 4. GPU Sampler (__iops_runtime_gpu_sampler.sh):
 #    - Collects GPU utilization, memory, temperature, power, clocks
 #    - Supports NVIDIA GPUs via nvidia-smi (extensible to AMD/Intel)
-#    - For SLURM multi-node: uses srun to launch on all nodes
+#    - Multi-node: fans out via the node launcher (SLURM, OAR, PBS)
 #    - Registers sentinel file cleanup with exit handler
 #
 # Key design decisions:
@@ -156,6 +160,96 @@ _iops_run_exit_actions() {
 
 # Set the single EXIT trap for the entire script
 trap '_iops_run_exit_actions' EXIT
+'''
+
+# Filename for the node launcher script (written to execution directory)
+NODE_LAUNCHER_FILENAME = "__iops_node_launcher.sh"
+
+# Node launcher template - starts a per-node helper on every node of the job.
+# Sourced after the exit handler and before any sampler, which then calls
+# _iops_launch_on_nodes instead of implementing its own fan-out.
+# Note: This template has no placeholders - it's written as-is to the file.
+NODE_LAUNCHER_TEMPLATE = '''#!/bin/bash
+# IOPS Node Launcher - starts a per-node helper on every node of the allocation.
+# This file is auto-generated and sourced by the main script before the samplers.
+#
+# Scheduler support:
+#   SLURM : srun --overlap, one call covers the whole allocation
+#   OAR   : $OAR_NODEFILE plus oarsh
+#   PBS   : $PBS_NODEFILE plus ssh
+#   none  : the local host only
+#
+# Every step is best-effort. A scheduler we cannot detect degrades to sampling
+# the local node rather than failing the benchmark.
+
+# Print the job's unique node list, one hostname per line.
+_iops_node_list() {
+    _iops_nl_out=""
+    if [ -n "${SLURM_JOB_NODELIST:-}" ] && command -v scontrol >/dev/null 2>&1; then
+        _iops_nl_out=$(scontrol show hostnames "$SLURM_JOB_NODELIST" 2>/dev/null)
+    fi
+    if [ -z "$_iops_nl_out" ]; then
+        _iops_nl_file="${OAR_NODEFILE:-}"
+        [ -z "$_iops_nl_file" ] && _iops_nl_file="${OAR_NODE_FILE:-}"
+        [ -z "$_iops_nl_file" ] && _iops_nl_file="${PBS_NODEFILE:-}"
+        if [ -n "$_iops_nl_file" ] && [ -r "$_iops_nl_file" ]; then
+            _iops_nl_out=$(sort -u "$_iops_nl_file" 2>/dev/null)
+        fi
+    fi
+    if [ -z "$_iops_nl_out" ]; then
+        _iops_nl_out=$(hostname 2>/dev/null || echo localhost)
+    fi
+    printf '%s\\n' "$_iops_nl_out"
+}
+
+# Print the command that starts a process on another node, empty if none works.
+_iops_remote_shell() {
+    if [ -n "${OAR_JOB_ID:-}" ] && command -v oarsh >/dev/null 2>&1; then
+        echo "oarsh"
+    elif command -v ssh >/dev/null 2>&1; then
+        echo "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+    else
+        echo ""
+    fi
+}
+
+# Start one helper per node of the allocation.
+#   $1: script executed on remote nodes, invoked as "bash <script>"
+#   $2: shell function run in the background on this node
+#   $3: attempt id, forwarded so remote helpers agree on sentinel and trace names
+#
+# Remote helpers write into the execution directory, so that directory must be
+# on a shared filesystem for their output to be collected. When it is node-local
+# the run still succeeds, only the remote traces stay behind on their nodes.
+_iops_launch_on_nodes() {
+    _iops_lon_script="$1"
+    _iops_lon_local_fn="$2"
+    _iops_lon_attempt="$3"
+
+    # SLURM: a single srun starts the helper on every allocated node.
+    # --overlap lets it coexist with the benchmark's own srun steps.
+    if [ -n "${SLURM_JOB_ID:-}" ] && [ "${SLURM_NNODES:-1}" -gt 1 ]; then
+        srun --overlap --nodes="${SLURM_NNODES}" --ntasks-per-node=1 \
+            bash "$_iops_lon_script" </dev/null >/dev/null 2>&1 &
+        return 0
+    fi
+
+    _iops_lon_rsh=$(_iops_remote_shell)
+    _iops_lon_self=$(hostname 2>/dev/null || echo localhost)
+
+    while IFS= read -r _iops_lon_node; do
+        [ -z "$_iops_lon_node" ] && continue
+        # Compare short names: node files and `hostname` disagree on FQDNs.
+        if [ "${_iops_lon_node%%.*}" = "${_iops_lon_self%%.*}" ]; then
+            "$_iops_lon_local_fn" </dev/null >/dev/null 2>&1 &
+            renice -n 19 -p "$!" >/dev/null 2>&1 || true
+        elif [ -n "$_iops_lon_rsh" ]; then
+            $_iops_lon_rsh "$_iops_lon_node" \
+                "IOPS_ATTEMPT_ID='$_iops_lon_attempt' nohup bash '$_iops_lon_script'" \
+                </dev/null >/dev/null 2>&1 &
+        fi
+    done < <(_iops_node_list)
+}
 '''
 
 # System probe script template - written as a separate file and sourced by user script
@@ -241,25 +335,28 @@ TRACE_FILENAME_PREFIX = "__iops_trace_"
 # Resource sampler script template - runs in background during execution
 # Collects per-core CPU utilization and memory usage at configurable intervals
 #
-# For SLURM multi-node jobs:
-# - Launched via srun on all nodes
+# For multi-node jobs:
+# - Launched on every node by the node launcher (SLURM, OAR, PBS)
 # - Uses sentinel file for termination (removed by exit handler)
 # - Each node writes to its own trace file (hostname in filename)
 #
 # This script can be:
 # - Sourced by the main script (sets up launcher + registers cleanup)
-# - Executed standalone via srun (just runs the sampling loop)
+# - Executed standalone on a remote node (just runs the sampling loop)
 RESOURCE_SAMPLER_TEMPLATE = '''#!/bin/bash
 # IOPS Resource Sampler - Collects CPU and memory utilization during execution
 # This file is auto-generated. It can be sourced (to set up and launch) or
-# executed directly via srun (for multi-node sampling).
+# executed directly on a remote node (for multi-node sampling).
 
 _IOPS_EXEC_DIR="{execution_dir}"
-# Per-attempt id: isolates this invocation from any sibling attempt that SLURM
-# may reschedule into the same exec_dir (e.g. requeue after a node failure).
-# Without this, a second attempt's exit handler would delete the sentinel
-# used by the first attempt's still-running sampler.
-_IOPS_ATTEMPT_ID="${{SLURM_JOB_ID:-$$}}"
+# Per-attempt id: isolates this invocation from any sibling attempt that the
+# scheduler may reschedule into the same exec_dir (e.g. requeue after a node
+# failure). Without this, a second attempt's exit handler would delete the
+# sentinel used by the first attempt's still-running sampler.
+# IOPS_ATTEMPT_ID is set by the node launcher on remote nodes so that every node
+# of a job derives the same sentinel path. The $$ fallback only applies outside
+# a scheduler, where the job is single-node anyway.
+_IOPS_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
 _IOPS_TRACE_FILE="${{_IOPS_EXEC_DIR}}/{trace_prefix}$(hostname)_${{_IOPS_ATTEMPT_ID}}.csv"
 _IOPS_INTERVAL={trace_interval}
 _IOPS_SENTINEL="${{_IOPS_EXEC_DIR}}/{sentinel_filename}.${{_IOPS_ATTEMPT_ID}}"
@@ -354,7 +451,7 @@ _iops_stop_samplers() {{
 
 # Check if running standalone (executed) vs sourced
 if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
-    # Running standalone (via srun) - just run the sampling loop
+    # Running standalone on a node - just run the sampling loop
     # The sentinel file and exit handler registration are done by the sourcing script
     _iops_sampler_loop
 else
@@ -366,18 +463,415 @@ else
     # Register cleanup with the centralized exit handler
     _iops_register_exit "_iops_stop_samplers"
 
-    # Launch samplers on all nodes
-    if [[ -n "$SLURM_JOB_ID" && "${{SLURM_NNODES:-1}}" -gt 1 ]]; then
-        # SLURM multi-node: use srun to launch sampler on all nodes
-        # --overlap allows this srun to coexist with user's MPI srun
-        # --ntasks-per-node=1 runs exactly one sampler per node
-        srun --overlap --nodes=${{SLURM_NNODES}} --ntasks-per-node=1 \
-            bash "${{BASH_SOURCE[0]}}" </dev/null >/dev/null 2>&1 &
+    # Launch one sampler per node. The node launcher resolves the job's node
+    # list for SLURM, OAR and PBS and starts this same script there. When it is
+    # not available (standalone use, or probes sourced without it) fall back to
+    # sampling this node only.
+    if declare -F _iops_launch_on_nodes >/dev/null 2>&1; then
+        _iops_launch_on_nodes "${{BASH_SOURCE[0]}}" _iops_sampler_loop "$_IOPS_ATTEMPT_ID"
     else
-        # Single node (local or SLURM single-node): run sampler locally in background
         _iops_sampler_loop </dev/null >/dev/null 2>&1 &
         # Lower priority of sampler process
         renice -n 19 -p "$!" >/dev/null 2>&1 || true
+    fi
+fi
+'''
+
+# Filename for the I/O sampler script - runs during execution to collect I/O counters
+RUNTIME_IO_SAMPLER_FILENAME = "__iops_runtime_io_sampler.sh"
+
+# Filename prefix for I/O trace output (written by sampler during execution)
+IO_TRACE_FILENAME_PREFIX = "__iops_io_trace_"
+
+# Filename prefix for the resolved I/O targets (written once when sampling starts).
+# Records what each configured path resolved to on that node, so a path that turned
+# out to have no countable storage behind it is visible rather than silently zero.
+IO_TARGETS_FILENAME_PREFIX = "__iops_io_targets_"
+
+# Sentinel file for the I/O sampler (signals samplers to stop)
+IO_SAMPLER_SENTINEL_FILENAME = "__iops_io_trace_running"
+
+# I/O sampler script template - runs in background during execution
+# Collects read/write bytes and operation counts at configurable intervals from
+# two independent counter sources, because a single source cannot describe both
+# a local disk and a network filesystem:
+#
+# - block: /proc/diskstats, whole block devices only. Covers local disks and
+#   NVMe. Reports nothing for NFS, whose traffic never reaches a block device
+#   on the client.
+# - nfs: /proc/self/mountstats, per-mount NFS counters. The bytes reported are
+#   the server read/written counters, i.e. what actually crossed the wire, not
+#   what the page cache served.
+#
+# Rows carry the source and device so a study comparing storage backends can
+# separate them. Future sources (Lustre llite stats, GPFS, cgroup io.stat)
+# plug in as additional counter functions.
+#
+# When probes.io_paths is set, each path is resolved on the node to the
+# filesystem holding it and only that filesystem's counters are recorded. This
+# matters because a node commonly has storage the benchmark never touches: a
+# job writing to /tmp on a machine that also mounts NFS would otherwise report
+# both. Resolution happens per node, since mount tables differ across an
+# allocation, and is recorded in a targets file next to the trace.
+#
+# For multi-node jobs:
+# - Launched on every node by the node launcher (SLURM, OAR, PBS)
+# - Uses sentinel file for termination (removed by exit handler)
+# - Each node writes to its own trace file (hostname in filename)
+IO_SAMPLER_TEMPLATE = '''#!/bin/bash
+# IOPS I/O Sampler - Collects read/write volume and operation counts during execution
+# This file is auto-generated. It can be sourced (to set up and launch) or
+# executed directly on a remote node (for multi-node sampling).
+
+_IOPS_IO_EXEC_DIR="{execution_dir}"
+# Per-attempt id: see the note in the CPU sampler.
+_IOPS_IO_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
+_IOPS_IO_TRACE_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_trace_prefix}$(hostname)_${{_IOPS_IO_ATTEMPT_ID}}.csv"
+_IOPS_IO_TARGETS_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_targets_prefix}$(hostname)_${{_IOPS_IO_ATTEMPT_ID}}.json"
+_IOPS_IO_INTERVAL={io_trace_interval}
+_IOPS_IO_SENTINEL="${{_IOPS_IO_EXEC_DIR}}/{io_sentinel_filename}.${{_IOPS_IO_ATTEMPT_ID}}"
+
+# Paths whose storage should be monitored. Empty means monitor every block
+# device and NFS mount on the node.
+_IOPS_IO_PATHS=({io_paths})
+
+# Counter sources. Overridable so the parsing can be exercised against fixtures
+# instead of live kernel counters.
+_IOPS_IO_DISKSTATS="${{IOPS_IO_DISKSTATS:-/proc/diskstats}}"
+_IOPS_IO_MOUNTSTATS="${{IOPS_IO_MOUNTSTATS:-/proc/self/mountstats}}"
+_IOPS_IO_SYSBLOCK="${{IOPS_IO_SYSBLOCK:-/sys/block}}"
+# /sys/class/block holds partitions as well as whole devices, which is what
+# resolving a path's backing device needs to walk.
+_IOPS_IO_SYSCLASSBLOCK="${{IOPS_IO_SYSCLASSBLOCK:-/sys/class/block}}"
+
+# /proc/diskstats reports sectors, fixed at 512 bytes by the kernel ABI
+# regardless of the device's physical sector size.
+_IOPS_IO_SECTOR_BYTES=512
+
+# Previous counters for delta calculation (key: "source|device")
+declare -A _iops_io_prev
+# Maps a counter key back to the configured path it was resolved from, so each
+# row can say which target it belongs to.
+declare -A _iops_io_labels
+_IOPS_IO_PREV_TS=""
+
+# Space-delimited filters, set by _iops_io_resolve_targets.
+_IOPS_IO_DEVICES=""
+_IOPS_IO_NFS_MOUNTS=""
+# 1 once paths have been resolved. An empty filter then means "nothing from this
+# source", not "everything from it": paths that all resolve to local disks must
+# not drag in every NFS mount the node happens to have.
+_IOPS_IO_FILTERED=0
+
+# Whole block devices, used when no paths were configured. Partitions (sda1)
+# are excluded because their traffic is already counted in the parent device,
+# and virtual devices (dm-*, md*, loop*) are excluded because they would double
+# count the disks underneath them.
+_iops_io_whole_devices() {{
+    local _dev _name
+    for _dev in "$_IOPS_IO_SYSBLOCK"/*; do
+        [ -d "$_dev" ] || continue
+        # Defensive: sysfs lists partitions under their parent, not here, but a
+        # partition that did show up would double count its parent's traffic.
+        [ -f "$_dev/partition" ] && continue
+        _name="${{_dev##*/}}"
+        case "$_name" in
+            loop*|ram*|fd*|sr*|dm-*|md*) continue ;;
+        esac
+        echo "$_name"
+    done
+}}
+
+# Walk a block device name up to the whole device(s) that actually carry its
+# traffic: a partition resolves to its parent disk, and a device-mapper or md
+# device resolves to every device underneath it (possibly several).
+_iops_io_whole_device() {{
+    local _name="$1"
+    local _sys="$_IOPS_IO_SYSCLASSBLOCK/$_name"
+    [ -d "$_sys" ] || return 0
+
+    if [ -f "$_sys/partition" ]; then
+        basename "$(dirname "$(readlink -f "$_sys" 2>/dev/null)")" 2>/dev/null
+        return 0
+    fi
+
+    if [ -d "$_sys/slaves" ] && [ -n "$(ls -A "$_sys/slaves" 2>/dev/null)" ]; then
+        local _slave
+        for _slave in "$_sys"/slaves/*; do
+            _iops_io_whole_device "${{_slave##*/}}"
+        done
+        return 0
+    fi
+
+    echo "$_name"
+}}
+
+# Resolve one configured path to "kind|target|mount|fstype".
+#   kind: block (target is one or more device names), nfs (target is the export
+#   as mountstats names it), or none when the filesystem has no counters we can
+#   read, such as tmpfs where the writes never leave RAM.
+_iops_io_resolve() {{
+    local _path="$1"
+    local _probe="$_path"
+
+    # The benchmark may not have created the path yet. The filesystem that will
+    # hold it is the one holding its nearest existing ancestor.
+    while [ ! -e "$_probe" ] && [ "$_probe" != "/" ] && [ -n "$_probe" ]; do
+        _probe="$(dirname "$_probe")"
+    done
+
+    local _line
+    _line=$(df -PT "$_probe" 2>/dev/null | tail -n 1)
+    if [ -z "$_line" ]; then
+        echo "none|||"
+        return 0
+    fi
+
+    local _src _type _mount
+    _src=$(echo "$_line" | awk '{{print $1}}')
+    _type=$(echo "$_line" | awk '{{print $2}}')
+    _mount=$(echo "$_line" | awk '{{print $NF}}')
+
+    case "$_type" in
+        nfs*) echo "nfs|$_src|$_mount|$_type"; return 0 ;;
+    esac
+
+    local _devs=""
+    case "$_src" in
+        /dev/*)
+            local _real
+            _real=$(readlink -f "$_src" 2>/dev/null || echo "$_src")
+            _devs=$(_iops_io_whole_device "${{_real##*/}}" 2>/dev/null | tr '\\n' ' ')
+            ;;
+    esac
+
+    # Trim, then report. No backing device means tmpfs, ramfs, or an overlay
+    # with nothing countable underneath.
+    _devs=$(echo "$_devs" | tr -s ' ' | sed 's/^ //;s/ $//')
+    if [ -n "$_devs" ]; then
+        echo "block|$_devs|$_mount|$_type"
+    else
+        echo "none||$_mount|$_type"
+    fi
+}}
+
+# Register one counter key for a configured path.
+#
+# Several paths commonly share a counter: two directories on the same disk
+# resolve to the same device, and the kernel has no per-directory counters to
+# tell them apart. The device is registered once, so its traffic is counted
+# once, and the label lists every path that landed on it rather than silently
+# crediting whichever was resolved last.
+_iops_io_add_target() {{
+    local _key="$1" _path="$2"
+    local _kind="${{_key%%|*}}" _name="${{_key#*|}}"
+    local _existing="${{_iops_io_labels[$_key]:-}}"
+
+    if [ -z "$_existing" ]; then
+        _iops_io_labels["$_key"]="$_path"
+        case "$_kind" in
+            block) _IOPS_IO_DEVICES="${{_IOPS_IO_DEVICES}} ${{_name}} " ;;
+            nfs)   _IOPS_IO_NFS_MOUNTS="${{_IOPS_IO_NFS_MOUNTS}} ${{_name}} " ;;
+        esac
+    else
+        case ";$_existing;" in
+            *";$_path;"*) ;;
+            *) _iops_io_labels["$_key"]="${{_existing}};${{_path}}" ;;
+        esac
+    fi
+}}
+
+# Build the counter filters and record what each path resolved to.
+_iops_io_resolve_targets() {{
+    if [ "${{#_IOPS_IO_PATHS[@]}}" -eq 0 ]; then
+        # No paths configured: monitor every whole block device and every NFS
+        # mount, and leave the filters for NFS open.
+        _IOPS_IO_DEVICES=" $(_iops_io_whole_devices 2>/dev/null | tr '\\n' ' ') "
+        _IOPS_IO_NFS_MOUNTS=""
+        return 0
+    fi
+
+    _IOPS_IO_FILTERED=1
+
+    local _path _resolved _kind _target _mount _fstype _dev
+    local _entries=""
+
+    for _path in "${{_IOPS_IO_PATHS[@]}}"; do
+        _resolved=$(_iops_io_resolve "$_path" 2>/dev/null)
+        _kind="${{_resolved%%|*}}"
+        _resolved="${{_resolved#*|}}"
+        _target="${{_resolved%%|*}}"
+        _resolved="${{_resolved#*|}}"
+        _mount="${{_resolved%%|*}}"
+        _fstype="${{_resolved#*|}}"
+
+        case "$_kind" in
+            block)
+                for _dev in $_target; do
+                    _iops_io_add_target "block|$_dev" "$_path"
+                done
+                ;;
+            nfs)
+                _iops_io_add_target "nfs|$_target" "$_path"
+                ;;
+        esac
+
+        [ -n "$_entries" ] && _entries="${{_entries}},"
+        _entries="${{_entries}}
+    {{\\"path\\": \\"$_path\\", \\"kind\\": \\"$_kind\\", \\"target\\": \\"$_target\\", \\"mount\\": \\"$_mount\\", \\"fstype\\": \\"$_fstype\\"}}"
+    done
+
+    {{
+        echo "{{"
+        echo "  \\"hostname\\": \\"$(hostname 2>/dev/null || echo unknown)\\","
+        echo "  \\"paths\\": [${{_entries}}"
+        echo "  ]"
+        echo "}}"
+    }} > "$_IOPS_IO_TARGETS_FILE" 2>/dev/null || true
+}}
+
+# True when there is at least one counter to read.
+_iops_io_have_targets() {{
+    [ -n "$(echo "$_IOPS_IO_DEVICES" | tr -d ' ')" ] || [ -n "$(echo "$_IOPS_IO_NFS_MOUNTS" | tr -d ' ')" ] \\
+        || {{ [ "${{#_IOPS_IO_PATHS[@]}}" -eq 0 ] && [ -r "$_IOPS_IO_MOUNTSTATS" ]; }}
+}}
+
+# Emit "source device read_bytes write_bytes read_ops write_ops" per device.
+# /proc/diskstats fields: 1 major, 2 minor, 3 name, 4 reads completed,
+# 5 reads merged, 6 sectors read, 7 ms reading, 8 writes completed, ...,
+# 10 sectors written.
+_iops_io_block_counters() {{
+    [ -r "$_IOPS_IO_DISKSTATS" ] || return 0
+    awk -v devs="$_IOPS_IO_DEVICES" -v sector="$_IOPS_IO_SECTOR_BYTES" '
+    {{
+        if (index(devs, " " $3 " ") == 0) next
+        printf "block %s %.0f %.0f %s %s\\n", $3, $6 * sector, $10 * sector, $4, $8
+    }}' "$_IOPS_IO_DISKSTATS" 2>/dev/null
+}}
+
+# NFS mounts from /proc/self/mountstats. The bytes line holds, in order:
+# normal-read, normal-write, direct-read, direct-write, server-read,
+# server-write, read-pages, write-pages. Fields 5 and 6 (server read/written)
+# are the bytes that actually crossed the network, which is what a storage
+# study wants: the first two include reads the page cache satisfied locally.
+_iops_io_nfs_counters() {{
+    [ -r "$_IOPS_IO_MOUNTSTATS" ] || return 0
+    awk -v want="$_IOPS_IO_NFS_MOUNTS" -v filtered="$_IOPS_IO_FILTERED" '
+    /^device / {{
+        dev = $2
+        isnfs = 0
+        # Locate the fstype token rather than assuming a field number: mount
+        # points containing spaces would shift every field after them.
+        for (i = 1; i < NF; i++) {{
+            if ($i == "fstype") {{ isnfs = ($(i + 1) ~ /^nfs/); break }}
+        }}
+        next
+    }}
+    isnfs && /^[ \\t]*bytes:/ {{ rb[dev] = $6; wb[dev] = $7; next }}
+    isnfs && /^[ \\t]*READ:/  {{ ro[dev] = $2; next }}
+    isnfs && /^[ \\t]*WRITE:/ {{ wo[dev] = $2; next }}
+    END {{
+        for (d in rb) {{
+            # Once paths are configured, only the mounts they resolved to count.
+            # An empty filter then selects nothing, which is the correct answer
+            # for a run whose paths all live on local disks.
+            if (filtered == "1" && index(want, " " d " ") == 0) continue
+            printf "nfs %s %s %s %s %s\\n", d, rb[d], wb[d], ro[d] + 0, wo[d] + 0
+        }}
+    }}' "$_IOPS_IO_MOUNTSTATS" 2>/dev/null
+}}
+
+# True when at least one counter source is readable. Without this the sampler
+# would spin producing header-only trace files on systems that expose neither.
+_iops_io_available() {{
+    [ -r "$_IOPS_IO_DISKSTATS" ] || [ -r "$_IOPS_IO_MOUNTSTATS" ]
+}}
+
+_iops_io_sample() {{
+    local ts elapsed host key prev deltas label
+    ts=$(date +%s.%N 2>/dev/null || date +%s)
+    host=$(hostname 2>/dev/null || echo "unknown")
+
+    if [[ -z "$_IOPS_IO_PREV_TS" ]]; then
+        elapsed="0"
+    else
+        elapsed=$(awk "BEGIN {{printf \\"%.3f\\", $ts - $_IOPS_IO_PREV_TS}}")
+    fi
+
+    while read -r src dev rb wb ro wo; do
+        [[ -z "$dev" ]] && continue
+        key="${{src}}|${{dev}}"
+        prev="${{_iops_io_prev[$key]:-}}"
+        label="${{_iops_io_labels[$key]:-}}"
+
+        if [[ -n "$prev" ]]; then
+            # Counters are cumulative since boot. A negative delta means the
+            # counter wrapped or the device was reset, so clamp it to zero
+            # rather than emitting a nonsense burst.
+            deltas=$(awk -v p="$prev" -v c="$rb $wb $ro $wo" 'BEGIN {{
+                split(p, a, " "); split(c, b, " ")
+                for (i = 1; i <= 4; i++) {{
+                    v = b[i] - a[i]
+                    if (v < 0) v = 0
+                    printf "%.0f%s", v, (i < 4 ? "," : "")
+                }}
+            }}')
+            echo "$ts,$host,$src,$dev,$label,$elapsed,$deltas"
+        fi
+
+        _iops_io_prev[$key]="$rb $wb $ro $wo"
+    done < <( {{ _iops_io_block_counters; _iops_io_nfs_counters; }} 2>/dev/null )
+
+    _IOPS_IO_PREV_TS="$ts"
+}}
+
+_iops_io_sampler_loop() {{
+    # Write CSV header
+    echo "timestamp,hostname,source,device,path,interval_s,read_bytes,write_bytes,read_ops,write_ops" > "$_IOPS_IO_TRACE_FILE"
+
+    # Initial read to populate baseline (first sample produces no output)
+    _iops_io_sample > /dev/null 2>&1
+
+    # Main sampling loop - exits when sentinel file is removed
+    while [[ -f "$_IOPS_IO_SENTINEL" ]]; do
+        sleep "$_IOPS_IO_INTERVAL"
+        _iops_io_sample >> "$_IOPS_IO_TRACE_FILE" 2>/dev/null
+    done
+}}
+
+# Cleanup function - removes sentinel file to signal all I/O samplers to stop
+_iops_stop_io_samplers() {{
+    rm -f "$_IOPS_IO_SENTINEL" 2>/dev/null || true
+}}
+
+# Check if running standalone (executed) vs sourced
+if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
+    # Running standalone on a node - resolve this node's own mounts, then sample.
+    # Mount tables differ across an allocation, so resolution cannot be inherited
+    # from the head node.
+    _iops_io_resolve_targets
+    _iops_io_sampler_loop
+else
+    # Being sourced - set up and launch the samplers
+
+    _iops_io_resolve_targets
+
+    if _iops_io_available && _iops_io_have_targets; then
+        # Create sentinel file (signals samplers to keep running)
+        touch "$_IOPS_IO_SENTINEL"
+
+        # Register cleanup with the centralized exit handler
+        _iops_register_exit "_iops_stop_io_samplers"
+
+        # Launch one sampler per node via the node launcher (SLURM, OAR, PBS),
+        # falling back to this node only when the launcher is not available.
+        if declare -F _iops_launch_on_nodes >/dev/null 2>&1; then
+            _iops_launch_on_nodes "${{BASH_SOURCE[0]}}" _iops_io_sampler_loop "$_IOPS_IO_ATTEMPT_ID"
+        else
+            _iops_io_sampler_loop </dev/null >/dev/null 2>&1 &
+            # Lower priority of sampler process
+            renice -n 19 -p "$!" >/dev/null 2>&1 || true
+        fi
     fi
 fi
 '''
@@ -469,18 +963,18 @@ GPU_SAMPLER_SENTINEL_FILENAME = "__iops_gpu_trace_running"
 # - NVIDIA: Uses nvidia-smi --query-gpu (detected via command -v nvidia-smi)
 # - AMD/Intel: Placeholder for future extension
 #
-# For SLURM multi-node jobs:
-# - Launched via srun on all nodes
+# For multi-node jobs:
+# - Launched on every node by the node launcher (SLURM, OAR, PBS)
 # - Uses sentinel file for termination (removed by exit handler)
 # - Each node writes to its own trace file (hostname in filename)
 #
 # This script can be:
 # - Sourced by the main script (sets up launcher + registers cleanup)
-# - Executed standalone via srun (just runs the sampling loop)
+# - Executed standalone on a remote node (just runs the sampling loop)
 GPU_SAMPLER_TEMPLATE = '''#!/bin/bash
 # IOPS GPU Sampler - Collects GPU metrics during execution
 # This file is auto-generated. It can be sourced (to set up and launch) or
-# executed directly via srun (for multi-node sampling).
+# executed directly on a remote node (for multi-node sampling).
 #
 # Supported vendors: NVIDIA (via nvidia-smi)
 # Future: AMD (rocm-smi), Intel (xpu-smi)
@@ -489,7 +983,7 @@ _IOPS_GPU_EXEC_DIR="{execution_dir}"
 # Per-attempt id: see the note in the CPU sampler. Prevents concurrent SLURM
 # attempts on the same exec_dir from stepping on each other's trace files and
 # sentinel files.
-_IOPS_GPU_ATTEMPT_ID="${{SLURM_JOB_ID:-$$}}"
+_IOPS_GPU_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
 _IOPS_GPU_TRACE_FILE="${{_IOPS_GPU_EXEC_DIR}}/{gpu_trace_prefix}$(hostname)_${{_IOPS_GPU_ATTEMPT_ID}}.csv"
 _IOPS_GPU_INTERVAL={gpu_trace_interval}
 _IOPS_GPU_SENTINEL="${{_IOPS_GPU_EXEC_DIR}}/{gpu_sentinel_filename}.${{_IOPS_GPU_ATTEMPT_ID}}"
@@ -544,7 +1038,7 @@ _iops_stop_gpu_samplers() {{
 
 # Check if running standalone (executed) vs sourced
 if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
-    # Running standalone (via srun) - just run the sampling loop
+    # Running standalone on a node - just run the sampling loop
     _iops_gpu_sampler_loop
 else
     # Being sourced - set up and launch the GPU samplers
@@ -557,13 +1051,11 @@ else
         # Register cleanup with the centralized exit handler
         _iops_register_exit "_iops_stop_gpu_samplers"
 
-        # Launch samplers on all nodes
-        if [[ -n "$SLURM_JOB_ID" && "${{SLURM_NNODES:-1}}" -gt 1 ]]; then
-            # SLURM multi-node: use srun to launch sampler on all nodes
-            srun --overlap --nodes=${{SLURM_NNODES}} --ntasks-per-node=1 \
-                bash "${{BASH_SOURCE[0]}}" </dev/null >/dev/null 2>&1 &
+        # Launch one sampler per node via the node launcher (SLURM, OAR, PBS),
+        # falling back to this node only when the launcher is not available.
+        if declare -F _iops_launch_on_nodes >/dev/null 2>&1; then
+            _iops_launch_on_nodes "${{BASH_SOURCE[0]}}" _iops_gpu_sampler_loop "$_IOPS_GPU_ATTEMPT_ID"
         else
-            # Single node: run sampler locally in background
             _iops_gpu_sampler_loop </dev/null >/dev/null 2>&1 &
             # Lower priority of sampler process
             renice -n 19 -p "$!" >/dev/null 2>&1 || true
@@ -1123,7 +1615,7 @@ class BasePlanner(ABC, HasLogger):
 
         # Inject IOPS helper scripts (exit handler, runtime monitors, atexit scripts)
         # All sources are injected at a single point after shebang/#SBATCH directives
-        script_text = self._inject_iops_scripts(script_text, exec_dir)
+        script_text = self._inject_iops_scripts(script_text, exec_dir, test)
 
         # Write script files inside repetition dir
         test.script_file = exec_dir / f"run_{test.script_name}.sh"
@@ -1171,7 +1663,30 @@ class BasePlanner(ABC, HasLogger):
 
         self.logger.debug(f"  [Prepare] Inputs written: {', '.join(written)}")
 
-    def _inject_iops_scripts(self, script_text: str, exec_dir: Path) -> str:
+    @staticmethod
+    def _render_io_paths(test: Any, probes: Any) -> str:
+        """
+        Render probes.io_paths for one execution as a bash array literal.
+
+        Paths are Jinja2 templates so they can name a location the execution
+        creates, e.g. "{{ execution_dir }}/scratch". Returns an empty string when
+        no paths are configured, which the sampler reads as "monitor everything".
+
+        When no execution is available (a caller building a script outside the
+        normal flow, as some tests do) the raw values are used, since there is
+        no context to render against.
+        """
+        if not probes or not probes.io_paths:
+            return ""
+
+        if test is not None and hasattr(test, "render_paths"):
+            paths = test.render_paths(probes.io_paths)
+        else:
+            paths = list(probes.io_paths)
+
+        return " ".join(shlex.quote(str(p)) for p in paths)
+
+    def _inject_iops_scripts(self, script_text: str, exec_dir: Path, test: Any = None) -> str:
         """
         Inject all IOPS helper scripts into a user script.
 
@@ -1205,11 +1720,13 @@ class BasePlanner(ABC, HasLogger):
         probes = self.cfg.benchmark.probes
         resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
         gpu_sampling = probes.gpu_sampling if probes else False
+        io_sampling = probes.io_sampling if probes else False
         system_snapshot = probes.system_snapshot if probes else self.cfg.benchmark.collect_system_info
         version_probe = probes.versions if probes else None
 
         # If no features enabled, return script unchanged
-        if not resource_sampling and not gpu_sampling and not system_snapshot and not version_probe:
+        if (not resource_sampling and not gpu_sampling and not io_sampling
+                and not system_snapshot and not version_probe):
             return script_text
 
         # Build list of source lines to inject
@@ -1223,6 +1740,13 @@ class BasePlanner(ABC, HasLogger):
         with open(handler_file, "w") as f:
             f.write(EXIT_HANDLER_TEMPLATE)
         source_lines.append(f'source "{handler_file}"')
+
+        # 1b. Node launcher (needed by the samplers to fan out across nodes)
+        if resource_sampling or gpu_sampling or io_sampling:
+            launcher_file = exec_dir / NODE_LAUNCHER_FILENAME
+            with open(launcher_file, "w") as f:
+                f.write(NODE_LAUNCHER_TEMPLATE)
+            source_lines.append(f'source "{launcher_file}"')
 
         # 2. Runtime scripts (run during execution)
         if resource_sampling:
@@ -1252,6 +1776,22 @@ class BasePlanner(ABC, HasLogger):
             with open(gpu_sampler_file, "w") as f:
                 f.write(gpu_sampler_script)
             source_lines.append(f'source "{gpu_sampler_file}"  # disable: probes.gpu_sampling: false')
+
+        if io_sampling:
+            # To disable: set probes.io_sampling: false in config
+            sampling_interval = probes.sampling_interval if probes else self.cfg.benchmark.trace_interval
+            io_sampler_script = IO_SAMPLER_TEMPLATE.format(
+                execution_dir=str(exec_dir),
+                io_trace_prefix=IO_TRACE_FILENAME_PREFIX,
+                io_targets_prefix=IO_TARGETS_FILENAME_PREFIX,
+                io_trace_interval=sampling_interval,
+                io_sentinel_filename=IO_SAMPLER_SENTINEL_FILENAME,
+                io_paths=self._render_io_paths(test, probes),
+            )
+            io_sampler_file = exec_dir / RUNTIME_IO_SAMPLER_FILENAME
+            with open(io_sampler_file, "w") as f:
+                f.write(io_sampler_script)
+            source_lines.append(f'source "{io_sampler_file}"  # disable: probes.io_sampling: false')
 
         # 3. At-exit scripts (run on script exit via trap)
         if system_snapshot:

@@ -670,6 +670,17 @@ class ExecutionInstance:
 
         return _render_template(self.post_script_template, script_ctx)
 
+    def render_paths(self, templates: List[str]) -> List[str]:
+        """
+        Render a list of Jinja path templates against this execution's context.
+
+        Used for config values that name a filesystem location per execution,
+        such as ``probes.io_paths``, so they can reference ``{{ execution_dir }}``
+        or any swept variable the same way ``command.template`` does.
+        """
+        ctx = self._render_context()
+        return [_render_template(t, ctx) for t in templates]
+
     @property
     def parser(self) -> Optional[ParserConfig]:
         """

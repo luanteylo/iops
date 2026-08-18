@@ -1,6 +1,8 @@
 
 from iops.logger import HasLogger
-from iops.execution.planner import BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX, GPU_TRACE_FILENAME_PREFIX
+from iops.execution.planner import (BasePlanner, STATUS_FILENAME, TRACE_FILENAME_PREFIX,
+                                    GPU_TRACE_FILENAME_PREFIX, IO_TRACE_FILENAME_PREFIX,
+                                    IO_TARGETS_FILENAME_PREFIX)
 from iops.execution.executors import BaseExecutor
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
@@ -666,13 +668,189 @@ class IOPSRunner(HasLogger):
 
         return metrics
 
+    def _compute_io_trace_metrics(self, trace_files: List[Path]) -> Dict[str, Any]:
+        """
+        Compute aggregated metrics from I/O trace files.
+
+        Rows are per-interval deltas tagged with the counter source ('block' for
+        local devices, 'nfs' for NFS mounts) and carry the interval they cover,
+        so rates are computed from the measured elapsed time rather than from
+        the configured sampling interval (sleep drifts under load).
+
+        Sources are disjoint on a client node: NFS traffic never reaches a block
+        device and local disk traffic never appears in the NFS counters, so the
+        totals can be summed as well as reported separately.
+
+        Volume metrics use 1024-based units, consistent with the memory metrics.
+
+        Args:
+            trace_files: List of paths to __iops_io_trace_*.csv files
+
+        Returns:
+            Dictionary with aggregated I/O metrics
+        """
+        per_source_read = {}
+        per_source_write = {}
+        total_read_ops = 0.0
+        total_write_ops = 0.0
+        nodes_seen = set()
+
+        # Elapsed time actually covered per node, summed over its samples. Using
+        # last-minus-first timestamps would drop the interval before the first
+        # emitted row, which is the baseline-to-first-sample window.
+        covered_s = {}
+        # Instantaneous per-node rates, keyed by (hostname, timestamp)
+        sample_read_bytes = {}
+        sample_write_bytes = {}
+        sample_interval = {}
+
+        # Time each node actually moved data, per direction. Sampling covers the
+        # whole script, most of which is usually not I/O, so an average taken
+        # over the full window answers "how much did this job move per second of
+        # runtime" rather than "how fast was the storage while in use".
+        read_active_s = {}
+        write_active_s = {}
+
+        for trace_file in trace_files:
+            try:
+                with open(trace_file, 'r', newline='') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        try:
+                            hostname = row.get('hostname', 'unknown')
+                            source = row.get('source', 'unknown')
+                            ts = float(row.get('timestamp', 0))
+                            interval = float(row.get('interval_s', 0))
+                            read_bytes = float(row.get('read_bytes', 0))
+                            write_bytes = float(row.get('write_bytes', 0))
+                            read_ops = float(row.get('read_ops', 0))
+                            write_ops = float(row.get('write_ops', 0))
+                        except (ValueError, KeyError) as e:
+                            self.logger.debug(f"Skipping malformed I/O trace row: {e}")
+                            continue
+
+                        if interval <= 0:
+                            # No measurable elapsed time, so no rate to derive
+                            continue
+
+                        nodes_seen.add(hostname)
+                        per_source_read[source] = per_source_read.get(source, 0.0) + read_bytes
+                        per_source_write[source] = per_source_write.get(source, 0.0) + write_bytes
+                        total_read_ops += read_ops
+                        total_write_ops += write_ops
+
+                        key = (hostname, ts)
+                        sample_read_bytes[key] = sample_read_bytes.get(key, 0.0) + read_bytes
+                        sample_write_bytes[key] = sample_write_bytes.get(key, 0.0) + write_bytes
+                        if key not in sample_interval:
+                            sample_interval[key] = interval
+                            covered_s[hostname] = covered_s.get(hostname, 0.0) + interval
+
+            except Exception as e:
+                self.logger.debug(f"Failed to read I/O trace file {trace_file}: {e}")
+                continue
+
+        metrics = {
+            "io_nodes_traced": len(nodes_seen),
+            "io_samples_collected": len(sample_interval),
+        }
+
+        if not sample_interval:
+            return metrics
+
+        # A sample counts as active for a direction when that direction moved
+        # anything, summed across the devices sampled on that node at that instant.
+        for (hostname, _ts), interval in sample_interval.items():
+            key = (hostname, _ts)
+            if sample_read_bytes.get(key, 0.0) > 0:
+                read_active_s[hostname] = read_active_s.get(hostname, 0.0) + interval
+            if sample_write_bytes.get(key, 0.0) > 0:
+                write_active_s[hostname] = write_active_s.get(hostname, 0.0) + interval
+
+        total_read = sum(per_source_read.values())
+        total_write = sum(per_source_write.values())
+
+        gib = 1024 ** 3
+        mib = 1024 ** 2
+
+        metrics["io_read_gb"] = round(total_read / gib, 3)
+        metrics["io_write_gb"] = round(total_write / gib, 3)
+
+        # Per-source breakdown: the point of the probe is telling a local disk
+        # apart from a network filesystem, so always emit both columns even when
+        # one source contributed nothing.
+        metrics["io_disk_read_gb"] = round(per_source_read.get('block', 0.0) / gib, 3)
+        metrics["io_disk_write_gb"] = round(per_source_write.get('block', 0.0) / gib, 3)
+        metrics["io_nfs_read_gb"] = round(per_source_read.get('nfs', 0.0) / gib, 3)
+        metrics["io_nfs_write_gb"] = round(per_source_write.get('nfs', 0.0) / gib, 3)
+
+        # Duration is the longest window any single node covered. Nodes sample
+        # independently, so this is the wall-clock span the totals span.
+        duration = max(covered_s.values())
+        metrics["io_trace_duration_s"] = round(duration, 2)
+
+        if duration > 0:
+            # Aggregate throughput: everything all nodes moved, over the window
+            metrics["io_read_mbs_avg"] = round(total_read / mib / duration, 2)
+            metrics["io_write_mbs_avg"] = round(total_write / mib / duration, 2)
+            metrics["io_read_iops_avg"] = round(total_read_ops / duration, 2)
+            metrics["io_write_iops_avg"] = round(total_write_ops / duration, 2)
+
+        # Same totals over the busy window only. The pair tells you two different
+        # things: the *_avg figures are diluted by however much of the job was
+        # not doing I/O, the *_active figures are the rate while it was.
+        read_active = max(read_active_s.values()) if read_active_s else 0.0
+        write_active = max(write_active_s.values()) if write_active_s else 0.0
+        metrics["io_read_active_s"] = round(read_active, 2)
+        metrics["io_write_active_s"] = round(write_active, 2)
+        metrics["io_read_mbs_active"] = round(total_read / mib / read_active, 2) if read_active > 0 else 0.0
+        metrics["io_write_mbs_active"] = round(total_write / mib / write_active, 2) if write_active > 0 else 0.0
+
+        # Peak is per node: samples on different nodes are not clock-aligned, so
+        # summing them at a shared instant would be fiction.
+        metrics["io_read_mbs_peak_per_node"] = round(
+            max(sample_read_bytes[k] / mib / sample_interval[k] for k in sample_interval), 2)
+        metrics["io_write_mbs_peak_per_node"] = round(
+            max(sample_write_bytes[k] / mib / sample_interval[k] for k in sample_interval), 2)
+
+        return metrics
+
+    def _collect_unresolved_io_paths(self, execution_dir: Path) -> Dict[str, str]:
+        """
+        Read the I/O targets files an execution's nodes wrote, and return the
+        configured paths that resolved to no countable storage.
+
+        A path on tmpfs or ramfs has no block device and no NFS mount behind it,
+        so the sampler has nothing to read and the metrics come back zero. That
+        looks identical to a benchmark that did no I/O, which is why it is worth
+        saying out loud rather than leaving the user to guess.
+
+        Returns:
+            Mapping of path to the filesystem type it landed on
+        """
+        unresolved = {}
+        pattern = str(execution_dir / f"{IO_TARGETS_FILENAME_PREFIX}*.json")
+        for targets_file in glob.glob(pattern):
+            try:
+                with open(targets_file, 'r') as f:
+                    data = json.load(f)
+            except Exception as e:
+                self.logger.debug(f"Failed to read I/O targets file {targets_file}: {e}")
+                continue
+
+            for entry in data.get("paths", []):
+                if entry.get("kind") == "none":
+                    unresolved[entry.get("path", "?")] = entry.get("fstype") or "unknown"
+
+        return unresolved
+
     def _aggregate_resource_traces(self, completed_tests: List) -> None:
         """
         Aggregate resource traces from all completed executions into a summary CSV.
 
         Creates __iops_resource_summary.csv in the run root directory with one row
         per execution+repetition, containing all user vars and aggregated resource metrics
-        (CPU/memory and GPU when available).
+        (CPU/memory, GPU, and I/O when available).
 
         This enables heatmap visualizations correlating variables with resource footprint.
 
@@ -682,11 +860,15 @@ class IOPSRunner(HasLogger):
         probes = self.cfg.benchmark.probes
         resource_sampling = probes.resource_sampling if probes else self.cfg.benchmark.trace_resources
         gpu_sampling = probes.gpu_sampling if probes else False
-        if not resource_sampling and not gpu_sampling:
+        io_sampling = probes.io_sampling if probes else False
+        if not resource_sampling and not gpu_sampling and not io_sampling:
             return
 
         rows = []
         fieldnames = None
+        # Configured io_paths that had no countable storage behind them, collected
+        # across executions so the warning is emitted once rather than per test
+        unresolved_io_paths = {}
 
         # Group tests by execution_id to handle repetitions
         tests_by_exec = {}
@@ -736,17 +918,39 @@ class IOPSRunner(HasLogger):
                     except Exception as e:
                         self.logger.warning(f"Failed to aggregate GPU traces for exec_{exec_id} rep_{rep}: {e}")
 
+            # I/O trace files
+            if io_sampling:
+                unresolved_io_paths.update(self._collect_unresolved_io_paths(test.execution_dir))
+                io_trace_pattern = str(test.execution_dir / f"{IO_TRACE_FILENAME_PREFIX}*.csv")
+                io_trace_files = [Path(f) for f in glob.glob(io_trace_pattern)]
+                if io_trace_files:
+                    try:
+                        io_metrics = self._compute_io_trace_metrics(io_trace_files)
+                        row.update(io_metrics)
+                        has_data = True
+                    except Exception as e:
+                        self.logger.warning(f"Failed to aggregate I/O traces for exec_{exec_id} rep_{rep}: {e}")
+
             if has_data:
                 rows.append(row)
                 # Union across rows, first-seen order: executions may report
                 # different metrics (a device can expose a field in one run and
-                # report it unsupported in another).
+                # report it unsupported in another, and an execution too short to
+                # collect samples reports only the counters).
                 if fieldnames is None:
                     fieldnames = list(row.keys())
                 else:
                     fieldnames.extend(k for k in row.keys() if k not in fieldnames)
             else:
                 self.logger.debug(f"No trace files found for exec_{exec_id} rep_{rep}")
+
+        if unresolved_io_paths:
+            details = ", ".join(f"{path} ({fstype})" for path, fstype in sorted(unresolved_io_paths.items()))
+            self.logger.warning(
+                f"I/O sampling found no countable storage behind: {details}. "
+                f"These filesystems have no block device or NFS mount to read counters from, "
+                f"so their traffic is not in the I/O metrics."
+            )
 
         if not rows:
             self.logger.info("No resource traces to aggregate")
@@ -756,7 +960,7 @@ class IOPSRunner(HasLogger):
         summary_path = Path(self.cfg.benchmark.workdir) / RESOURCE_SUMMARY_FILENAME
         try:
             with open(summary_path, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames, restval="")
                 writer.writeheader()
                 writer.writerows(rows)
 
