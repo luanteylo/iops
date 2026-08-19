@@ -751,7 +751,7 @@ reporting:
     folder: string              #   Convention folder per execution dir (default: "images")
     sources: list               #   OPTIONAL: Jinja2-templated paths resolved per execution
     pattern: string             #   Glob for convention folder (default: "*.png")
-    max_width: integer          #   OPTIONAL: downscale cap in pixels (requires Pillow)
+    max_width: integer          #   OPTIONAL: downscale cap in pixels (needs [gallery] extra)
     caption_vars: list          #   OPTIONAL: variable names shown under each card
     title: string               #   Gallery section heading (default: "Image Gallery")
 

@@ -195,3 +195,63 @@ def test_image_to_data_uri_unknown_extension(tmp_path):
     f.write_text("hi")
     gen = ReportGenerator.__new__(ReportGenerator)
     assert gen._image_to_data_uri(f, None) is None
+
+
+def test_gallery_renders_with_max_width_when_pillow_missing(tmp_path, monkeypatch):
+    """max_width without Pillow must warn and embed full size, not raise NameError."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_pillow(name, *args, **kwargs):
+        if name.startswith("PIL"):
+            raise ImportError("No module named 'PIL'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pillow)
+
+    run_dir = _make_gallery_run(tmp_path, n_exec=1)
+    gallery = GalleryConfig(enabled=True, max_width=1000)
+    html = _gallery_stub(run_dir, gallery)._generate_gallery_section([])
+
+    assert "data:image/png;base64," in html
+
+
+def test_image_to_data_uri_skips_oversized_image(tmp_path):
+    f = tmp_path / "huge.png"
+    f.write_bytes(b"\x00" * (ReportGenerator._MAX_IMAGE_BYTES + 1))
+    gen = ReportGenerator.__new__(ReportGenerator)
+    assert gen._image_to_data_uri(f, None) is None
+
+
+def test_max_width_without_pillow_warns_at_load(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_pillow(name, *args, **kwargs):
+        if name.startswith("PIL"):
+            raise ImportError("No module named 'PIL'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pillow)
+
+    with pytest.warns(UserWarning, match="Pillow is not installed"):
+        g = _parse_gallery_config({"enabled": True, "max_width": 1000})
+    assert g.max_width == 1000
+
+
+def test_no_pillow_warning_when_gallery_disabled(monkeypatch, recwarn):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_pillow(name, *args, **kwargs):
+        if name.startswith("PIL"):
+            raise ImportError("No module named 'PIL'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pillow)
+
+    _parse_gallery_config({"enabled": False, "max_width": 1000})
+    assert not [w for w in recwarn if "Pillow" in str(w.message)]

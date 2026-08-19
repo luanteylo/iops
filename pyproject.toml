@@ -38,6 +38,7 @@ bayesian = ["scikit-optimize"]
 parquet = ["pyarrow"]
 watch = ["rich"]
 plots = ["kaleido"]
+gallery = ["pillow"]
 studio = ["nicegui"]
 
 [project.urls]

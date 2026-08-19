@@ -5,6 +5,7 @@ IOPS Report Generator - Creates HTML reports with interactive plots.
 import base64
 import html as html_module
 import json
+import logging
 import re
 import numpy as np
 import pandas as pd
@@ -423,7 +424,6 @@ class ReportGenerator:
         - Parser returned None for a metric (doesn't create column)
         - Configuration was updated but old results are being analyzed
         """
-        import logging
         logger = logging.getLogger(__name__)
 
         # Get available metric columns from results
@@ -613,7 +613,6 @@ class ReportGenerator:
             try:
                 fig.write_image(image_path, format=self.plot_format, width=1200, height=800)
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).debug(f"Could not save {self.plot_format.upper()} plot: {e}")
 
         kwargs = {
@@ -1017,7 +1016,6 @@ class ReportGenerator:
                 self.plots_dir.mkdir(exist_ok=True)
                 self._plot_counter = 0
             else:
-                import logging
                 logging.getLogger(__name__).warning(
                     "Plot export requested but kaleido is not installed. "
                     "Install with: pip install iops-benchmark[plots]"

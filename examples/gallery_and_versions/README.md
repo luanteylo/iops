@@ -18,6 +18,7 @@ This example demonstrates two IOPS reporting features:
   pip install numpy matplotlib
   ```
 - `Pillow` is optional; it enables `reporting.gallery.max_width` downscaling.
+  Install it with `pip install iops-benchmark[gallery]`.
 
 ## Run
 
