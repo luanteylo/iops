@@ -5,7 +5,7 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
-## [3.5.9.dev0] - Unreleased
+## [3.5.9] - 2026-08-19
 
 ### Added
 
@@ -40,6 +40,9 @@ All notable changes to IOPS are documented here.
 - `iops report` now honors `reporting.output_dir` and `reporting.output_filename` from the report config (whether passed via `--report-config` or auto-detected as `report_config.yaml` in the run directory). Previously these fields were ignored on the CLI path and the report was always written to `<workdir>/analysis_report.html`. The precedence is now: explicit `--output` flag, then the config's `output_dir`/`output_filename`, then the default `<workdir>/analysis_report.html`.
 
 - A report with `reporting.gallery.max_width` set no longer fails with `name 'logging' is not defined` when Pillow is missing. The gallery's two fallback paths, the notice that Pillow is unavailable and the notice that an image exceeds the 25 MB embedding cap, called `logging.getLogger()` in a module that never imported `logging`, so the branch meant to degrade gracefully raised `NameError` instead. Report generation aborted before `analysis_report.html` was written, which read as a broken gallery even though the images and folder layout were correct. Setting `max_width` was the only way to reach the first path, and Pillow is not installed by default, so any run combining the two hit it. The report now renders with images embedded at full size and a warning naming the missing package.
+
+- A SLURM execution whose parser failed is no longer reported as succeeded. When a job exited cleanly but parsing its output then failed, the success path ran the parser and discarded the result, leaving the status `SUCCEEDED`. The runner caches on that status, so the execution was written to the cache with no metrics and a later run with `--use-cache` skipped it as already done. A parser failure on the success path now downgrades the status to `FAILED`, matching the local executor, so the execution is neither reported as succeeded nor cached. This applies to the SLURM and single-allocation executors.
+- GPU metrics are no longer lost when a device does not expose one of the sampled fields. `nvidia-smi` reports `[N/A]` for fields a device does not provide, such as the memory fields on unified-memory parts, and every field of a sample was parsed inside one `try` block, so a single unparsable field discarded the whole row including the valid power, temperature, and utilization readings. With every row dropped, `__iops_resource_summary.csv` carried only `gpu_count` and `gpu_samples_collected`. Fields are now parsed independently and a metric is emitted only when the device reported it. Unreported fields are omitted rather than written as zero, so a missing measurement is not mistaken for an idle device; only the timestamp remains mandatory, since it anchors the sample on the power and duration timeline.
 
 ## [3.5.8] - 2026-06-20
 
