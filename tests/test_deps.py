@@ -58,9 +58,27 @@ def test_import_name_differs_from_package_name():
     assert gallery.package == "pillow" and gallery.module == "PIL"
 
 
-def test_is_available_reflects_a_real_import():
-    assert deps.is_available("gallery") == _importable("PIL")
-    assert deps.is_available("parquet") == _importable("pyarrow")
+def test_is_available_agrees_with_a_real_import():
+    """The cheap check and the authoritative one must not disagree in practice."""
+    for dep in deps.OPTIONAL_DEPENDENCIES:
+        assert deps.is_available(dep.extra) == _importable(dep.module)
+
+
+def test_is_importable_reflects_a_real_import():
+    for dep in deps.OPTIONAL_DEPENDENCIES:
+        assert deps.is_importable(dep.extra) == _importable(dep.module)
+
+
+def test_is_available_does_not_load_the_package(monkeypatch):
+    """The gates run on every startup, so they must not pay a package's import cost."""
+    import sys
+
+    for name in [m for m in sys.modules if m == "skopt" or m.startswith("skopt.")]:
+        del sys.modules[name]
+    deps.is_available.cache_clear()
+
+    assert deps.is_available("bayesian") is True
+    assert "skopt" not in sys.modules
 
 
 def _importable(module):
@@ -81,7 +99,7 @@ def test_missing_extras_are_a_subset_of_the_catalog():
 def test_installed_version_is_none_only_when_unavailable():
     for dep in deps.OPTIONAL_DEPENDENCIES:
         version = deps.installed_version(dep.extra)
-        assert (version is None) == (not deps.is_available(dep.extra))
+        assert (version is None) == (not deps.is_importable(dep.extra))
 
 
 # ============================================================================ #
@@ -112,7 +130,7 @@ def test_no_source_file_prints_an_unquoted_install_hint():
 
 
 def test_format_status_lists_every_extra(monkeypatch):
-    monkeypatch.setattr(deps, "is_available", lambda extra: True)
+    monkeypatch.setattr(deps, "is_importable", lambda extra: True)
     out = deps.format_status()
     for dep in deps.OPTIONAL_DEPENDENCIES:
         assert dep.extra in out
@@ -120,19 +138,19 @@ def test_format_status_lists_every_extra(monkeypatch):
 
 
 def test_format_status_marks_absent_packages(monkeypatch):
-    monkeypatch.setattr(deps, "is_available", lambda extra: False)
+    monkeypatch.setattr(deps, "is_importable", lambda extra: False)
     assert deps.format_status().count("not installed") == len(deps.OPTIONAL_DEPENDENCIES)
 
 
 def test_format_status_missing_only_filters_installed(monkeypatch):
-    monkeypatch.setattr(deps, "is_available", lambda extra: extra != "watch")
+    monkeypatch.setattr(deps, "is_importable", lambda extra: extra != "watch")
     out = deps.format_status(missing_only=True)
     assert "watch" in out
     assert "studio" not in out
 
 
 def test_format_status_missing_only_says_so_when_all_present(monkeypatch):
-    monkeypatch.setattr(deps, "is_available", lambda extra: True)
+    monkeypatch.setattr(deps, "is_importable", lambda extra: True)
     assert deps.format_status(missing_only=True) == "All optional dependencies are installed."
 
 

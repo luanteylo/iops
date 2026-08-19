@@ -79,11 +79,37 @@ def get(extra: str) -> OptionalDependency:
 @lru_cache(maxsize=None)
 def is_available(extra: str) -> bool:
     """
-    Report whether the package behind an extra can be imported.
+    Report whether the package behind an extra is installed, without loading it.
 
-    Attempts a real import rather than inspecting metadata, so a package that is
-    recorded as installed but broken counts as unavailable, matching what the
-    calling module would have seen from its own try/except.
+    This runs on every IOPS startup, once per gate, so it locates the module
+    rather than importing it: importing scikit-optimize alone costs most of a
+    second (it pulls in sklearn and scipy), and paying that to set a boolean
+    delayed every command including `iops --version`.
+
+    The trade-off is that a package which is present but fails on import counts
+    as available here. That is safe for the gates, because the code that goes on
+    to use a package imports it for real and raises a clear error if it cannot.
+    Use is_importable() when the answer itself is the product, as it is for
+    `iops deps`.
+    """
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(get(extra).module) is not None
+    except (ImportError, AttributeError, ValueError):
+        # A missing parent package raises, and a module already imported without
+        # a spec has none to find. Either way it is not usable.
+        return False
+
+
+@lru_cache(maxsize=None)
+def is_importable(extra: str) -> bool:
+    """
+    Report whether the package behind an extra actually imports.
+
+    Slower than is_available() but authoritative: a package recorded as
+    installed but broken counts as missing, which is what a user running
+    `iops deps` to diagnose an environment needs to see.
     """
     import importlib
 
@@ -102,12 +128,12 @@ def installed_version(extra: str) -> Optional[str]:
         return version(get(extra).package)
     except PackageNotFoundError:
         # Importable without distribution metadata (vendored, or on PYTHONPATH).
-        return "unknown" if is_available(extra) else None
+        return "unknown" if is_importable(extra) else None
 
 
 def missing_extras() -> List[str]:
-    """Return the extras whose package is not importable, in catalog order."""
-    return [dep.extra for dep in OPTIONAL_DEPENDENCIES if not is_available(dep.extra)]
+    """Return the extras whose package does not import, in catalog order."""
+    return [dep.extra for dep in OPTIONAL_DEPENDENCIES if not is_importable(dep.extra)]
 
 
 def install_hint(extras: List[str]) -> str:
@@ -125,7 +151,7 @@ def format_status(missing_only: bool = False) -> str:
     """Render the dependency table shown by `iops deps`."""
     rows = []
     for dep in OPTIONAL_DEPENDENCIES:
-        available = is_available(dep.extra)
+        available = is_importable(dep.extra)
         if missing_only and available:
             continue
         status = installed_version(dep.extra) if available else "not installed"

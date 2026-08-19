@@ -11,6 +11,10 @@ All notable changes to IOPS are documented here.
 
 - `iops deps` lists the optional dependencies, what each one enables, and whether it is installed, so the packages behind Bayesian search, Parquet sinks, watch mode, plot export, gallery downscaling, and Studio can be checked in one place instead of by triggering the feature and reading the error. `--missing` narrows the table to what is absent, and `--check` exits with status 1 when anything is missing, for use in CI. The same catalog now backs the availability flags inside IOPS: `iops/deps.py` holds one entry per extra and the modules that gate on a package call `is_available()` instead of carrying their own try/except, so the command and the runtime cannot disagree about what is installed. Detection uses each package's import name rather than its distribution name, which is why Pillow (imported as `PIL`) is reported correctly. Every install hint IOPS prints now quotes the package spec (`pip install "iops-benchmark[bayesian]"`), because zsh treats the square brackets of an extra as a glob and rejects the unquoted form with `no matches found`. A test asserts no source file emits an unquoted hint.
 
+### Changed
+
+- Every IOPS command starts about twice as fast. Deciding whether an optional package was installed was done by importing it, and importing scikit-optimize pulls in scikit-learn and SciPy behind it, which cost roughly 0.8 seconds. That was paid on every invocation to set a boolean, including `iops --version` and `iops find`, whether or not the run used Bayesian search. The availability gates now locate a module instead of executing it, which measures as no cost at all, taking startup from about 1.0 to about 0.45 seconds; the remainder is pandas, reached through the results writer. `iops deps` still performs a real import, since there the answer is the product and a package that is installed but broken should be reported as missing. This became a one-line change because the gates had already moved behind a single catalog.
+
 ## [3.5.9] - 2026-08-19
 
 ### Added
