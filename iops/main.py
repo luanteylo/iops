@@ -119,6 +119,7 @@ Examples:
   iops report ./run_001             Generate HTML report
   iops generate                     Create config template
   iops studio                       Launch the local web UI
+  iops deps                         Show optional dependency status
 """
     )
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
@@ -166,7 +167,7 @@ Examples:
     find_parser.add_argument('--cached', type=str, default=None, choices=['yes', 'no'],
                              help="Filter by cache status (yes=only cached, no=only executed)")
     find_parser.add_argument('--watch', '-w', action='store_true',
-                             help="Continuously monitor execution status (requires: pip install iops-benchmark[watch])")
+                             help="Continuously monitor execution status (requires: pip install 'iops-benchmark[watch]')")
     find_parser.add_argument('--interval', type=int, default=5, metavar='SECONDS',
                              help="Refresh interval in seconds for watch mode (default: 5, minimum: 1)")
     find_parser.add_argument('--metrics', '-m', action='store_true',
@@ -376,6 +377,16 @@ Examples:
                                help="Do not open a browser window automatically")
     _add_common_args(studio_parser)
 
+    # ---- deps command ----
+    deps_parser = subparsers.add_parser('deps', help='Show optional dependency status',
+                                        description='List the optional dependencies of IOPS, '
+                                                    'what each one enables, and whether it is installed.')
+    deps_parser.add_argument('--missing', action='store_true',
+                             help="List only the dependencies that are not installed")
+    deps_parser.add_argument('--check', action='store_true',
+                             help="Exit with status 1 if any listed dependency is missing (for CI)")
+    _add_common_args(deps_parser)
+
     args = parser.parse_args()
 
     # Show help if no command provided
@@ -552,6 +563,20 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
 def main():
     args = parse_arguments()
     logger = initialize_logger(args)
+
+    # ---- deps command ----
+    if args.command == 'deps':
+        from iops.deps import format_status, install_hint, missing_extras
+
+        print(f"Optional dependencies for IOPS {load_version()}\n")
+        print(format_status(missing_only=args.missing))
+
+        missing = missing_extras()
+        if missing:
+            print(f"\nInstall the missing ones with:\n  {install_hint(missing)}")
+        if args.check and missing:
+            return 1
+        return
 
     # ---- studio command ----
     if args.command == 'studio':
@@ -1143,4 +1168,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())

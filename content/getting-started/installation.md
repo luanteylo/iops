@@ -12,7 +12,8 @@ weight: 10
 3. [Installation from Source](#installation-from-source)
 4. [Offline Installation (Wheelhouse)](#offline-installation-wheelhouse)
 5. [Installation with Spack (for HPC environments)](#installation-with-spack-for-hpc-environments)
-6. [Verifying Your Installation](#verifying-your-installation)
+6. [Optional Dependencies](#optional-dependencies)
+7. [Verifying Your Installation](#verifying-your-installation)
 
 ---
 
@@ -130,6 +131,45 @@ spack load iops-benchmark
 # Verify installation
 iops --version
 ```
+
+## Optional Dependencies
+
+The core install keeps its dependency footprint small, so several features are
+backed by packages installed separately as extras. Run `iops deps` to see what
+they are, what each one enables, and which are present in the current
+environment:
+
+```bash
+iops deps
+```
+
+```
+Optional dependencies for IOPS 3.5.10
+
+EXTRA     PACKAGE          STATUS         ENABLES
+bayesian  scikit-optimize  0.10.2         benchmark.search_method: bayesian
+parquet   pyarrow          not installed  output.sink.type: parquet
+watch     rich             13.7.1         iops find --watch, progress bars
+plots     kaleido          not installed  iops report --export-plots
+gallery   pillow           12.0.0         reporting.gallery.max_width downscaling
+studio    nicegui          2.11.0         iops studio
+
+Install the missing ones with:
+  pip install "iops-benchmark[parquet,plots]"
+```
+
+`iops deps --missing` lists only what is absent. `iops deps --check` exits with
+status 1 when anything is missing, which is useful in a CI job that must run on
+a fully equipped environment.
+
+Extras can be combined in a single install:
+
+```bash
+pip install "iops-benchmark[bayesian,parquet,watch]"
+```
+
+A missing extra never breaks the core: IOPS reports what is needed and, where it
+can, carries on with the feature degraded rather than failing.
 
 ## Verifying Your Installation
 

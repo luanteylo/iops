@@ -655,7 +655,7 @@ __iops_plots/
 
 **File naming:** Files are numbered in report order (001, 002, ...); names include the plot type and metric, with special characters sanitized to underscores; the extension matches the chosen format (pdf, png, svg, jpg, webp).
 
-**Controlled by:** `--export-plots` flag when running `iops report` (use `--plot-format FORMAT` to select the format, default: pdf). Requires the `kaleido` package (`pip install iops-benchmark[plots]`).
+**Controlled by:** `--export-plots` flag when running `iops report` (use `--plot-format FORMAT` to select the format, default: pdf). Requires the `kaleido` package (`pip install "iops-benchmark[plots]"`).
 
 ## Best Practices
 

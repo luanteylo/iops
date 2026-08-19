@@ -17,19 +17,10 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from jinja2 import Template
 
-# Optional pyarrow for parquet support
-try:
-    import pyarrow
-    PYARROW_AVAILABLE = True
-except ImportError:
-    PYARROW_AVAILABLE = False
+from iops.deps import install_hint, is_available
 
-# Optional kaleido for PDF export
-try:
-    import kaleido
-    KALEIDO_AVAILABLE = True
-except ImportError:
-    KALEIDO_AVAILABLE = False
+PYARROW_AVAILABLE = is_available("parquet")   # parquet result files
+KALEIDO_AVAILABLE = is_available("plots")     # static plot export
 
 from iops.config.models import (
     ReportingConfig,
@@ -324,7 +315,7 @@ class ReportGenerator:
                 raise ImportError(
                     "pyarrow is required for parquet output. "
                     "Install it with: pip install pyarrow\n"
-                    "Or install iops with parquet support: pip install iops-benchmark[parquet]"
+                    f"Or install iops with parquet support: {install_hint(['parquet'])}"
                 )
             self.df = pd.read_parquet(output_path)
         elif output_info['type'] == 'sqlite':
@@ -1018,7 +1009,7 @@ class ReportGenerator:
             else:
                 logging.getLogger(__name__).warning(
                     "Plot export requested but kaleido is not installed. "
-                    "Install with: pip install iops-benchmark[plots]"
+                    f"Install with: {install_hint(['plots'])}"
                 )
 
         # Get report variables and metrics

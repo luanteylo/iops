@@ -18,12 +18,11 @@ from typing import Any, Dict, List, Optional
 
 from .execution_cache import ExecutionCache, _normalize_value
 
-# Try to import rich for progress bars (optional dependency)
-try:
+from iops.deps import is_available
+
+RICH_AVAILABLE = is_available("watch")        # progress bars
+if RICH_AVAILABLE:
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn
-    RICH_AVAILABLE = True
-except ImportError:
-    RICH_AVAILABLE = False
 
 
 @contextmanager

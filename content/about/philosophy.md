@@ -45,7 +45,7 @@ When something must change, IOPS follows a **2 minor version deprecation cycle**
 
 ```bash
 pip install iops-benchmark                      # core only
-pip install iops-benchmark[bayesian,parquet]    # selected extras
+pip install "iops-benchmark[bayesian,parquet]"    # selected extras
 ```
 
 ## 5. Plugin-Based Extensibility

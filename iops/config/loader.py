@@ -14,19 +14,10 @@ import os
 from jinja2 import Environment, StrictUndefined, TemplateSyntaxError
 from jinja2.exceptions import UndefinedError
 
-# Optional pyarrow for parquet support
-try:
-    import pyarrow
-    PYARROW_AVAILABLE = True
-except ImportError:
-    PYARROW_AVAILABLE = False
+from iops.deps import install_hint, is_available
 
-# Optional scikit-optimize for Bayesian optimization
-try:
-    import skopt
-    SKOPT_AVAILABLE = True
-except ImportError:
-    SKOPT_AVAILABLE = False
+PYARROW_AVAILABLE = is_available("parquet")   # parquet output sinks
+SKOPT_AVAILABLE = is_available("bayesian")    # Bayesian search method
 
 from iops.config.models import (
     ConfigValidationError,
@@ -1739,18 +1730,16 @@ def _parse_gallery_config(data: Any) -> GalleryConfig:
 
     # Downscaling needs Pillow, which is an optional dependency. Flag it now so the
     # user is not told after a long run that images were embedded at full size.
-    if max_width is not None and data.get("enabled", False):
-        try:
-            import PIL  # noqa: F401
-        except ImportError:
-            import warnings
-            warnings.warn(
-                "reporting.gallery.max_width is set but Pillow is not installed; "
-                "gallery images will be embedded at full size. "
-                "Install it with: pip install iops-benchmark[gallery]",
-                UserWarning,
-                stacklevel=4,
-            )
+    if max_width is not None and data.get("enabled", False) and not is_available("gallery"):
+        import warnings
+        from iops.deps import install_hint
+        warnings.warn(
+            "reporting.gallery.max_width is set but Pillow is not installed; "
+            "gallery images will be embedded at full size. "
+            f"Install it with: {install_hint(['gallery'])}",
+            UserWarning,
+            stacklevel=4,
+        )
 
     return GalleryConfig(
         enabled=data.get("enabled", False),
@@ -2270,7 +2259,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if not SKOPT_AVAILABLE:
             raise ConfigValidationError(
                 "Bayesian optimization requires the 'scikit-optimize' library.\n"
-                "Install with: pip install iops-benchmark[bayesian]"
+                f"Install with: {install_hint(['bayesian'])}"
             )
         bc = cfg.benchmark.bayesian_config
         if bc is None:
@@ -2724,7 +2713,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError(
             "pyarrow is required for parquet output. "
             "Install it with: pip install pyarrow\n"
-            "Or install iops with parquet support: pip install iops-benchmark[parquet]"
+            f"Or install iops with parquet support: {install_hint(['parquet'])}"
         )
 
     # Validate that requested fields exist in config (static check)

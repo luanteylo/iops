@@ -14,12 +14,9 @@ that actually use it are imported lazily by the ``iops studio`` command.
 # remote SSH/orchestration workflow is functional end to end.
 __version__ = "0.1.0"
 
-# Optional nicegui for the Studio web UI
-try:
-    import nicegui  # noqa: F401
-    NICEGUI_AVAILABLE = True
-except ImportError:
-    NICEGUI_AVAILABLE = False
+from iops.deps import install_hint, is_available
+
+NICEGUI_AVAILABLE = is_available("studio")    # the Studio web UI
 
 
 def _check_nicegui():
@@ -28,5 +25,5 @@ def _check_nicegui():
         raise ImportError(
             "IOPS Studio requires NiceGUI.\n"
             "Install it with: pip install nicegui\n"
-            "Or install iops with Studio support: pip install iops-benchmark[studio]"
+            f"Or install iops with Studio support: {install_hint(['studio'])}"
         )

@@ -225,33 +225,24 @@ def test_image_to_data_uri_skips_oversized_image(tmp_path):
 
 
 def test_max_width_without_pillow_warns_at_load(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def no_pillow(name, *args, **kwargs):
-        if name.startswith("PIL"):
-            raise ImportError("No module named 'PIL'")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", no_pillow)
+    """Availability now comes from the registry, so patch it rather than the import."""
+    monkeypatch.setattr("iops.config.loader.is_available", lambda extra: False)
 
     with pytest.warns(UserWarning, match="Pillow is not installed"):
         g = _parse_gallery_config({"enabled": True, "max_width": 1000})
     assert g.max_width == 1000
 
 
+def test_max_width_warning_names_the_gallery_extra(monkeypatch):
+    monkeypatch.setattr("iops.config.loader.is_available", lambda extra: False)
+
+    with pytest.warns(UserWarning) as caught:
+        _parse_gallery_config({"enabled": True, "max_width": 1000})
+    assert 'pip install "iops-benchmark[gallery]"' in str(caught[0].message)
+
+
 def test_no_pillow_warning_when_gallery_disabled(monkeypatch, recwarn):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def no_pillow(name, *args, **kwargs):
-        if name.startswith("PIL"):
-            raise ImportError("No module named 'PIL'")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", no_pillow)
+    monkeypatch.setattr("iops.config.loader.is_available", lambda extra: False)
 
     _parse_gallery_config({"enabled": False, "max_width": 1000})
     assert not [w for w in recwarn if "Pillow" in str(w.message)]

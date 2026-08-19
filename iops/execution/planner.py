@@ -30,12 +30,11 @@ import copy
 import contextlib
 import functools
 
-# Try to import rich for progress bars
-try:
+from iops.deps import install_hint, is_available
+
+RICH_AVAILABLE = is_available("watch")        # progress bars
+if RICH_AVAILABLE:
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn
-    RICH_AVAILABLE = True
-except ImportError:
-    RICH_AVAILABLE = False
 
 
 def _blas_thread_limit():
@@ -2618,7 +2617,7 @@ class BayesianPlanner(BasePlanner, HasLogger):
         if not SKOPT_AVAILABLE:
             raise ImportError(
                 "Bayesian optimization requires the 'scikit-optimize' library.\n"
-                "Install with: pip install iops-benchmark[bayesian]"
+                f"Install with: {install_hint(['bayesian'])}"
             )
 
         # Bayesian config is guaranteed by loader to be set when search_method is "bayesian"

@@ -22,12 +22,11 @@ from iops.archive.filter import (
 )
 from iops.logger import HasLogger
 
-# Try to import rich for progress bars
-try:
+from iops.deps import is_available
+
+RICH_AVAILABLE = is_available("watch")        # progress bars
+if RICH_AVAILABLE:
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn
-    RICH_AVAILABLE = True
-except ImportError:
-    RICH_AVAILABLE = False
 
 
 @contextmanager

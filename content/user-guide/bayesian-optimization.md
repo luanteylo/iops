@@ -32,7 +32,7 @@ Bayesian optimization (BO) is a sequential, model-based strategy for optimizing 
 **Install note:** Bayesian optimization requires the `scikit-optimize` library:
 
 ```bash
-pip install iops-benchmark[bayesian]
+pip install "iops-benchmark[bayesian]"
 ```
 
 **Note:** Bayesian optimization cannot be used with SLURM [single-allocation mode](../single-allocation-mode), which pre-generates all tests upfront and leaves no feedback loop. IOPS rejects this combination at config validation.

@@ -4,7 +4,7 @@ Watch mode for monitoring IOPS execution status in real-time.
 This module provides functionality for the `iops find --watch` command,
 allowing users to monitor execution progress with live updates.
 
-Requires the 'rich' library: pip install iops-benchmark[watch]
+Requires the 'rich' library: pip install "iops-benchmark[watch]"
 """
 
 from __future__ import annotations
@@ -29,17 +29,16 @@ try:
 except ImportError:
     UNIX_TERMINAL = False
 
-# Check for rich availability
-try:
+from iops.deps import install_hint, is_available
+
+RICH_AVAILABLE = is_available("watch")        # the whole watch UI
+if RICH_AVAILABLE:
     from rich.console import Console
     from rich.table import Table
     from rich.live import Live
     from rich.panel import Panel
     from rich.text import Text
     from rich.progress import Progress, BarColumn, TextColumn
-    RICH_AVAILABLE = True
-except ImportError:
-    RICH_AVAILABLE = False
 
 # Import constants from find module
 from .find import (
@@ -67,7 +66,7 @@ def check_rich_available() -> None:
     if not RICH_AVAILABLE:
         raise WatchModeError(
             "Watch mode requires the 'rich' library.\n"
-            "Install with: pip install iops-benchmark[watch]"
+            f"Install with: {install_hint(['watch'])}"
         )
 
 

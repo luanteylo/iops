@@ -427,7 +427,7 @@ class TestSkoptNotInstalled:
             yaml.dump(bayesian_config_dict, f)
 
         with patch.object(loader_module, "SKOPT_AVAILABLE", False):
-            with pytest.raises(ConfigValidationError, match=r"pip install iops-benchmark\[bayesian\]"):
+            with pytest.raises(ConfigValidationError, match=r"pip install \"iops-benchmark\[bayesian\]\""):
                 load_config(config_file)
 
     def test_bayesian_planner_raises_import_error(self, bayesian_config):
@@ -435,5 +435,5 @@ class TestSkoptNotInstalled:
         import iops.execution.planner as planner_module
 
         with patch.object(planner_module, "SKOPT_AVAILABLE", False):
-            with pytest.raises(ImportError, match=r"pip install iops-benchmark\[bayesian\]"):
+            with pytest.raises(ImportError, match=r"pip install \"iops-benchmark\[bayesian\]\""):
                 planner_module.BayesianPlanner(bayesian_config)

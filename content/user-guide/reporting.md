@@ -539,7 +539,7 @@ The resolution order is: `--output` flag, then the config's `output_dir`/`output
 IOPS can export all plots as image files for publications, presentations, or external documents. This requires the `kaleido` package and is enabled via CLI options:
 
 ```bash
-pip install iops-benchmark[plots]
+pip install "iops-benchmark[plots]"
 ```
 
 ```bash
@@ -645,7 +645,7 @@ scripts:
 | `folder` | `"images"` | Convention folder scanned per execution directory |
 | `sources` | none | Explicit Jinja2-templated paths resolved per execution |
 | `pattern` | `"*.png"` | Glob pattern used when scanning the convention folder |
-| `max_width` | none | Maximum width in pixels of the embedded image (requires Pillow: `pip install iops-benchmark[gallery]`; degrades gracefully without it). Used for both the thumbnail and the click-to-enlarge view, so set it generously (e.g. 800 to 1200); the grid thumbnail is shrunk to fit its card regardless. Omit to embed images at original resolution. |
+| `max_width` | none | Maximum width in pixels of the embedded image (requires Pillow: `pip install "iops-benchmark[gallery]"`; degrades gracefully without it). Used for both the thumbnail and the click-to-enlarge view, so set it generously (e.g. 800 to 1200); the grid thumbnail is shrunk to fit its card regardless. Omit to embed images at original resolution. |
 | `caption_vars` | report_vars | Variable names shown as the caption under each execution's cards |
 | `title` | `"Image Gallery"` | Heading for the gallery section |
 
