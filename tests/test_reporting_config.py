@@ -389,7 +389,9 @@ class TestParseReportingConfig:
         # Top-level fields
         assert config.enabled is True
         assert config.output_filename == "test_report.html"
-        assert config.output_dir == Path("/tmp/reports")
+        # The loader resolves paths, so compare resolved: on macOS /tmp is a
+        # symlink to /private/tmp.
+        assert config.output_dir == Path("/tmp/reports").resolve()
 
         # Theme
         assert config.theme.style == "plotly_dark"

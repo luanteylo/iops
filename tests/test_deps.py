@@ -73,6 +73,10 @@ def test_is_available_does_not_load_the_package(monkeypatch):
     """The gates run on every startup, so they must not pay a package's import cost."""
     import sys
 
+    # The assertion below needs the extra actually installed; skopt is the
+    # heavyweight import this gate exists to avoid.
+    pytest.importorskip("skopt")
+
     for name in [m for m in sys.modules if m == "skopt" or m.startswith("skopt.")]:
         del sys.modules[name]
     deps.is_available.cache_clear()

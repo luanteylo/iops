@@ -8,8 +8,10 @@ node, plus its integration with the resource and GPU samplers.
 """
 
 import os
+import pathlib
 import subprocess
 
+import pytest
 import yaml
 
 from conftest import load_config
@@ -128,6 +130,10 @@ class TestLauncherFanOut:
         ))
         return TRACE_FILENAME_PREFIX
 
+    @pytest.mark.skipif(
+        not pathlib.Path("/proc/stat").exists(),
+        reason="the resource sampler reads /proc/stat, which only exists on Linux",
+    )
     def test_oar_multinode_job_traces_the_local_node(self, tmp_path):
         """
         Regression test: an OAR multi-node job used to fall into the single-node
