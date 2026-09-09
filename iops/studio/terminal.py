@@ -44,12 +44,15 @@ logger = logging.getLogger(__name__)
 
 _RS = 0x1e  # ASCII record separator, used to delimit sentinels invisibly
 
-# Above this many base64 bytes a payload is streamed instead of being inlined
-# into a command line. A command line has to fit the *remote* tty's input
-# buffer; anything longer is silently never delivered and the shell then waits
-# forever for the rest of a line that cannot arrive. The real ceiling depends on
-# the host, so this stays well under the smallest one observed.
-_MAX_INLINE_B64 = 2048
+# Maximum number of bytes Studio will put on a single remote command line.
+# A command line has to fit the *remote* tty's input buffer; anything longer is
+# silently truncated and the shell then waits forever for the rest of a line
+# that cannot arrive, wedging the channel for every later command as well. The
+# real ceiling is host-dependent: command lines up to ~8 KB arrived on one SSH
+# host, but PLAFRIM truncates at exactly 1024 bytes. This stays well under the
+# smallest one observed. Anything longer is streamed instead, which the remote
+# *reads* rather than parses as a command line and so has no size limit.
+_MAX_INLINE_CMD = 768
 
 OutputFn = Callable[[bytes], None]
 
@@ -58,6 +61,35 @@ def _short(text: str, limit: int = 200) -> str:
     """One-line, length-capped rendering of a command for a log line."""
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[:limit] + "..."
+
+
+def _command_line(rid: str, command: str, subshell: bool) -> str:
+    """The exact single line ``run`` writes to the shell to execute ``command``.
+
+    Built separately from sending it so its length can be measured against
+    ``_MAX_INLINE_CMD`` before anything is written.
+    """
+    if "\n" in command and subshell:
+        b64 = base64.b64encode(command.encode()).decode()
+        payload = f"echo {b64} | base64 -d | bash"
+    else:
+        payload = command
+    # A ( ) subshell isolates the interactive shell from exit/cd. A { } group
+    # runs in the current shell so setup commands persist their env changes.
+    wrapped = f"( {payload} )" if subshell else f"{{ {payload} ; }}"
+    return (f"printf '\\036S{rid}\\036'; {wrapped}; "
+            f"printf '\\036E{rid}:%s\\036' \"$?\"\n")
+
+
+def _fits_inline(command: str, subshell: bool = True) -> bool:
+    """Whether ``command`` is short enough to send as one remote command line."""
+    return len(_command_line("x" * 8, command, subshell)) <= _MAX_INLINE_CMD
+
+
+def _inline_write_command(remote_path: str, b64: str) -> str:
+    """One-line remote command writing ``b64``, decoded, into ``remote_path``."""
+    return (f'mkdir -p "$(dirname "{remote_path}")" && '
+            f"printf %s '{b64}' | base64 -d > \"{remote_path}\" && echo __WROTE__")
 
 
 class TerminalSession:
@@ -406,7 +438,9 @@ class TerminalSession:
                 'D="$HOME/%s"; mkdir -p "$D" && __t="$D/.iops_incoming" && '
                 "stty raw -echo 2>/dev/null && printf '\\036R%s\\036' && "
                 'head -c %d > "$__t"; stty sane 2>/dev/null; '
-                'base64 -d "$__t" 2>/dev/null | tar xzf - -C "$D"; __rc=$?; rm -f "$__t"; '
+                # `base64 -d < file`, not `base64 -d file`: BSD/macOS base64
+                # rejects a positional input file (exit 64).
+                'base64 -d < "$__t" 2>/dev/null | tar xzf - -C "$D"; __rc=$?; rm -f "$__t"; '
                 "printf '\\036E%s:%%s\\036' \"$__rc\"\n"
             ) % (dest_rel, rid, n, rid)
 
@@ -432,12 +466,11 @@ class TerminalSession:
         logger.debug("push_text -> %s (%d bytes, b64 %d)",
                      remote_path, len(text.encode()), len(payload))
 
-        if len(payload) <= _MAX_INLINE_B64:
-            b64 = payload.decode()
-            code, out = await self.run(
-                f'mkdir -p "$(dirname "{remote_path}")" && '
-                f"printf %s '{b64}' | base64 -d > \"{remote_path}\" && echo __WROTE__",
-                display=display, timeout=60)
+        # Measure the command line we would actually send, not just the payload:
+        # the path appears twice and the sentinels add their own bytes.
+        inline = _inline_write_command(remote_path, payload.decode())
+        if _fits_inline(inline):
+            code, out = await self.run(inline, display=display, timeout=60)
             # The marker guards against a garbled capture reporting a false success.
             return code if code != 0 or "__WROTE__" in out else -1
 
@@ -452,7 +485,9 @@ class TerminalSession:
                 'F="%s"; mkdir -p "$(dirname "$F")" && __t="$F.iops_incoming" && '
                 "stty raw -echo 2>/dev/null && printf '\\036R%s\\036' && "
                 'head -c %d > "$__t"; stty sane 2>/dev/null; '
-                'base64 -d "$__t" > "$F" 2>/dev/null; __rc=$?; rm -f "$__t"; '
+                # `base64 -d < file`, not `base64 -d file`: BSD/macOS base64
+                # rejects a positional input file (exit 64).
+                'base64 -d < "$__t" > "$F" 2>/dev/null; __rc=$?; rm -f "$__t"; '
                 "printf '\\036E%s:%%s\\036' \"$__rc\"\n"
             ) % (remote_path, rid, n, rid)
 
@@ -530,6 +565,32 @@ class TerminalSession:
                     pass
             self.input_locked = False
 
+    async def _run_via_script(self, command: str, display: Optional[str],
+                              timeout: float, subshell: bool) -> tuple[int, str]:
+        """Run a command too long to fit on one remote command line.
+
+        Streams ``command`` to a temporary script on the target and then invokes
+        that script with a short line, so the payload is *read* by the remote
+        instead of being parsed as a command line. Without this, a long line is
+        silently truncated in transit and the remote shell blocks forever waiting
+        for a newline that never arrives, wedging the channel for good.
+
+        ``subshell=False`` sources the script in the current shell so setup
+        commands still persist their env changes; it deliberately avoids a bare
+        ``exit``, which would kill the user's interactive shell.
+        """
+        path = f"$HOME/.iops_cmd_{uuid.uuid4().hex[:8]}.sh"
+        logger.debug("run%s (streamed via %s): %s", "" if subshell else " (in-shell)",
+                     path, display or _short(command))
+        if await self.push_text(path, command, timeout=timeout) != 0:
+            logger.debug("run -> streaming the command script failed")
+            return (-1, "")
+        if subshell:
+            invoke = f'bash "{path}"; __rc=$?; rm -f "{path}"; exit $__rc'
+        else:
+            invoke = f'. "{path}"; __rc=$?; rm -f "{path}"; (exit $__rc)'
+        return await self.run(invoke, display=display, timeout=timeout, subshell=subshell)
+
     async def run(self, command: str, display: Optional[str] = None,
                   timeout: float = 120.0, subshell: bool = True) -> tuple[int, str]:
         """Run ``command`` in the shell; return ``(exit_code, captured_output)``.
@@ -537,7 +598,9 @@ class TerminalSession:
         A readable ``$ display`` line is shown first. Input is locked for the
         duration so the user's keystrokes cannot corrupt the running command;
         it unlocks as soon as the command finishes, times out, or fails.
-        Multi-line commands are base64-wrapped to stay a single shell line.
+        Multi-line commands are base64-wrapped to stay a single shell line, and
+        anything whose line would exceed ``_MAX_INLINE_CMD`` is streamed to a
+        temporary script on the target and run from there instead.
 
         ``subshell`` (default) runs the command in a ``( )`` subshell so a stray
         ``exit``/``cd`` cannot perturb the user's interactive shell. Pass
@@ -555,9 +618,13 @@ class TerminalSession:
             logger.debug("run skipped (shell not alive): %s", display or _short(command))
             return (-1, "")
 
+        rid = uuid.uuid4().hex[:8]
+        line = _command_line(rid, command, subshell)
+        if len(line) > _MAX_INLINE_CMD:
+            return await self._run_via_script(command, display, timeout, subshell)
+
         logger.debug("run%s: %s", "" if subshell else " (in-shell)",
                      display or _short(command))
-        rid = uuid.uuid4().hex[:8]
         start = bytes([_RS]) + b"S" + rid.encode() + bytes([_RS])
         end = bytes([_RS]) + b"E" + rid.encode() + b":"
         future = self._loop.create_future()
@@ -565,17 +632,6 @@ class TerminalSession:
 
         if display and self._on_output:
             self._on_output(("\r\n\x1b[36m$ " + display + "\x1b[0m\r\n").encode())
-
-        if "\n" in command and subshell:
-            b64 = base64.b64encode(command.encode()).decode()
-            payload = f"echo {b64} | base64 -d | bash"
-        else:
-            payload = command
-        # A ( ) subshell isolates the interactive shell from exit/cd. A { } group
-        # runs in the current shell so setup commands persist their env changes.
-        wrapped = f"( {payload} )" if subshell else f"{{ {payload} ; }}"
-        line = (f"printf '\\036S{rid}\\036'; {wrapped}; "
-                f"printf '\\036E{rid}:%s\\036' \"$?\"\n")
 
         self.input_locked = True
         saved_attrs = None
