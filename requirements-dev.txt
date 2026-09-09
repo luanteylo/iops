@@ -1,3 +1,4 @@
 pytest-mock
 streamlit
 statsmodels
+tomli; python_version < "3.11"

@@ -9,27 +9,40 @@ Covers:
 
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
 
 from iops import deps
 
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 falls back to the tomli backport
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+
+needs_toml = pytest.mark.skipif(
+    tomllib is None,
+    reason="no TOML parser available (Python < 3.11 without tomli)",
+)
 
 
 # ============================================================================ #
 # Catalog integrity
 # ============================================================================ #
 
+@needs_toml
 def test_catalog_matches_pyproject_extras():
     """Every extra IOPS ships must be described exactly once in the catalog."""
     declared = tomllib.loads(PYPROJECT.read_text())["project"]["optional-dependencies"]
     assert {d.extra for d in deps.OPTIONAL_DEPENDENCIES} == set(declared)
 
 
+@needs_toml
 def test_catalog_package_names_match_pyproject():
     declared = tomllib.loads(PYPROJECT.read_text())["project"]["optional-dependencies"]
     for dep in deps.OPTIONAL_DEPENDENCIES:
