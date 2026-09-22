@@ -7,10 +7,13 @@ Covers:
 - Variable impact plot rendering when all impact scores are zero.
 - Report config serializer/deserializer round trip (coverage_heatmap fields,
   sections, best_results.min_samples).
+- report_config.yaml round trip keeping every PlotConfig field (log_y was lost).
+- Bar value labels readable for small metric values.
 - Scatter plot with a string-typed color_by variable.
 """
 
 import json
+from dataclasses import fields
 
 import pandas as pd
 import pytest
@@ -23,8 +26,13 @@ from iops.config.models import (
     ReportThemeConfig,
     SectionConfig,
 )
-from iops.reporting.config_template import serialize_reporting_config
-from iops.reporting.plots import ScatterPlot
+from iops.config.loader import load_report_config
+from iops.reporting.config_template import (
+    _create_clean_report_config,
+    _literal_block_dumper,
+    serialize_reporting_config,
+)
+from iops.reporting.plots import BarPlot, ScatterPlot
 from iops.reporting.report_generator import ReportGenerator
 
 
@@ -234,6 +242,124 @@ class TestConfigTemplateRoundTrip:
         assert restored.best_results.top_n == 7
         assert restored.best_results.show_command is False
         assert restored.best_results.min_samples == 3
+
+
+def _plot_config_with_every_field_changed() -> PlotConfig:
+    """A PlotConfig where every field differs from its default."""
+    return PlotConfig(
+        type="scatter",
+        x_var="nodes",
+        y_var="ppn",
+        z_metric="latency",
+        group_by="mode",
+        color_by="mode",
+        size_by="ppn",
+        title="Custom title",
+        xaxis_label="Nodes",
+        yaxis_label="Bandwidth",
+        log_x=True,
+        log_y=True,
+        colorscale="Plasma",
+        show_error_bars=False,
+        show_outliers=False,
+        height=700,
+        width=900,
+        per_variable=True,
+        include_metric=False,
+        row_vars=["nodes", "ppn"],
+        col_var="mode",
+        aggregation="median",
+        show_missing=False,
+        sort_rows_by="values",
+        sort_cols_by="values",
+        sort_ascending=True,
+    )
+
+
+class TestReportConfigYamlRoundTrip:
+    """report_config.yaml is auto-loaded by `iops report`, so it must not drop plot options."""
+
+    def _round_trip(self, reporting, tmp_path):
+        import yaml
+
+        path = tmp_path / "report_config.yaml"
+        clean = _create_clean_report_config(reporting, scripts=[])
+        with open(path, "w") as f:
+            yaml.dump({"reporting": clean}, f, Dumper=_literal_block_dumper(), sort_keys=False)
+        return load_report_config(path)
+
+    def test_fixture_changes_every_plot_field(self):
+        changed = _plot_config_with_every_field_changed()
+        default = PlotConfig(type=changed.type)
+        unchanged = [
+            f.name for f in fields(PlotConfig)
+            if f.name != "type" and getattr(changed, f.name) == getattr(default, f.name)
+        ]
+        assert unchanged == [], "update the fixture for new PlotConfig fields"
+
+    def test_metric_plot_fields_survive(self, tmp_path):
+        original = _plot_config_with_every_field_changed()
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"bandwidth": MetricPlotsConfig(plots=[original])},
+        )
+
+        restored = self._round_trip(reporting, tmp_path)
+
+        assert restored.metrics["bandwidth"].plots[0] == original
+
+    def test_default_plot_fields_survive(self, tmp_path):
+        original = _plot_config_with_every_field_changed()
+        reporting = ReportingConfig(enabled=True, default_plots=[original])
+
+        restored = self._round_trip(reporting, tmp_path)
+
+        assert restored.default_plots[0] == original
+
+    def test_log_y_bar_plot_survives(self, tmp_path):
+        original = PlotConfig(type="bar", x_var="levelmin", log_y=True)
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"l1_norm": MetricPlotsConfig(plots=[original])},
+        )
+
+        restored = self._round_trip(reporting, tmp_path)
+
+        assert restored.metrics["l1_norm"].plots[0].log_y is True
+
+    def test_default_values_are_omitted(self):
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"bandwidth": MetricPlotsConfig(plots=[PlotConfig(type="bar", x_var="nodes")])},
+        )
+
+        clean = _create_clean_report_config(reporting, scripts=[])
+
+        assert clean["metrics"]["bandwidth"]["plots"] == [{"type": "bar", "x_var": "nodes"}]
+
+
+# ============================================================================
+# Bar plot value labels
+# ============================================================================
+
+class TestBarPlotLabels:
+    def test_small_values_are_not_rounded_to_zero(self):
+        df = pd.DataFrame({
+            "vars.levelmin": [4, 5, 7],
+            "metrics.l1_norm": [9.56e-4, 9.57e-4, 9.10e-4],
+        })
+        plot = BarPlot(
+            df=df,
+            metric="l1_norm",
+            plot_config=PlotConfig(type="bar", x_var="levelmin"),
+            theme=ReportThemeConfig(),
+            var_column_fn=lambda v: f"vars.{v}",
+            metric_column_fn=lambda m: f"metrics.{m}",
+        )
+
+        labels = list(plot.generate().data[0].text)
+
+        assert labels == ["0.000956", "0.000957", "0.00091"]
 
 
 # ============================================================================
