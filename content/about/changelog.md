@@ -15,6 +15,11 @@ All notable changes to IOPS are documented here.
 
 - Every IOPS command starts about twice as fast. Deciding whether an optional package was installed was done by importing it, and importing scikit-optimize pulls in scikit-learn and SciPy behind it, which cost roughly 0.8 seconds. That was paid on every invocation to set a boolean, including `iops --version` and `iops find`, whether or not the run used Bayesian search. The availability gates now locate a module instead of executing it, which measures as no cost at all, taking startup from about 1.0 to about 0.45 seconds; the remainder is pandas, reached through the results writer. `iops deps` still performs a real import, since there the answer is the product and a package that is installed but broken should be reported as missing. This became a one-line change because the gates had already moved behind a single catalog.
 
+### Fixed
+
+- The `report_config.yaml` written after a run dropped most plot options: only `type`, `x_var`, `y_var`, `group_by`, `title`, and `colorscale` were kept, so `log_x`, `log_y`, axis labels, sizes, error-bar and outlier toggles, `z_metric`, `color_by`, `size_by`, and the coverage heatmap options were lost. Because `iops report` auto-loads that file in preference to the run metadata, a regenerated report silently ignored them, even though the report produced at the end of the run honored them. Every non-default plot field is now written, for both `reporting.metrics` plots and `reporting.default_plots`. Runs created with an earlier version keep the truncated file; restore the missing options by hand, or delete the file so `iops report` falls back to the configuration stored in the run metadata.
+- Bar plot value labels used two decimal places, so metrics below 0.005 were all labeled `0.00`. Labels now show three significant digits (`0.000956`).
+
 ## [3.5.9] - 2026-08-19
 
 ### Added

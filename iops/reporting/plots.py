@@ -240,7 +240,7 @@ class BarPlot(BasePlot):
             y=self._to_list(df_grouped['mean']),
             error_y=error_y,
             name=self.metric,
-            text=[f'{v:.2f}' for v in df_grouped['mean']],
+            text=[f'{v:.3g}' for v in df_grouped['mean']],
             textposition='outside',
         ))
 
