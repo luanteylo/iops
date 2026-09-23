@@ -14,6 +14,7 @@ All notable changes to IOPS are documented here.
 ### Changed
 
 - Every IOPS command starts about twice as fast. Deciding whether an optional package was installed was done by importing it, and importing scikit-optimize pulls in scikit-learn and SciPy behind it, which cost roughly 0.8 seconds. That was paid on every invocation to set a boolean, including `iops --version` and `iops find`, whether or not the run used Bayesian search. The availability gates now locate a module instead of executing it, which measures as no cost at all, taking startup from about 1.0 to about 0.45 seconds; the remainder is pandas, reached through the results writer. `iops deps` still performs a real import, since there the answer is the product and a package that is installed but broken should be reported as missing. This became a one-line change because the gates had already moved behind a single catalog.
+- A logarithmic axis (`log_x`, `log_y`) whose data spans two decades or more is now labelled once per decade, as a power of ten. Plotly labels minor log ticks by default, so an axis covering four decades read `2, 0.001, 5, 2, 100µ, 5, 2, 10µ`, mixing minor labels in with the decade marks. Data confined to less than two decades keeps the automatic ticks: those labels are ordinary numbers, and a decade rule would leave such an axis with a single label or none at all, since its whole range can sit between two powers of ten.
 
 ### Fixed
 
