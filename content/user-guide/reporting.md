@@ -14,6 +14,8 @@ IOPS includes a reporting system that generates interactive HTML reports with cu
 3. [Report Sections](#report-sections)
 4. [Controlling Sections](#controlling-sections)
 5. [Custom Plots](#custom-plots)
+   - [Logarithmic Axis Scales](#logarithmic-axis-scales)
+   - [Explicit Axis Ranges](#explicit-axis-ranges)
 6. [Default Plots](#default-plots)
 7. [Themes and Styling](#themes-and-styling)
 8. [Plot Sizing and Defaults](#plot-sizing-and-defaults)
@@ -187,7 +189,7 @@ Define custom plots per metric for detailed analysis.
 
 ### Plot Types
 
-IOPS supports 10 plot types. All types accept these optional parameters: `title` (string), `xaxis_label` (string), `yaxis_label` (string, default: metric name), `log_x` (boolean, default: false), `log_y` (boolean, default: false), `height` (pixels), and `width` (pixels). Type-specific parameters are listed below.
+IOPS supports 10 plot types. All types accept these optional parameters: `title` (string), `xaxis_label` (string), `yaxis_label` (string, default: metric name), `log_x` (boolean, default: false), `log_y` (boolean, default: false), `xaxis_range` (list of two numbers, default: auto), `yaxis_range` (list of two numbers, default: auto), `height` (pixels), and `width` (pixels). Type-specific parameters are listed below.
 
 ### Logarithmic Axis Scales
 
@@ -204,6 +206,37 @@ metrics:
 ```
 
 > **Note:** On bar, line, box, and violin plots the x-axis is rendered as ordered categories (one tick per swept value), so `log_x` has no visible effect there; use `log_y` for the metric axis, and use `log_x`/`log_y` together on `scatter`, `heatmap`, or `surface_3d` plots where both axes are numeric.
+
+### Explicit Axis Ranges
+
+Set `xaxis_range` and/or `yaxis_range` to `[min, max]` on any plot to pin an axis to explicit limits instead of letting Plotly auto-zoom to the data. This is useful for comparing several plots on identical axes, zooming into a narrow band of interest, forcing a bar chart to start at zero, or plotting a metric against a fixed reference range.
+
+```yaml
+metrics:
+  bandwidth:
+    plots:
+      - type: "line"
+        x_var: "block_size"
+        yaxis_range: [0, 5000]     # Fixed y-axis, in data units
+        title: "Bandwidth Scaling (fixed scale)"
+```
+
+> **Important:** `xaxis_range`/`yaxis_range` are always written in data units, never in log units, even when `log_x`/`log_y` is also set on that axis. IOPS converts the bounds to powers of ten internally at render time. For example, `yaxis_range: [1e-6, 1e-2]` with `log_y: true` shows the axis from 10^-6 to 10^-2. This differs from raw Plotly, which expects log10 values for a log axis range; you do not need to take the log yourself.
+
+```yaml
+metrics:
+  latency:
+    plots:
+      - type: "line"
+        x_var: "nodes"
+        log_y: true
+        yaxis_range: [1e-6, 1e-2]  # Shown as 10^-6 to 10^-2, not literal -6 to -2
+        title: "Latency (log scale, fixed range)"
+```
+
+Validation rules: the value must be a list of exactly two numbers, the minimum must be less than the maximum, and when the matching `log_x`/`log_y` is `true`, the lower bound must be greater than zero (a logarithmic axis cannot show zero or negative values). A zero lower bound is fine on a linear axis, e.g. `yaxis_range: [0, 100]`.
+
+An explicit range also decides whether a log axis gets one labelled tick per decade: with a range set, that decision is based on the number of decades the range spans, not on the number of decades the underlying data spans.
 
 #### 1. Execution Scatter
 

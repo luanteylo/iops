@@ -119,7 +119,8 @@ ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
 ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
 ALLOWED_PLOT_KEYS = {
     "type", "x_var", "y_var", "z_metric", "group_by", "color_by", "size_by",
-    "title", "xaxis_label", "yaxis_label", "log_x", "log_y", "colorscale",
+    "title", "xaxis_label", "yaxis_label", "log_x", "log_y",
+    "xaxis_range", "yaxis_range", "colorscale",
     "show_error_bars", "show_outliers", "height", "width", "per_variable",
     "include_metric",
     "row_vars", "col_var", "aggregation", "show_missing", "sort_rows_by",
@@ -1752,6 +1753,47 @@ def _parse_gallery_config(data: Any) -> GalleryConfig:
     )
 
 
+def _parse_axis_range(plot_data: dict, axis: str, context: str) -> Optional[List[float]]:
+    """
+    Validate and return a plot's axis limits, or None when unset.
+
+    The limits are written in data units even for a logarithmic axis, where
+    Plotly itself expects powers of ten; the conversion happens at render time
+    so that the configuration stays readable.
+    """
+    key = f"{axis}axis_range"
+    value = plot_data.get(key)
+    if value is None:
+        return None
+
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ConfigValidationError(
+            f"{context}.{key} must be a list of two numbers [min, max]"
+        )
+
+    limits = []
+    for bound in value:
+        if isinstance(bound, bool) or not isinstance(bound, (int, float)):
+            raise ConfigValidationError(
+                f"{context}.{key} bounds must be numbers, got {bound!r}"
+            )
+        limits.append(float(bound))
+
+    low, high = limits
+    if low >= high:
+        raise ConfigValidationError(
+            f"{context}.{key} must have min < max, got [{low}, {high}]"
+        )
+
+    if plot_data.get(f"log_{axis}", False) and low <= 0:
+        raise ConfigValidationError(
+            f"{context}.{key} must be positive when log_{axis} is true "
+            f"(a logarithmic axis cannot show {low})"
+        )
+
+    return limits
+
+
 def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     """
     Parse reporting configuration dictionary into ReportingConfig dataclass.
@@ -1850,8 +1892,9 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
             plots = []
             for plot_idx, plot_data in enumerate(metric_data["plots"]):
                 _ensure_mapping(plot_data, f"reporting.metrics.{metric_name}.plots[{plot_idx}]")
+                context = f"reporting.metrics.{metric_name}.plots[{plot_idx}]"
                 key_errors = _validate_allowed_keys(
-                    plot_data, ALLOWED_PLOT_KEYS, f"reporting.metrics.{metric_name}.plots[{plot_idx}]"
+                    plot_data, ALLOWED_PLOT_KEYS, context
                 )
                 if key_errors:
                     raise ConfigValidationError("\n".join(key_errors))
@@ -1868,6 +1911,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                     yaxis_label=plot_data.get("yaxis_label"),
                     log_x=plot_data.get("log_x", False),
                     log_y=plot_data.get("log_y", False),
+                    xaxis_range=_parse_axis_range(plot_data, "x", context),
+                    yaxis_range=_parse_axis_range(plot_data, "y", context),
                     colorscale=plot_data.get("colorscale", "Viridis"),
                     show_error_bars=plot_data.get("show_error_bars", True),
                     show_outliers=plot_data.get("show_outliers", True),
@@ -1893,8 +1938,9 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
         _ensure_list(data["default_plots"], "reporting.default_plots")
         for plot_idx, plot_data in enumerate(data["default_plots"]):
             _ensure_mapping(plot_data, f"reporting.default_plots[{plot_idx}]")
+            context = f"reporting.default_plots[{plot_idx}]"
             key_errors = _validate_allowed_keys(
-                plot_data, ALLOWED_PLOT_KEYS, f"reporting.default_plots[{plot_idx}]"
+                plot_data, ALLOWED_PLOT_KEYS, context
             )
             if key_errors:
                 raise ConfigValidationError("\n".join(key_errors))
@@ -1911,6 +1957,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                 yaxis_label=plot_data.get("yaxis_label"),
                 log_x=plot_data.get("log_x", False),
                 log_y=plot_data.get("log_y", False),
+                xaxis_range=_parse_axis_range(plot_data, "x", context),
+                yaxis_range=_parse_axis_range(plot_data, "y", context),
                 colorscale=plot_data.get("colorscale", "Viridis"),
                 show_error_bars=plot_data.get("show_error_bars", True),
                 show_outliers=plot_data.get("show_outliers", True),
