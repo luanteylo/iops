@@ -1,5 +1,6 @@
 """Plot generation abstractions for IOPS reports."""
 
+import math
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
 import plotly.graph_objects as go
@@ -74,11 +75,46 @@ class BasePlot(ABC):
         # Apply logarithmic axis scales last so they override any per-plot
         # axis type (e.g. 'category') set earlier in generate().
         if getattr(self.config, "log_x", False):
-            fig.update_xaxes(type='log')
+            fig.update_xaxes(type='log', **self._log_tick_options(fig, 'x'))
         if getattr(self.config, "log_y", False):
-            fig.update_yaxes(type='log')
+            fig.update_yaxes(type='log', **self._log_tick_options(fig, 'y'))
 
         return fig
+
+    # Below this many decades, decade-only ticks would leave an axis with one
+    # label or none, so the automatic ticks are kept instead.
+    _LOG_DECADES_FOR_DECADE_TICKS = 2
+
+    @staticmethod
+    def _log_tick_options(fig: go.Figure, axis: str) -> Dict[str, Any]:
+        """
+        Choose tick settings for a logarithmic axis.
+
+        Plotly labels minor log ticks by default, which reads as
+        "2, 0.001, 5, 2, 100u, 5, 2, 10u" once the data spans several decades.
+        One labelled tick per decade, written as a power of ten, is legible
+        instead. Data confined to less than two decades keeps the automatic
+        ticks: there they read as ordinary numbers, and a decade rule would
+        leave the axis with a single label or none at all.
+        """
+        values = [
+            value
+            for trace in fig.data
+            for value in (getattr(trace, axis, None) or [])
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        ]
+        if not values:
+            return {}
+
+        decades = math.log10(max(values) / min(values))
+        if decades < BasePlot._LOG_DECADES_FOR_DECADE_TICKS:
+            return {}
+
+        return {
+            "dtick": 1,
+            "exponentformat": "power",
+            "showexponent": "all",
+        }
 
     def _get_title(self, default: str) -> str:
         """Get plot title (custom or default)."""

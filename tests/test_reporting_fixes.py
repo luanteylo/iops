@@ -9,6 +9,7 @@ Covers:
   sections, best_results.min_samples).
 - report_config.yaml round trip keeping every PlotConfig field (log_y was lost).
 - Bar value labels readable for small metric values.
+- Log axis tick labels: one per decade for wide data, automatic for narrow data.
 - Scatter plot with a string-typed color_by variable.
 """
 
@@ -360,6 +361,57 @@ class TestBarPlotLabels:
         labels = list(plot.generate().data[0].text)
 
         assert labels == ["0.000956", "0.000957", "0.00091"]
+
+
+# ============================================================================
+# Log axis tick labels
+# ============================================================================
+
+class TestLogAxisTicks:
+    """Plotly labels minor log ticks, which is unreadable over several decades."""
+
+    def _yaxis(self, values, log_y=True):
+        df = pd.DataFrame({
+            "vars.levelmin": list(range(4, 4 + len(values))),
+            "metrics.l1_norm": values,
+        })
+        plot = BarPlot(
+            df=df,
+            metric="l1_norm",
+            plot_config=PlotConfig(type="bar", x_var="levelmin", log_y=log_y),
+            theme=ReportThemeConfig(),
+            var_column_fn=lambda v: f"vars.{v}",
+            metric_column_fn=lambda m: f"metrics.{m}",
+        )
+        return plot.generate().layout.yaxis
+
+    def test_wide_range_gets_one_tick_per_decade(self):
+        yaxis = self._yaxis([9.56e-4, 1.21e-4, 1.53e-5, 1.91e-6, 2.42e-7])
+
+        assert yaxis.type == "log"
+        assert yaxis.dtick == 1
+        assert yaxis.exponentformat == "power"
+
+    def test_narrow_range_keeps_automatic_ticks(self):
+        yaxis = self._yaxis([9.56e-4, 9.56e-4, 9.57e-4, 9.10e-4, 9.61e-4])
+
+        assert yaxis.type == "log"
+        assert yaxis.dtick is None
+        assert yaxis.exponentformat is None
+
+    def test_linear_axis_is_untouched(self):
+        yaxis = self._yaxis([9.56e-4, 1.21e-4, 1.53e-5], log_y=False)
+
+        assert yaxis.type is None
+        assert yaxis.dtick is None
+
+    def test_non_positive_values_do_not_raise(self):
+        # A log axis cannot show zero or negatives, but building the figure
+        # must not fail before Plotly gets a chance to drop them.
+        yaxis = self._yaxis([0.0, -1.0, 1e-6, 1e-2])
+
+        assert yaxis.type == "log"
+        assert yaxis.dtick == 1
 
 
 # ============================================================================
