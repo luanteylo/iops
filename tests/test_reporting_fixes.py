@@ -10,6 +10,7 @@ Covers:
 - report_config.yaml round trip keeping every PlotConfig field (log_y was lost).
 - Bar value labels readable for small metric values.
 - Log axis tick labels: one per decade for wide data, automatic for narrow data.
+- Explicit axis limits (xaxis_range / yaxis_range), including log conversion.
 - Scatter plot with a string-typed color_by variable.
 """
 
@@ -27,7 +28,7 @@ from iops.config.models import (
     ReportThemeConfig,
     SectionConfig,
 )
-from iops.config.loader import load_report_config
+from iops.config.loader import ConfigValidationError, load_report_config
 from iops.reporting.config_template import (
     _create_clean_report_config,
     _literal_block_dumper,
@@ -260,6 +261,8 @@ def _plot_config_with_every_field_changed() -> PlotConfig:
         yaxis_label="Bandwidth",
         log_x=True,
         log_y=True,
+        xaxis_range=[1.0, 64.0],
+        yaxis_range=[1e-6, 1e-2],
         colorscale="Plasma",
         show_error_bars=False,
         show_outliers=False,
@@ -468,3 +471,99 @@ class TestScatterStringValues:
         fig = self._make_plot(df, config).generate()
 
         assert any("bandwidth: 100.0000" in t for t in fig.data[0].text)
+
+
+# ============================================================================
+# Explicit axis limits
+# ============================================================================
+
+class TestAxisRange:
+    """xaxis_range / yaxis_range give control over the zoom Plotly would pick."""
+
+    DF = pd.DataFrame({
+        "vars.levelmin": [4, 5, 6, 7, 8],
+        "metrics.l1_norm": [9.56e-4, 9.56e-4, 9.57e-4, 9.10e-4, 9.61e-4],
+    })
+
+    def _yaxis(self, **cfg):
+        plot = ScatterPlot(
+            df=self.DF,
+            metric="l1_norm",
+            plot_config=PlotConfig(type="scatter", x_var="levelmin", **cfg),
+            theme=ReportThemeConfig(),
+            var_column_fn=lambda v: f"vars.{v}",
+            metric_column_fn=lambda m: f"metrics.{m}",
+        )
+        return plot.generate().layout.yaxis
+
+    def _load(self, plot_dict, tmp_path):
+        import yaml
+
+        path = tmp_path / "report_config.yaml"
+        with open(path, "w") as f:
+            yaml.dump({"reporting": {"enabled": True, "metrics": {
+                "l1_norm": {"plots": [plot_dict]}}}}, f)
+        return load_report_config(path)
+
+    def test_linear_range_passes_through(self):
+        yaxis = self._yaxis(yaxis_range=[0, 1e-3])
+
+        assert tuple(yaxis.range) == (0, 1e-3)
+
+    def test_log_range_is_converted_to_powers_of_ten(self):
+        # Plotly states a log axis range in log10 units; the config does not.
+        yaxis = self._yaxis(log_y=True, yaxis_range=[1e-6, 1e-2])
+
+        assert yaxis.type == "log"
+        assert tuple(yaxis.range) == (-6.0, -2.0)
+
+    def test_wide_explicit_range_gets_decade_ticks(self):
+        # The data spans 0.02 decades, so only the explicit range justifies them.
+        yaxis = self._yaxis(log_y=True, yaxis_range=[1e-6, 1e-2])
+
+        assert yaxis.dtick == 1
+
+    def test_narrow_explicit_range_keeps_automatic_ticks(self):
+        yaxis = self._yaxis(log_y=True, yaxis_range=[9e-4, 1e-3])
+
+        assert yaxis.dtick is None
+
+    def test_no_range_leaves_plotly_to_choose(self):
+        assert self._yaxis(log_y=True).range is None
+
+    def test_range_survives_report_config_round_trip(self, tmp_path):
+        original = PlotConfig(type="scatter", x_var="levelmin", log_y=True,
+                              yaxis_range=[1e-6, 1e-2], xaxis_range=[1.0, 64.0])
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"l1_norm": MetricPlotsConfig(plots=[original])},
+        )
+
+        clean = _create_clean_report_config(reporting, scripts=[])
+        restored = self._load(clean["metrics"]["l1_norm"]["plots"][0], tmp_path)
+
+        assert restored.metrics["l1_norm"].plots[0] == original
+
+    @pytest.mark.parametrize("bad_range, message", [
+        ([1, 2, 3], "list of two numbers"),
+        ([10, 1], "min < max"),
+        (["a", 2], "must be numbers"),
+        (5, "list of two numbers"),
+    ])
+    def test_invalid_range_is_rejected(self, bad_range, message, tmp_path):
+        with pytest.raises(ConfigValidationError, match=message):
+            self._load({"type": "scatter", "x_var": "levelmin",
+                        "yaxis_range": bad_range}, tmp_path)
+
+    @pytest.mark.parametrize("low", [0, -1])
+    def test_non_positive_bound_rejected_on_log_axis(self, low, tmp_path):
+        # A log axis cannot show zero or negative values at all.
+        with pytest.raises(ConfigValidationError, match="must be positive"):
+            self._load({"type": "scatter", "x_var": "levelmin", "log_y": True,
+                        "yaxis_range": [low, 1e-2]}, tmp_path)
+
+    def test_zero_bound_allowed_on_linear_axis(self, tmp_path):
+        restored = self._load({"type": "scatter", "x_var": "levelmin",
+                               "yaxis_range": [0, 1e-2]}, tmp_path)
+
+        assert restored.metrics["l1_norm"].plots[0].yaxis_range == [0.0, 1e-2]

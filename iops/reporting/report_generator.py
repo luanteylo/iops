@@ -706,6 +706,8 @@ class ReportGenerator:
                 yaxis_label=plot_data.get('yaxis_label'),
                 log_x=plot_data.get('log_x', False),
                 log_y=plot_data.get('log_y', False),
+                xaxis_range=plot_data.get('xaxis_range'),
+                yaxis_range=plot_data.get('yaxis_range'),
                 colorscale=plot_data.get('colorscale', 'Viridis'),
                 show_error_bars=plot_data.get('show_error_bars', True),
                 show_outliers=plot_data.get('show_outliers', True),

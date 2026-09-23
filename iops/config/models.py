@@ -471,6 +471,10 @@ class PlotConfig:
     log_x: bool = False  # Use logarithmic scale on the x-axis
     log_y: bool = False  # Use logarithmic scale on the y-axis
 
+    # Axis limits as [min, max], always in data units (not log units)
+    xaxis_range: Optional[List[float]] = None
+    yaxis_range: Optional[List[float]] = None
+
     # Plot-specific options
     colorscale: str = "Viridis"
     show_error_bars: bool = True

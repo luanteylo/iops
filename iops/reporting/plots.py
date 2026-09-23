@@ -79,14 +79,35 @@ class BasePlot(ABC):
         if getattr(self.config, "log_y", False):
             fig.update_yaxes(type='log', **self._log_tick_options(fig, 'y'))
 
+        # Explicit limits win over the range Plotly infers from the data.
+        x_range = self._axis_range('x')
+        if x_range:
+            fig.update_xaxes(range=x_range)
+        y_range = self._axis_range('y')
+        if y_range:
+            fig.update_yaxes(range=y_range)
+
         return fig
+
+    def _axis_range(self, axis: str) -> Optional[list]:
+        """Return the configured limits for an axis, in the units Plotly wants."""
+        limits = getattr(self.config, f"{axis}axis_range", None)
+        if not limits:
+            return None
+
+        low, high = limits
+        if getattr(self.config, f"log_{axis}", False):
+            # A logarithmic axis takes its range as powers of ten, while the
+            # configuration states plain data values. The loader has already
+            # rejected non-positive bounds here.
+            return [math.log10(low), math.log10(high)]
+        return [low, high]
 
     # Below this many decades, decade-only ticks would leave an axis with one
     # label or none, so the automatic ticks are kept instead.
     _LOG_DECADES_FOR_DECADE_TICKS = 2
 
-    @staticmethod
-    def _log_tick_options(fig: go.Figure, axis: str) -> Dict[str, Any]:
+    def _log_tick_options(self, fig: go.Figure, axis: str) -> Dict[str, Any]:
         """
         Choose tick settings for a logarithmic axis.
 
@@ -97,6 +118,12 @@ class BasePlot(ABC):
         ticks: there they read as ordinary numbers, and a decade rule would
         leave the axis with a single label or none at all.
         """
+        limits = getattr(self.config, f"{axis}axis_range", None)
+        if limits:
+            # Explicit limits decide what the axis shows, so they, not the data,
+            # say whether decade ticks would leave enough labels.
+            return self._decade_ticks(math.log10(limits[1] / limits[0]))
+
         values = [
             value
             for trace in fig.data
@@ -106,7 +133,11 @@ class BasePlot(ABC):
         if not values:
             return {}
 
-        decades = math.log10(max(values) / min(values))
+        return self._decade_ticks(math.log10(max(values) / min(values)))
+
+    @staticmethod
+    def _decade_ticks(decades: float) -> Dict[str, Any]:
+        """Decade ticks for an axis spanning `decades`, or {} to keep the defaults."""
         if decades < BasePlot._LOG_DECADES_FOR_DECADE_TICKS:
             return {}
 

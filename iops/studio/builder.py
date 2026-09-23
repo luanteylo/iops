@@ -943,6 +943,23 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                         rep.setdefault("metrics", {})[n] = {"plots": [{"type": "line"}]}
                 ui.button("Add metric", icon="add", on_click=restructure(add_metric)).props("flat dense")
 
+    def _axis_range_inputs(p: dict, key: str):
+        """Two bounds editing one [min, max] list; a half-filled pair stays unset."""
+        current = p.get(key) or [None, None]
+        low = ui.number(f"{key} min", value=current[0], format="%g").classes("grow")
+        high = ui.number(f"{key} max", value=current[1], format="%g").classes("grow")
+
+        def handler(_e=None):
+            bounds = [low.value, high.value]
+            if any(b is None or b == "" for b in bounds):
+                p.pop(key, None)
+            else:
+                p[key] = [float(b) for b in bounds]
+            sync_to_yaml()
+
+        low.on_value_change(handler)
+        high.on_value_change(handler)
+
     def _plot_card(plots, idx, key_prefix):
         p = plots[idx]
         with ui.card().classes("w-full p-2 gap-1"):
@@ -973,6 +990,9 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                                     on_change=setter(p, "log_x", drop_empty=False))
                         ui.checkbox("log_y", value=p.get("log_y", False),
                                     on_change=setter(p, "log_y", drop_empty=False))
+                    with ui.row().classes("gap-2 w-full"):
+                        _axis_range_inputs(p, "xaxis_range")
+                        _axis_range_inputs(p, "yaxis_range")
                     with ui.row().classes("gap-2 w-full"):
                         ui.input("colorscale", value=p.get("colorscale", "Viridis"), on_change=setter(p, "colorscale")).classes("grow")
                         ui.number("height", value=p.get("height"), min=100, format="%d",
