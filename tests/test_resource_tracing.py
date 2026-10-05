@@ -779,3 +779,59 @@ class TestResourceSummaryFile:
 
         summary_file = tmp_path / RESOURCE_SUMMARY_FILENAME
         assert not summary_file.exists()
+
+
+class TestAutoReportIncludesResourceMetrics:
+    """The report generated at the end of a run must see the resource summary."""
+
+    def test_auto_report_includes_gpu_metrics(self, sample_config_dict, tmp_path):
+        """Custom plots on resource metrics render in the automatic report.
+
+        Regression: the report used to be generated before the resource trace
+        summary was written, so it reported "Metric ... not found in results"
+        until regenerated with `iops report`.
+        """
+        from iops.execution.planner import GPU_TRACE_FILENAME_PREFIX
+        from iops.execution.runner import IOPSRunner
+
+        # The script writes the GPU trace itself, so the test needs neither a
+        # GPU nor nvidia-smi and does not depend on sampler timing.
+        trace_file = f"{{{{ execution_dir }}}}/{GPU_TRACE_FILENAME_PREFIX}node01_1.csv"
+        sample_config_dict["benchmark"]["repetitions"] = 1
+        sample_config_dict["benchmark"]["probes"] = {"gpu_sampling": True}
+        sample_config_dict["scripts"][0]["script_template"] = (
+            "#!/bin/bash\n"
+            "echo 'result: 100' > {{ execution_dir }}/output.txt\n"
+            f"cat > {trace_file} <<'TRACE'\n"
+            "timestamp,hostname,gpu_index,gpu_name,utilization_gpu_pct,utilization_mem_pct,"
+            "memory_used_mib,memory_total_mib,temperature_c,power_draw_w,clock_sm_mhz,clock_mem_mhz\n"
+            "1705123456.0,node01,0,Tesla V100,40,10,1024,32768,45,150.0,1500,877\n"
+            "1705123457.0,node01,0,Tesla V100,60,10,1024,32768,45,150.0,1500,877\n"
+            "TRACE\n"
+        )
+        sample_config_dict["reporting"] = {
+            "enabled": True,
+            "metrics": {
+                "gpu_avg_utilization_pct": {
+                    "plots": [{"type": "bar", "x_var": "nodes"}],
+                },
+            },
+        }
+
+        config_file = tmp_path / "test_config.yaml"
+        with open(config_file, "w") as f:
+            yaml.dump(sample_config_dict, f)
+        config = load_config(config_file)
+
+        args = MagicMock()
+        args.use_cache = False
+        args.cache_only = False
+        args.log_level = "INFO"
+        args.max_core_hours = None
+        IOPSRunner(config, args).run()
+
+        report = (Path(config.benchmark.workdir) / config.reporting.output_filename).read_text()
+        assert "Metric 'gpu_avg_utilization_pct' not found in results" not in report
+        assert "<h3>gpu_avg_utilization_pct</h3>" in report
+        assert "Resource Metrics Summary" in report
+        assert "Total Runtime" in report

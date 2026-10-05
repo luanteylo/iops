@@ -2470,6 +2470,7 @@ class IOPSRunner(HasLogger):
         test_count = 0
         adaptive_results = None
         benchmark_end_time = None
+        generate_report = False
 
         try:
             if self.effective_parallel > 1:
@@ -2621,9 +2622,9 @@ class IOPSRunner(HasLogger):
                     }
                 }
 
-            # Auto-generate report if enabled
-            if self.cfg.reporting and self.cfg.reporting.enabled:
-                self._generate_report()
+            # The report is generated at the end of the finally block, once the
+            # metadata update and resource trace summary it reads are written.
+            generate_report = bool(self.cfg.reporting and self.cfg.reporting.enabled)
 
             # Cleanup: Cancel any remaining SLURM allocations (e.g., single-allocation mode)
             self._cleanup_remaining_jobs()
@@ -2657,3 +2658,8 @@ class IOPSRunner(HasLogger):
             if self.status_rollup is not None:
                 self.status_rollup.close(complete=True)
                 self.status_rollup = None
+
+            # Auto-generate report last: it reads the run metadata (timing,
+            # system environment) and __iops_resource_summary.csv written above.
+            if generate_report:
+                self._generate_report()
