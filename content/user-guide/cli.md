@@ -51,6 +51,7 @@ iops run <config.yaml> [options]
 - `--fail-fast` - Stop execution on first test failure
 - `--parallel N` - Max concurrent test executions (overrides `benchmark.parallel` in config)
 - `--machine NAME` - Apply machine-specific config overrides (or set `IOPS_MACHINE` env var)
+- `--no-hooks` - Do not fire the [hooks](../hooks) configured in the YAML file
 - `--max-core-hours N` - Set core-hours budget limit (SLURM only)
 - `--time-estimate SEC` - Estimated test duration in seconds
 - `--log-file PATH` - Write logs to file
@@ -67,6 +68,7 @@ iops run benchmark.yaml --cache-only
 iops run benchmark.yaml --parallel 4
 iops run benchmark.yaml --max-core-hours 1000 --time-estimate 300
 iops run benchmark.yaml --machine cluster   # or: export IOPS_MACHINE=cluster
+iops run benchmark.yaml --no-hooks
 ```
 
 ### check - Validate Configuration
@@ -367,6 +369,30 @@ iops convert multi.xml --benchmark ior_bench --dry-run
 ```
 
 See the [JUBE Conversion guide](../jube-conversion) for concept mapping, limitations, and post-conversion validation.
+
+### hooks - Test Run Hooks
+
+```bash
+iops hooks test <config.yaml> [options]
+```
+
+Renders the hooks defined in the configuration against a sample context (a run of 100 tests, with the numbers adjusted to agree with each hook's first threshold) and runs them now, so a mail command or a notification script can be checked before a long run. Nothing is benchmarked and no run folder is created: `workdir` in the context is the configured base working directory. For each hook the rendered command, exit code, and output are printed. The exit status is 1 if any hook failed.
+
+**Options:**
+- `--hook NAME` - Only fire this hook (repeatable)
+- `--event EVENT` - Only fire hooks for this event
+- `--render-only` - Print the rendered commands without running them
+- `--machine NAME` - Apply machine-specific config overrides
+
+**Examples:**
+
+```bash
+iops hooks test benchmark.yaml
+iops hooks test benchmark.yaml --hook halfway_mail
+iops hooks test benchmark.yaml --event finish --render-only
+```
+
+See the [Hooks guide](../hooks) for the full feature description.
 
 ### --version - Show Version
 

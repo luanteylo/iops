@@ -4,6 +4,7 @@ from iops.execution.planner import (BasePlanner, STATUS_FILENAME, TRACE_FILENAME
                                     GPU_TRACE_FILENAME_PREFIX, IO_TRACE_FILENAME_PREFIX,
                                     IO_TARGETS_FILENAME_PREFIX)
 from iops.execution.executors import BaseExecutor
+from iops.execution.hooks import HookManager, describe_hook_trigger
 from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
@@ -230,6 +231,22 @@ class IOPSRunner(HasLogger):
 
         if self.effective_parallel > 1:
             self.logger.info(f"Parallel execution: {self.effective_parallel} concurrent tests")
+
+        # Run-level hooks (user commands fired on run events). --no-hooks
+        # disables them; compare with True since tests pass Mock args.
+        self.hooks: Optional[HookManager] = None
+        self.stop_reason: Optional[str] = None  # "fail_fast" when a failure stopped the run
+        if cfg.hooks:
+            if getattr(args, 'no_hooks', False) is True:
+                self.logger.info(f"Hooks: {len(cfg.hooks)} configured, disabled by --no-hooks")
+            else:
+                self.hooks = HookManager(
+                    hooks=cfg.hooks,
+                    benchmark_name=cfg.benchmark.name,
+                    workdir=Path(cfg.benchmark.workdir),
+                    logger=self.logger,
+                )
+                self.logger.info(f"Hooks: {len(cfg.hooks)} configured")
 
         # Thread safety locks for parallel execution
         self._jobs_lock = threading.Lock()
@@ -1548,8 +1565,8 @@ class IOPSRunner(HasLogger):
         # Fall back to string representation
         raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
-    def _generate_report(self):
-        """Generate HTML report after execution completes."""
+    def _generate_report(self) -> Optional[Path]:
+        """Generate HTML report after execution completes. Returns its path, or None on failure."""
         try:
             from iops.reporting.report_generator import ReportGenerator
 
@@ -1573,11 +1590,13 @@ class IOPSRunner(HasLogger):
 
             self.logger.info(f"✓ Report generated: {report_path}")
             self.logger.info("=" * 70)
+            return Path(report_path)
 
         except Exception as e:
             self.logger.warning(f"Failed to generate report: {e}")
             self.logger.warning("You can manually generate the report later using:")
             self.logger.warning(f"  iops report {self.cfg.benchmark.workdir}")
+            return None
 
     def _cleanup_remaining_jobs(self) -> None:
         """
@@ -1652,6 +1671,19 @@ class IOPSRunner(HasLogger):
                     self.logger.info(f"    Description: {constraint.description}")
                 self.logger.info("")
             self.logger.info("Note: Invalid parameter combinations will be filtered during matrix generation.")
+            self.logger.info("")
+
+        # Report hooks if configured (they never fire in dry-run mode)
+        if self.cfg.hooks:
+            self.logger.info("=" * 70)
+            self.logger.info("HOOKS CONFIGURED (not fired in dry-run):")
+            self.logger.info("=" * 70)
+            for hook in self.cfg.hooks:
+                self.logger.info(f"  • {hook.name}: {describe_hook_trigger(hook)}")
+                self.logger.info(f"    Command: {hook.command.strip()}")
+            if getattr(self.args, 'no_hooks', False) is True:
+                self.logger.info("Note: --no-hooks is set, so they would not fire in a real run either.")
+            self.logger.info("Test them with: iops hooks test <config>")
             self.logger.info("")
 
         # Generate all test scripts using the planner
@@ -2154,8 +2186,19 @@ class IOPSRunner(HasLogger):
                 f"→ {status} {cache_marker}{metrics_str}"
             )
 
+        # Track core-hours
+        core_hours_used = self._compute_core_hours(test)
+        with self._budget_lock:
+            if used_cache:
+                self.saved_core_hours += core_hours_used
+            else:
+                self.accumulated_core_hours += core_hours_used
+
+        self._record_hook_status(status)
+
         # Check for fail-fast mode
         if getattr(self.args, 'fail_fast', False) and status in ("FAILED", "ERROR"):
+            self.stop_reason = "fail_fast"
             self.logger.error("=" * 70)
             self.logger.error(f"Test failed and --fail-fast is enabled. Stopping execution.")
             self.logger.error("=" * 70)
@@ -2178,15 +2221,39 @@ class IOPSRunner(HasLogger):
         self.planner.record_completed_test(test)
         self.completed_tests.append(test)
 
-        # Track core-hours
-        core_hours_used = self._compute_core_hours(test)
-        with self._budget_lock:
-            if used_cache:
-                self.saved_core_hours += core_hours_used
-            else:
-                self.accumulated_core_hours += core_hours_used
-
         return False  # continue
+
+    def _start_hooks(self) -> None:
+        """
+        Fire start hooks once, after the planner yielded its first test.
+
+        Planners build their matrix lazily on the first request, so this is
+        the earliest point where the total number of tests is known.
+        """
+        if self.hooks is not None and not self.hooks.started:
+            self.hooks.start(total=self.planner.get_progress().get('total', 0))
+
+    def _run_outcome(self, crashed: bool) -> str:
+        """Why the run ended, as reported to finish hooks."""
+        if crashed:
+            return "crashed"
+        if self.interrupted:
+            return "interrupted"
+        if self.stop_reason == "fail_fast":
+            return "fail_fast"
+        if self.budget_exceeded:
+            return "budget_exceeded"
+        return "completed"
+
+    def _record_hook_status(self, status: str) -> None:
+        """Feed one concluded test to the hook manager (main thread only)."""
+        if self.hooks is None:
+            return
+        self.hooks.record(
+            status,
+            total=self.planner.get_progress().get('total', 0),
+            core_hours=self.accumulated_core_hours,
+        )
 
     def _show_progress(self, test_count: int) -> None:
         """Display progress and budget information periodically."""
@@ -2258,6 +2325,7 @@ class IOPSRunner(HasLogger):
             if test is None:
                 break
 
+            self._start_hooks()
             test_count += 1
 
             self.logger.debug(
@@ -2282,6 +2350,7 @@ class IOPSRunner(HasLogger):
                     if execution_index:
                         self._write_status_file(test, status='SKIPPED')
                     self.planner.record_completed_test(test)
+                    self._record_hook_status('SKIPPED')
                     continue
 
                 # An interrupt may have landed between next_test() and here;
@@ -2330,6 +2399,8 @@ class IOPSRunner(HasLogger):
                 batch = []
                 if available > 0 and not self.interrupted:
                     batch = self.planner.next_tests(available)
+                    if batch:
+                        self._start_hooks()
                     for test in batch:
                         test_count += 1
 
@@ -2363,6 +2434,7 @@ class IOPSRunner(HasLogger):
                             if execution_index:
                                 self._write_status_file(test, status='SKIPPED')
                             self.planner.record_completed_test(test)
+                            self._record_hook_status('SKIPPED')
                             continue
 
                         # An interrupt may have landed mid-batch; stop
@@ -2471,6 +2543,8 @@ class IOPSRunner(HasLogger):
         adaptive_results = None
         benchmark_end_time = None
         generate_report = False
+        report_path = None
+        crashed = False
 
         try:
             if self.effective_parallel > 1:
@@ -2633,6 +2707,10 @@ class IOPSRunner(HasLogger):
             self.interrupted = True
             self.logger.info("\n\nExecution interrupted by user (Ctrl+C)")
 
+        except Exception:
+            crashed = True
+            raise
+
         finally:
             if benchmark_end_time is None:
                 benchmark_end_time = datetime.now()
@@ -2662,4 +2740,15 @@ class IOPSRunner(HasLogger):
             # Auto-generate report last: it reads the run metadata (timing,
             # system environment) and __iops_resource_summary.csv written above.
             if generate_report:
-                self._generate_report()
+                report_path = self._generate_report()
+
+            # Finish hooks go last so they can point to the report. finish()
+            # waits for pending hooks, so a notification is not lost when
+            # the process exits right after.
+            if self.hooks is not None:
+                self.hooks.finish(
+                    outcome=self._run_outcome(crashed),
+                    total=self.planner.get_progress().get('total', 0),
+                    core_hours=self.accumulated_core_hours,
+                    report_path=report_path,
+                )
