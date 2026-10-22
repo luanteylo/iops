@@ -39,6 +39,7 @@ Located in `workdir/run_XXX/`:
 | `__iops_index.json` | Fast execution lookup for `iops find` |
 | `__iops_status_rollup.json` | Aggregated per-repetition status for `iops find` and watch mode |
 | `__iops_resource_summary.csv` | Aggregated CPU/memory, GPU, and I/O metrics |
+| `__iops_hooks.log` | Output and exit status of fired [hooks](../hooks) (only if hooks are configured and fired) |
 | `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
 | `__iops_plots/` | PDF exports of report plots (requires kaleido) |
 

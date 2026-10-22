@@ -43,6 +43,7 @@ IOPS uses Jinja2 templating throughout the configuration to enable dynamic value
 | `scripts[].parser.parser_script` | **No** | Yes | Yes |
 | `vars[].expr` | Yes | No | Yes |
 | `output.sink.path` | Yes | No | Yes |
+| `hooks[].command` | Yes (own context, see [Hooks](../hooks#command-context)) | No | Yes |
 
 ### Standard Context Variables
 

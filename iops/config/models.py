@@ -357,6 +357,58 @@ class ConstraintConfig:
 
 
 @dataclass
+class HookThreshold:
+    """
+    A trigger point for a hook: an absolute count or a percentage.
+
+    Written in YAML as an integer (``5``) or as a string ending in ``%``
+    (``"25%"``). The meaning of the number depends on the event: for
+    ``progress`` a percentage is relative to the total number of tests, for
+    ``failures`` it is the failure rate among tests that ran.
+    """
+    value: float
+    percent: bool = False
+
+    def __str__(self) -> str:
+        number = int(self.value) if float(self.value).is_integer() else self.value
+        return f"{number}%" if self.percent else str(number)
+
+
+@dataclass
+class HookConfig:
+    """
+    A user command run by IOPS when a run event happens.
+
+    Hooks run on the host running IOPS (not inside the benchmark jobs), in the
+    background, and never affect the benchmark: a failing or slow hook is
+    logged and the run continues.
+
+    Attributes:
+        name: Unique identifier, used in logs and in ``iops hooks test``.
+        event: One of HOOK_EVENTS.
+        command: Shell command, rendered with Jinja2 against the hook context.
+        at: One-shot thresholds, each fired once when first reached.
+        every: Repeating threshold, fired at every multiple of its value.
+        when: Run outcomes that fire a ``finish`` hook (default: all).
+        min_tests: For percentage ``failures`` thresholds, the number of tests
+            that must have run before the rate is considered.
+        timeout: Seconds before the command is killed.
+    """
+    name: str
+    event: str
+    command: str
+    at: List[HookThreshold] = field(default_factory=list)
+    every: Optional[HookThreshold] = None
+    when: Optional[List[str]] = None
+    min_tests: int = 10
+    timeout: float = 60.0
+
+
+HOOK_EVENTS = ("start", "progress", "failures", "consecutive_failures", "finish")
+HOOK_OUTCOMES = ("completed", "interrupted", "budget_exceeded", "fail_fast", "crashed")
+
+
+@dataclass
 class CommandConfig:
     template: str
     labels: Dict[str, Any]
@@ -595,3 +647,4 @@ class GenericBenchmarkConfig:
     output: OutputConfig
     constraints: List[ConstraintConfig] = field(default_factory=list)
     reporting: Optional[ReportingConfig] = None
+    hooks: List[HookConfig] = field(default_factory=list)
