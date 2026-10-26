@@ -33,7 +33,7 @@
     {
       "@type": "Role",
       "roleName": "numpex-catalog:spack_package",
-      "url": "https://gitlab.inria.fr/lgouveia/iops-spack"
+      "url": "https://github.com/spack/spack-packages/blob/develop/repos/spack_repo/builtin/packages/py_iops_benchmark/package.py"
     }
   ]
 }

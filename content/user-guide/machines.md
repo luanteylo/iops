@@ -55,6 +55,7 @@ The distinction follows the Kubernetes convention: lists of **named objects** (e
 | `scripts` | Named objects (`name`) | **Merge by name**, append new |
 | `scripts[].parser.metrics` | Named objects (`name`) | **Merge by name**, append new |
 | `constraints` | Named objects (`name`) | **Merge by name**, append new |
+| `hooks` | Named objects (`name`) | **Merge by name**, append new |
 | `output.sink.exclude` | Strings | **Replace** |
 | `output.sink.include` | Strings | **Replace** |
 | `reporting.metrics.<m>.plots` | Anonymous objects | **Replace** |
@@ -100,6 +101,7 @@ machines:
     output: {}        # Optional
     constraints: []   # Optional
     reporting: {}     # Optional
+    hooks: []         # Optional
 ```
 
 Machine names are arbitrary identifiers (e.g., `laptop`, `cluster_a`, `grid5000_lyon`).

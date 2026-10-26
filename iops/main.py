@@ -1,6 +1,7 @@
 import argparse
 import logging
 from pathlib import Path
+from typing import Optional
 
 from iops.logger import setup_logger
 from iops.execution.runner import IOPSRunner
@@ -66,7 +67,7 @@ def _preprocess_args():
     first_arg = sys.argv[1]
 
     # Skip if it's already a known command, a flag, or --version/--help
-    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache', 'convert', 'studio'}
+    known_commands = {'run', 'check', 'find', 'report', 'generate', 'archive', 'cache', 'convert', 'studio', 'hooks'}
     if first_arg in known_commands or first_arg.startswith('-'):
         return
 
@@ -120,6 +121,7 @@ Examples:
   iops generate                     Create config template
   iops studio                       Launch the local web UI
   iops deps                         Show optional dependency status
+  iops hooks test config.yaml       Fire the configured hooks once
 """
     )
     parser.add_argument('--version', action='version', version=f'IOPS Tool v{load_version()}')
@@ -146,6 +148,8 @@ Examples:
                             help="Max concurrent test executions (overrides config)")
     run_parser.add_argument('--machine', type=str, default=None, metavar='NAME',
                             help="Apply machine-specific config overrides (or set IOPS_MACHINE env var)")
+    run_parser.add_argument('--no-hooks', action='store_true',
+                            help="Do not fire the hooks configured in the YAML file")
     run_parser.add_argument('--meline', action='store_true',
                             help=argparse.SUPPRESS)  # Easter egg: hide banner
     _add_common_args(run_parser)
@@ -377,6 +381,29 @@ Examples:
                                help="Do not open a browser window automatically")
     _add_common_args(studio_parser)
 
+    # ---- hooks command with subcommands ----
+    hooks_parser = subparsers.add_parser('hooks', help='Inspect and test run hooks',
+                                         description='Inspect and test the hooks defined in a configuration file.')
+    hooks_subparsers = hooks_parser.add_subparsers(dest='hooks_command', title='hooks commands',
+                                                   metavar='<hooks-command>')
+
+    # hooks test
+    hooks_test_parser = hooks_subparsers.add_parser(
+        'test', help='Fire hooks once with sample values',
+        description='Render each hook command against a sample run context (a run of 100 '
+                    'tests, matched to the hook threshold) and run it now, so a command can be checked before a long run. '
+                    'Nothing is benchmarked and no run folder is created.')
+    hooks_test_parser.add_argument('config_file', type=Path, help="Path to the YAML configuration file")
+    hooks_test_parser.add_argument('--hook', type=str, action='append', default=None, metavar='NAME',
+                                   help="Only fire this hook (repeatable)")
+    hooks_test_parser.add_argument('--event', type=str, default=None, metavar='EVENT',
+                                   help="Only fire hooks for this event")
+    hooks_test_parser.add_argument('--render-only', action='store_true',
+                                   help="Print the rendered commands without running them")
+    hooks_test_parser.add_argument('--machine', type=str, default=None, metavar='NAME',
+                                   help="Apply machine-specific config overrides (or set IOPS_MACHINE env var)")
+    _add_common_args(hooks_test_parser)
+
     # ---- deps command ----
     deps_parser = subparsers.add_parser('deps', help='Show optional dependency status',
                                         description='List the optional dependencies of IOPS, '
@@ -560,6 +587,60 @@ def log_execution_context(cfg: GenericBenchmarkConfig, args: argparse.Namespace,
 
 
 
+def _hooks_test(args, logger) -> Optional[int]:
+    """Fire the selected hooks once against a sample context. Returns 1 if any failed."""
+    from iops.execution.hooks import (describe_hook_trigger, hook_environment,
+                                      render_hook_command, run_hook_command, sample_hook_context)
+
+    try:
+        cfg = load_generic_config(args.config_file, logger=logger, machine=args.machine,
+                                  create_dirs=False)
+    except ConfigValidationError as e:
+        logger.error(f"Configuration error: {e}")
+        return 1
+
+    hooks = cfg.hooks
+    if args.hook:
+        unknown = sorted(set(args.hook) - {h.name for h in hooks})
+        if unknown:
+            logger.error(f"Unknown hook(s): {', '.join(unknown)}. "
+                         f"Defined: {', '.join(h.name for h in hooks) or 'none'}")
+            return 1
+        hooks = [h for h in hooks if h.name in args.hook]
+    if args.event:
+        hooks = [h for h in hooks if h.event == args.event]
+    if not hooks:
+        logger.warning("No hooks to fire (none defined, or none match the filters)")
+        return
+
+    workdir = Path(cfg.benchmark.workdir)
+    failures = 0
+    for hook in hooks:
+        ctx = sample_hook_context(hook, cfg.benchmark.name, workdir)
+        rendered = render_hook_command(hook.command, ctx)
+        print(f"== {hook.name}: {describe_hook_trigger(hook)}")
+        print(f"   command: {rendered}")
+        if args.render_only:
+            continue
+        result = run_hook_command(hook, rendered, hook_environment(ctx), cwd=workdir)
+        if result.error:
+            print(f"   error: {result.error}")
+        elif result.timed_out:
+            print(f"   timed out after {hook.timeout:g}s")
+        else:
+            print(f"   exit code {result.exit_code} ({result.duration:.2f}s)")
+        for name, text in (("stdout", result.stdout), ("stderr", result.stderr)):
+            if text.strip():
+                print(f"   {name}:")
+                for line in text.rstrip().splitlines():
+                    print(f"     {line}")
+        if not result.ok:
+            failures += 1
+    if failures:
+        logger.error(f"{failures} of {len(hooks)} hook(s) failed")
+        return 1
+
+
 def main():
     args = parse_arguments()
     logger = initialize_logger(args)
@@ -577,6 +658,13 @@ def main():
         if args.check and missing:
             return 1
         return
+
+    # ---- hooks command ----
+    if args.command == 'hooks':
+        if args.hooks_command != 'test':
+            logger.error("Usage: iops hooks test <config.yaml> [--hook NAME] [--event EVENT] [--render-only]")
+            return 1
+        return _hooks_test(args, logger)
 
     # ---- studio command ----
     if args.command == 'studio':
