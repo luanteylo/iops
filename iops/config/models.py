@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, Union
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -497,6 +497,15 @@ class ReportThemeConfig:
     style: str = "plotly_white"
     colors: Optional[List[str]] = None
     font_family: str = "Segoe UI, Tahoma, Geneva, Verdana, sans-serif"
+    # Plotly colorscale (name or list of colors) used by every colorbar that
+    # does not set its own: built-in sections and custom plots alike.
+    colorscale: Union[str, List[Any]] = "Viridis"
+    # Per built-in section overrides, keyed by section name (e.g. variable_impact)
+    section_colorscales: Dict[str, Union[str, List[Any]]] = field(default_factory=dict)
+
+    def colorscale_for(self, section: str) -> Union[str, List[Any]]:
+        """Colorscale for a built-in report section."""
+        return self.section_colorscales.get(section, self.colorscale)
 
 
 @dataclass
@@ -528,7 +537,7 @@ class PlotConfig:
     yaxis_range: Optional[List[float]] = None
 
     # Plot-specific options
-    colorscale: str = "Viridis"
+    colorscale: Optional[Union[str, List[Any]]] = None  # None uses theme.colorscale
     show_error_bars: bool = True
     show_outliers: bool = True  # For box plots
 

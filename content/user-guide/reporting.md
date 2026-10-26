@@ -254,6 +254,8 @@ metrics:
         yaxis_label: "Bandwidth (MB/s)"
 ```
 
+Points are colored by the metric value using the plot's `colorscale` (see [Colorscales](#colorscales)).
+
 **When to use**: Identifying outliers, trends across execution order, or verifying result consistency. This is the default first plot in legacy report mode.
 
 #### 2. Bar Charts
@@ -299,6 +301,7 @@ metrics:
         y_var: "processes_per_node"
         color_by: "bandwidth"       # Color points by bandwidth value
         size_by: "block_size"       # Size points by block_size
+        colorscale: "Cividis"       # Colorbar for color_by (optional)
         title: "Parameter Space Exploration"
 ```
 
@@ -317,7 +320,7 @@ metrics:
         title: "Bandwidth Heatmap"
 ```
 
-**Supported colorscales**: `"Viridis"`, `"Plasma"`, `"Inferno"`, `"Magma"`, `"Cividis"`, `"Blues"`, `"Reds"`, `"RdBu"`, etc.
+Any Plotly colorscale works; see [Colorscales](#colorscales) for the accepted values and for setting one scale for the whole report.
 
 #### 6. Box Plots
 
@@ -369,7 +372,7 @@ metrics:
 
 **Optional Parameters**:
 - `z_metric` (string): Metric to display as z-axis/surface (default: current metric)
-- `colorscale` (string): Plotly colorscale name (default: "Viridis")
+- `colorscale` (string): Plotly colorscale name (default: `theme.colorscale`, see [Colorscales](#colorscales))
 
 ```yaml
 metrics:
@@ -394,7 +397,7 @@ Multi-dimensional visualization showing all numeric swept variables and the metr
 **Required Parameters**: None (automatically includes all numeric swept variables)
 
 **Optional Parameters**:
-- `colorscale` (string): Colorscale for lines colored by metric value (default: "Viridis")
+- `colorscale` (string): Colorscale for lines colored by metric value (default: `theme.colorscale`, see [Colorscales](#colorscales))
 
 ```yaml
 metrics:
@@ -421,7 +424,7 @@ Multi-variable heatmap showing parameter space coverage with hierarchical row/co
 - `sort_rows_by` (string): Sort rows by - "index" (variable values, default) or "values" (metric aggregation)
 - `sort_cols_by` (string): Sort columns by - "index" (variable values, default) or "values" (metric aggregation)
 - `sort_ascending` (boolean): Sort direction for "values" mode (default: false = highest values first)
-- `colorscale` (string): Plotly colorscale name (default: "Viridis")
+- `colorscale` (string): Plotly colorscale name (default: `theme.colorscale`, see [Colorscales](#colorscales))
 
 ```yaml
 metrics:
@@ -502,6 +505,48 @@ reporting:
       - "#AB63FA"               # Purple
       - "#FFA15A"               # Orange
 ```
+
+### Colorscales
+
+Every plot with a colorbar uses a Plotly colorscale: the built-in Variable Impact, Parallel Coordinates, and Bayesian Parameter Evolution sections, and the custom `heatmap`, `surface_3d`, `coverage_heatmap`, `parallel_coordinates`, `execution_scatter`, and `scatter` (with `color_by`) plots. All of them default to Viridis. Set `theme.colorscale` to change them at once:
+
+```yaml
+reporting:
+  theme:
+    colorscale: "Cividis"            # Every colorbar in the report
+```
+
+To give a built-in section its own scale, list it under `section_colorscales`. Sections not listed keep `theme.colorscale`:
+
+```yaml
+reporting:
+  theme:
+    colorscale: "Cividis"
+    section_colorscales:
+      variable_impact: "Plasma"
+      parallel_coordinates: "Turbo"
+      bayesian_parameter_evolution: "Blues"
+```
+
+A custom plot's own `colorscale` takes precedence over both:
+
+```yaml
+reporting:
+  theme:
+    colorscale: "Cividis"
+  metrics:
+    bandwidth:
+      plots:
+        - type: "heatmap"            # Uses Cividis from the theme
+          x_var: "nodes"
+          y_var: "block_size"
+        - type: "heatmap"            # Uses its own scale
+          x_var: "nodes"
+          y_var: "block_size"
+          colorscale: "RdBu_r"
+```
+
+A colorscale is either the name of a Plotly scale, in any case (`"Viridis"`, `"Plasma"`, `"Inferno"`, `"Magma"`, `"Cividis"`, `"Turbo"`, `"Blues"`, `"Reds"`, `"RdBu"`, `"RdYlGn"`, and the rest of [Plotly's built-in scales](https://plotly.com/python/builtin-colorscales/)), with `_r` appended to reverse it (`"RdYlGn_r"`), or an explicit list of colors (`["#f7fbff", "#08306b"]`) or of `[position, color]` stops (`[[0, "white"], [0.5, "gold"], [1, "darkred"]]`). `iops check` rejects anything else and names the offending field.
 
 ### Font Customization
 

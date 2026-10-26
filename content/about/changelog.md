@@ -5,6 +5,16 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
+## [Unreleased]
+
+### Added
+
+- `reporting.theme.colorscale` sets the colorscale of every colorbar in the report at once, and `reporting.theme.section_colorscales` overrides it for single built-in sections (`variable_impact`, `parallel_coordinates`, `bayesian_parameter_evolution`). Those sections were fixed to Viridis with no way to change them, and a custom plot needed its own `colorscale` entry to depart from Viridis. A plot's own `colorscale` still takes precedence, so plots can be customized independently, and a plot without one now follows the theme. Both options are also written to `report_config.yaml`, so a regenerated report keeps them, and the theme scale can be set in the Studio report editor. See [Colorscales](/iops/user-guide/reporting/#colorscales).
+
+### Changed
+
+- Colorscale values are now validated when the configuration is loaded, so `iops check` reports a misspelled name such as `Virdis`, along with the field it appears in, instead of the report showing Plotly's error message where the plot should be. This also applies to plot types that draw no colorbar, which used to ignore the value. Anything Plotly accepts is valid: a named scale in any case, a reversed scale with an `_r` suffix, or an explicit list of colors.
+
 ## [3.5.10] - 2026-10-26
 
 ### Added

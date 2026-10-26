@@ -112,7 +112,9 @@ ALLOWED_REPORTING_KEYS = {
     "enabled", "output_dir", "output_filename", "theme", "sections",
     "best_results", "metrics", "default_plots", "plot_defaults", "gallery",
 }
-ALLOWED_THEME_KEYS = {"style", "colors", "font_family"}
+ALLOWED_THEME_KEYS = {"style", "colors", "font_family", "colorscale", "section_colorscales"}
+# Built-in report sections that draw a colorbar
+ALLOWED_SECTION_COLORSCALE_KEYS = {"variable_impact", "parallel_coordinates", "bayesian_parameter_evolution"}
 ALLOWED_SECTIONS_KEYS = {
     "test_summary", "best_results", "variable_impact", "parallel_coordinates",
     "bayesian_evolution", "bayesian_parameter_evolution", "resource_sampling", "custom_plots",
@@ -1983,6 +1985,34 @@ def _parse_axis_range(plot_data: dict, axis: str, context: str) -> Optional[List
     return limits
 
 
+def _parse_colorscale(value: Any, context: str) -> Any:
+    """
+    Validate a colorscale and return it unchanged.
+
+    Plotly is the judge of what it accepts: a named scale in any case,
+    reversed with an ``_r`` suffix, or an explicit list of colors.
+    """
+    import plotly.graph_objects as go
+
+    try:
+        go.Heatmap(colorscale=value)
+    except ValueError:
+        raise ConfigValidationError(
+            f"{context} is not a valid Plotly colorscale: {value!r}. Use a named scale "
+            f"such as 'Viridis', 'Cividis', 'Plasma' or 'RdBu' (add '_r' to reverse it), "
+            f"or a list of colors"
+        ) from None
+    return value
+
+
+def _parse_plot_colorscale(plot_data: dict, context: str) -> Any:
+    """Return a plot's own colorscale, or None to fall back to the theme."""
+    value = plot_data.get("colorscale")
+    if value is None:
+        return None
+    return _parse_colorscale(value, f"{context}.colorscale")
+
+
 def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
     """
     Parse reporting configuration dictionary into ReportingConfig dataclass.
@@ -2011,10 +2041,29 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
         key_errors = _validate_allowed_keys(theme_data, ALLOWED_THEME_KEYS, "reporting.theme")
         if key_errors:
             raise ConfigValidationError("\n".join(key_errors))
+        colorscale = theme_data.get("colorscale")
+        if colorscale is None:
+            colorscale = ReportThemeConfig.colorscale
+        else:
+            colorscale = _parse_colorscale(colorscale, "reporting.theme.colorscale")
+        section_colorscales = theme_data.get("section_colorscales") or {}
+        _ensure_mapping(section_colorscales, "reporting.theme.section_colorscales")
+        key_errors = _validate_allowed_keys(
+            section_colorscales, ALLOWED_SECTION_COLORSCALE_KEYS, "reporting.theme.section_colorscales"
+        )
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+        section_colorscales = {
+            section: _parse_colorscale(value, f"reporting.theme.section_colorscales.{section}")
+            for section, value in section_colorscales.items()
+            if value is not None
+        }
         theme_cfg = ReportThemeConfig(
             style=theme_data.get("style", "plotly_white"),
             colors=theme_data.get("colors"),
             font_family=theme_data.get("font_family", "Segoe UI, Tahoma, Geneva, Verdana, sans-serif"),
+            colorscale=colorscale,
+            section_colorscales=section_colorscales,
         )
 
     # Parse sections (optional)
@@ -2102,7 +2151,7 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                     log_y=plot_data.get("log_y", False),
                     xaxis_range=_parse_axis_range(plot_data, "x", context),
                     yaxis_range=_parse_axis_range(plot_data, "y", context),
-                    colorscale=plot_data.get("colorscale", "Viridis"),
+                    colorscale=_parse_plot_colorscale(plot_data, context),
                     show_error_bars=plot_data.get("show_error_bars", True),
                     show_outliers=plot_data.get("show_outliers", True),
                     height=plot_data.get("height"),
@@ -2148,7 +2197,7 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                 log_y=plot_data.get("log_y", False),
                 xaxis_range=_parse_axis_range(plot_data, "x", context),
                 yaxis_range=_parse_axis_range(plot_data, "y", context),
-                colorscale=plot_data.get("colorscale", "Viridis"),
+                colorscale=_parse_plot_colorscale(plot_data, context),
                 show_error_bars=plot_data.get("show_error_bars", True),
                 show_outliers=plot_data.get("show_outliers", True),
                 height=plot_data.get("height"),

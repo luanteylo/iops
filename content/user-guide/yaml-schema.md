@@ -735,6 +735,11 @@ reporting:
                                 #   "plotly_dark", "ggplot2", "seaborn", "simple_white"
     colors: list                #   Custom color palette (hex codes)
     font_family: string         #   Font family (e.g., "Arial, sans-serif")
+    colorscale: string|list     #   Plotly colorscale for every colorbar (default: "Viridis")
+    section_colorscales:        #   Per built-in section override of colorscale
+      variable_impact: string|list
+      parallel_coordinates: string|list
+      bayesian_parameter_evolution: string|list
 
   sections:                     # Optional: section visibility
     test_summary: boolean       #   Execution statistics (default: true)

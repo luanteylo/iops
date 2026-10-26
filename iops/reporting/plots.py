@@ -55,6 +55,11 @@ class BasePlot(ABC):
         self._get_var_column = var_column_fn
         self._get_metric_column = metric_column_fn
 
+    @property
+    def colorscale(self):
+        """The plot's own colorscale, or the report-wide theme default."""
+        return self.config.colorscale or self.theme.colorscale
+
     @abstractmethod
     def generate(self) -> go.Figure:
         """Generate the plot and return Plotly figure."""
@@ -475,7 +480,7 @@ class ScatterPlot(BasePlot):
             marker=dict(
                 size=12,
                 color=marker_color,
-                colorscale=self.config.colorscale,
+                colorscale=self.colorscale,
                 showscale=True,
                 colorbar=colorbar,
                 line=dict(width=1, color='white'),
@@ -532,7 +537,7 @@ class HeatmapPlot(BasePlot):
             x=[str(x) for x in df_pivot.columns],
             y=[str(y) for y in df_pivot.index],
             z=self._to_list(df_pivot.values),
-            colorscale=self.config.colorscale,
+            colorscale=self.colorscale,
             colorbar=dict(title=z_metric),
             hovertemplate=f'{x_var}: %{{x}}<br>{y_var}: %{{y}}<br>{z_metric}: %{{z:.4f}}<extra></extra>',
         ))
@@ -657,7 +662,7 @@ class Surface3DPlot(BasePlot):
             x=self._to_list(df_pivot.columns),
             y=self._to_list(df_pivot.index),
             z=self._to_list(df_pivot.values),
-            colorscale=self.config.colorscale,
+            colorscale=self.colorscale,
             colorbar=dict(title=z_metric),
             hovertemplate=f'{x_var}: %{{x}}<br>{y_var}: %{{y}}<br>{z_metric}: %{{z:.4f}}<extra></extra>',
         ))
@@ -738,7 +743,7 @@ class ExecutionScatterPlot(BasePlot):
             marker=dict(
                 size=10,
                 color=y_values,
-                colorscale=self.config.colorscale,
+                colorscale=self.colorscale,
                 showscale=True,
                 colorbar=dict(title=self.metric),
                 line=dict(width=1, color='white'),
@@ -801,7 +806,7 @@ class ParallelCoordinatesPlot(BasePlot):
         fig = go.Figure(data=go.Parcoords(
             line=dict(
                 color=self._to_list(df_grouped[metric_col]),
-                colorscale=self.config.colorscale,
+                colorscale=self.colorscale,
                 showscale=True,
                 colorbar=dict(title=self.metric),
             ),
@@ -1022,7 +1027,7 @@ class CoverageHeatmapPlot(BasePlot):
         fig = go.Figure()
 
         # Customize colorscale to handle NaN if show_missing is True
-        colorscale = self.config.colorscale
+        colorscale = self.colorscale
         nan_mask = pd.isna(z_values)
         if self.config.show_missing and nan_mask.any():
             # Use a custom colorscale that shows NaN differently

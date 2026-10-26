@@ -846,6 +846,8 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                      on_change=lambda e: (_set_nested(rep, ["theme", "font_family"], e.value), sync_to_yaml())).classes("w-full")
             ui.input("colors (comma-separated hex)", value=_values_text(theme.get("colors")),
                      on_change=lambda e: (_set_nested(rep, ["theme", "colors"], _csv_list(e.value) or None), sync_to_yaml())).classes("w-full")
+            ui.input("colorscale (all colorbars)", value=theme.get("colorscale", ""), placeholder="Viridis",
+                     on_change=lambda e: (_set_nested(rep, ["theme", "colorscale"], e.value), sync_to_yaml())).classes("w-full")
         with _card("Sections"):
             sections = rep.get("sections") or {}
             with ui.column().classes("gap-0 w-full"):
@@ -994,7 +996,8 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                         _axis_range_inputs(p, "xaxis_range")
                         _axis_range_inputs(p, "yaxis_range")
                     with ui.row().classes("gap-2 w-full"):
-                        ui.input("colorscale", value=p.get("colorscale", "Viridis"), on_change=setter(p, "colorscale")).classes("grow")
+                        ui.input("colorscale", value=p.get("colorscale", ""), placeholder="theme default",
+                                 on_change=setter(p, "colorscale")).classes("grow")
                         ui.number("height", value=p.get("height"), min=100, format="%d",
                                   on_change=setter(p, "height", cast=int)).classes("grow")
                         ui.number("width", value=p.get("width"), min=100, format="%d",

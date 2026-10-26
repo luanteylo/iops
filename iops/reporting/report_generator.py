@@ -210,6 +210,12 @@ class ReportGenerator:
             return self.report_config.theme.colors
         return None
 
+    def _section_colorscale(self, section: str):
+        """Colorscale for a built-in section's colorbar, from the report theme."""
+        if self.report_config and self.report_config.theme:
+            return self.report_config.theme.colorscale_for(section)
+        return 'Viridis'
+
     def __init__(
         self,
         workdir: Path,
@@ -708,7 +714,7 @@ class ReportGenerator:
                 log_y=plot_data.get('log_y', False),
                 xaxis_range=plot_data.get('xaxis_range'),
                 yaxis_range=plot_data.get('yaxis_range'),
-                colorscale=plot_data.get('colorscale', 'Viridis'),
+                colorscale=plot_data.get('colorscale'),
                 show_error_bars=plot_data.get('show_error_bars', True),
                 show_outliers=plot_data.get('show_outliers', True),
                 height=plot_data.get('height'),
@@ -729,6 +735,8 @@ class ReportGenerator:
             style=data.get('theme', {}).get('style', 'plotly_white'),
             colors=data.get('theme', {}).get('colors'),
             font_family=data.get('theme', {}).get('font_family', 'Segoe UI, sans-serif'),
+            colorscale=data.get('theme', {}).get('colorscale') or 'Viridis',
+            section_colorscales=data.get('theme', {}).get('section_colorscales') or {},
         )
 
         sections = SectionConfig(
@@ -3305,7 +3313,7 @@ class ReportGenerator:
                     marker=dict(
                         size=10,
                         color=metric_values,
-                        colorscale='Viridis',
+                        colorscale=self._section_colorscale('bayesian_parameter_evolution'),
                         showscale=(idx == 1),  # Only show colorbar for first subplot
                         colorbar=dict(
                             title=target_metric,
@@ -3790,7 +3798,7 @@ class ReportGenerator:
             fig = go.Figure(data=go.Parcoords(
                 line=dict(
                     color=metric_values,
-                    colorscale='Viridis',
+                    colorscale=self._section_colorscale('parallel_coordinates'),
                     showscale=True,
                     cmin=min(metric_values),
                     cmax=max(metric_values),
@@ -3860,7 +3868,7 @@ class ReportGenerator:
                 y=sorted_impacts,
                 marker=dict(
                     color=sorted_impacts,
-                    colorscale='Viridis',
+                    colorscale=self._section_colorscale('variable_impact'),
                     showscale=True,
                     colorbar=dict(title='Impact Score')
                 ),

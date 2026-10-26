@@ -851,6 +851,9 @@ output:
 #   theme:
 #     style: "plotly_white"  # plotly, plotly_dark, ggplot2, seaborn, simple_white
 #     colors: ["#3498db", "#e74c3c", "#2ecc71"]
+#     colorscale: "Viridis"  # Colorbars of all plots; a plot's own colorscale wins
+#     section_colorscales:   # Override for single built-in sections
+#       variable_impact: "Plasma"
 #
 #   # Optional: Control report sections (all true by default unless noted)
 #   sections:

@@ -196,7 +196,7 @@ class TestDataclassDefaults:
         assert plot.title is None
         assert plot.xaxis_label is None
         assert plot.yaxis_label is None
-        assert plot.colorscale == "Viridis"
+        assert plot.colorscale is None  # Falls back to theme.colorscale
         assert plot.show_error_bars is True
         assert plot.show_outliers is True
         assert plot.height is None
@@ -536,7 +536,7 @@ class TestParseReportingConfig:
         plot = config.metrics["bandwidth"].plots[0]
         assert plot.type == "bar"
         assert plot.x_var == "nodes"
-        assert plot.colorscale == "Viridis"  # Default
+        assert plot.colorscale is None  # Default: theme.colorscale
         assert plot.show_error_bars is True  # Default
         assert plot.show_outliers is True  # Default
         assert plot.per_variable is False  # Default
