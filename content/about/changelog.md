@@ -5,7 +5,7 @@ weight: 40
 
 All notable changes to IOPS are documented here.
 
-## [3.5.10.dev0] - Unreleased
+## [3.5.10] - 2026-10-26
 
 ### Added
 
@@ -23,6 +23,9 @@ All notable changes to IOPS are documented here.
 - The `report_config.yaml` written after a run dropped most plot options: only `type`, `x_var`, `y_var`, `group_by`, `title`, and `colorscale` were kept, so `log_x`, `log_y`, axis labels, sizes, error-bar and outlier toggles, `z_metric`, `color_by`, `size_by`, and the coverage heatmap options were lost. Because `iops report` auto-loads that file in preference to the run metadata, a regenerated report silently ignored them, even though the report produced at the end of the run honored them. Every non-default plot field is now written, for both `reporting.metrics` plots and `reporting.default_plots`. Runs created with an earlier version keep the truncated file; restore the missing options by hand, or delete the file so `iops report` falls back to the configuration stored in the run metadata.
 - Bar plot value labels used two decimal places, so metrics below 0.005 were all labeled `0.00`. Labels now show three significant digits (`0.000956`).
 - With `fail_fast` enabled, the core-hours of the test that stopped the run were not added to the total, because the run stopped before they were counted. They are now included, so the budget total and hooks see the full cost.
+- The automatic HTML report produced at the end of a run now includes resource sampling data. It was generated before the run metadata was finalized and `__iops_resource_summary.csv` was written, so custom plots on resource metrics (such as `gpu_avg_utilization_pct`) reported "not found in results", and the Resource Sampling table, System Environment section, and total runtime were missing until the report was regenerated with `iops report`. The report is now built as the last step of a run that completes normally.
+- The version probe wrote an `__iops_versions.json` that no JSON parser could read whenever a version command printed more than one line on macOS or BSD, or printed a tab on any system. Its escaping relied on a GNU-only `sed` idiom and a tab substitution that never took effect. Escaping now uses bash parameter expansion and produces identical, valid output on bash 3.2 and 5.x.
+- Studio no longer hangs on targets whose terminal truncates long input lines. Every command was sent as a single line, so one longer than the target tty's input buffer was cut short and the shell waited forever for the missing newline, leaving the session unusable. Environment discovery hit this on clusters such as PLAFRIM, which truncate at 1024 bytes. Commands that would exceed the budget are now streamed to a temporary script on the target and invoked with a short line (sourced, so `module load` and `export` still persist). Streamed transfers to macOS and BSD targets also work now: they decoded with `base64 -d "$file"`, which BSD `base64` rejects.
 
 ## [3.5.9] - 2026-08-19
 

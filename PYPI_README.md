@@ -89,7 +89,7 @@ output:
 
 ## Documentation
 
-Full documentation, examples, and tutorials: **[https://lgouveia.gitlabpages.inria.fr/iops/](https://lgouveia.gitlabpages.inria.fr/iops/)**
+Full documentation, examples, and tutorials: **[https://iops-benchmark.com](https://iops-benchmark.com)**
 
 ## License
 
