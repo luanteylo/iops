@@ -14,19 +14,10 @@ import os
 from jinja2 import Environment, StrictUndefined, TemplateSyntaxError
 from jinja2.exceptions import UndefinedError
 
-# Optional pyarrow for parquet support
-try:
-    import pyarrow
-    PYARROW_AVAILABLE = True
-except ImportError:
-    PYARROW_AVAILABLE = False
+from iops.deps import install_hint, is_available
 
-# Optional scikit-optimize for Bayesian optimization
-try:
-    import skopt
-    SKOPT_AVAILABLE = True
-except ImportError:
-    SKOPT_AVAILABLE = False
+PYARROW_AVAILABLE = is_available("parquet")   # parquet output sinks
+SKOPT_AVAILABLE = is_available("bayesian")    # Bayesian search method
 
 from iops.config.models import (
     ConfigValidationError,
@@ -58,12 +49,16 @@ from iops.config.models import (
     BestResultsConfig,
     PlotDefaultsConfig,
     GalleryConfig,
+    HookConfig,
+    HookThreshold,
+    HOOK_EVENTS,
+    HOOK_OUTCOMES,
 )
 
 # ----------------- Allowed Keys for Config Validation ----------------- #
 
 # Allowed keys for each config section (used for unknown key detection)
-ALLOWED_TOP_LEVEL_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting", "machines"}
+ALLOWED_TOP_LEVEL_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting", "hooks", "machines"}
 
 ALLOWED_BENCHMARK_KEYS = {
     "name", "description", "workdir", "repetitions", "cache_file",
@@ -109,7 +104,9 @@ ALLOWED_BAYESIAN_CONFIG_KEYS = {
 
 ALLOWED_CONSTRAINT_KEYS = {"name", "rule", "violation_policy", "description"}
 
-ALLOWED_MACHINE_OVERRIDE_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting"}
+ALLOWED_MACHINE_OVERRIDE_KEYS = {"benchmark", "vars", "command", "scripts", "output", "constraints", "reporting", "hooks"}
+
+ALLOWED_HOOK_KEYS = {"name", "event", "command", "at", "every", "when", "min_tests", "timeout"}
 
 ALLOWED_REPORTING_KEYS = {
     "enabled", "output_dir", "output_filename", "theme", "sections",
@@ -128,7 +125,8 @@ ALLOWED_BEST_RESULTS_KEYS = {"top_n", "show_command", "min_samples"}
 ALLOWED_PLOT_DEFAULTS_KEYS = {"height", "width", "margin"}
 ALLOWED_PLOT_KEYS = {
     "type", "x_var", "y_var", "z_metric", "group_by", "color_by", "size_by",
-    "title", "xaxis_label", "yaxis_label", "log_x", "log_y", "colorscale",
+    "title", "xaxis_label", "yaxis_label", "log_x", "log_y",
+    "xaxis_range", "yaxis_range", "colorscale",
     "show_error_bars", "show_outliers", "height", "width", "per_variable",
     "include_metric",
     "row_vars", "col_var", "aggregation", "show_missing", "sort_rows_by",
@@ -1595,6 +1593,9 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
     if "reporting" in data and data["reporting"] is not None:
         reporting_cfg = _parse_reporting_config(data["reporting"])
 
+    # ---- hooks (optional) ----
+    hooks = _parse_hooks(data.get("hooks"))
+
     return GenericBenchmarkConfig(
         benchmark=benchmark,
         vars=vars_cfg,
@@ -1603,11 +1604,188 @@ def _parse_to_config(data: Dict[str, Any], config_dir: Path) -> GenericBenchmark
         scripts=scripts,
         output=output,
         reporting=reporting_cfg,
+        hooks=hooks,
     )
 
 
+def _validate_hooks(cfg: GenericBenchmarkConfig) -> None:
+    """Semantic validation of the 'hooks' section."""
+    from iops.execution.hooks import render_hook_command, sample_hook_context
+
+    threshold_events = ("progress", "failures", "consecutive_failures")
+    seen: Set[str] = set()
+
+    for idx, hook in enumerate(cfg.hooks):
+        where = f"hooks[{idx}] ('{hook.name}')"
+
+        if hook.name in seen:
+            raise ConfigValidationError(f"{where}: duplicate hook name '{hook.name}'")
+        seen.add(hook.name)
+
+        if hook.event is None:
+            raise ConfigValidationError(
+                f"{where} is missing 'event'. Valid events: {', '.join(HOOK_EVENTS)}"
+            )
+        if hook.event not in HOOK_EVENTS:
+            raise ConfigValidationError(
+                f"{where}.event must be one of {', '.join(HOOK_EVENTS)} (got '{hook.event}')"
+            )
+
+        ok, err = _validate_jinja_template(hook.command, f"{where}.command")
+        if not ok:
+            raise ConfigValidationError(err)
+        if hook.command is None or not str(hook.command).strip():
+            raise ConfigValidationError(f"{where}.command must not be empty")
+
+        if hook.event in threshold_events:
+            if not hook.at and hook.every is None:
+                raise ConfigValidationError(
+                    f"{where}: '{hook.event}' hooks need 'at' and/or 'every' to say when they fire"
+                )
+        elif hook.at or hook.every is not None:
+            raise ConfigValidationError(
+                f"{where}: 'at' and 'every' do not apply to '{hook.event}' hooks"
+            )
+
+        thresholds = [(f"{where}.at", t) for t in hook.at]
+        if hook.every is not None:
+            thresholds.append((f"{where}.every", hook.every))
+        for field_name, t in thresholds:
+            if t.percent:
+                if hook.event == "consecutive_failures":
+                    raise ConfigValidationError(
+                        f"{field_name}: consecutive_failures takes counts only (got '{t}')"
+                    )
+                if not 0 < t.value <= 100:
+                    raise ConfigValidationError(
+                        f"{field_name}: percentage must be greater than 0% and at most 100% (got '{t}')"
+                    )
+            elif t.value < 1:
+                raise ConfigValidationError(f"{field_name}: count must be at least 1 (got {t})")
+        if hook.event == "failures" and hook.every is not None and hook.every.percent:
+            raise ConfigValidationError(
+                f"{where}.every: the failure rate can go down as well as up, so a repeating "
+                f"percentage is ambiguous. Use 'at' with a list of percentages, or a count for 'every'"
+            )
+
+        if hook.when is not None:
+            if hook.event != "finish":
+                raise ConfigValidationError(f"{where}: 'when' only applies to 'finish' hooks")
+            invalid = [w for w in hook.when if w not in HOOK_OUTCOMES]
+            if invalid or not hook.when:
+                raise ConfigValidationError(
+                    f"{where}.when must list outcomes from {', '.join(HOOK_OUTCOMES)} (got {hook.when})"
+                )
+
+        if hook.min_tests < 1:
+            raise ConfigValidationError(f"{where}.min_tests must be at least 1 (got {hook.min_tests})")
+        if hook.timeout <= 0:
+            raise ConfigValidationError(f"{where}.timeout must be positive (got {hook.timeout:g})")
+
+        # Render against a sample context to catch misspelled context names
+        # (e.g. {{ progres.total }}) at check time rather than mid-run
+        try:
+            render_hook_command(
+                hook.command,
+                sample_hook_context(hook, cfg.benchmark.name, Path(cfg.benchmark.workdir)),
+            )
+        except Exception as e:
+            raise ConfigValidationError(
+                f"{where}.command cannot be rendered: {e}. Hook commands see the run context "
+                f"(event, progress, run, benchmark, workdir, report_path, hostname, message, os_env), "
+                f"not the benchmark variables"
+            )
+
+
+def _parse_hook_threshold(value: Any, field: str) -> HookThreshold:
+    """Parse a hook threshold: an integer count, or a string percentage like "25%"."""
+    if isinstance(value, bool):
+        raise ConfigValidationError(
+            f"{field} must be an integer count or a percentage string like \"25%\" (got {value!r})"
+        )
+    if isinstance(value, int):
+        return HookThreshold(value=float(value), percent=False)
+    if isinstance(value, str) and value.strip().endswith("%"):
+        number = value.strip()[:-1].strip()
+        try:
+            return HookThreshold(value=float(number), percent=True)
+        except ValueError:
+            pass
+    if isinstance(value, float):
+        raise ConfigValidationError(
+            f"{field} must be an integer count; write percentages as a string, "
+            f"e.g. \"{value:g}%\" (got {value!r})"
+        )
+    raise ConfigValidationError(
+        f"{field} must be an integer count or a percentage string like \"25%\" (got {value!r})"
+    )
+
+
+def _parse_hooks(hooks_data: Any) -> List[HookConfig]:
+    """Parse the optional top-level 'hooks' list. Semantics are checked in validate_generic_config."""
+    if hooks_data is None:
+        return []
+    _ensure_list(hooks_data, "hooks")
+
+    hooks: List[HookConfig] = []
+    for idx, h in enumerate(hooks_data):
+        where = f"hooks[{idx}]"
+        if not isinstance(h, dict):
+            raise ConfigValidationError(f"{where} must be a mapping (got {_type_label(h)})")
+
+        # YAML 1.1 reads a bare 'on' key as the boolean True
+        if True in h:
+            raise ConfigValidationError(
+                f"{where} has an 'on' key, which YAML reads as the boolean true. "
+                f"Use 'event:' to name the event."
+            )
+
+        key_errors = _validate_allowed_keys(h, ALLOWED_HOOK_KEYS, where)
+        if key_errors:
+            raise ConfigValidationError("\n".join(key_errors))
+
+        name = h.get("name") or f"hook_{idx}"
+        where = f"hooks[{idx}] ('{name}')"
+
+        at_raw = h.get("at")
+        if at_raw is None:
+            at_raw = []
+        elif not isinstance(at_raw, list):
+            at_raw = [at_raw]
+        at = [_parse_hook_threshold(v, f"{where}.at") for v in at_raw]
+
+        every = None
+        if h.get("every") is not None:
+            every = _parse_hook_threshold(h["every"], f"{where}.every")
+
+        when = h.get("when")
+        if when is not None and not isinstance(when, list):
+            when = [when]
+
+        min_tests = h.get("min_tests", 10)
+        if isinstance(min_tests, bool) or not isinstance(min_tests, int):
+            raise ConfigValidationError(f"{where}.min_tests must be an integer (got {min_tests!r})")
+
+        timeout = h.get("timeout", 60)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ConfigValidationError(f"{where}.timeout must be a number of seconds (got {timeout!r})")
+
+        hooks.append(HookConfig(
+            name=str(name),
+            event=h.get("event"),
+            command=h.get("command"),
+            at=at,
+            every=every,
+            when=when,
+            min_tests=min_tests,
+            timeout=float(timeout),
+        ))
+    return hooks
+
+
 def load_generic_config(
-    config_path: Path, logger, dry_run: bool = False, machine: Optional[str] = None
+    config_path: Path, logger, dry_run: bool = False, machine: Optional[str] = None,
+    create_dirs: bool = True,
 ) -> GenericBenchmarkConfig:
     """
     Load and parse a YAML configuration file into a GenericBenchmarkConfig object.
@@ -1624,6 +1802,8 @@ def load_generic_config(
         logger: Logger instance for debug messages
         dry_run: If True, create 'dryrun_' folders instead of 'run_' folders
         machine: Machine name for config overrides (or use IOPS_MACHINE env var)
+        create_dirs: If False, skip step 5 and leave the filesystem untouched
+            (workdir stays the configured base, not a run folder)
 
     Returns:
         Validated GenericBenchmarkConfig object with workdir created
@@ -1669,7 +1849,8 @@ def load_generic_config(
     validate_generic_config(cfg)
 
     # 5. Create workdir (side effect)
-    create_workdir(cfg, logger, dry_run=dry_run)
+    if create_dirs:
+        create_workdir(cfg, logger, dry_run=dry_run)
 
     return cfg
 
@@ -1739,18 +1920,16 @@ def _parse_gallery_config(data: Any) -> GalleryConfig:
 
     # Downscaling needs Pillow, which is an optional dependency. Flag it now so the
     # user is not told after a long run that images were embedded at full size.
-    if max_width is not None and data.get("enabled", False):
-        try:
-            import PIL  # noqa: F401
-        except ImportError:
-            import warnings
-            warnings.warn(
-                "reporting.gallery.max_width is set but Pillow is not installed; "
-                "gallery images will be embedded at full size. "
-                "Install it with: pip install iops-benchmark[gallery]",
-                UserWarning,
-                stacklevel=4,
-            )
+    if max_width is not None and data.get("enabled", False) and not is_available("gallery"):
+        import warnings
+        from iops.deps import install_hint
+        warnings.warn(
+            "reporting.gallery.max_width is set but Pillow is not installed; "
+            "gallery images will be embedded at full size. "
+            f"Install it with: {install_hint(['gallery'])}",
+            UserWarning,
+            stacklevel=4,
+        )
 
     return GalleryConfig(
         enabled=data.get("enabled", False),
@@ -1761,6 +1940,47 @@ def _parse_gallery_config(data: Any) -> GalleryConfig:
         caption_vars=caption_vars,
         title=data.get("title", "Image Gallery"),
     )
+
+
+def _parse_axis_range(plot_data: dict, axis: str, context: str) -> Optional[List[float]]:
+    """
+    Validate and return a plot's axis limits, or None when unset.
+
+    The limits are written in data units even for a logarithmic axis, where
+    Plotly itself expects powers of ten; the conversion happens at render time
+    so that the configuration stays readable.
+    """
+    key = f"{axis}axis_range"
+    value = plot_data.get(key)
+    if value is None:
+        return None
+
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ConfigValidationError(
+            f"{context}.{key} must be a list of two numbers [min, max]"
+        )
+
+    limits = []
+    for bound in value:
+        if isinstance(bound, bool) or not isinstance(bound, (int, float)):
+            raise ConfigValidationError(
+                f"{context}.{key} bounds must be numbers, got {bound!r}"
+            )
+        limits.append(float(bound))
+
+    low, high = limits
+    if low >= high:
+        raise ConfigValidationError(
+            f"{context}.{key} must have min < max, got [{low}, {high}]"
+        )
+
+    if plot_data.get(f"log_{axis}", False) and low <= 0:
+        raise ConfigValidationError(
+            f"{context}.{key} must be positive when log_{axis} is true "
+            f"(a logarithmic axis cannot show {low})"
+        )
+
+    return limits
 
 
 def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
@@ -1861,8 +2081,9 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
             plots = []
             for plot_idx, plot_data in enumerate(metric_data["plots"]):
                 _ensure_mapping(plot_data, f"reporting.metrics.{metric_name}.plots[{plot_idx}]")
+                context = f"reporting.metrics.{metric_name}.plots[{plot_idx}]"
                 key_errors = _validate_allowed_keys(
-                    plot_data, ALLOWED_PLOT_KEYS, f"reporting.metrics.{metric_name}.plots[{plot_idx}]"
+                    plot_data, ALLOWED_PLOT_KEYS, context
                 )
                 if key_errors:
                     raise ConfigValidationError("\n".join(key_errors))
@@ -1879,6 +2100,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                     yaxis_label=plot_data.get("yaxis_label"),
                     log_x=plot_data.get("log_x", False),
                     log_y=plot_data.get("log_y", False),
+                    xaxis_range=_parse_axis_range(plot_data, "x", context),
+                    yaxis_range=_parse_axis_range(plot_data, "y", context),
                     colorscale=plot_data.get("colorscale", "Viridis"),
                     show_error_bars=plot_data.get("show_error_bars", True),
                     show_outliers=plot_data.get("show_outliers", True),
@@ -1904,8 +2127,9 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
         _ensure_list(data["default_plots"], "reporting.default_plots")
         for plot_idx, plot_data in enumerate(data["default_plots"]):
             _ensure_mapping(plot_data, f"reporting.default_plots[{plot_idx}]")
+            context = f"reporting.default_plots[{plot_idx}]"
             key_errors = _validate_allowed_keys(
-                plot_data, ALLOWED_PLOT_KEYS, f"reporting.default_plots[{plot_idx}]"
+                plot_data, ALLOWED_PLOT_KEYS, context
             )
             if key_errors:
                 raise ConfigValidationError("\n".join(key_errors))
@@ -1922,6 +2146,8 @@ def _parse_reporting_config(data: Dict[str, Any]) -> ReportingConfig:
                 yaxis_label=plot_data.get("yaxis_label"),
                 log_x=plot_data.get("log_x", False),
                 log_y=plot_data.get("log_y", False),
+                xaxis_range=_parse_axis_range(plot_data, "x", context),
+                yaxis_range=_parse_axis_range(plot_data, "y", context),
                 colorscale=plot_data.get("colorscale", "Viridis"),
                 show_error_bars=plot_data.get("show_error_bars", True),
                 show_outliers=plot_data.get("show_outliers", True),
@@ -2270,7 +2496,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         if not SKOPT_AVAILABLE:
             raise ConfigValidationError(
                 "Bayesian optimization requires the 'scikit-optimize' library.\n"
-                "Install with: pip install iops-benchmark[bayesian]"
+                f"Install with: {install_hint(['bayesian'])}"
             )
         bc = cfg.benchmark.bayesian_config
         if bc is None:
@@ -2590,6 +2816,9 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
                 f"(got '{constraint.violation_policy}')"
             )
 
+    # ---- hooks ----
+    _validate_hooks(cfg)
+
     # ---- command ----
     # Validate Jinja2 syntax first: it produces a curated message for
     # non-string values, which .strip() would crash on
@@ -2724,7 +2953,7 @@ def validate_generic_config(cfg: GenericBenchmarkConfig) -> None:
         raise ConfigValidationError(
             "pyarrow is required for parquet output. "
             "Install it with: pip install pyarrow\n"
-            "Or install iops with parquet support: pip install iops-benchmark[parquet]"
+            f"Or install iops with parquet support: {install_hint(['parquet'])}"
         )
 
     # Validate that requested fields exist in config (static check)

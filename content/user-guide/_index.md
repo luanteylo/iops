@@ -7,7 +7,7 @@ Guides for IOPS features and capabilities.
 
 ## Configuration
 
-- **[YAML Schema Reference](yaml-schema)** - All configuration options (`benchmark`, `vars`, `command`, `scripts`, `output`, `reporting`, `machines`)
+- **[YAML Schema Reference](yaml-schema)** - All configuration options (`benchmark`, `vars`, `command`, `scripts`, `output`, `reporting`, `hooks`, `machines`)
 - **[Templating and Context](templating-and-context)** - Jinja2 syntax, dynamic values, conditionals, and context variables per section
 - **[Matrix Generation](matrix-generation)** - How IOPS builds the parameter space, including conditional variables
 - **[Machine Overrides](machines)** - One config for multiple systems with per-machine overrides
@@ -24,6 +24,7 @@ Guides for IOPS features and capabilities.
 - **[Single-Allocation Mode](single-allocation-mode)** - Run all tests in one SLURM allocation (MPI setup, troubleshooting)
 - **[Result Caching](caching)** - Skip redundant tests
 - **[Budget Control](budget-control)** - Limit core-hours with `max_core_hours` and `cores_expr`
+- **[Hooks](hooks)** - Run commands (mail, rsync, scripts) on run events: start, progress, failures, finish
 - **[Resource Sampling](resource-tracing)** - Sample CPU, memory, and GPU metrics (power, utilization, temperature) during execution
 
 ## Results & Analysis

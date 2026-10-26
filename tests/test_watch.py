@@ -705,7 +705,7 @@ class TestWatchModeErrorWithoutRich:
         # Simulate the error that would be raised
         expected_msg = (
             "Watch mode requires the 'rich' library.\n"
-            "Install with: pip install iops-benchmark[watch]"
+            'Install with: pip install "iops-benchmark[watch]"'
         )
         error = WatchModeError(expected_msg)
 

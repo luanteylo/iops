@@ -1,0 +1,103 @@
+# IOPS Hooks Example
+#
+# Runs a small local sweep and fires hooks at run events. Hook commands run on
+# the host running IOPS, never inside the benchmark jobs, and a failing hook
+# never affects the run. Here the hooks only print messages and append to a
+# file so the example works anywhere; replace them with `mail`, `curl`,
+# `rsync`, or your own notification script.
+#
+# Usage:
+#   iops check examples/hooks/hooks.yaml
+#   iops hooks test examples/hooks/hooks.yaml          # fire every hook once
+#   iops hooks test examples/hooks/hooks.yaml --render-only
+#   iops run examples/hooks/hooks.yaml
+#   iops run examples/hooks/hooks.yaml --no-hooks      # run without hooks
+#
+# Hook output is recorded in <run dir>/__iops_hooks.log.
+
+benchmark:
+  name: "Hooks Example"
+  workdir: "./workdir_hooks"
+  executor: local
+  search_method: exhaustive
+  repetitions: 1
+
+vars:
+  size:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 4, 8]
+
+  repeat:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 3, 4, 5]
+
+command:
+  template: "echo {{ size * repeat }}"
+
+scripts:
+  - name: "work"
+    submit: "bash"
+    script_template: |
+      #!/bin/bash
+      {{ command.template }} > {{ execution_dir }}/out.txt
+    parser:
+      file: "{{ execution_dir }}/out.txt"
+      metrics:
+        - name: value
+      parser_script: |
+        def parse(file_path):
+            with open(file_path) as f:
+                return {"value": int(f.read().strip())}
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results.csv"
+
+hooks:
+  # Once, after the planner yields the first test (the total is known).
+  - name: announce_start
+    event: start
+    command: "echo {{ message | quote }}"
+
+  # One-shot thresholds: a percentage (string ending in %) or a count.
+  - name: halfway
+    event: progress
+    at: ["25%", "50%", "75%"]
+    command: "echo {{ message | quote }} >> {{ workdir | quote }}/progress_notes.txt"
+
+  # Repeating threshold: every 5 concluded tests.
+  - name: ticker
+    event: progress
+    every: 5
+    command: "echo 'concluded {{ progress.completed }} of {{ progress.total }}'"
+
+  # Failure rate among tests that ran, ignored until 10 have run (min_tests).
+  - name: failure_rate
+    event: failures
+    at: ["20%"]
+    min_tests: 10
+    command: "echo {{ message | quote }}"
+
+  # Three failures in a row; re-arms after a success breaks the streak.
+  - name: failure_streak
+    event: consecutive_failures
+    at: [3]
+    command: "echo {{ message | quote }}"
+
+  # Only when the run did not complete normally. The same values are exported
+  # as IOPS_* environment variables for scripts.
+  - name: abnormal_end
+    event: finish
+    when: [interrupted, budget_exceeded, fail_fast, crashed]
+    timeout: 30
+    command: 'echo "run ended: $IOPS_OUTCOME after $IOPS_ELAPSED_SECONDS s"'
+
+  # On every outcome. report_path is empty when no report was generated.
+  - name: wrap_up
+    event: finish
+    command: "echo {{ message | quote }}"

@@ -7,10 +7,15 @@ Covers:
 - Variable impact plot rendering when all impact scores are zero.
 - Report config serializer/deserializer round trip (coverage_heatmap fields,
   sections, best_results.min_samples).
+- report_config.yaml round trip keeping every PlotConfig field (log_y was lost).
+- Bar value labels readable for small metric values.
+- Log axis tick labels: one per decade for wide data, automatic for narrow data.
+- Explicit axis limits (xaxis_range / yaxis_range), including log conversion.
 - Scatter plot with a string-typed color_by variable.
 """
 
 import json
+from dataclasses import fields
 
 import pandas as pd
 import pytest
@@ -23,8 +28,13 @@ from iops.config.models import (
     ReportThemeConfig,
     SectionConfig,
 )
-from iops.reporting.config_template import serialize_reporting_config
-from iops.reporting.plots import ScatterPlot
+from iops.config.loader import ConfigValidationError, load_report_config
+from iops.reporting.config_template import (
+    _create_clean_report_config,
+    _literal_block_dumper,
+    serialize_reporting_config,
+)
+from iops.reporting.plots import BarPlot, ScatterPlot
 from iops.reporting.report_generator import ReportGenerator
 
 
@@ -236,6 +246,177 @@ class TestConfigTemplateRoundTrip:
         assert restored.best_results.min_samples == 3
 
 
+def _plot_config_with_every_field_changed() -> PlotConfig:
+    """A PlotConfig where every field differs from its default."""
+    return PlotConfig(
+        type="scatter",
+        x_var="nodes",
+        y_var="ppn",
+        z_metric="latency",
+        group_by="mode",
+        color_by="mode",
+        size_by="ppn",
+        title="Custom title",
+        xaxis_label="Nodes",
+        yaxis_label="Bandwidth",
+        log_x=True,
+        log_y=True,
+        xaxis_range=[1.0, 64.0],
+        yaxis_range=[1e-6, 1e-2],
+        colorscale="Plasma",
+        show_error_bars=False,
+        show_outliers=False,
+        height=700,
+        width=900,
+        per_variable=True,
+        include_metric=False,
+        row_vars=["nodes", "ppn"],
+        col_var="mode",
+        aggregation="median",
+        show_missing=False,
+        sort_rows_by="values",
+        sort_cols_by="values",
+        sort_ascending=True,
+    )
+
+
+class TestReportConfigYamlRoundTrip:
+    """report_config.yaml is auto-loaded by `iops report`, so it must not drop plot options."""
+
+    def _round_trip(self, reporting, tmp_path):
+        import yaml
+
+        path = tmp_path / "report_config.yaml"
+        clean = _create_clean_report_config(reporting, scripts=[])
+        with open(path, "w") as f:
+            yaml.dump({"reporting": clean}, f, Dumper=_literal_block_dumper(), sort_keys=False)
+        return load_report_config(path)
+
+    def test_fixture_changes_every_plot_field(self):
+        changed = _plot_config_with_every_field_changed()
+        default = PlotConfig(type=changed.type)
+        unchanged = [
+            f.name for f in fields(PlotConfig)
+            if f.name != "type" and getattr(changed, f.name) == getattr(default, f.name)
+        ]
+        assert unchanged == [], "update the fixture for new PlotConfig fields"
+
+    def test_metric_plot_fields_survive(self, tmp_path):
+        original = _plot_config_with_every_field_changed()
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"bandwidth": MetricPlotsConfig(plots=[original])},
+        )
+
+        restored = self._round_trip(reporting, tmp_path)
+
+        assert restored.metrics["bandwidth"].plots[0] == original
+
+    def test_default_plot_fields_survive(self, tmp_path):
+        original = _plot_config_with_every_field_changed()
+        reporting = ReportingConfig(enabled=True, default_plots=[original])
+
+        restored = self._round_trip(reporting, tmp_path)
+
+        assert restored.default_plots[0] == original
+
+    def test_log_y_bar_plot_survives(self, tmp_path):
+        original = PlotConfig(type="bar", x_var="levelmin", log_y=True)
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"l1_norm": MetricPlotsConfig(plots=[original])},
+        )
+
+        restored = self._round_trip(reporting, tmp_path)
+
+        assert restored.metrics["l1_norm"].plots[0].log_y is True
+
+    def test_default_values_are_omitted(self):
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"bandwidth": MetricPlotsConfig(plots=[PlotConfig(type="bar", x_var="nodes")])},
+        )
+
+        clean = _create_clean_report_config(reporting, scripts=[])
+
+        assert clean["metrics"]["bandwidth"]["plots"] == [{"type": "bar", "x_var": "nodes"}]
+
+
+# ============================================================================
+# Bar plot value labels
+# ============================================================================
+
+class TestBarPlotLabels:
+    def test_small_values_are_not_rounded_to_zero(self):
+        df = pd.DataFrame({
+            "vars.levelmin": [4, 5, 7],
+            "metrics.l1_norm": [9.56e-4, 9.57e-4, 9.10e-4],
+        })
+        plot = BarPlot(
+            df=df,
+            metric="l1_norm",
+            plot_config=PlotConfig(type="bar", x_var="levelmin"),
+            theme=ReportThemeConfig(),
+            var_column_fn=lambda v: f"vars.{v}",
+            metric_column_fn=lambda m: f"metrics.{m}",
+        )
+
+        labels = list(plot.generate().data[0].text)
+
+        assert labels == ["0.000956", "0.000957", "0.00091"]
+
+
+# ============================================================================
+# Log axis tick labels
+# ============================================================================
+
+class TestLogAxisTicks:
+    """Plotly labels minor log ticks, which is unreadable over several decades."""
+
+    def _yaxis(self, values, log_y=True):
+        df = pd.DataFrame({
+            "vars.levelmin": list(range(4, 4 + len(values))),
+            "metrics.l1_norm": values,
+        })
+        plot = BarPlot(
+            df=df,
+            metric="l1_norm",
+            plot_config=PlotConfig(type="bar", x_var="levelmin", log_y=log_y),
+            theme=ReportThemeConfig(),
+            var_column_fn=lambda v: f"vars.{v}",
+            metric_column_fn=lambda m: f"metrics.{m}",
+        )
+        return plot.generate().layout.yaxis
+
+    def test_wide_range_gets_one_tick_per_decade(self):
+        yaxis = self._yaxis([9.56e-4, 1.21e-4, 1.53e-5, 1.91e-6, 2.42e-7])
+
+        assert yaxis.type == "log"
+        assert yaxis.dtick == 1
+        assert yaxis.exponentformat == "power"
+
+    def test_narrow_range_keeps_automatic_ticks(self):
+        yaxis = self._yaxis([9.56e-4, 9.56e-4, 9.57e-4, 9.10e-4, 9.61e-4])
+
+        assert yaxis.type == "log"
+        assert yaxis.dtick is None
+        assert yaxis.exponentformat is None
+
+    def test_linear_axis_is_untouched(self):
+        yaxis = self._yaxis([9.56e-4, 1.21e-4, 1.53e-5], log_y=False)
+
+        assert yaxis.type is None
+        assert yaxis.dtick is None
+
+    def test_non_positive_values_do_not_raise(self):
+        # A log axis cannot show zero or negatives, but building the figure
+        # must not fail before Plotly gets a chance to drop them.
+        yaxis = self._yaxis([0.0, -1.0, 1e-6, 1e-2])
+
+        assert yaxis.type == "log"
+        assert yaxis.dtick == 1
+
+
 # ============================================================================
 # Scatter plot with string-typed columns
 # ============================================================================
@@ -290,3 +471,99 @@ class TestScatterStringValues:
         fig = self._make_plot(df, config).generate()
 
         assert any("bandwidth: 100.0000" in t for t in fig.data[0].text)
+
+
+# ============================================================================
+# Explicit axis limits
+# ============================================================================
+
+class TestAxisRange:
+    """xaxis_range / yaxis_range give control over the zoom Plotly would pick."""
+
+    DF = pd.DataFrame({
+        "vars.levelmin": [4, 5, 6, 7, 8],
+        "metrics.l1_norm": [9.56e-4, 9.56e-4, 9.57e-4, 9.10e-4, 9.61e-4],
+    })
+
+    def _yaxis(self, **cfg):
+        plot = ScatterPlot(
+            df=self.DF,
+            metric="l1_norm",
+            plot_config=PlotConfig(type="scatter", x_var="levelmin", **cfg),
+            theme=ReportThemeConfig(),
+            var_column_fn=lambda v: f"vars.{v}",
+            metric_column_fn=lambda m: f"metrics.{m}",
+        )
+        return plot.generate().layout.yaxis
+
+    def _load(self, plot_dict, tmp_path):
+        import yaml
+
+        path = tmp_path / "report_config.yaml"
+        with open(path, "w") as f:
+            yaml.dump({"reporting": {"enabled": True, "metrics": {
+                "l1_norm": {"plots": [plot_dict]}}}}, f)
+        return load_report_config(path)
+
+    def test_linear_range_passes_through(self):
+        yaxis = self._yaxis(yaxis_range=[0, 1e-3])
+
+        assert tuple(yaxis.range) == (0, 1e-3)
+
+    def test_log_range_is_converted_to_powers_of_ten(self):
+        # Plotly states a log axis range in log10 units; the config does not.
+        yaxis = self._yaxis(log_y=True, yaxis_range=[1e-6, 1e-2])
+
+        assert yaxis.type == "log"
+        assert tuple(yaxis.range) == (-6.0, -2.0)
+
+    def test_wide_explicit_range_gets_decade_ticks(self):
+        # The data spans 0.02 decades, so only the explicit range justifies them.
+        yaxis = self._yaxis(log_y=True, yaxis_range=[1e-6, 1e-2])
+
+        assert yaxis.dtick == 1
+
+    def test_narrow_explicit_range_keeps_automatic_ticks(self):
+        yaxis = self._yaxis(log_y=True, yaxis_range=[9e-4, 1e-3])
+
+        assert yaxis.dtick is None
+
+    def test_no_range_leaves_plotly_to_choose(self):
+        assert self._yaxis(log_y=True).range is None
+
+    def test_range_survives_report_config_round_trip(self, tmp_path):
+        original = PlotConfig(type="scatter", x_var="levelmin", log_y=True,
+                              yaxis_range=[1e-6, 1e-2], xaxis_range=[1.0, 64.0])
+        reporting = ReportingConfig(
+            enabled=True,
+            metrics={"l1_norm": MetricPlotsConfig(plots=[original])},
+        )
+
+        clean = _create_clean_report_config(reporting, scripts=[])
+        restored = self._load(clean["metrics"]["l1_norm"]["plots"][0], tmp_path)
+
+        assert restored.metrics["l1_norm"].plots[0] == original
+
+    @pytest.mark.parametrize("bad_range, message", [
+        ([1, 2, 3], "list of two numbers"),
+        ([10, 1], "min < max"),
+        (["a", 2], "must be numbers"),
+        (5, "list of two numbers"),
+    ])
+    def test_invalid_range_is_rejected(self, bad_range, message, tmp_path):
+        with pytest.raises(ConfigValidationError, match=message):
+            self._load({"type": "scatter", "x_var": "levelmin",
+                        "yaxis_range": bad_range}, tmp_path)
+
+    @pytest.mark.parametrize("low", [0, -1])
+    def test_non_positive_bound_rejected_on_log_axis(self, low, tmp_path):
+        # A log axis cannot show zero or negative values at all.
+        with pytest.raises(ConfigValidationError, match="must be positive"):
+            self._load({"type": "scatter", "x_var": "levelmin", "log_y": True,
+                        "yaxis_range": [low, 1e-2]}, tmp_path)
+
+    def test_zero_bound_allowed_on_linear_axis(self, tmp_path):
+        restored = self._load({"type": "scatter", "x_var": "levelmin",
+                               "yaxis_range": [0, 1e-2]}, tmp_path)
+
+        assert restored.metrics["l1_norm"].plots[0].yaxis_range == [0.0, 1e-2]

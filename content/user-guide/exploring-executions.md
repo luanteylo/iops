@@ -182,7 +182,7 @@ iops find ./workdir/run_001 --watch     # or -w
 Watch mode requires the `rich` library:
 
 ```bash
-pip install iops-benchmark[watch]   # or: pip install rich
+pip install "iops-benchmark[watch]"   # or: pip install rich
 ```
 
 ### Display Features

@@ -7,12 +7,9 @@ import sqlite3
 
 import pandas as pd
 
-# Optional pyarrow for parquet support
-try:
-    import pyarrow
-    PYARROW_AVAILABLE = True
-except ImportError:
-    PYARROW_AVAILABLE = False
+from iops.deps import install_hint, is_available
+
+PYARROW_AVAILABLE = is_available("parquet")
 
 
 def _check_pyarrow():
@@ -21,7 +18,7 @@ def _check_pyarrow():
         raise ImportError(
             "pyarrow is required for parquet output. "
             "Install it with: pip install pyarrow\n"
-            "Or install iops with parquet support: pip install iops-benchmark[parquet]"
+            f"Or install iops with parquet support: {install_hint(['parquet'])}"
         )
 
 

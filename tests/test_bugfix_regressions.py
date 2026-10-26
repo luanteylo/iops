@@ -108,6 +108,8 @@ class TestBayesianObjective:
     best for minimize studies."""
 
     def test_objective_defaults_to_minimize(self, tmp_path):
+        # Loading a bayesian config validates that scikit-optimize is present.
+        pytest.importorskip("skopt")
         config_file = _write_bayesian_config(tmp_path)
         cfg = _load_config(config_file)
         assert cfg.benchmark.bayesian_config.objective == "minimize"

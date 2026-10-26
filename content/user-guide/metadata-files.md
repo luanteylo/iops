@@ -39,6 +39,7 @@ Located in `workdir/run_XXX/`:
 | `__iops_index.json` | Fast execution lookup for `iops find` |
 | `__iops_status_rollup.json` | Aggregated per-repetition status for `iops find` and watch mode |
 | `__iops_resource_summary.csv` | Aggregated CPU/memory, GPU, and I/O metrics |
+| `__iops_hooks.log` | Output and exit status of fired [hooks](../hooks) (only if hooks are configured and fired) |
 | `__iops_kickoff.sh` | Single-allocation mode execution script (SLURM only) |
 | `__iops_plots/` | PDF exports of report plots (requires kaleido) |
 
@@ -655,7 +656,7 @@ __iops_plots/
 
 **File naming:** Files are numbered in report order (001, 002, ...); names include the plot type and metric, with special characters sanitized to underscores; the extension matches the chosen format (pdf, png, svg, jpg, webp).
 
-**Controlled by:** `--export-plots` flag when running `iops report` (use `--plot-format FORMAT` to select the format, default: pdf). Requires the `kaleido` package (`pip install iops-benchmark[plots]`).
+**Controlled by:** `--export-plots` flag when running `iops report` (use `--plot-format FORMAT` to select the format, default: pdf). Requires the `kaleido` package (`pip install "iops-benchmark[plots]"`).
 
 ## Best Practices
 

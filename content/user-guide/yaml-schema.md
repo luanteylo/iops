@@ -17,7 +17,8 @@ weight: 10
 6. [`scripts`](#scripts)
 7. [`output`](#output)
 8. [`reporting` (optional)](#reporting-optional)
-9. [`machines` (optional)](#machines-optional)
+9. [`hooks` (optional)](#hooks-optional)
+10. [`machines` (optional)](#machines-optional)
 
 See also: [Templating and Context Reference](../templating-and-context) for Jinja2 syntax, dynamic values, conditionals, and context variables.
 
@@ -33,6 +34,7 @@ command:         # Command template and labels
 scripts:         # Execution scripts and parsers
 output:          # Output configuration (CSV, Parquet, SQLite)
 reporting:       # (Optional) Report generation settings
+hooks:           # (Optional) Commands fired on run events
 machines:        # (Optional) Per-machine config overrides
 ```
 
@@ -846,6 +848,52 @@ reporting:
 
 ---
 
+## `hooks` (optional)
+
+Commands that IOPS runs on the host running it when run events happen (start, progress, failures, finish). Hooks never affect the benchmark. See the [Hooks guide](../hooks) for details and examples.
+
+```yaml
+hooks:
+  - name: halfway_mail
+    event: progress                 # start, progress, failures, consecutive_failures, finish
+    at: ["25%", "50%"]              # One-shot thresholds: integer count or "N%" string
+    every: 100                      # Repeating threshold (alternative or addition to at)
+    command: >                      # Jinja2 template, run with bash
+      echo {{ message | quote }} |
+      mail -s "IOPS {{ benchmark.name }}" me@example.org
+    timeout: 60                     # Seconds before the command is killed
+```
+
+#### `name` (optional, default: `hook_<index>`)
+
+Unique name of the hook, used in logs and by `iops hooks test --hook`.
+
+#### `event` (required)
+
+One of `start`, `progress`, `failures`, `consecutive_failures`, `finish`. The key is `event`, not `on`, because YAML reads a bare `on` as a boolean.
+
+#### `command` (required)
+
+Shell command rendered with Jinja2 (strict mode) against the run context: `event`, `progress`, `run`, `benchmark.name`, `workdir`, `report_path`, `hostname`, `os_env`, and `message`. Benchmark variables are not available. The `quote` filter shell-quotes a value. The same values are exported as `IOPS_*` environment variables.
+
+#### `at` / `every` (required for `progress`, `failures`, `consecutive_failures`)
+
+`at` is a threshold or list of thresholds, each fired once. `every` is a repeating threshold. A threshold is an integer (a count of attempts, that is, executions times repetitions) or a string ending in `%`. `consecutive_failures` and `failures` with `every` accept counts only. Not allowed for `start` and `finish`.
+
+#### `when` (optional, `finish` only)
+
+Outcomes that fire the hook: `completed`, `interrupted`, `budget_exceeded`, `fail_fast`, `crashed`. Default: all.
+
+#### `min_tests` (optional, default: 10)
+
+For percentage thresholds on `failures`: number of tests that must have run before the failure rate is evaluated. Lowered to the number of runnable tests on small runs.
+
+#### `timeout` (optional, default: 60)
+
+Seconds before the command and its child processes are killed.
+
+---
+
 ## `machines` (optional)
 
 Per-machine configuration overrides. Select at runtime with `--machine NAME` or `IOPS_MACHINE` env var.
@@ -860,6 +908,7 @@ machines:
     output: {}        # Optional: output overrides
     constraints: []   # Optional: constraint overrides
     reporting: {}     # Optional: reporting overrides
+    hooks: []         # Optional: hook overrides (merged by name)
 ```
 
 Each machine entry can override any combination of the standard top-level sections. Overrides are deep-merged into the base configuration: only what you specify is changed.

@@ -51,6 +51,8 @@ def _serialize_plot_config(plot_cfg) -> Dict[str, Any]:
         "yaxis_label": plot_cfg.yaxis_label,
         "log_x": plot_cfg.log_x,
         "log_y": plot_cfg.log_y,
+        "xaxis_range": plot_cfg.xaxis_range,
+        "yaxis_range": plot_cfg.yaxis_range,
         "colorscale": plot_cfg.colorscale,
         "show_error_bars": plot_cfg.show_error_bars,
         "show_outliers": plot_cfg.show_outliers,
@@ -66,6 +68,22 @@ def _serialize_plot_config(plot_cfg) -> Dict[str, Any]:
         "sort_rows_by": plot_cfg.sort_rows_by,
         "sort_cols_by": plot_cfg.sort_cols_by,
         "sort_ascending": plot_cfg.sort_ascending,
+    }
+
+
+def _clean_plot_config(plot_cfg) -> Dict[str, Any]:
+    """Serialize a PlotConfig keeping only the fields that differ from their defaults.
+
+    Built on _serialize_plot_config so every plot option round-trips through
+    report_config.yaml, which `iops report` loads in preference to the run metadata.
+    """
+    from iops.config.models import PlotConfig
+
+    defaults = _serialize_plot_config(PlotConfig(type=plot_cfg.type))
+    return {
+        key: value
+        for key, value in _serialize_plot_config(plot_cfg).items()
+        if key == "type" or value != defaults[key]
     }
 
 
@@ -218,18 +236,7 @@ def _create_clean_report_config(
         for metric_name, metric_plots_config in reporting.metrics.items():
             plots = []
             for plot_cfg in metric_plots_config.plots:
-                plot_dict = {"type": plot_cfg.type}
-                if plot_cfg.x_var:
-                    plot_dict["x_var"] = plot_cfg.x_var
-                if plot_cfg.y_var:
-                    plot_dict["y_var"] = plot_cfg.y_var
-                if plot_cfg.group_by:
-                    plot_dict["group_by"] = plot_cfg.group_by
-                if plot_cfg.title:
-                    plot_dict["title"] = plot_cfg.title
-                if plot_cfg.colorscale != "Viridis":
-                    plot_dict["colorscale"] = plot_cfg.colorscale
-                plots.append(plot_dict)
+                plots.append(_clean_plot_config(plot_cfg))
             metrics_config[metric_name] = {"plots": plots}
         config["metrics"] = metrics_config
 
@@ -237,12 +244,7 @@ def _create_clean_report_config(
     if reporting.default_plots:
         default_plots = []
         for plot_cfg in reporting.default_plots:
-            plot_dict = {"type": plot_cfg.type}
-            if plot_cfg.per_variable:
-                plot_dict["per_variable"] = plot_cfg.per_variable
-            if plot_cfg.show_error_bars:
-                plot_dict["show_error_bars"] = plot_cfg.show_error_bars
-            default_plots.append(plot_dict)
+            default_plots.append(_clean_plot_config(plot_cfg))
         config["default_plots"] = default_plots
 
     # Image gallery (only include if enabled)

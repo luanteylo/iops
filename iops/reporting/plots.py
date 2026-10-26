@@ -1,5 +1,6 @@
 """Plot generation abstractions for IOPS reports."""
 
+import math
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
 import plotly.graph_objects as go
@@ -74,11 +75,77 @@ class BasePlot(ABC):
         # Apply logarithmic axis scales last so they override any per-plot
         # axis type (e.g. 'category') set earlier in generate().
         if getattr(self.config, "log_x", False):
-            fig.update_xaxes(type='log')
+            fig.update_xaxes(type='log', **self._log_tick_options(fig, 'x'))
         if getattr(self.config, "log_y", False):
-            fig.update_yaxes(type='log')
+            fig.update_yaxes(type='log', **self._log_tick_options(fig, 'y'))
+
+        # Explicit limits win over the range Plotly infers from the data.
+        x_range = self._axis_range('x')
+        if x_range:
+            fig.update_xaxes(range=x_range)
+        y_range = self._axis_range('y')
+        if y_range:
+            fig.update_yaxes(range=y_range)
 
         return fig
+
+    def _axis_range(self, axis: str) -> Optional[list]:
+        """Return the configured limits for an axis, in the units Plotly wants."""
+        limits = getattr(self.config, f"{axis}axis_range", None)
+        if not limits:
+            return None
+
+        low, high = limits
+        if getattr(self.config, f"log_{axis}", False):
+            # A logarithmic axis takes its range as powers of ten, while the
+            # configuration states plain data values. The loader has already
+            # rejected non-positive bounds here.
+            return [math.log10(low), math.log10(high)]
+        return [low, high]
+
+    # Below this many decades, decade-only ticks would leave an axis with one
+    # label or none, so the automatic ticks are kept instead.
+    _LOG_DECADES_FOR_DECADE_TICKS = 2
+
+    def _log_tick_options(self, fig: go.Figure, axis: str) -> Dict[str, Any]:
+        """
+        Choose tick settings for a logarithmic axis.
+
+        Plotly labels minor log ticks by default, which reads as
+        "2, 0.001, 5, 2, 100u, 5, 2, 10u" once the data spans several decades.
+        One labelled tick per decade, written as a power of ten, is legible
+        instead. Data confined to less than two decades keeps the automatic
+        ticks: there they read as ordinary numbers, and a decade rule would
+        leave the axis with a single label or none at all.
+        """
+        limits = getattr(self.config, f"{axis}axis_range", None)
+        if limits:
+            # Explicit limits decide what the axis shows, so they, not the data,
+            # say whether decade ticks would leave enough labels.
+            return self._decade_ticks(math.log10(limits[1] / limits[0]))
+
+        values = [
+            value
+            for trace in fig.data
+            for value in (getattr(trace, axis, None) or [])
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        ]
+        if not values:
+            return {}
+
+        return self._decade_ticks(math.log10(max(values) / min(values)))
+
+    @staticmethod
+    def _decade_ticks(decades: float) -> Dict[str, Any]:
+        """Decade ticks for an axis spanning `decades`, or {} to keep the defaults."""
+        if decades < BasePlot._LOG_DECADES_FOR_DECADE_TICKS:
+            return {}
+
+        return {
+            "dtick": 1,
+            "exponentformat": "power",
+            "showexponent": "all",
+        }
 
     def _get_title(self, default: str) -> str:
         """Get plot title (custom or default)."""
@@ -240,7 +307,7 @@ class BarPlot(BasePlot):
             y=self._to_list(df_grouped['mean']),
             error_y=error_y,
             name=self.metric,
-            text=[f'{v:.2f}' for v in df_grouped['mean']],
+            text=[f'{v:.3g}' for v in df_grouped['mean']],
             textposition='outside',
         ))
 
