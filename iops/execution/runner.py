@@ -5,7 +5,7 @@ from iops.execution.planner import (BasePlanner, STATUS_FILENAME, TRACE_FILENAME
                                     IO_TARGETS_FILENAME_PREFIX)
 from iops.execution.executors import BaseExecutor
 from iops.execution.hooks import HookManager, describe_hook_trigger
-from iops.cache import ExecutionCache
+from iops.cache import ExecutionCache, command_fingerprint
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
 from iops.results.status_rollup import StatusRollup, exec_key_for
@@ -100,11 +100,15 @@ class IOPSRunner(HasLogger):
                 objective_metric = cfg.benchmark.bayesian_config.objective_metric
                 objective = cfg.benchmark.bayesian_config.objective or "maximize"
 
+            # Entries are tied to the command definition, so editing
+            # command.template or command.env invalidates them
             self.cache = ExecutionCache(
                 cfg.benchmark.cache_file,
                 exclude_vars=exclude_vars,
                 objective_metric=objective_metric,
                 objective=objective,
+                command_fingerprint=command_fingerprint(cfg.command.template, cfg.command.env),
+                strict=getattr(args, 'cache_strict', False),
             )
 
             if args.use_cache:
@@ -113,6 +117,11 @@ class IOPSRunner(HasLogger):
                     f"Cache: ENABLED for reads and writes "
                     f"({stats['total_entries']} entries, {stats['unique_parameter_sets']} unique parameter sets)"
                 )
+                if stats['unverified_entries'] and self.cache.strict:
+                    self.logger.info(
+                        f"Cache: strict mode, ignoring {stats['unverified_entries']} entries "
+                        f"recorded without a command fingerprint"
+                    )
             else:
                 self.logger.info("Cache: WRITE-ONLY mode (use --use-cache to enable reads)")
         elif args.use_cache:
@@ -1140,6 +1149,16 @@ class IOPSRunner(HasLogger):
             count = len(self.submitted_job_ids)
         self.logger.debug(f"  [JobTracker] Registered SLURM job {job_id} (total tracked: {count})")
 
+    def _warn_unverified_cache_hits(self) -> None:
+        """Warn once per summary about cache hits whose command could not be verified."""
+        if not self.cache or not self.cache.unverified_hits:
+            return
+        self.logger.warning(
+            f"Cache: {self.cache.unverified_hits} cached results predate command "
+            f"fingerprinting; their command could not be verified against the current "
+            f"command.template. Use --cache-strict to ignore them."
+        )
+
     def _validate_cached_metrics(self, cached_metrics: dict) -> bool:
         """
         Validate that cached metrics contain all expected metrics.
@@ -1735,6 +1754,7 @@ class IOPSRunner(HasLogger):
             self.logger.info(f"    {cached_count}/{total_executions} executions cached")
             self.logger.info(f"    {fully_cached_tests}/{num_unique_tests} tests fully cached (all {repetitions} repetitions)")
             self.logger.info("")
+            self._warn_unverified_cache_hits()
 
         # Compute cores and core-hours for each execution
         cores_list = []
@@ -2584,6 +2604,7 @@ class IOPSRunner(HasLogger):
                 if self.skipped_cache_only > 0:
                     cache_stats += f", {self.skipped_cache_only} skipped (cache-only mode)"
                 self.logger.info(cache_stats)
+                self._warn_unverified_cache_hits()
             elif self.cache:
                 self.logger.info(f"Cache: {test_count} results written to database")
 

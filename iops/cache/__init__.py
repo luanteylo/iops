@@ -9,7 +9,13 @@ This module provides:
 - create_cache_from_csv: Function to build a cache from a CSV file
 """
 
-from .execution_cache import ExecutionCache, normalize_params, hash_params
+from .execution_cache import (
+    CacheSchemaError,
+    ExecutionCache,
+    command_fingerprint,
+    hash_params,
+    normalize_params,
+)
 from .rebuild import rebuild_cache, RebuildStats
 from .from_csv import create_cache_from_csv, CreateFromCsvStats
 from .inspect import (
@@ -21,7 +27,9 @@ from .inspect import (
 )
 
 __all__ = [
+    "CacheSchemaError",
     "ExecutionCache",
+    "command_fingerprint",
     "normalize_params",
     "hash_params",
     "rebuild_cache",

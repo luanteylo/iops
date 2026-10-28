@@ -13,8 +13,9 @@ weight: 50
    - [Cache-Only Mode](#cache-only-mode)
    - [Parameter Hashing](#parameter-hashing)
    - [Excluding Variables from Cache](#excluding-variables-from-cache)
+   - [Command Changes](#command-changes)
+   - [Caches from Older Versions](#caches-from-older-versions)
    - [Cache Schema](#cache-schema)
-   - [Important: Command Changes Are Not Detected](#important-command-changes-are-not-detected)
    - [What Gets Cached](#what-gets-cached)
 3. [Inspecting the Cache](#inspecting-the-cache)
 4. [Rebuilding the Cache](#rebuilding-the-cache)
@@ -25,7 +26,7 @@ weight: 50
 
 IOPS caches execution results in SQLite so that tests with identical parameters can be skipped on re-runs. This speeds up iterative development, lets you safely retry failed runs without re-executing successful tests, and handles repetitions correctly (each repetition is cached separately).
 
-**Warning: Use caching with caution.** The cache key is computed only from variable values, not from the command template. If you change your command (e.g., from `./benchmark {{ var1 }}` to `./benchmark -F {{ var1 }}`), the cache will still return old results because the parameters haven't changed. This can lead to incorrect results. See [Command Changes Are Not Detected](#important-command-changes-are-not-detected) for details and workarounds.
+The cache key is made of the variable values and a fingerprint of the `command` section. Changing `command.template` or `command.env` (e.g., from `./benchmark {{ var1 }}` to `./benchmark -F {{ var1 }}`) makes earlier results stop matching. Changes to the script template do **not** affect the key. See [Command Changes](#command-changes) for what this means when writing a configuration.
 
 ## Configuration
 
@@ -81,7 +82,8 @@ Benchmark completed (cache-only mode): 3 tests processed
 
 Each test is uniquely identified by:
 1. **Parameters**: All swept and fixed variables (e.g., `nodes=2, processes=16`)
-2. **Repetition**: Which repetition this is (1, 2, 3, ...)
+2. **Command fingerprint**: A hash of `command.template` and `command.env` (see [Command Changes](#command-changes))
+3. **Repetition**: Which repetition this is (1, 2, 3, ...)
 
 Parameters are normalized before hashing:
 - Numeric strings: a string is coerced to a number only when the numeric form round-trips back to the exact original string. `"8"` and `8` hash the same, but `"1.10"` and `"1.1"` (or `"08"` and `"8"`, `"1e3"` and `"1000.0"`) keep distinct hashes.
@@ -117,6 +119,53 @@ benchmark:
 ```
 
 
+### Command Changes
+
+Cached results are tied to the `command` section. IOPS stores a fingerprint of `command.template` and `command.env` with every result, and a result is reused only when the current fingerprint matches:
+
+```yaml
+# Original command
+command:
+  template: "fio --name=test --rw=read --bs={{ block_size }}"
+
+# Modified command (added --direct=1 for unbuffered I/O): earlier results no longer match
+command:
+  template: "fio --name=test --rw=read --bs={{ block_size }} --direct=1"
+```
+
+Results for both commands are kept side by side, so reverting the command makes the earlier results available again.
+
+The fingerprint is computed from the **unrendered** templates. The rendered command is fully determined by the template and the variable values, and the variable values are already part of the key, so nothing is lost. The benefit is that run-specific values rendered into the command, such as `{{ execution_dir }}`, do not invalidate the cache. Runs of whitespace are collapsed before hashing, so reflowing a long template over several YAML lines keeps the same fingerprint. `command.labels` is not part of the fingerprint, since labels describe a test rather than change it.
+
+**The script is not part of the key.** Script templates mostly hold launch details (`#SBATCH` directives, partitions, time limits, module paths, output redirection) that should not throw away results when edited. Keep anything that changes what is being measured in one of these two places:
+
+- **A variable**, which is part of the parameters, for example a stripe count or a library version you compare.
+- **The `command` section**, either in `command.template` or in `command.env` (e.g. `OMP_NUM_THREADS`).
+
+Values read from `os_env` or from files included by the template are not tracked by the fingerprint.
+
+If you need to invalidate results for a reason the key cannot see, use a new cache file, or add a constant variable (e.g. `cache_version`) and change its value.
+
+### Caches from Older Versions
+
+Caches created before command fingerprinting are upgraded automatically the first time a newer IOPS opens them:
+
+- The original file is copied to `<cache_file>.v0.bak` before anything is changed.
+- The upgrade runs in a single transaction. If it fails, the cache is left exactly as it was.
+- Existing results are kept with an **unknown** command. They still match on parameters alone, exactly as before the upgrade, so `--use-cache` keeps finding them.
+- When a test is run again, the new result is stored with the current fingerprint and is preferred over the old one from then on.
+
+At the end of a run, IOPS reports how many results came from entries with an unknown command, since it cannot check that those were produced by the current command:
+
+```
+WARNING | Cache: 12 cached results predate command fingerprinting; their command could not be verified against
+WARNING | the current command.template. Use --cache-strict to ignore them.
+```
+
+Pass `--cache-strict` to ignore entries with an unknown command. Nothing is deleted, so a later run without the flag can still use them. Caches built with `iops cache create` from a CSV file also have no command information, and behave the same way.
+
+An older IOPS version can still read an upgraded cache. It ignores fingerprints and matches on parameters alone, as it always did. Its writes, however, can overwrite results stored by the newer version for the same test, so avoid running old and new versions of IOPS against the same cache file. A cache written by a newer IOPS than the one opening it is refused with a request to upgrade.
+
 ### Cache Schema
 
 ```sql
@@ -128,41 +177,18 @@ CREATE TABLE cached_executions (
     metrics_json TEXT,                  -- Benchmark metrics
     metadata_json TEXT,                 -- Execution metadata
     created_at TEXT NOT NULL,           -- Timestamp
-    UNIQUE(param_hash, repetition)
+    command_fingerprint TEXT            -- SHA-256 of the command section (NULL: unknown)
 );
 
 -- Index for fast lookups
 CREATE INDEX idx_param_hash ON cached_executions(param_hash, repetition);
+
+-- One entry per key (not created for caches written by `iops cache rebuild`)
+CREATE UNIQUE INDEX idx_unique_entry
+    ON cached_executions(param_hash, IFNULL(command_fingerprint, ''), repetition);
 ```
 
-### Important: Command Changes Are Not Detected
-
-**Warning**: The cache hash is computed **only from variables**, not from the command template itself. This is intentional: commands often contain paths like `{{ execution_dir }}` that change between runs but shouldn't invalidate the cache.
-
-However, this means that if you modify your command template in ways that affect results, the cache will still return old results:
-
-```yaml
-# Original command
-command:
-  template: "fio --name=test --rw=read --bs={{ block_size }}"
-
-# Modified command (added --direct=1 for unbuffered I/O)
-command:
-  template: "fio --name=test --rw=read --bs={{ block_size }} --direct=1"
-```
-
-Since `block_size` hasn't changed, the cache hash remains the same, and you'll get stale results that don't reflect the `--direct=1` behavior.
-
-**Solutions:**
-1. **Clear the cache** when changing command behavior: delete the cache file or use `cache.clear_cache()`
-2. **Add a version variable** to force cache invalidation:
-   ```yaml
-   vars:
-     cache_version:
-       type: int
-       value: 2  # Increment when command changes
-   ```
-3. **Use a new cache file** for different command configurations
+The schema version is stored in SQLite's `PRAGMA user_version` (currently 1).
 
 ### What Gets Cached
 
@@ -184,7 +210,7 @@ IOPS provides three read-only subcommands to explore what is stored in a cache d
 
 ### `iops cache stats`
 
-Print a summary of the cache: total entries, unique parameter sets, and date range.
+Print a summary of the cache: total entries, unique parameter sets, number of distinct commands, entries with an unknown command, schema version, and date range. It never upgrades the file, so it is safe to run on a cache from an older version.
 
 ```bash
 $ iops cache stats cache.db
@@ -194,6 +220,9 @@ Cache: cache.db
 Total entries:          28
 Unique parameter sets:  14
 Distinct repetitions:   2
+Distinct commands:      1
+Unknown command:        0
+Schema version:         1
 Oldest entry:           2026-04-06T18:58:32.285294
 Newest entry:           2026-04-17T23:53:07.035720
 ```
@@ -233,7 +262,7 @@ iops cache list cache.db --json
 
 ### `iops cache show`
 
-Show full details for a single cached parameter set, including every repetition's metrics and metadata. The hash argument accepts a git-style short prefix:
+Show full details for a single cached parameter set, including every repetition's metrics and metadata. Each repetition shows the short command fingerprint it was recorded with (`unknown` for entries without one). The hash argument accepts a git-style short prefix:
 
 ```bash
 $ iops cache show cache.db 57c77e
@@ -247,7 +276,7 @@ Parameters:
 
 Repetitions: 2
 
-  rep=1  cached_at=2026-04-08T08:01:27.580146
+  rep=1  cached_at=2026-04-08T08:01:27.580146  command=3f9a0c21
     metrics:
       average_epoch_time_sec: 428.96
       ...
@@ -295,6 +324,8 @@ ExecutionCache("cache.db").clear_cache()
 The `iops cache rebuild` command modifies an existing cache database by:
 - **Excluding variables** from the hash (consolidating entries that now hash to the same value)
 - **Adding variables** with constant values to all entries (enabling cache reuse after config changes)
+
+Command fingerprints are carried over unchanged, so entries recorded with different commands stay separate. The source file is only read: a cache from an older version is not upgraded, and its entries keep an unknown command in the output.
 
 ### Usage
 

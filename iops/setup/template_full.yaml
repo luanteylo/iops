@@ -30,7 +30,10 @@ benchmark:
   workdir: "/path/to/your/workdir"
 
   # Optional: Cache file for storing execution results
-  # When --use-cache is specified, results are reused if parameters match
+  # When --use-cache is specified, results are reused if parameters and the
+  # command section (command.template and command.env) match. The script
+  # template is not part of the key: put anything that changes what is
+  # measured in a variable or in the command section.
   # Set this to enable caching across multiple runs
   cache_file: "/path/to/your/cache.db"
 

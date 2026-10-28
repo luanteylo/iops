@@ -17,7 +17,14 @@ from contextlib import closing
 import json
 import logging
 
-from .execution_cache import normalize_params, hash_params
+from .execution_cache import (
+    SCHEMA_VERSION,
+    create_cache_indexes,
+    create_cache_table,
+    has_fingerprint_column,
+    hash_params,
+    normalize_params,
+)
 
 
 @dataclass
@@ -66,7 +73,11 @@ def rebuild_cache(
 
     When multiple entries collapse to the same (new_hash, repetition) due
     to the excluded variables, all entries are kept (the output database
-    does NOT have a UNIQUE constraint on param_hash + repetition).
+    does NOT have a unique index on the entry key).
+
+    Command fingerprints are carried over unchanged. A source cache created
+    by an older IOPS version (no fingerprint column) is read as-is and its
+    entries keep an unknown (NULL) fingerprint.
 
     Args:
         source_db: Path to the source cache database
@@ -117,9 +128,14 @@ def rebuild_cache(
         cursor.execute("SELECT COUNT(DISTINCT param_hash) FROM cached_executions")
         stats.source_unique_hashes = cursor.fetchone()[0]
 
-        # Read all entries
-        cursor.execute("""
-            SELECT param_hash, params_json, repetition, metrics_json, metadata_json, created_at
+        # Read all entries (source caches older than schema v1 have no fingerprint)
+        fingerprint_col = (
+            "command_fingerprint" if has_fingerprint_column(src_conn)
+            else "NULL AS command_fingerprint"
+        )
+        cursor.execute(f"""
+            SELECT param_hash, params_json, repetition, metrics_json, metadata_json,
+                   created_at, {fingerprint_col}
             FROM cached_executions
             ORDER BY created_at ASC
         """)
@@ -127,27 +143,13 @@ def rebuild_cache(
 
     logger.info(f"Read {stats.source_entries} entries from source cache")
 
-    # Create output database (without UNIQUE constraint to allow all entries)
+    # Create output database (without unique index to allow all entries)
     output_db.parent.mkdir(parents=True, exist_ok=True)
 
     with closing(sqlite3.connect(str(output_db))) as out_conn, out_conn:
-        out_conn.execute("""
-            CREATE TABLE cached_executions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                param_hash TEXT NOT NULL,
-                params_json TEXT NOT NULL,
-                repetition INTEGER NOT NULL,
-                metrics_json TEXT,
-                metadata_json TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
-
-        # Create index for fast lookups (same as original)
-        out_conn.execute("""
-            CREATE INDEX idx_param_hash
-            ON cached_executions(param_hash, repetition)
-        """)
+        create_cache_table(out_conn)
+        create_cache_indexes(out_conn, unique=False)
+        out_conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
         # Track seen (hash, rep) combinations for collision counting
         seen_hash_rep: Set[tuple] = set()
@@ -167,7 +169,7 @@ def rebuild_cache(
             new_params_json = json.dumps(new_params, sort_keys=True, default=str)
 
             repetition = entry["repetition"]
-            hash_rep_key = (new_hash, repetition)
+            hash_rep_key = (new_hash, entry["command_fingerprint"], repetition)
 
             if hash_rep_key in seen_hash_rep:
                 stats.collisions += 1
@@ -178,8 +180,9 @@ def rebuild_cache(
 
             out_conn.execute("""
                 INSERT INTO cached_executions
-                (param_hash, params_json, repetition, metrics_json, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (param_hash, params_json, repetition, metrics_json, metadata_json,
+                 created_at, command_fingerprint)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 new_hash,
                 new_params_json,
@@ -187,6 +190,7 @@ def rebuild_cache(
                 entry["metrics_json"],
                 entry["metadata_json"],
                 entry["created_at"],
+                entry["command_fingerprint"],
             ))
 
         out_conn.commit()

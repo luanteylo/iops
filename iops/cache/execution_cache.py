@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import math
+import shutil
 import sqlite3
 import json
 import hashlib
@@ -21,6 +22,92 @@ DEFAULT_SQLITE_TIMEOUT = 60
 # Retry settings for database lock errors
 MAX_RETRIES = 5
 RETRY_BASE_DELAY = 0.5  # seconds
+
+# Cache schema version, stored in SQLite's PRAGMA user_version.
+#   0: original schema, entries keyed by (param_hash, repetition)
+#   1: adds command_fingerprint; entries keyed by (param_hash, command_fingerprint, repetition)
+SCHEMA_VERSION = 1
+
+TABLE_NAME = "cached_executions"
+
+
+class CacheSchemaError(RuntimeError):
+    """Raised when a cache database uses a schema this IOPS version cannot handle."""
+
+
+def create_cache_table(conn: sqlite3.Connection, table: str = TABLE_NAME) -> None:
+    """Create the cache table with the current schema (no-op if it exists)."""
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            param_hash TEXT NOT NULL,
+            params_json TEXT NOT NULL,
+            repetition INTEGER NOT NULL,
+            metrics_json TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL,
+            command_fingerprint TEXT
+        )
+    """)
+
+
+def create_cache_indexes(conn: sqlite3.Connection, unique: bool = True) -> None:
+    """
+    Create the lookup index and, optionally, the uniqueness index.
+
+    Regular caches keep one entry per (param_hash, command_fingerprint,
+    repetition). Rebuilt caches skip the unique index so entries that
+    collapse to the same key are all kept. A NULL fingerprint (entry with
+    unknown command) is treated as a single value for uniqueness.
+    """
+    conn.execute(f"""
+        CREATE INDEX IF NOT EXISTS idx_param_hash
+        ON {TABLE_NAME}(param_hash, repetition)
+    """)
+    if unique:
+        conn.execute(f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_entry
+            ON {TABLE_NAME}(param_hash, IFNULL(command_fingerprint, ''), repetition)
+        """)
+
+
+def get_schema_version(conn: sqlite3.Connection) -> int:
+    """Return the cache schema version stored in the database header."""
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def has_fingerprint_column(conn: sqlite3.Connection) -> bool:
+    """Check whether the cache table has the command_fingerprint column."""
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({TABLE_NAME})")}
+    return "command_fingerprint" in columns
+
+
+def command_fingerprint(template: str, env: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Fingerprint the command definition (command.template and command.env).
+
+    The fingerprint uses the unrendered templates: the rendered command is
+    fully determined by the template plus the vars, and the vars that matter
+    are already in the param hash. Hashing the template therefore detects
+    command changes without being affected by per-run values such as
+    execution_dir. Whitespace runs are collapsed so reflowing the YAML does
+    not change the fingerprint.
+
+    Args:
+        template: The command.template source text
+        env: The command.env mapping (values are templates)
+
+    Returns:
+        SHA-256 hex digest of the normalized command definition
+    """
+    def _norm(text: Any) -> str:
+        return " ".join(str(text).split())
+
+    payload = {
+        "template": _norm(template),
+        "env": {str(k): _norm(v) for k, v in sorted((env or {}).items())},
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def _normalize_value(value: Any) -> Any:
@@ -120,6 +207,15 @@ class ExecutionCache(HasLogger):
             - metrics_json: TEXT (cached metrics)
             - metadata_json: TEXT (execution metadata: status, timestamps, etc.)
             - created_at: TEXT (timestamp)
+            - command_fingerprint: TEXT (see command_fingerprint(); NULL when
+              the command is unknown, e.g. entries created before schema v1
+              or built from a CSV file)
+
+    Lookup with a command fingerprint prefers entries recorded with the same
+    fingerprint and, unless strict, falls back to entries whose command is
+    unknown. Entries recorded with a different fingerprint never match.
+    Caches created by older IOPS versions are migrated in place on open
+    (a backup of the original file is kept next to it).
     """
 
     def __init__(
@@ -129,6 +225,8 @@ class ExecutionCache(HasLogger):
         timeout: int = DEFAULT_SQLITE_TIMEOUT,
         objective_metric: Optional[str] = None,
         objective: str = "maximize",
+        command_fingerprint: Optional[str] = None,
+        strict: bool = False,
     ):
         """
         Initialize the execution cache.
@@ -140,6 +238,10 @@ class ExecutionCache(HasLogger):
             objective_metric: If set, cache lookup returns the entry with best metric value
                              instead of most recent. Used for Bayesian optimization.
             objective: "maximize" or "minimize" - determines what "best" means
+            command_fingerprint: Fingerprint of the current command definition.
+                             If None, entries match on parameters only.
+            strict: If True, entries with unknown command (NULL fingerprint) are
+                    ignored on lookup instead of being used as a fallback.
         """
         super().__init__()
         self.db_path = Path(db_path)
@@ -148,6 +250,10 @@ class ExecutionCache(HasLogger):
         self.timeout = timeout
         self.objective_metric = objective_metric
         self.objective = objective
+        self.command_fingerprint = command_fingerprint
+        self.strict = strict
+        # (param_hash, repetition) keys served from entries with unknown command
+        self._unverified_keys: set = set()
 
         # Detect NFS and use NFS-friendly mode
         # NFS has unreliable file locking, so we disable it since IOPS
@@ -252,32 +358,109 @@ class ExecutionCache(HasLogger):
             f"Consider using a local filesystem for the cache file."
         )
 
+    @property
+    def unverified_hits(self) -> int:
+        """Number of distinct (params, repetition) lookups served from entries with unknown command."""
+        return len(self._unverified_keys)
+
     def _init_db(self):
-        """Create the cache table if it doesn't exist."""
+        """Create the cache table, or migrate an existing one to the current schema."""
         conn = self._connect_with_retry()
+        # Manage transactions explicitly so DDL and data copy are atomic
+        conn.isolation_level = None
         try:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS cached_executions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    param_hash TEXT NOT NULL,
-                    params_json TEXT NOT NULL,
-                    repetition INTEGER NOT NULL,
-                    metrics_json TEXT,
-                    metadata_json TEXT,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(param_hash, repetition)
+            version = get_schema_version(conn)
+            if version > SCHEMA_VERSION:
+                raise CacheSchemaError(
+                    f"Cache file {self.db_path} uses schema version {version}, but this "
+                    f"IOPS version supports up to {SCHEMA_VERSION}. Upgrade IOPS to use this cache."
                 )
-            """)
 
-            # Create index for fast lookups
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_param_hash
-                ON cached_executions(param_hash, repetition)
-            """)
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (TABLE_NAME,),
+            ).fetchone() is not None
 
-            conn.commit()
+            if not table_exists:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    create_cache_table(conn)
+                    create_cache_indexes(conn, unique=True)
+                    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                    conn.execute("COMMIT")
+                except BaseException:
+                    conn.execute("ROLLBACK")
+                    raise
+            elif version < SCHEMA_VERSION:
+                self._migrate_v0_to_v1(conn)
         finally:
             conn.close()
+
+    def _migrate_v0_to_v1(self, conn: sqlite3.Connection) -> None:
+        """
+        Migrate a schema v0 cache in place.
+
+        Existing entries are kept with a NULL command_fingerprint, so they
+        still match on parameters alone (as before the migration). The
+        original file is copied to '<name>.v0.bak' first, and the migration
+        runs in a single transaction: on failure the database is unchanged.
+        """
+        columns = "id, param_hash, params_json, repetition, metrics_json, metadata_json, created_at"
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Re-check under the write lock: another process may have migrated
+            if has_fingerprint_column(conn):
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                conn.execute("COMMIT")
+                return
+
+            # Caches written by 'iops cache rebuild' have no unique constraint
+            # and may hold several entries per key; keep that property.
+            unique = any(
+                row[2] == 1 and row[3] == "u"
+                for row in conn.execute(f"PRAGMA index_list({TABLE_NAME})")
+            )
+
+            # The write lock blocks other writers, so the copy is consistent
+            backup_path = self.db_path.with_name(self.db_path.name + ".v0.bak")
+            if backup_path.exists():
+                self.logger.info(f"Cache backup already exists, keeping it: {backup_path}")
+            else:
+                shutil.copy2(self.db_path, backup_path)
+
+            create_cache_table(conn, table=f"{TABLE_NAME}_v1")
+            conn.execute(
+                f"INSERT INTO {TABLE_NAME}_v1 ({columns}) SELECT {columns} FROM {TABLE_NAME}"
+            )
+            conn.execute(f"DROP TABLE {TABLE_NAME}")
+            conn.execute(f"ALTER TABLE {TABLE_NAME}_v1 RENAME TO {TABLE_NAME}")
+            create_cache_indexes(conn, unique=unique)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+
+        self.logger.info(
+            f"Cache upgraded to schema v{SCHEMA_VERSION} (command fingerprints). "
+            f"Existing entries are kept and match on parameters only. "
+            f"Backup of the original file: {backup_path}"
+        )
+
+    def _select_matching(self, rows: List[sqlite3.Row]) -> List[sqlite3.Row]:
+        """
+        Filter entries of one (param_hash, repetition) by command fingerprint.
+
+        Returns the entries recorded with the current fingerprint if any,
+        otherwise (unless strict) the entries with unknown command. Without
+        a current fingerprint, all entries match.
+        """
+        if self.command_fingerprint is None:
+            return rows
+        exact = [r for r in rows if r["command_fingerprint"] == self.command_fingerprint]
+        if exact or self.strict:
+            return exact
+        return [r for r in rows if r["command_fingerprint"] is None]
 
     def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -329,15 +512,19 @@ class ExecutionCache(HasLogger):
         """
         Retrieve cached result for given parameters and repetition.
 
-        If objective_metric is set, returns the entry with the best metric value
-        (max for maximize, min for minimize). Otherwise returns most recent entry.
+        Only entries matching the current command fingerprint are considered
+        (see _select_matching). If objective_metric is set, returns the entry
+        with the best metric value (max for maximize, min for minimize).
+        Otherwise returns the most recent entry.
 
         Args:
             params: Execution parameters
             repetition: Repetition number (1-based)
 
         Returns:
-            Dict with 'metrics' and 'metadata' if found, None otherwise
+            Dict with 'metrics', 'metadata', 'cached_at' and 'verified' (False
+            when the entry was recorded with an unknown command) if found,
+            None otherwise
         """
         normalized = self._normalize_params(params)
         param_hash = self._hash_params(normalized)
@@ -346,100 +533,81 @@ class ExecutionCache(HasLogger):
         try:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            cursor.execute("""
+                SELECT metrics_json, metadata_json, created_at, command_fingerprint
+                FROM cached_executions
+                WHERE param_hash = ? AND repetition = ?
+                ORDER BY created_at ASC
+            """, (param_hash, repetition))
+            rows = self._select_matching(cursor.fetchall())
+        finally:
+            conn.close()
 
-            # If objective_metric is set, find the best entry for this (hash, repetition)
-            # This handles cases where multiple entries exist for the same key
-            if self.objective_metric:
-                cursor.execute("""
-                    SELECT metrics_json, metadata_json, created_at
-                    FROM cached_executions
-                    WHERE param_hash = ? AND repetition = ?
-                    ORDER BY created_at ASC
-                """, (param_hash, repetition))
-
-                rows = cursor.fetchall()
-
-                if not rows:
-                    self.logger.debug(
-                        f"  [Cache] MISS: hash={param_hash[:8]} rep={repetition}"
-                    )
-                    return None
-
-                # Find the entry with the best metric value
-                best_row = None
-                best_value = None
-
-                for row in rows:
-                    metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
-                    metric_value = metrics.get(self.objective_metric)
-
-                    if metric_value is None:
-                        continue
-
-                    # Metrics serialized with default=str may come back as
-                    # strings (e.g. numpy scalars); compare numerically only.
-                    if isinstance(metric_value, str):
-                        try:
-                            metric_value = float(metric_value)
-                        except ValueError:
-                            continue
-                    if isinstance(metric_value, bool) or not isinstance(metric_value, (int, float)):
-                        continue
-
-                    if best_value is None:
-                        best_value = metric_value
-                        best_row = row
-                    elif self.objective == "maximize" and metric_value > best_value:
-                        best_value = metric_value
-                        best_row = row
-                    elif self.objective == "minimize" and metric_value < best_value:
-                        best_value = metric_value
-                        best_row = row
-
-                if best_row:
-                    self.logger.debug(
-                        f"  [Cache] HIT: hash={param_hash[:8]} rep={repetition} "
-                        f"(best {self.objective_metric}={best_value:.2f} from {len(rows)} entries)"
-                    )
-
-                    return {
-                        'metrics': json.loads(best_row['metrics_json']) if best_row['metrics_json'] else {},
-                        'metadata': json.loads(best_row['metadata_json']) if best_row['metadata_json'] else {},
-                        'cached_at': best_row['created_at'],
-                    }
-
-                # No entry with the metric found, fall back to most recent
-                row = rows[-1]
-            else:
-                # Default behavior: return most recent entry
-                cursor.execute("""
-                    SELECT metrics_json, metadata_json, created_at
-                    FROM cached_executions
-                    WHERE param_hash = ? AND repetition = ?
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, (param_hash, repetition))
-
-                row = cursor.fetchone()
-
-            if row:
-                self.logger.debug(
-                    f"  [Cache] HIT: hash={param_hash[:8]} rep={repetition} "
-                    f"(cached_at={row['created_at']})"
-                )
-
-                return {
-                    'metrics': json.loads(row['metrics_json']) if row['metrics_json'] else {},
-                    'metadata': json.loads(row['metadata_json']) if row['metadata_json'] else {},
-                    'cached_at': row['created_at'],
-                }
-
+        if not rows:
             self.logger.debug(
                 f"  [Cache] MISS: hash={param_hash[:8]} rep={repetition}"
             )
             return None
-        finally:
-            conn.close()
+
+        # Default behavior: most recent entry
+        row = rows[-1]
+
+        # If objective_metric is set, find the best entry for this key
+        # This handles cases where multiple entries exist for the same key
+        if self.objective_metric:
+            best_row = None
+            best_value = None
+
+            for candidate in rows:
+                metrics = json.loads(candidate['metrics_json']) if candidate['metrics_json'] else {}
+                metric_value = metrics.get(self.objective_metric)
+
+                if metric_value is None:
+                    continue
+
+                # Metrics serialized with default=str may come back as
+                # strings (e.g. numpy scalars); compare numerically only.
+                if isinstance(metric_value, str):
+                    try:
+                        metric_value = float(metric_value)
+                    except ValueError:
+                        continue
+                if isinstance(metric_value, bool) or not isinstance(metric_value, (int, float)):
+                    continue
+
+                if best_value is None:
+                    best_value = metric_value
+                    best_row = candidate
+                elif self.objective == "maximize" and metric_value > best_value:
+                    best_value = metric_value
+                    best_row = candidate
+                elif self.objective == "minimize" and metric_value < best_value:
+                    best_value = metric_value
+                    best_row = candidate
+
+            if best_row:
+                self.logger.debug(
+                    f"  [Cache] HIT: hash={param_hash[:8]} rep={repetition} "
+                    f"(best {self.objective_metric}={best_value:.2f} from {len(rows)} entries)"
+                )
+                row = best_row
+            # No entry with the metric found: fall back to most recent
+        else:
+            self.logger.debug(
+                f"  [Cache] HIT: hash={param_hash[:8]} rep={repetition} "
+                f"(cached_at={row['created_at']})"
+            )
+
+        verified = self.command_fingerprint is None or row['command_fingerprint'] is not None
+        if not verified:
+            self._unverified_keys.add((param_hash, repetition))
+
+        return {
+            'metrics': json.loads(row['metrics_json']) if row['metrics_json'] else {},
+            'metadata': json.loads(row['metadata_json']) if row['metadata_json'] else {},
+            'cached_at': row['created_at'],
+            'verified': verified,
+        }
 
     def store_result(
         self,
@@ -450,6 +618,10 @@ class ExecutionCache(HasLogger):
     ):
         """
         Store execution result in cache.
+
+        The entry is recorded with the current command fingerprint. An
+        existing entry with the same parameters, fingerprint and repetition
+        is replaced.
 
         Args:
             params: Execution parameters
@@ -470,10 +642,12 @@ class ExecutionCache(HasLogger):
             try:
                 conn.execute("""
                     INSERT INTO cached_executions
-                    (param_hash, params_json, repetition, metrics_json, metadata_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (param_hash, params_json, repetition, metrics_json, metadata_json,
+                     created_at, command_fingerprint)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    param_hash, params_json, repetition, metrics_json, metadata_json, created_at
+                    param_hash, params_json, repetition, metrics_json, metadata_json,
+                    created_at, self.command_fingerprint,
                 ))
                 conn.commit()
 
@@ -483,15 +657,15 @@ class ExecutionCache(HasLogger):
                 )
 
             except sqlite3.IntegrityError:
-                # Already exists (same param_hash, repetition)
+                # Already exists (same param_hash, fingerprint, repetition)
                 # Update with latest result
                 conn.execute("""
                     UPDATE cached_executions
                     SET metrics_json = ?, metadata_json = ?, created_at = ?
-                    WHERE param_hash = ? AND repetition = ?
+                    WHERE param_hash = ? AND repetition = ? AND command_fingerprint IS ?
                 """, (
                     metrics_json, metadata_json, created_at,
-                    param_hash, repetition
+                    param_hash, repetition, self.command_fingerprint,
                 ))
                 conn.commit()
 
@@ -509,6 +683,9 @@ class ExecutionCache(HasLogger):
         """
         Count how many repetitions are cached for given parameters.
 
+        A repetition counts when it has an entry matching the current command
+        fingerprint (see _select_matching).
+
         Args:
             params: Execution parameters
 
@@ -520,18 +697,22 @@ class ExecutionCache(HasLogger):
 
         conn = self._connect_with_retry()
         try:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            # DISTINCT: caches rebuilt with iops cache rebuild have no
-            # UNIQUE(param_hash, repetition) constraint and may legitimately
-            # hold several rows per repetition; COUNT(*) would over-count.
+            # Caches rebuilt with iops cache rebuild have no unique index and
+            # may legitimately hold several rows per repetition; count each
+            # repetition once.
             cursor.execute("""
-                SELECT COUNT(DISTINCT repetition) FROM cached_executions
+                SELECT repetition, command_fingerprint FROM cached_executions
                 WHERE param_hash = ?
             """, (param_hash,))
 
-            count = cursor.fetchone()[0]
-            return count
+            by_rep: Dict[int, List[sqlite3.Row]] = {}
+            for row in cursor.fetchall():
+                by_rep.setdefault(row["repetition"], []).append(row)
+
+            return sum(1 for rows in by_rep.values() if self._select_matching(rows))
         finally:
             conn.close()
 
@@ -573,9 +754,16 @@ class ExecutionCache(HasLogger):
             cursor.execute("SELECT MAX(created_at) FROM cached_executions")
             newest = cursor.fetchone()[0]
 
+            # Entries recorded without a command fingerprint
+            cursor.execute(
+                "SELECT COUNT(*) FROM cached_executions WHERE command_fingerprint IS NULL"
+            )
+            unverified = cursor.fetchone()[0]
+
             return {
                 'total_entries': total_entries,
                 'unique_parameter_sets': unique_params,
+                'unverified_entries': unverified,
                 'oldest_entry': oldest,
                 'newest_entry': newest,
                 'db_path': str(self.db_path),

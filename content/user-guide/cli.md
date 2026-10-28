@@ -48,6 +48,7 @@ iops run <config.yaml> [options]
 - `--dry-run, -n` - Preview execution plan without running
 - `--use-cache` - Skip tests with cached results
 - `--cache-only` - Only use cached results; skip tests not in cache (requires `cache_file`)
+- `--cache-strict` - Ignore cached results recorded without a command fingerprint (created by older IOPS versions or from a CSV file). See [Caches from Older Versions](/iops/user-guide/caching/#caches-from-older-versions)
 - `--fail-fast` - Stop execution on first test failure
 - `--parallel N` - Max concurrent test executions (overrides `benchmark.parallel` in config)
 - `--machine NAME` - Apply machine-specific config overrides (or set `IOPS_MACHINE` env var)

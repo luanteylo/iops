@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 import sqlite3
 import json
 
+from .execution_cache import get_schema_version, has_fingerprint_column
+
 
 # Width used when truncating long parameter/metric values in the default view.
 DEFAULT_TRUNCATE_WIDTH = 30
@@ -41,6 +43,13 @@ def _truncate(value: str, max_width: int) -> str:
     if max_width <= 3:
         return "..."[:max_width] if max_width > 0 else ""
     return "..." + value[-(max_width - 3):]
+
+
+def _fingerprint_select(conn: sqlite3.Connection) -> str:
+    """SELECT expression for the fingerprint, valid on caches older than schema v1."""
+    if has_fingerprint_column(conn):
+        return "command_fingerprint"
+    return "NULL AS command_fingerprint"
 
 
 def _format_metric(value: Any) -> str:
@@ -219,6 +228,7 @@ def get_cache_entry(db_path: Path, hash_prefix: str) -> Dict[str, Any]:
                         "metrics": dict,
                         "metadata": dict,
                         "created_at": str,
+                        "command_fingerprint": str or None,
                     },
                     ...
                 ],
@@ -233,8 +243,9 @@ def get_cache_entry(db_path: Path, hash_prefix: str) -> Dict[str, Any]:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """
-            SELECT params_json, repetition, metrics_json, metadata_json, created_at
+            f"""
+            SELECT params_json, repetition, metrics_json, metadata_json, created_at,
+                   {_fingerprint_select(conn)}
             FROM cached_executions
             WHERE param_hash = ?
             ORDER BY repetition ASC, created_at ASC
@@ -255,6 +266,7 @@ def get_cache_entry(db_path: Path, hash_prefix: str) -> Dict[str, Any]:
             "metrics": json.loads(row["metrics_json"]) if row["metrics_json"] else {},
             "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
             "created_at": row["created_at"],
+            "command_fingerprint": row["command_fingerprint"],
         })
 
     return {"hash": full_hash, "params": params, "repetitions": repetitions}
@@ -268,7 +280,9 @@ def get_cache_stats(db_path: Path) -> Dict[str, Any]:
 
     Returns:
         Dict with total_entries, unique_parameter_sets, oldest_entry,
-        newest_entry, total_repetitions, and db_path.
+        newest_entry, distinct_repetitions, schema_version,
+        distinct_commands, unverified_entries (entries with unknown
+        command), and db_path.
     """
     conn = _connect(Path(db_path))
     try:
@@ -294,6 +308,21 @@ def get_cache_stats(db_path: Path) -> Dict[str, Any]:
             "SELECT COUNT(DISTINCT repetition) AS c FROM cached_executions"
         )
         distinct_reps = cursor.fetchone()["c"]
+
+        schema_version = get_schema_version(conn)
+        if has_fingerprint_column(conn):
+            cursor.execute(
+                "SELECT COUNT(DISTINCT command_fingerprint) AS c FROM cached_executions"
+            )
+            distinct_commands = cursor.fetchone()["c"]
+            cursor.execute(
+                "SELECT COUNT(*) AS c FROM cached_executions "
+                "WHERE command_fingerprint IS NULL"
+            )
+            unverified = cursor.fetchone()["c"]
+        else:
+            distinct_commands = 0
+            unverified = total_entries
     finally:
         conn.close()
 
@@ -302,6 +331,9 @@ def get_cache_stats(db_path: Path) -> Dict[str, Any]:
         "total_entries": total_entries,
         "unique_parameter_sets": unique_params,
         "distinct_repetitions": distinct_reps,
+        "schema_version": schema_version,
+        "distinct_commands": distinct_commands,
+        "unverified_entries": unverified,
         "oldest_entry": oldest,
         "newest_entry": newest,
     }
@@ -383,7 +415,9 @@ def display_cache_entry(entry: Dict[str, Any], show_full: bool = False) -> None:
         return
 
     for rep in reps:
-        print(f"\n  rep={rep['repetition']}  cached_at={rep['created_at']}")
+        fingerprint = rep.get("command_fingerprint")
+        command = fingerprint[:SHORT_HASH_LEN] if fingerprint else "unknown"
+        print(f"\n  rep={rep['repetition']}  cached_at={rep['created_at']}  command={command}")
         if rep["metrics"]:
             print("    metrics:")
             for name in sorted(rep["metrics"].keys()):
@@ -408,5 +442,8 @@ def display_cache_stats(stats: Dict[str, Any]) -> None:
     print(f"Total entries:          {stats['total_entries']}")
     print(f"Unique parameter sets:  {stats['unique_parameter_sets']}")
     print(f"Distinct repetitions:   {stats['distinct_repetitions']}")
+    print(f"Distinct commands:      {stats['distinct_commands']}")
+    print(f"Unknown command:        {stats['unverified_entries']}")
+    print(f"Schema version:         {stats['schema_version']}")
     print(f"Oldest entry:           {stats['oldest_entry'] or '(empty)'}")
     print(f"Newest entry:           {stats['newest_entry'] or '(empty)'}")
