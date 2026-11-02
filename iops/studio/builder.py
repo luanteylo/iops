@@ -20,6 +20,7 @@ runs on the target via ``iops check`` at run time.
 
 from __future__ import annotations
 
+import posixpath
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -169,6 +170,52 @@ def config_workdir(text: str) -> str:
     return str(bench.get("workdir") or "") if isinstance(bench, dict) else ""
 
 
+def target_path(path: str, base: Optional[str] = None,
+                home: Optional[str] = None) -> Optional[str]:
+    """Resolve a path on the target the way IOPS would, without touching the target.
+
+    ``~`` and ``$HOME`` expand to ``home`` when it is known (left as ``~``
+    otherwise), and a relative path is joined to ``base``, the folder the
+    command runs from. Returns None when the path cannot be resolved locally:
+    Jinja2 templates, other environment variables, ``~user``, or a relative
+    path with no ``base``.
+    """
+    p = (path or "").strip()
+    if not p or "{{" in p or "{%" in p:
+        return None
+    for prefix in ("${HOME}", "$HOME"):
+        if p == prefix or p.startswith(prefix + "/"):
+            p = "~" + p[len(prefix):]
+            break
+    if "$" in p or (p.startswith("~") and p != "~" and not p.startswith("~/")):
+        return None
+    if not p.startswith(("/", "~")):
+        if not base:
+            return None
+        p = base.rstrip("/") + "/" + p
+    if home and (p == "~" or p.startswith("~/")):
+        p = home.rstrip("/") + p[1:]
+    return posixpath.normpath(p)
+
+
+def workdir_outside_setup(setup_workdir: str, yaml_workdir: str,
+                          home: Optional[str] = None) -> Optional[str]:
+    """The resolved ``benchmark.workdir`` when it lies outside the setup workdir, else None.
+
+    Studio cd's into the setup workdir before ``iops run``, so a relative
+    ``benchmark.workdir`` lands inside it. None also means "cannot tell" (a
+    templated path, an unknown variable, or ``~`` against an absolute path
+    while the target's home is unknown), so callers only warn on certainty.
+    """
+    setup = target_path(setup_workdir, "~", home)  # relative: from the login dir
+    run = target_path(yaml_workdir, setup, home)
+    if not setup or not run or setup[0] != run[0]:
+        return None
+    if run == setup or run.startswith(setup.rstrip("/") + "/"):
+        return None
+    return run
+
+
 def var_kind(vardef: dict) -> str:
     if "expr" in vardef:
         return "expr"
@@ -263,12 +310,18 @@ _SECTIONS = [
 # Editor UI
 # --------------------------------------------------------------------------- #
 def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
-                 on_run, on_check, on_export=None) -> None:
+                 on_run, on_check, on_export=None, setup_workdir: Optional[str] = None,
+                 target_home: Optional[str] = None) -> None:
     """Render the section-navigated config editor into the current container.
 
     ``on_export`` (optional) is an async callback ``(name, yaml_text)`` that
     writes the *current* editor text to a file on the host; when provided, an
     Export button appears in the header.
+
+    ``setup_workdir`` (optional) is the folder Studio runs IOPS from on the
+    target; when given, the editor warns if ``benchmark.workdir`` resolves
+    outside it. ``target_home`` is the target's ``$HOME``, if known, used to
+    compare ``~`` paths with absolute ones.
     """
     from nicegui import ui
 
@@ -297,6 +350,22 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                 .props("flat dense").tooltip("Save the current YAML to a file on the host")
 
     status = ui.row().classes("items-center gap-2 min-h-6")
+    workdir_note = ui.row().classes("items-center gap-2 w-full no-wrap")
+
+    def update_workdir_note():
+        workdir_note.clear()
+        if not setup_workdir:
+            return
+        outside = workdir_outside_setup(setup_workdir, config_workdir(cm.value), target_home)
+        if not outside:
+            return
+        with workdir_note:
+            ui.icon("warning", color="warning")
+            ui.label(f"benchmark.workdir resolves to {outside}, outside this setup's workdir "
+                     f"({setup_workdir}). The run works, but to find its results point "
+                     f"'Browse runs' at {outside}, or use a relative workdir (e.g. ./runs) "
+                     f"to keep runs under the setup workdir.") \
+                .classes("text-sm text-warning")
 
     def show_status(ok: Optional[bool], text: str):
         status.clear()
@@ -307,6 +376,7 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                      ("text-negative" if ok is False else "text-grey")))
 
     def revalidate():
+        update_workdir_note()
         ok, msgs = validate_yaml_text(cm.value)
         if ok:
             show_status(True, "Valid config")
@@ -444,6 +514,10 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                      on_change=setter(bench, "description")).classes("w-full")
             ui.input("Workdir (on the target)", value=bench.get("workdir", ""),
                      on_change=setter(bench, "workdir")).classes("w-full")
+            if setup_workdir:
+                ui.label(f"Where IOPS creates run_NNN folders. A relative path is placed "
+                         f"under the setup workdir ({setup_workdir}), which Studio runs "
+                         f"IOPS from.").classes("text-xs text-grey")
             with ui.row().classes("gap-2 w-full"):
                 ui.select(EXECUTORS, label="Executor", value=bench.get("executor", "local"),
                           on_change=restructure(lambda e: bench.__setitem__("executor", e.value))).classes("grow")

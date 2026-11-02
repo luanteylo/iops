@@ -44,17 +44,47 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text or "").strip("_") or "item"
 
 
+RUNS_SEARCH_DEPTH = 5
+
+# Characters that would break out of the double quotes a remote folder is
+# embedded in (variables such as $SCRATCH are allowed and expanded on purpose).
+_UNSAFE_REMOTE_CHARS = ('"', "`", "\\", "\n", "\r")
+
+
+def is_safe_remote_dir(path: str) -> bool:
+    """True if ``path`` can be embedded in a double-quoted remote shell word."""
+    return bool((path or "").strip()) and not any(c in path for c in _UNSAFE_REMOTE_CHARS)
+
+
 def list_runs_command(workdir: str) -> str:
     """Shell to list run roots under ``workdir``, newest first.
 
-    Emits ``<mtime>\\t<run_dir>`` lines: each ``run_dir`` is a directory holding
+    First emits ``__IOPS_DIR=<absolute folder>`` (the folder as the target
+    resolved it) or ``__IOPS_NO_DIR__`` when the folder does not exist, then
+    ``<mtime>\\t<run_dir>`` lines: each ``run_dir`` is a directory holding
     ``__iops_run_metadata.json``. ``-printf``/``%T@`` are GNU find features
-    (present on Linux clusters).
+    (present on Linux clusters). The markers are assembled by ``printf`` so the
+    command text itself never contains them.
     """
     return (
-        f'find "{workdir}" -maxdepth 5 -name __iops_run_metadata.json '
-        "-printf '%T@\\t%h\\n' 2>/dev/null | sort -rn"
+        f'if [ -d "{workdir}" ]; then '
+        f'printf \'__IOPS_%s=%s\\n\' DIR "$(cd "{workdir}" && pwd)"; '
+        f'find "{workdir}" -maxdepth {RUNS_SEARCH_DEPTH} -name __iops_run_metadata.json '
+        "-printf '%T@\\t%h\\n' 2>/dev/null | sort -rn; "
+        "else printf '__IOPS_%s__\\n' NO_DIR; fi"
     )
+
+
+def parse_runs_folder(output: str) -> tuple[bool, Optional[str]]:
+    """From ``list_runs_command`` output: ``(folder_exists, absolute_folder)``."""
+    exists, folder = True, None
+    for line in (output or "").splitlines():
+        line = line.strip()
+        if line == "__IOPS_NO_DIR__":
+            exists = False
+        elif line.startswith("__IOPS_DIR=") and folder is None:
+            folder = line[len("__IOPS_DIR="):] or None
+    return exists, folder
 
 
 def parse_run_list(output: str) -> list:

@@ -60,6 +60,10 @@ class SetupConfig:
     # set up the environment so discovery / install / validation see it.
     init_commands: list = field(default_factory=list)
     studio_version: str = STUDIO_VERSION
+    # The folder 'Browse runs' last searched for completed runs, when the user
+    # pointed it somewhere other than ``workdir`` (e.g. a scratch filesystem
+    # their configs write to). None means search ``workdir``.
+    runs_dir: Optional[str] = None
 
     @property
     def where(self) -> str:
@@ -89,6 +93,7 @@ def _parse_setup(d: object) -> Optional[SetupConfig]:
             init_commands=list(d.get("init_commands") or []),
             workdir=d.get("workdir") or "~/iops_workdir",
             studio_version=d.get("studio_version", ""),
+            runs_dir=d.get("runs_dir") or None,
         )
     except KeyError:
         return None

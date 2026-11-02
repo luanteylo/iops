@@ -104,6 +104,17 @@ Click **New config** (or **Edit** on an existing one) to open the **config build
 - The header toggle switches between **Form + YAML** (default), **Form** only, and **YAML** only.
 - **Save**, **Run**, **Check on target** (runs `iops check`), and **Export** (write the YAML to a file on the host) are in the header.
 
+### Setup workdir and `benchmark.workdir`
+
+Two folders are involved, and they have different jobs:
+
+- The **setup workdir** belongs to Studio. It holds the configs Studio writes to the target (`<workdir>/configs/`) and its run scripts (`<workdir>/.iops-studio/`), and Studio `cd`s into it before running `iops run`.
+- **`benchmark.workdir`** in the YAML is where IOPS creates the `run_NNN` folders. IOPS itself does not know about the setup workdir.
+
+A new config starts with `benchmark.workdir` set to the setup workdir. This is a copy, not a link: changing the setup workdir later does not update existing configs. A **relative** `benchmark.workdir` (`./runs`) is resolved from the setup workdir, so it follows the setup and keeps the config portable between machines. An absolute path, `~/...`, or a variable such as `$SCRATCH` is used as written.
+
+When `benchmark.workdir` resolves outside the setup workdir, the builder shows a warning under the validation status and the config card shows a warning icon. This is not an error (writing runs to a scratch filesystem is common on clusters); it is a reminder that **Browse runs** has to be pointed at that folder to find the results (see [Step 6](#step-6---view-and-customize-results)). Studio only warns when it can tell for sure: paths with Jinja2 templates or variables other than `$HOME` are not checked.
+
 Script templates and parser code get language-aware editors: **bash** highlighting for `script_template`, **Python** for `parser_script`.
 
 ![Script and parser editors](../../images/studio/studio-scripts.png)
@@ -131,7 +142,11 @@ Studio writes the config to the target's workdir and runs it **inside a `screen`
 
 ## Step 6 - View and customize results
 
-In the ready view, **Browse runs** lists the completed runs under the workdir. For any run you can:
+The **Results** panel of the ready view lists completed runs (folders holding `__iops_run_metadata.json`) up to five levels below a folder on the target. Type the folder, or pick one from the suggestions (the arrow next to the field): the setup workdir and the `benchmark.workdir` of each saved config. `~` and variables such as `$SCRATCH` are expanded on the target. Click **Browse runs** (or press Enter) to search.
+
+After a search, the panel states which folder was searched, as the target resolved it to an absolute path, and how many runs it holds, or that the folder does not exist. Studio remembers the folder for each setup, so a config that writes to scratch does not have to be re-entered every time.
+
+For any run you can:
 
 - **View report** - Studio runs `iops report`, pulls the HTML back, and shows it in an integrated viewer (charts render offline).
 

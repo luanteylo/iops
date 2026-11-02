@@ -42,7 +42,8 @@ from iops.studio.installer import (
     iops_version_command,
     parse_iops_version,
 )
-from iops.studio.builder import build_editor, config_workdir, starter_yaml
+from iops.studio.builder import (build_editor, config_workdir, starter_yaml, target_path,
+                                 workdir_outside_setup)
 from iops.studio.configs import (
     StudioConfig,
     delete_config,
@@ -55,10 +56,13 @@ from iops.studio.filebrowser import choose_dir, open_yaml, save_yaml
 from iops.studio.results import (
     DEFAULT_REPORT_CONFIG,
     REPORT_FILENAME,
+    RUNS_SEARCH_DEPTH,
+    is_safe_remote_dir,
     light_tar_command,
     list_runs_command,
     localize_report_html,
     parse_run_list,
+    parse_runs_folder,
     plotly_bundle_path,
     report_config_path,
     report_html_path,
@@ -640,6 +644,32 @@ def _run_badge(status):
     ui.badge(label, color=color).props("outline" if status != "running" else "")
 
 
+def _runs_dir_candidates(saved: SetupConfig, cfgs: list) -> list:
+    """``(label, folder)`` suggestions for 'Browse runs'.
+
+    The setup workdir first, then each config's ``benchmark.workdir`` (a
+    relative one is placed under the setup workdir, where Studio runs IOPS
+    from), then the folder searched last. Templated workdirs are skipped.
+    """
+    out, seen = [], set()
+
+    def add(label: str, folder: Optional[str]):
+        if folder and folder not in seen:
+            seen.add(folder)
+            out.append((label, folder))
+
+    add("Setup workdir", saved.workdir)
+    for sc in cfgs:
+        wd = config_workdir(sc.yaml_text)
+        if not wd or "{{" in wd or "{%" in wd:
+            continue
+        if not wd.startswith(("/", "~", "$")):
+            wd = target_path(wd, saved.workdir)
+        add(f"Workdir of config '{sc.name}'", wd)
+    add("Last searched", saved.runs_dir)
+    return out
+
+
 def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                  note, on_back, validate: bool, *, on_new_config, on_edit_config,
                  on_run_config, on_delete_config, on_import_config, on_export_config,
@@ -726,6 +756,9 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                 await _ensure_workdir(session, saved.workdir)
                 if not _alive(status):
                     return
+                state["home"] = await _remote_value(session, "$HOME", "HOME") or None
+                if not _alive(status):
+                    return
                 working("Validating environment...")
                 ok, detail = await _validate_setup(session, saved)
                 msg = detail if ok else detail + " — fix it and re-validate, or delete this setup."
@@ -786,20 +819,57 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
 
     # ---- results (reports + pull) ------------------------------------------ #
     runs_list = state.get("runs_list")
+    cfgs = load_configs(saved.name)
     with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
-        with ui.row().classes("items-center justify-between w-full no-wrap"):
-            ui.label("Results").classes("text-md font-semibold")
-            ui.button("Browse runs", icon="folder_open", on_click=on_browse_runs) \
-                .props("flat dense").tooltip("List completed runs in the workdir")
+        ui.label("Results").classes("text-md font-semibold")
         ui.label("View a run's report in Studio, or pull its results (CSVs, "
                  "metadata, report) to the host.").classes("text-xs text-gray-500")
-        if runs_list is None:
-            ui.label("Click 'Browse runs' to list runs under the workdir.") \
-                .classes("text-xs text-gray-400 italic")
-        elif not runs_list:
-            ui.label("No runs found under the workdir yet.") \
+        with ui.row().classes("items-center gap-1 w-full no-wrap"):
+            runs_dir_in = ui.input(
+                "Folder on the target to search for runs",
+                value=state.get("runs_dir") or saved.runs_dir or saved.workdir) \
+                .classes("grow").props("dense")
+            runs_dir_in.tooltip(f"Runs are found up to {RUNS_SEARCH_DEPTH} levels below this "
+                                "folder. ~ and variables such as $SCRATCH are expanded on "
+                                "the target.")
+            runs_dir_in.on("keydown.enter", lambda: on_browse_runs(runs_dir_in.value))
+            with ui.button(icon="arrow_drop_down").props("flat round dense") \
+                    .tooltip("Suggested folders: the setup workdir and each config's workdir"):
+                with ui.menu():
+                    def pick_folder(f: str):
+                        # Return the browse coroutine itself so NiceGUI awaits it
+                        # (wrapped in a tuple it would never run).
+                        runs_dir_in.set_value(f)
+                        return on_browse_runs(f)
+
+                    for label, folder in _runs_dir_candidates(saved, cfgs):
+                        with ui.menu_item(on_click=lambda f=folder: pick_folder(f)):
+                            with ui.column().classes("gap-0"):
+                                ui.label(label).classes("text-xs text-gray-500")
+                                ui.label(folder).classes("text-sm font-mono")
+            ui.button("Browse runs", icon="search",
+                      on_click=lambda: on_browse_runs(runs_dir_in.value)) \
+                .props("flat dense no-caps")
+        searched = state.get("runs_searched")
+        if runs_list is None or searched is None:
+            ui.label("Choose a folder and click 'Browse runs' to list completed runs.") \
                 .classes("text-xs text-gray-400 italic")
         else:
+            typed, resolved, exists = searched
+            where = resolved or typed
+            with ui.row().classes("items-center gap-1 w-full no-wrap"):
+                ui.icon("folder" if exists else "error", color=None if exists else "negative") \
+                    .classes("text-gray-500")
+                if not exists:
+                    text = f"Folder not found on the target: {typed}"
+                else:
+                    n = len(runs_list)
+                    text = f"{n} run{'s' if n != 1 else ''} in {where}"
+                    if resolved and resolved != typed:
+                        text += f" ({typed})"
+                ui.label(text).classes("text-xs font-mono " + (
+                    "text-gray-600" if exists else "text-negative")).style("word-break:break-all")
+        if runs_list:
             for rd in runs_list:
                 with ui.card().classes("w-full p-2"):
                     with ui.row().classes("items-center justify-between w-full no-wrap"):
@@ -813,6 +883,7 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                                 .props("flat round dense").tooltip("Pull results to the host")
 
     # ---- configs for this target ------------------------------------------- #
+    home = state.get("home") or (str(Path.home()) if saved.target_kind == "local" else None)
     with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
         with ui.row().classes("items-center justify-between w-full no-wrap"):
             ui.label("Configs for this target").classes("text-md font-semibold")
@@ -820,7 +891,6 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                 ui.button("Import", icon="file_upload", on_click=on_import_config) \
                     .props("flat dense").tooltip("Load a YAML file from the host as a new config")
                 ui.button("New config", icon="add", on_click=on_new_config).props("flat dense")
-        cfgs = load_configs(saved.name)
         if not cfgs:
             ui.label("No configs yet. Build one to run a benchmark.") \
                 .classes("text-xs text-gray-400 italic")
@@ -829,8 +899,14 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                 with ui.row().classes("items-center justify-between w-full no-wrap"):
                     with ui.column().classes("gap-0"):
                         ui.label(sc.name).classes("font-medium")
-                        ui.label(config_workdir(sc.yaml_text) or "(workdir in YAML)") \
-                            .classes("text-xs text-gray-500")
+                        cfg_wd = config_workdir(sc.yaml_text)
+                        with ui.row().classes("items-center gap-1 no-wrap"):
+                            ui.label(cfg_wd or "(workdir in YAML)") \
+                                .classes("text-xs text-gray-500")
+                            if workdir_outside_setup(saved.workdir, cfg_wd, home):
+                                ui.icon("warning", color="warning", size="xs").tooltip(
+                                    "Runs are written outside the setup workdir. Point "
+                                    "'Browse runs' at this folder to find them.")
                     with ui.row().classes("items-center gap-1"):
                         ui.button(icon="play_arrow", on_click=lambda s=sc: on_run_config(s)) \
                             .props("flat round dense").tooltip("Run on target")
@@ -1145,7 +1221,7 @@ def _page():
                 on_stop_run=lambda r: _guarded(stop_run(cfg, r)),
                 on_dismiss_run=lambda r: dismiss_run(cfg, r),
                 on_refresh_runs=lambda: _guarded(refresh_runs(cfg)),
-                on_browse_runs=lambda: _guarded(browse_runs(cfg)),
+                on_browse_runs=lambda folder=None: _guarded(browse_runs(cfg, folder)),
                 on_view_report=lambda rd: _guarded(view_report(cfg, rd)),
                 on_pull_results=lambda rd: _guarded(pull_results(cfg, rd)),
             )
@@ -1212,6 +1288,8 @@ def _page():
                 on_cancel=cancel,
                 on_run=run_from_editor,
                 on_check=lambda name, text: check_config(setup_cfg, name, text),
+                setup_workdir=setup_cfg.workdir,
+                target_home=_target_home(setup_cfg),
                 on_export=lambda name, text: _export_yaml(
                     f"{_slug(name) or 'config'}.yaml", text),
             )
@@ -1421,6 +1499,14 @@ def _page():
         sess.state["run_status"] = status
         _refresh_ready(setup_cfg)
 
+    def _target_home(setup_cfg: SetupConfig) -> Optional[str]:
+        """The target's $HOME: recorded at validation, or the local one for local setups."""
+        sess = registry.by_setup(setup_cfg.name)
+        home = sess.state.get("home") if sess is not None else None
+        if not home and setup_cfg.target_kind == "local":
+            home = str(Path.home())
+        return home
+
     def _refresh_ready(setup_cfg: SetupConfig):
         show_ready(setup_cfg, validate=False)
 
@@ -1595,22 +1681,40 @@ def _page():
         url = f"{_RESULTS_URL}/{rel}/{REPORT_FILENAME}?v={uuid.uuid4().hex[:8]}"
         show_report_viewer(setup_cfg, run_dir, url)
 
-    async def browse_runs(setup_cfg: SetupConfig):
+    async def browse_runs(setup_cfg: SetupConfig, folder: Optional[str] = None):
+        """List completed runs below ``folder`` (default: the last one, or the workdir).
+
+        The folder is remembered per setup, so a config that writes elsewhere
+        (a scratch filesystem, say) does not have to be re-entered each time.
+        """
         sess = registry.by_setup(setup_cfg.name)
         if sess is None:
             ui.notify("No terminal for this setup", type="warning")
             return
-        logger.debug("browse_runs: %s under %s", setup_cfg.name, setup_cfg.workdir)
+        folder = ((folder or "").strip() or sess.state.get("runs_dir")
+                  or setup_cfg.runs_dir or setup_cfg.workdir)
+        if not is_safe_remote_dir(folder):
+            ui.notify('The folder cannot contain quotes, backticks, or backslashes',
+                      type="warning")
+            return
+        logger.debug("browse_runs: %s under %s", setup_cfg.name, folder)
         await _detach_if_attached(sess.term, sess.state)
         if not await _is_on_target(sess, setup_cfg):
             ui.notify("Not connected to the target. Reattach a run, or re-select the "
                       "setup to connect.", type="warning")
             return
-        _, out = await sess.term.run(list_runs_command(_shell_workdir(setup_cfg.workdir)),
-                                     display="list runs", timeout=60)
-        runs = parse_run_list(out)
-        logger.debug("browse_runs -> %d run(s) found", len(runs))
+        _, out = await sess.term.run(list_runs_command(_shell_workdir(folder)),
+                                     display=f"list runs in {folder}", timeout=60)
+        exists, resolved = parse_runs_folder(out)
+        runs = parse_run_list(out) if exists else []
+        logger.debug("browse_runs -> %d run(s) found in %s", len(runs), resolved or folder)
         sess.state["runs_list"] = runs
+        sess.state["runs_dir"] = folder
+        sess.state["runs_searched"] = (folder, resolved, exists)
+        remembered = None if folder == setup_cfg.workdir else folder
+        if exists and setup_cfg.runs_dir != remembered:
+            setup_cfg.runs_dir = remembered
+            upsert_setup(setup_cfg)
         _refresh_ready(setup_cfg)
 
     async def _fetch_remote(sess: StudioSession, target_kind: str, remote_path: str,
@@ -1792,6 +1896,7 @@ def _page():
             iops_version=None if env_changed else cfg.iops_version,
             workdir=(wd_in.value or "").strip() or "~/iops_workdir",
             init_commands=_parse_commands(cmds_in.value),
+            runs_dir=cfg.runs_dir,
         )
         # A live terminal for this setup now holds stale state; close it.
         live = registry.by_setup(cfg.name)
