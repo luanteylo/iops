@@ -8,6 +8,7 @@ This module provides functions for:
 from __future__ import annotations
 
 import logging
+from dataclasses import fields
 from pathlib import Path
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
@@ -185,6 +186,13 @@ def _get_resource_metrics(workdir: Path) -> List[str]:
         return []
 
 
+def _non_default_fields(obj) -> Dict[str, Any]:
+    """The fields of a reporting dataclass whose value differs from its default."""
+    default = type(obj)()
+    return {f.name: getattr(obj, f.name) for f in fields(obj)
+            if getattr(obj, f.name) != getattr(default, f.name)}
+
+
 def _create_clean_report_config(
     reporting: "ReportingConfig",
     scripts: List["ScriptConfig"],
@@ -211,32 +219,25 @@ def _create_clean_report_config(
     if reporting.output_dir:
         config["output_dir"] = str(reporting.output_dir)
 
-    # Theme (only include if non-default)
-    if (reporting.theme.style != "plotly_white" or
-        reporting.theme.colors or
-        reporting.theme.font_family != "Segoe UI, sans-serif" or
-        reporting.theme.colorscale != "Viridis" or
-        reporting.theme.section_colorscales):
-        theme = {"style": reporting.theme.style}
-        if reporting.theme.colors:
-            theme["colors"] = reporting.theme.colors
-        if reporting.theme.font_family != "Segoe UI, sans-serif":
-            theme["font_family"] = reporting.theme.font_family
-        if reporting.theme.colorscale != "Viridis":
-            theme["colorscale"] = reporting.theme.colorscale
-        if reporting.theme.section_colorscales:
-            theme["section_colorscales"] = reporting.theme.section_colorscales
-        config["theme"] = theme
+    # Theme, best results and plot defaults: only the fields that differ from
+    # the model defaults (compared field by field, so new fields are covered).
+    theme = _non_default_fields(reporting.theme)
+    if theme:
+        config["theme"] = {"style": reporting.theme.style, **theme}
 
-    # Sections (only include if not all True)
-    sections_dict = {
-        "test_summary": reporting.sections.test_summary,
-        "best_results": reporting.sections.best_results,
-        "variable_impact": reporting.sections.variable_impact,
-        "custom_plots": reporting.sections.custom_plots,
-    }
-    if not all(sections_dict.values()):
-        config["sections"] = sections_dict
+    # Sections: written in full as soon as any one differs from its default, so
+    # the file shows every toggle there is to flip
+    if _non_default_fields(reporting.sections):
+        config["sections"] = {f.name: getattr(reporting.sections, f.name)
+                              for f in fields(reporting.sections)}
+
+    best_results = _non_default_fields(reporting.best_results)
+    if best_results:
+        config["best_results"] = best_results
+
+    plot_defaults = _non_default_fields(reporting.plot_defaults)
+    if plot_defaults:
+        config["plot_defaults"] = plot_defaults
 
     # User's metric configs
     if reporting.metrics:

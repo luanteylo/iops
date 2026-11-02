@@ -24,6 +24,7 @@ from iops.config.models import (
     BestResultsConfig,
     MetricPlotsConfig,
     PlotConfig,
+    PlotDefaultsConfig,
     ReportingConfig,
     ReportThemeConfig,
     SectionConfig,
@@ -330,6 +331,37 @@ class TestReportConfigYamlRoundTrip:
         restored = self._round_trip(reporting, tmp_path)
 
         assert restored.metrics["l1_norm"].plots[0].log_y is True
+
+    def test_every_section_toggle_survives(self, tmp_path):
+        # Flipping a section outside the first four used to drop the whole
+        # sections block, so the report ignored e.g. parallel_coordinates: false.
+        for f in fields(SectionConfig):
+            flipped = SectionConfig(**{f.name: not getattr(SectionConfig(), f.name)})
+            restored = self._round_trip(ReportingConfig(enabled=True, sections=flipped), tmp_path)
+            assert restored.sections == flipped, f.name
+
+    def test_best_results_and_plot_defaults_survive(self, tmp_path):
+        reporting = ReportingConfig(
+            enabled=True,
+            best_results=BestResultsConfig(top_n=9, show_command=False, min_samples=2),
+            plot_defaults=PlotDefaultsConfig(height=640, width=900,
+                                             margin={"l": 10, "r": 10, "t": 30, "b": 10}),
+        )
+        restored = self._round_trip(reporting, tmp_path)
+        assert restored.best_results == reporting.best_results
+        assert restored.plot_defaults == reporting.plot_defaults
+
+    def test_theme_survives(self, tmp_path):
+        theme = ReportThemeConfig(style="seaborn", colors=["#000000", "#ffffff"],
+                                  font_family="Arial", colorscale="Cividis",
+                                  section_colorscales={"variable_impact": "Plasma"})
+        restored = self._round_trip(ReportingConfig(enabled=True, theme=theme), tmp_path)
+        assert restored.theme == theme
+
+    def test_untouched_blocks_are_omitted(self):
+        clean = _create_clean_report_config(ReportingConfig(enabled=True), scripts=[])
+        for key in ("theme", "sections", "best_results", "plot_defaults", "gallery"):
+            assert key not in clean, key
 
     def test_default_values_are_omitted(self):
         reporting = ReportingConfig(
