@@ -14,7 +14,12 @@ from typing import Any, Dict, List, Optional
 import sqlite3
 import json
 
-from .execution_cache import get_schema_version, has_fingerprint_column
+from .execution_cache import (
+    COMMANDS_TABLE_NAME,
+    get_schema_version,
+    has_commands_table,
+    has_fingerprint_column,
+)
 
 
 # Width used when truncating long parameter/metric values in the default view.
@@ -50,6 +55,31 @@ def _fingerprint_select(conn: sqlite3.Connection) -> str:
     if has_fingerprint_column(conn):
         return "command_fingerprint"
     return "NULL AS command_fingerprint"
+
+
+def _load_commands(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
+    """Map each fingerprint to its stored command text (empty for older caches)."""
+    if not has_commands_table(conn):
+        return {}
+    rows = conn.execute(
+        f"SELECT fingerprint, template, env_json, first_seen FROM {COMMANDS_TABLE_NAME}"
+    ).fetchall()
+    return {
+        row["fingerprint"]: {
+            "template": row["template"],
+            "env": json.loads(row["env_json"]) if row["env_json"] else {},
+            "first_seen": row["first_seen"],
+        }
+        for row in rows
+    }
+
+
+def _one_line(text: str, max_width: int) -> str:
+    """Collapse whitespace so a multi-line template fits on one table line."""
+    flat = " ".join(text.split())
+    if len(flat) <= max_width:
+        return flat
+    return flat[:max_width - 3] + "..."
 
 
 def _format_metric(value: Any) -> str:
@@ -105,17 +135,23 @@ def list_cache_entries(
     param_filters: Optional[Dict[str, str]] = None,
     limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """List cached entries, collapsed per unique parameter hash.
+    """List cached entries, collapsed per parameter set and command.
 
-    Each returned dict represents one unique parameter set and aggregates
-    across repetitions:
+    Each returned dict represents one unique parameter set recorded with one
+    command, and aggregates across repetitions. Results for the same
+    parameters measured with different commands are listed separately, so
+    repetition counts and metric means never mix commands:
 
         {
             "hash": str,                # full param_hash
             "params": dict,             # parameter values
-            "rep_count": int,           # number of cached repetitions
-            "repetitions": list[int],   # sorted list of repetition numbers
-            "metrics": dict,            # metric name -> mean across reps
+            "command_fingerprint": str or None,  # None: unknown command
+            "command": str or None,     # command.template, if stored
+            "rep_count": int,           # number of distinct cached repetitions
+            "repetitions": list[int],   # sorted distinct repetition numbers
+            "entries": int,             # stored rows (rebuilt caches may hold
+                                        # several per repetition)
+            "metrics": dict,            # metric name -> mean across entries
             "first_cached": str,        # earliest created_at (ISO string)
             "last_cached": str,         # latest created_at (ISO string)
         }
@@ -128,39 +164,45 @@ def list_cache_entries(
         limit: Maximum number of entries to return (applied after filtering).
 
     Returns:
-        List of per-hash summary dicts, sorted by last_cached descending.
+        List of per-(hash, command) summary dicts, sorted by last_cached
+        descending.
     """
     conn = _connect(Path(db_path))
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """
-            SELECT param_hash, params_json, repetition, metrics_json, created_at
+            f"""
+            SELECT param_hash, params_json, repetition, metrics_json, created_at,
+                   {_fingerprint_select(conn)}
             FROM cached_executions
             ORDER BY created_at ASC
             """
         )
         rows = cursor.fetchall()
+        known_commands = _load_commands(conn)
     finally:
         conn.close()
 
-    grouped: Dict[str, Dict[str, Any]] = {}
+    grouped: Dict[tuple, Dict[str, Any]] = {}
     for row in rows:
         h = row["param_hash"]
+        fp = row["command_fingerprint"]
         params = json.loads(row["params_json"]) if row["params_json"] else {}
         metrics = json.loads(row["metrics_json"]) if row["metrics_json"] else {}
         created_at = row["created_at"]
 
-        if h not in grouped:
-            grouped[h] = {
+        key = (h, fp)
+        if key not in grouped:
+            grouped[key] = {
                 "hash": h,
                 "params": params,
+                "command_fingerprint": fp,
                 "repetitions": [],
                 "_metric_lists": {},
                 "first_cached": created_at,
                 "last_cached": created_at,
             }
-        entry = grouped[h]
+        entry = grouped[key]
         entry["repetitions"].append(row["repetition"])
         if created_at < entry["first_cached"]:
             entry["first_cached"] = created_at
@@ -180,12 +222,16 @@ def list_cache_entries(
             for name, vals in entry["_metric_lists"].items()
             if vals
         }
-        reps_sorted = sorted(entry["repetitions"])
+        reps_sorted = sorted(set(entry["repetitions"]))
+        fp = entry["command_fingerprint"]
         results.append({
             "hash": entry["hash"],
             "params": entry["params"],
+            "command_fingerprint": fp,
+            "command": known_commands.get(fp, {}).get("template") if fp else None,
             "rep_count": len(reps_sorted),
             "repetitions": reps_sorted,
+            "entries": len(entry["repetitions"]),
             "metrics": metric_means,
             "first_cached": entry["first_cached"],
             "last_cached": entry["last_cached"],
@@ -232,7 +278,15 @@ def get_cache_entry(db_path: Path, hash_prefix: str) -> Dict[str, Any]:
                     },
                     ...
                 ],
+                "commands": {
+                    fingerprint: {"template": str, "env": dict, "first_seen": str},
+                    ...
+                },
             }
+
+        ``commands`` holds the stored command text for the fingerprints of
+        this entry. A fingerprint can be missing from it when its results
+        were stored before IOPS kept the command text.
 
     Raises:
         HashPrefixError: If the prefix is ambiguous or has no match.
@@ -253,6 +307,7 @@ def get_cache_entry(db_path: Path, hash_prefix: str) -> Dict[str, Any]:
             (full_hash,),
         )
         rows = cursor.fetchall()
+        known_commands = _load_commands(conn)
     finally:
         conn.close()
 
@@ -269,7 +324,10 @@ def get_cache_entry(db_path: Path, hash_prefix: str) -> Dict[str, Any]:
             "command_fingerprint": row["command_fingerprint"],
         })
 
-    return {"hash": full_hash, "params": params, "repetitions": repetitions}
+    fingerprints = {rep["command_fingerprint"] for rep in repetitions} - {None}
+    commands = {fp: known_commands[fp] for fp in sorted(fingerprints) if fp in known_commands}
+
+    return {"hash": full_hash, "params": params, "repetitions": repetitions, "commands": commands}
 
 
 def get_cache_stats(db_path: Path) -> Dict[str, Any]:
@@ -282,7 +340,10 @@ def get_cache_stats(db_path: Path) -> Dict[str, Any]:
         Dict with total_entries, unique_parameter_sets, oldest_entry,
         newest_entry, distinct_repetitions, schema_version,
         distinct_commands, unverified_entries (entries with unknown
-        command), and db_path.
+        command), commands, and db_path. ``commands`` lists one dict per
+        fingerprint with fingerprint, entries, template, env, and
+        first_seen (template and env are None when the command text was
+        not stored).
     """
     conn = _connect(Path(db_path))
     try:
@@ -320,9 +381,27 @@ def get_cache_stats(db_path: Path) -> Dict[str, Any]:
                 "WHERE command_fingerprint IS NULL"
             )
             unverified = cursor.fetchone()["c"]
+
+            known_commands = _load_commands(conn)
+            cursor.execute(
+                "SELECT command_fingerprint AS fp, COUNT(*) AS c, MIN(created_at) AS first "
+                "FROM cached_executions WHERE command_fingerprint IS NOT NULL "
+                "GROUP BY command_fingerprint ORDER BY first ASC"
+            )
+            commands = []
+            for row in cursor.fetchall():
+                known = known_commands.get(row["fp"], {})
+                commands.append({
+                    "fingerprint": row["fp"],
+                    "entries": row["c"],
+                    "template": known.get("template"),
+                    "env": known.get("env"),
+                    "first_seen": known.get("first_seen", row["first"]),
+                })
         else:
             distinct_commands = 0
             unverified = total_entries
+            commands = []
     finally:
         conn.close()
 
@@ -334,6 +413,7 @@ def get_cache_stats(db_path: Path) -> Dict[str, Any]:
         "schema_version": schema_version,
         "distinct_commands": distinct_commands,
         "unverified_entries": unverified,
+        "commands": commands,
         "oldest_entry": oldest,
         "newest_entry": newest,
     }
@@ -349,7 +429,7 @@ def display_cache_list(
     show_full: bool = False,
     hide_metrics: bool = False,
 ) -> None:
-    """Print a tabular view of cache entries (one row per unique hash)."""
+    """Print a tabular view of cache entries (one row per parameter set and command)."""
     if not entries:
         print("No cache entries match.")
         return
@@ -365,11 +445,12 @@ def display_cache_list(
     if not hide_metrics:
         metric_names = sorted({m for e in entries for m in e["metrics"].keys()})
 
-    headers = ["Hash"] + var_names + ["Reps"] + metric_names + ["Last Cached"]
+    headers = ["Hash", "Cmd"] + var_names + ["Reps"] + metric_names + ["Last Cached"]
 
     rows: List[List[str]] = []
     for e in entries:
-        row = [e["hash"][:SHORT_HASH_LEN]]
+        fp = e.get("command_fingerprint")
+        row = [e["hash"][:SHORT_HASH_LEN], fp[:SHORT_HASH_LEN] if fp else "unknown"]
         for v in var_names:
             row.append(dv(str(e["params"].get(v, ""))))
         row.append(str(e["rep_count"]))
@@ -393,7 +474,14 @@ def display_cache_list(
     for row in rows:
         print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)))
 
-    print(f"\n{len(entries)} unique parameter set(s)")
+    # Counted like 'iops cache stats': unknown commands are not a command
+    param_sets = len({e["hash"] for e in entries})
+    commands = len({e.get("command_fingerprint") for e in entries} - {None})
+    unknown = sum(1 for e in entries if not e.get("command_fingerprint"))
+    summary = f"\n{len(entries)} row(s): {param_sets} unique parameter set(s), {commands} command(s)"
+    if unknown:
+        summary += f", {unknown} row(s) with unknown command"
+    print(summary)
 
 
 def display_cache_entry(entry: Dict[str, Any], show_full: bool = False) -> None:
@@ -434,6 +522,21 @@ def display_cache_entry(entry: Dict[str, Any], show_full: bool = False) -> None:
                     val_str = _truncate(val_str, 60)
                 print(f"      {name}: {val_str}")
 
+    fingerprints = sorted({rep.get("command_fingerprint") for rep in reps} - {None})
+    if fingerprints:
+        commands = entry.get("commands", {})
+        print("\nCommands:")
+        for fp in fingerprints:
+            print(f"\n  {fp[:SHORT_HASH_LEN]}:")
+            command = commands.get(fp)
+            if command is None:
+                print("    (command text not stored)")
+                continue
+            for line in command["template"].strip().splitlines():
+                print(f"    {line}")
+            for key in sorted(command["env"]):
+                print(f"    env {key}={command['env'][key]}")
+
 
 def display_cache_stats(stats: Dict[str, Any]) -> None:
     """Print cache summary statistics."""
@@ -447,3 +550,11 @@ def display_cache_stats(stats: Dict[str, Any]) -> None:
     print(f"Schema version:         {stats['schema_version']}")
     print(f"Oldest entry:           {stats['oldest_entry'] or '(empty)'}")
     print(f"Newest entry:           {stats['newest_entry'] or '(empty)'}")
+
+    commands = stats.get("commands") or []
+    if commands:
+        print("\nCommands:")
+        for command in commands:
+            text = command["template"]
+            text = _one_line(text, 70) if text is not None else "(command text not stored)"
+            print(f"  {command['fingerprint'][:SHORT_HASH_LEN]}  {command['entries']:>5} entries  {text}")

@@ -18,9 +18,12 @@ import json
 import logging
 
 from .execution_cache import (
+    COMMANDS_TABLE_NAME,
     SCHEMA_VERSION,
     create_cache_indexes,
     create_cache_table,
+    create_commands_table,
+    has_commands_table,
     has_fingerprint_column,
     hash_params,
     normalize_params,
@@ -75,7 +78,8 @@ def rebuild_cache(
     to the excluded variables, all entries are kept (the output database
     does NOT have a unique index on the entry key).
 
-    Command fingerprints are carried over unchanged. A source cache created
+    Command fingerprints and the stored command text are carried over
+    unchanged. A source cache created
     by an older IOPS version (no fingerprint column) is read as-is and its
     entries keep an unknown (NULL) fingerprint.
 
@@ -141,6 +145,13 @@ def rebuild_cache(
         """)
         entries = cursor.fetchall()
 
+        commands = []
+        if has_commands_table(src_conn):
+            cursor.execute(
+                f"SELECT fingerprint, template, env_json, first_seen FROM {COMMANDS_TABLE_NAME}"
+            )
+            commands = [tuple(row) for row in cursor.fetchall()]
+
     logger.info(f"Read {stats.source_entries} entries from source cache")
 
     # Create output database (without unique index to allow all entries)
@@ -149,7 +160,13 @@ def rebuild_cache(
     with closing(sqlite3.connect(str(output_db))) as out_conn, out_conn:
         create_cache_table(out_conn)
         create_cache_indexes(out_conn, unique=False)
+        create_commands_table(out_conn)
         out_conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+        out_conn.executemany(f"""
+            INSERT INTO {COMMANDS_TABLE_NAME} (fingerprint, template, env_json, first_seen)
+            VALUES (?, ?, ?, ?)
+        """, commands)
 
         # Track seen (hash, rep) combinations for collision counting
         seen_hash_rep: Set[tuple] = set()

@@ -5,7 +5,7 @@ from iops.execution.planner import (BasePlanner, STATUS_FILENAME, TRACE_FILENAME
                                     IO_TARGETS_FILENAME_PREFIX)
 from iops.execution.executors import BaseExecutor
 from iops.execution.hooks import HookManager, describe_hook_trigger
-from iops.cache import ExecutionCache, command_fingerprint
+from iops.cache import ExecutionCache
 from iops.config.models import GenericBenchmarkConfig
 from iops.results.writer import save_test_execution
 from iops.results.status_rollup import StatusRollup, exec_key_for
@@ -107,7 +107,8 @@ class IOPSRunner(HasLogger):
                 exclude_vars=exclude_vars,
                 objective_metric=objective_metric,
                 objective=objective,
-                command_fingerprint=command_fingerprint(cfg.command.template, cfg.command.env),
+                command_template=cfg.command.template,
+                command_env=cfg.command.env,
                 strict=getattr(args, 'cache_strict', False),
             )
 

@@ -326,7 +326,7 @@ Examples:
 
     # cache list
     cache_list_parser = cache_subparsers.add_parser('list', help='List cached entries',
-                                                     description='List cached entries, collapsed per unique parameter set.')
+                                                     description='List cached entries, one row per parameter set and command.')
     cache_list_parser.add_argument('source', type=Path, help='Path to cache database')
     cache_list_parser.add_argument('filter', type=str, nargs='*', metavar='VAR=VALUE',
                                     help='Filter entries by variable values (e.g., nodes=4 ppn=8)')

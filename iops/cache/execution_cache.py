@@ -30,6 +30,11 @@ SCHEMA_VERSION = 1
 
 TABLE_NAME = "cached_executions"
 
+# Command text per fingerprint, so a cached result can be traced to the command
+# that produced it. Added without a schema version bump: it is created on open
+# when missing, and older IOPS versions ignore it.
+COMMANDS_TABLE_NAME = "cached_commands"
+
 
 class CacheSchemaError(RuntimeError):
     """Raised when a cache database uses a schema this IOPS version cannot handle."""
@@ -49,6 +54,26 @@ def create_cache_table(conn: sqlite3.Connection, table: str = TABLE_NAME) -> Non
             command_fingerprint TEXT
         )
     """)
+
+
+def create_commands_table(conn: sqlite3.Connection) -> None:
+    """Create the command text table (no-op if it exists)."""
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {COMMANDS_TABLE_NAME} (
+            fingerprint TEXT PRIMARY KEY,
+            template TEXT NOT NULL,
+            env_json TEXT,
+            first_seen TEXT NOT NULL
+        )
+    """)
+
+
+def has_commands_table(conn: sqlite3.Connection) -> bool:
+    """Check whether the database has the command text table."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (COMMANDS_TABLE_NAME,),
+    ).fetchone() is not None
 
 
 def create_cache_indexes(conn: sqlite3.Connection, unique: bool = True) -> None:
@@ -108,6 +133,10 @@ def command_fingerprint(template: str, env: Optional[Dict[str, Any]] = None) -> 
         "env": {str(k): _norm(v) for k, v in sorted((env or {}).items())},
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+# ExecutionCache takes a 'command_fingerprint' argument that shadows the function
+_compute_fingerprint = command_fingerprint
 
 
 def _normalize_value(value: Any) -> Any:
@@ -210,6 +239,11 @@ class ExecutionCache(HasLogger):
             - command_fingerprint: TEXT (see command_fingerprint(); NULL when
               the command is unknown, e.g. entries created before schema v1
               or built from a CSV file)
+        cached_commands:
+            - fingerprint: TEXT PRIMARY KEY (matches command_fingerprint)
+            - template: TEXT (command.template as first stored)
+            - env_json: TEXT (command.env as JSON)
+            - first_seen: TEXT (timestamp)
 
     Lookup with a command fingerprint prefers entries recorded with the same
     fingerprint and, unless strict, falls back to entries whose command is
@@ -227,6 +261,8 @@ class ExecutionCache(HasLogger):
         objective: str = "maximize",
         command_fingerprint: Optional[str] = None,
         strict: bool = False,
+        command_template: Optional[str] = None,
+        command_env: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the execution cache.
@@ -242,6 +278,10 @@ class ExecutionCache(HasLogger):
                              If None, entries match on parameters only.
             strict: If True, entries with unknown command (NULL fingerprint) are
                     ignored on lookup instead of being used as a fallback.
+            command_template: The command.template source. When given, the
+                             fingerprint is computed from it and command_env,
+                             and the command text is stored with the results.
+            command_env: The command.env mapping (used with command_template)
         """
         super().__init__()
         self.db_path = Path(db_path)
@@ -250,8 +290,13 @@ class ExecutionCache(HasLogger):
         self.timeout = timeout
         self.objective_metric = objective_metric
         self.objective = objective
+        self.command_template = command_template
+        self.command_env = dict(command_env or {})
+        if command_template is not None:
+            command_fingerprint = _compute_fingerprint(command_template, self.command_env)
         self.command_fingerprint = command_fingerprint
         self.strict = strict
+        self._command_recorded = False
         # (param_hash, repetition) keys served from entries with unknown command
         self._unverified_keys: set = set()
 
@@ -393,8 +438,30 @@ class ExecutionCache(HasLogger):
                     raise
             elif version < SCHEMA_VERSION:
                 self._migrate_v0_to_v1(conn)
+
+            create_commands_table(conn)
+            self._backfill_command(conn)
         finally:
             conn.close()
+
+    def _backfill_command(self, conn: sqlite3.Connection) -> None:
+        """
+        Store the command text if results with the current fingerprint exist.
+
+        Results stored before the commands table existed have a fingerprint
+        but no text. A matching fingerprint means the current template is
+        the one that produced them, so its text can be filled in. Without
+        this, a run served entirely from cache would never record it.
+        """
+        if self.command_template is None:
+            return
+        has_results = conn.execute(
+            f"SELECT 1 FROM {TABLE_NAME} WHERE command_fingerprint = ? LIMIT 1",
+            (self.command_fingerprint,),
+        ).fetchone() is not None
+        if has_results:
+            self._record_command(conn)
+            self._command_recorded = True
 
     def _migrate_v0_to_v1(self, conn: sqlite3.Connection) -> None:
         """
@@ -619,9 +686,10 @@ class ExecutionCache(HasLogger):
         """
         Store execution result in cache.
 
-        The entry is recorded with the current command fingerprint. An
-        existing entry with the same parameters, fingerprint and repetition
-        is replaced.
+        The entry is recorded with the current command fingerprint, and the
+        command text is stored in cached_commands when known. An existing
+        entry with the same parameters, fingerprint and repetition is
+        replaced.
 
         Args:
             params: Execution parameters
@@ -639,6 +707,7 @@ class ExecutionCache(HasLogger):
 
         conn = self._connect_with_retry()
         try:
+            self._record_command(conn)
             try:
                 conn.execute("""
                     INSERT INTO cached_executions
@@ -673,8 +742,26 @@ class ExecutionCache(HasLogger):
                     f"  [Cache] UPDATE: hash={param_hash[:8]} rep={repetition} "
                     f"metrics={len(metrics)} keys"
                 )
+
+            # Set only after commit, so a failed store retries the command row
+            self._command_recorded = self.command_template is not None
         finally:
             conn.close()
+
+    def _record_command(self, conn: sqlite3.Connection) -> None:
+        """Store the command text for the current fingerprint (once per instance)."""
+        if self._command_recorded or self.command_template is None:
+            return
+        conn.execute(f"""
+            INSERT OR IGNORE INTO {COMMANDS_TABLE_NAME}
+            (fingerprint, template, env_json, first_seen)
+            VALUES (?, ?, ?, ?)
+        """, (
+            self.command_fingerprint,
+            self.command_template,
+            json.dumps(self.command_env, sort_keys=True, default=str),
+            datetime.now().isoformat(),
+        ))
 
     def get_cached_repetitions_count(
         self,
@@ -721,10 +808,12 @@ class ExecutionCache(HasLogger):
         conn = self._connect_with_retry()
         try:
             conn.execute("DELETE FROM cached_executions")
+            conn.execute(f"DELETE FROM {COMMANDS_TABLE_NAME}")
             conn.commit()
         finally:
             conn.close()
 
+        self._command_recorded = False
         self.logger.info("Cache cleared")
 
     def get_cache_stats(self) -> Dict[str, Any]:

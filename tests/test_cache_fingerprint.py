@@ -367,3 +367,258 @@ def test_inspect_reports_fingerprints(tmp_path):
     assert stats["schema_version"] == SCHEMA_VERSION
     assert stats["distinct_commands"] == 2
     assert stats["unverified_entries"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Stored command text
+# ---------------------------------------------------------------------------
+
+TEMPLATE_A = "ior -w\n  -b {{ block }}"
+ENV_A = {"OMP_NUM_THREADS": "4"}
+
+
+def _commands(path):
+    with sqlite3.connect(str(path)) as conn:
+        return conn.execute(
+            "SELECT fingerprint, template, env_json FROM cached_commands ORDER BY first_seen"
+        ).fetchall()
+
+
+def test_template_sets_fingerprint(tmp_path):
+    cache = ExecutionCache(tmp_path / "c.db", command_template=TEMPLATE_A, command_env=ENV_A)
+    assert cache.command_fingerprint == command_fingerprint(TEMPLATE_A, ENV_A)
+
+
+def test_store_records_command_text(tmp_path):
+    db = tmp_path / "c.db"
+    cache = ExecutionCache(db, command_template=TEMPLATE_A, command_env=ENV_A)
+    _store(cache, {"nodes": 1}, 1, 10)
+    _store(cache, {"nodes": 2}, 1, 20)
+
+    assert _commands(db) == [(cache.command_fingerprint, TEMPLATE_A, '{"OMP_NUM_THREADS": "4"}')]
+
+
+def test_command_not_recorded_without_results(tmp_path):
+    db = tmp_path / "c.db"
+    ExecutionCache(db, command_template=TEMPLATE_A)
+    assert _commands(db) == []
+
+
+def test_command_not_recorded_without_template(tmp_path):
+    db = tmp_path / "c.db"
+    _store(ExecutionCache(db, command_fingerprint=FP_A), {"nodes": 1}, 1, 10)
+    _store(ExecutionCache(db), {"nodes": 2}, 1, 20)
+    assert _commands(db) == []
+
+
+def test_first_command_text_kept_for_same_fingerprint(tmp_path):
+    """A reflowed template has the same fingerprint; the first text stays."""
+    db = tmp_path / "c.db"
+    _store(ExecutionCache(db, command_template=TEMPLATE_A), {"nodes": 1}, 1, 10)
+    _store(ExecutionCache(db, command_template="ior -w -b {{ block }}"), {"nodes": 2}, 1, 20)
+
+    rows = _commands(db)
+    assert len(rows) == 1
+    assert rows[0][1] == TEMPLATE_A
+
+
+def test_one_command_row_per_fingerprint(tmp_path):
+    db = tmp_path / "c.db"
+    _store(ExecutionCache(db, command_template="ior -w"), {"nodes": 1}, 1, 10)
+    _store(ExecutionCache(db, command_template="ior -r"), {"nodes": 1}, 1, 20)
+
+    assert [row[1] for row in _commands(db)] == ["ior -w", "ior -r"]
+
+
+def test_commands_table_added_to_existing_v1_cache(tmp_path):
+    """Caches created before the commands table get it on open, with no version bump."""
+    db = tmp_path / "c.db"
+    _store(ExecutionCache(db, command_fingerprint=FP_A), {"nodes": 1}, 1, 10)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("DROP TABLE cached_commands")
+
+    cache = ExecutionCache(db, command_template="ior -w")
+    assert _user_version(db) == SCHEMA_VERSION
+    assert _commands(db) == []
+    assert ExecutionCache(db, command_fingerprint=FP_A).get_cached_result({"nodes": 1}, 1) is not None
+
+    _store(cache, {"nodes": 2}, 1, 20)
+    assert [row[1] for row in _commands(db)] == ["ior -w"]
+
+
+def test_v0_migration_adds_commands_table(v0_cache):
+    ExecutionCache(v0_cache)
+    assert _commands(v0_cache) == []
+
+
+def test_clear_cache_clears_commands(tmp_path):
+    db = tmp_path / "c.db"
+    cache = ExecutionCache(db, command_template="ior -w")
+    _store(cache, {"nodes": 1}, 1, 10)
+    cache.clear_cache()
+    assert _commands(db) == []
+
+    # The command is recorded again with the next result
+    _store(cache, {"nodes": 1}, 1, 10)
+    assert [row[1] for row in _commands(db)] == ["ior -w"]
+
+
+def test_rebuild_copies_commands(tmp_path):
+    src = tmp_path / "src.db"
+    out = tmp_path / "out.db"
+    _store(ExecutionCache(src, command_template="ior -w", command_env=ENV_A), {"nodes": 1, "path": "/a"}, 1, 10)
+
+    rebuild_cache(src, out, exclude_vars=["path"])
+
+    assert _commands(out) == _commands(src)
+
+
+def test_inspect_entry_includes_command_text(tmp_path):
+    db = tmp_path / "c.db"
+    cache_a = ExecutionCache(db, command_template="ior -w", command_env=ENV_A)
+    _store(cache_a, {"nodes": 1}, 1, 10)
+    # Fingerprint without stored text, as for results stored before this table existed
+    _store(ExecutionCache(db, command_fingerprint=FP_B), {"nodes": 1}, 2, 20)
+
+    entry_hash = next(iter(sqlite3.connect(str(db)).execute("SELECT param_hash FROM cached_executions")))[0]
+    entry = get_cache_entry(db, entry_hash)
+
+    assert entry["commands"] == {
+        cache_a.command_fingerprint: {
+            "template": "ior -w",
+            "env": ENV_A,
+            "first_seen": entry["commands"][cache_a.command_fingerprint]["first_seen"],
+        }
+    }
+
+
+def test_inspect_stats_lists_commands(tmp_path):
+    db = tmp_path / "c.db"
+    cache_a = ExecutionCache(db, command_template="ior -w")
+    _store(cache_a, {"nodes": 1}, 1, 10)
+    _store(cache_a, {"nodes": 2}, 1, 10)
+    _store(ExecutionCache(db, command_fingerprint=FP_B), {"nodes": 1}, 1, 20)
+    _store(ExecutionCache(db), {"nodes": 3}, 1, 30)
+
+    commands = get_cache_stats(db)["commands"]
+
+    assert [(c["fingerprint"], c["entries"], c["template"]) for c in commands] == [
+        (cache_a.command_fingerprint, 2, "ior -w"),
+        (FP_B, 1, None),
+    ]
+
+
+def test_display_shows_command_text(tmp_path, capsys):
+    from iops.cache.inspect import display_cache_entry, display_cache_stats
+
+    db = tmp_path / "c.db"
+    cache = ExecutionCache(db, command_template="mpirun -np 4\n  ior -w", command_env=ENV_A)
+    _store(cache, {"nodes": 1}, 1, 10)
+    entry_hash = next(iter(sqlite3.connect(str(db)).execute("SELECT param_hash FROM cached_executions")))[0]
+
+    display_cache_entry(get_cache_entry(db, entry_hash))
+    shown = capsys.readouterr().out
+    assert f"command={cache.command_fingerprint[:8]}" in shown
+    assert "    mpirun -np 4\n      ior -w\n" in shown
+    assert "env OMP_NUM_THREADS=4" in shown
+
+    display_cache_stats(get_cache_stats(db))
+    assert "mpirun -np 4 ior -w" in capsys.readouterr().out
+
+
+def test_command_text_backfilled_on_open(tmp_path):
+    """Results stored without text get it when the matching command opens the cache."""
+    db = tmp_path / "c.db"
+    fp = command_fingerprint("ior -w", ENV_A)
+    _store(ExecutionCache(db, command_fingerprint=fp), {"nodes": 1}, 1, 10)
+    assert _commands(db) == []
+
+    # A different command must not be attached to those results
+    ExecutionCache(db, command_template="ior -r")
+    assert _commands(db) == []
+
+    ExecutionCache(db, command_template="ior -w", command_env=ENV_A)
+    assert [(row[0], row[1]) for row in _commands(db)] == [(fp, "ior -w")]
+
+
+# ---------------------------------------------------------------------------
+# Listing per parameter set and command
+# ---------------------------------------------------------------------------
+
+
+def test_list_separates_commands(tmp_path):
+    from iops.cache import list_cache_entries
+
+    db = tmp_path / "c.db"
+    cache_a = ExecutionCache(db, command_template="ior -w")
+    cache_b = ExecutionCache(db, command_template="ior -r")
+    for rep in (1, 2):
+        _store(cache_a, {"nodes": 1}, rep, 10)
+    _store(cache_b, {"nodes": 1}, 1, 30)
+
+    entries = list_cache_entries(db)
+    by_cmd = {e["command"]: e for e in entries}
+
+    assert len(entries) == 2
+    assert entries[0]["hash"] == entries[1]["hash"]
+    assert by_cmd["ior -w"]["repetitions"] == [1, 2]
+    assert by_cmd["ior -w"]["metrics"] == {"bw": 10}
+    assert by_cmd["ior -r"]["repetitions"] == [1]
+    assert by_cmd["ior -r"]["metrics"] == {"bw": 30}
+    assert by_cmd["ior -w"]["command_fingerprint"] == cache_a.command_fingerprint
+
+
+def test_list_unknown_command_and_missing_text(tmp_path):
+    from iops.cache import list_cache_entries
+
+    db = tmp_path / "c.db"
+    _store(ExecutionCache(db), {"nodes": 1}, 1, 10)
+    _store(ExecutionCache(db, command_fingerprint=FP_B), {"nodes": 2}, 1, 20)
+
+    by_nodes = {e["params"]["nodes"]: e for e in list_cache_entries(db)}
+    assert by_nodes[1]["command_fingerprint"] is None
+    assert by_nodes[1]["command"] is None
+    assert by_nodes[2]["command_fingerprint"] == FP_B
+    assert by_nodes[2]["command"] is None
+
+
+def test_list_counts_distinct_repetitions_in_rebuilt_cache(v0_rebuilt_cache):
+    """Rebuilt caches can hold several rows per repetition; count each once."""
+    from iops.cache import list_cache_entries
+
+    entries = list_cache_entries(v0_rebuilt_cache)
+    assert len(entries) == 1
+    assert entries[0]["repetitions"] == [1, 2]
+    assert entries[0]["rep_count"] == 2
+    assert entries[0]["entries"] == 4
+
+
+def test_list_reads_v0_cache_without_migrating(v0_cache):
+    from iops.cache import list_cache_entries
+
+    original = v0_cache.read_bytes()
+    entries = list_cache_entries(v0_cache)
+
+    assert v0_cache.read_bytes() == original
+    assert len(entries) == 2
+    assert all(e["command_fingerprint"] is None for e in entries)
+
+
+def test_display_list_shows_command_column(tmp_path, capsys):
+    from iops.cache import list_cache_entries
+    from iops.cache.inspect import display_cache_list
+
+    db = tmp_path / "c.db"
+    cache_a = ExecutionCache(db, command_template="ior -w")
+    _store(cache_a, {"nodes": 1}, 1, 10)
+    _store(ExecutionCache(db, command_template="ior -r"), {"nodes": 1}, 1, 30)
+    _store(ExecutionCache(db), {"nodes": 2}, 1, 20)
+
+    display_cache_list(list_cache_entries(db))
+    out = capsys.readouterr().out
+
+    header = out.splitlines()[0].split()
+    assert header[:2] == ["Hash", "Cmd"]
+    assert cache_a.command_fingerprint[:8] in out
+    assert "unknown" in out
+    assert "3 row(s): 2 unique parameter set(s), 2 command(s), 1 row(s) with unknown command" in out

@@ -186,9 +186,19 @@ CREATE INDEX idx_param_hash ON cached_executions(param_hash, repetition);
 -- One entry per key (not created for caches written by `iops cache rebuild`)
 CREATE UNIQUE INDEX idx_unique_entry
     ON cached_executions(param_hash, IFNULL(command_fingerprint, ''), repetition);
+
+-- Command text, one row per fingerprint
+CREATE TABLE cached_commands (
+    fingerprint TEXT PRIMARY KEY,       -- Matches cached_executions.command_fingerprint
+    template TEXT NOT NULL,             -- command.template as first stored
+    env_json TEXT,                      -- command.env as JSON
+    first_seen TEXT NOT NULL            -- Timestamp
+);
 ```
 
 The schema version is stored in SQLite's `PRAGMA user_version` (currently 1).
+
+The command text is stored once per distinct command, so `iops cache show` and `iops cache stats` can display the command behind each fingerprint. It is recorded when a result is stored, and also when IOPS opens a cache that already holds results for the current command but not its text (for example results stored by a development version before the table existed). The text is the template as first stored: a reflowed template with the same fingerprint does not replace it. Entries with an unknown command have no text, since IOPS cannot tell which command produced them.
 
 ### What Gets Cached
 
@@ -225,21 +235,30 @@ Unknown command:        0
 Schema version:         1
 Oldest entry:           2026-04-06T18:58:32.285294
 Newest entry:           2026-04-17T23:53:07.035720
+
+Commands:
+  3f9a0c21     28 entries  python train.py --dataset {{ dataset }} --conv {{ light_conv }}
 ```
+
+Each command is listed with its short fingerprint, the number of entries recorded with it, and its template on one line. Use `--json` for the full text.
 
 ### `iops cache list`
 
-List cached entries, collapsed per unique parameter hash. Each row shows a short (8-character) hash, the parameter values, the number of cached repetitions, and metric averages across repetitions.
+List cached entries, one row per parameter set and command. Each row shows a short (8-character) parameter hash, the short command fingerprint (`Cmd`, or `unknown` for entries without one), the parameter values, the number of cached repetitions, and metric averages across repetitions.
 
 ```bash
 $ iops cache list cache.db
 
-Hash      dataset       light_conv  Reps  average_epoch_time_sec  peak_gpu_memory_mib  Last Cached
------------------------------------------------------------------------------------------------------
-57c77ec3  moving_mnist  tied        2     430.72                  10996.97             2026-04-17T23:53:07
-096cd29f  taasrad19     sqnxt       2     391.29                  11134.85             2026-04-17T12:21:38
+Hash      Cmd       dataset       light_conv  Reps  average_epoch_time_sec  peak_gpu_memory_mib  Last Cached
+---------------------------------------------------------------------------------------------------------------
+57c77ec3  3f9a0c21  moving_mnist  tied        2     430.72                  10996.97             2026-04-17T23:53:07
+096cd29f  3f9a0c21  taasrad19     sqnxt       2     391.29                  11134.85             2026-04-17T12:21:38
 ...
+
+14 row(s): 14 unique parameter set(s), 1 command(s)
 ```
+
+When the same parameters were measured with different commands, each command gets its own row with the same `Hash`, so repetition counts and metric averages never mix results from two commands. Use `iops cache show <hash>` to see the command text behind a fingerprint. `Reps` counts distinct repetitions: a cache written by `iops cache rebuild` can hold several entries for one repetition, which are averaged together. With `--json`, each row also carries the full `command_fingerprint`, the `command` template (when stored), and the number of stored `entries`.
 
 Filter by parameter values using the same `VAR=VALUE` syntax as `iops find`:
 
@@ -253,7 +272,7 @@ iops cache list cache.db --no-metrics
 # Show full parameter values without truncation
 iops cache list cache.db --full
 
-# Limit to the 10 most recently cached parameter sets
+# Limit to the 10 most recently cached rows
 iops cache list cache.db --limit 10
 
 # Emit JSON for scripting
@@ -283,7 +302,14 @@ Repetitions: 2
     metadata:
       __executor_status: SUCCEEDED
       ...
+
+Commands:
+
+  3f9a0c21:
+    python train.py --dataset {{ dataset }} --conv {{ light_conv }}
 ```
+
+The `Commands` section prints the template (and `command.env`) for every fingerprint used by the entry. A fingerprint whose text was never stored shows `(command text not stored)`.
 
 If the prefix matches multiple hashes, IOPS reports the candidates and asks for a longer prefix:
 
@@ -325,7 +351,7 @@ The `iops cache rebuild` command modifies an existing cache database by:
 - **Excluding variables** from the hash (consolidating entries that now hash to the same value)
 - **Adding variables** with constant values to all entries (enabling cache reuse after config changes)
 
-Command fingerprints are carried over unchanged, so entries recorded with different commands stay separate. The source file is only read: a cache from an older version is not upgraded, and its entries keep an unknown command in the output.
+Command fingerprints and the stored command text are carried over unchanged, so entries recorded with different commands stay separate. The source file is only read: a cache from an older version is not upgraded, and its entries keep an unknown command in the output.
 
 ### Usage
 
