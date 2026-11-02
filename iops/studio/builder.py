@@ -27,6 +27,7 @@ from typing import Optional
 import yaml
 
 from iops.config.loader import validate_yaml_config
+from iops.config.models import HOOK_EVENTS, HOOK_OUTCOMES
 
 REQUIRED_SECTIONS = ("benchmark", "vars", "command", "scripts", "output")
 
@@ -50,6 +51,27 @@ REPORT_SECTIONS = [
     "bayesian_evolution", "bayesian_parameter_evolution", "resource_sampling",
     "custom_plots", "gallery", "versions",
 ]
+
+# Hook events that fire on thresholds (`at` / `every`), with the default `at`
+# a freshly selected event starts with so the form stays valid.
+HOOK_THRESHOLD_DEFAULTS = {"progress": "50%", "failures": 5, "consecutive_failures": 3}
+HOOK_EVENT_HELP = {
+    "start": "Fires once, after the first test is planned.",
+    "progress": "Fires when the number of concluded tests crosses a threshold "
+                "(count, or \"N%\" of the total).",
+    "failures": "Fires when the number of failed tests (count) or the failure rate "
+                "(\"N%\") crosses a threshold.",
+    "consecutive_failures": "Fires when the current streak of failures reaches a count. "
+                            "Re-arms after a success.",
+    "finish": "Fires once when the run ends. Restrict to some outcomes with 'when'.",
+}
+HOOK_CONTEXT_HELP = (
+    "Jinja2 context: event.{name,hook,threshold}, progress.{completed,total,percent,succeeded,"
+    "failed,skipped,failed_percent,consecutive_failures}, run.{outcome,elapsed,elapsed_seconds,"
+    "start_time,core_hours}, benchmark.name, workdir, report_path, hostname, message, os_env. "
+    "Benchmark vars are not available. Use the quote filter for shell safety, "
+    "e.g. {{ message | quote }}. Hooks run on the host running IOPS."
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -185,6 +207,44 @@ def _csv_list(text: str) -> list:
     return [t.strip() for t in (text or "").split(",") if t.strip()]
 
 
+def _parse_threshold(tok: str):
+    """One hook threshold from form text: "25%" stays a string, "5" becomes an int.
+
+    Anything else is kept as typed (a float or free text) so IOPS' validator
+    reports it with its own message instead of the form silently dropping it.
+    """
+    tok = (tok or "").strip()
+    if not tok:
+        return None
+    if tok.endswith("%"):
+        return tok[:-1].strip() + "%"
+    for cast in (int, float):
+        try:
+            return cast(tok)
+        except ValueError:
+            continue
+    return tok
+
+
+def _parse_thresholds(text: str):
+    """Comma-separated thresholds -> a scalar (one value), a list, or None."""
+    values = [v for v in (_parse_threshold(t) for t in (text or "").split(",")) if v is not None]
+    if not values:
+        return None
+    return values[0] if len(values) == 1 else values
+
+
+def _thresholds_text(value) -> str:
+    if value is None:
+        return ""
+    return _values_text(value if isinstance(value, list) else [value])
+
+
+def _int_or_float(v):
+    f = float(v)
+    return int(f) if f.is_integer() else f
+
+
 # Rail sections: (model key, label, icon). The key also drives item counts.
 _SECTIONS = [
     ("benchmark", "Benchmark", "science"),
@@ -195,6 +255,7 @@ _SECTIONS = [
     ("probes", "Probes", "sensors"),
     ("reporting", "Reporting", "assessment"),
     ("constraints", "Constraints", "rule"),
+    ("hooks", "Hooks", "notifications"),
 ]
 
 
@@ -1056,10 +1117,108 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
                     {"name": "constraint", "rule": "", "violation_policy": "skip"})
             ui.button("Add constraint", icon="add", on_click=restructure(add)).props("flat dense")
 
+    # ---- section: hooks ---------------------------------------------------- #
+    def _hooks_section():
+        hooks = model.get("hooks") or []
+        with ui.column().classes("w-full gap-2"):
+            with _card():
+                ui.label("Commands run on run events (start, progress, failures, finish), "
+                         "e.g. to send a mail or copy results. A failing hook never affects "
+                         "the benchmark. Try them on the target with 'iops hooks test'.") \
+                    .classes("text-xs text-grey")
+            for idx in range(len(hooks)):
+                if isinstance(hooks[idx], dict):
+                    _hook_card(hooks, idx)
+
+            def add(_e=None):
+                hs = model.setdefault("hooks", [])
+                names = {h.get("name") for h in hs if isinstance(h, dict)}
+                i, new = len(hs) + 1, f"hook{len(hs) + 1}"
+                while new in names:
+                    i += 1
+                    new = f"hook{i}"
+                hs.append({"name": new, "event": "progress",
+                           "at": HOOK_THRESHOLD_DEFAULTS["progress"],
+                           "command": "echo {{ message | quote }}"})
+            ui.button("Add hook", icon="add", on_click=restructure(add)).props("flat dense")
+
+    def _remove_hook(idx):
+        hooks = model.get("hooks") or []
+        hooks.pop(idx)
+        if not hooks:
+            model.pop("hooks", None)
+
+    def _switch_hook_event(hook, event):
+        hook["event"] = event
+        if event in HOOK_THRESHOLD_DEFAULTS:
+            if hook.get("at") is None and hook.get("every") is None:
+                hook["at"] = HOOK_THRESHOLD_DEFAULTS[event]
+        else:
+            hook.pop("at", None)
+            hook.pop("every", None)
+        if event != "failures":
+            hook.pop("min_tests", None)
+        if event != "finish":
+            hook.pop("when", None)
+
+    def _hook_card(hooks, idx):
+        hook = hooks[idx]
+        event = hook.get("event")
+        with _card():
+            with ui.row().classes("items-center gap-2 w-full no-wrap"):
+                ui.input("Name", value=hook.get("name", ""),
+                         on_change=setter(hook, "name")).classes("grow")
+                ui.select(list(HOOK_EVENTS), label="Event",
+                          value=event if event in HOOK_EVENTS else None,
+                          on_change=restructure(lambda e, h=hook: _switch_hook_event(h, e.value))) \
+                    .classes("w-48")
+                ui.button(icon="delete", on_click=restructure(lambda e, i=idx: _remove_hook(i))) \
+                    .props("flat round dense color=negative")
+            if event in HOOK_EVENT_HELP:
+                ui.label(HOOK_EVENT_HELP[event]).classes("text-xs text-grey")
+
+            if event in HOOK_THRESHOLD_DEFAULTS:
+                pct_hint = "counts only" if event == "consecutive_failures" else 'count or "N%"'
+                with ui.row().classes("gap-2 w-full"):
+                    ui.input(f"at (comma-separated, {pct_hint}; each fires once)",
+                             value=_thresholds_text(hook.get("at")),
+                             on_change=lambda e, h=hook: (_set_or_pop(h, "at", _parse_thresholds(e.value)),
+                                                          sync_to_yaml())).classes("grow")
+                    ui.input("every (repeating)", value=_thresholds_text(hook.get("every")),
+                             on_change=lambda e, h=hook: (_set_or_pop(h, "every", _parse_threshold(e.value)),
+                                                          sync_to_yaml())).classes("w-48") \
+                        .tooltip("Fires at each multiple, e.g. 100 or \"10%\"")
+            if event == "failures":
+                ui.number("min_tests (before a percentage is evaluated)",
+                          value=hook.get("min_tests", 10), min=1, format="%d",
+                          on_change=setter(hook, "min_tests", cast=int)).classes("w-72")
+            if event == "finish":
+                when = hook.get("when")
+                when_list = when if isinstance(when, list) else ([when] if when else [])
+                ui.select(list(HOOK_OUTCOMES), label="when (empty = every outcome)",
+                          value=[w for w in when_list if w in HOOK_OUTCOMES], multiple=True,
+                          on_change=lambda e, h=hook: (_set_or_pop(h, "when", list(e.value or []) or None),
+                                                       sync_to_yaml())) \
+                    .classes("w-full").props("use-chips")
+
+            _code_editor("Command (bash, Jinja2 with the run context)", hook.get("command", ""),
+                         setter(hook, "command"), "Shell", min_height="90px")
+            ui.label(HOOK_CONTEXT_HELP).classes("text-xs text-grey")
+            ui.number("timeout (s)", value=hook.get("timeout", 60), min=1,
+                      on_change=setter(hook, "timeout", cast=_int_or_float)).classes("w-40") \
+                .tooltip("Seconds before the command is killed (default 60)")
+
+    def _set_or_pop(container, key, value):
+        if value is None:
+            container.pop(key, None)
+        else:
+            container[key] = value
+
     _RENDERERS = {
         "benchmark": _benchmark_section, "vars": _vars_section, "command": _command_section,
         "scripts": _scripts_section, "output": _output_section, "probes": _probes_section,
         "reporting": _reporting_section, "constraints": _constraints_section,
+        "hooks": _hooks_section,
     }
 
     def _section_count(key):
@@ -1069,6 +1228,8 @@ def build_editor(name: str, initial_yaml: str, *, on_save, on_cancel,
             return len(model.get("scripts") or [])
         if key == "constraints":
             return len(model.get("constraints") or [])
+        if key == "hooks":
+            return len(model.get("hooks") or [])
         return None
 
     # ---- rail + content + yaml -------------------------------------------- #
