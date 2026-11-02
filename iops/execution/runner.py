@@ -27,6 +27,7 @@ import shutil
 import socket
 import glob
 import csv
+import statistics
 import threading
 
 # IOPS metadata filename
@@ -416,6 +417,64 @@ class IOPSRunner(HasLogger):
         result["nodes_detail"] = self.collected_system_info
 
         return result
+
+    @staticmethod
+    def _sample_intervals(trace_files: List[Path]) -> List[float]:
+        """
+        Gaps between consecutive samples in sampler trace files.
+
+        Every sampler trace has a ``timestamp`` column, and all rows of one
+        sample (one per core, or one per device) share the same timestamp, so the
+        gaps are taken between distinct timestamps within each file (one file
+        per node).
+
+        Args:
+            trace_files: Trace CSV files written by a sampler
+
+        Returns:
+            All gaps in seconds, pooled across files (empty when no file holds
+            two samples)
+        """
+        gaps = []
+        for trace_file in trace_files:
+            stamps = set()
+            try:
+                with open(trace_file, 'r', newline='') as f:
+                    for row in csv.DictReader(f):
+                        try:
+                            stamps.add(float(row["timestamp"]))
+                        except (KeyError, TypeError, ValueError):
+                            continue
+            except OSError:
+                continue
+            ordered = sorted(stamps)
+            gaps.extend(b - a for a, b in zip(ordered, ordered[1:]))
+        return gaps
+
+    def _warn_on_slow_sampling(self, gaps: List[float], configured: float) -> None:
+        """
+        Warn once when samplers ran much slower than the configured interval.
+
+        A sampler sleeps for the interval and then takes a sample, so the real
+        interval is the sleep plus however long a sample takes. A slow sample
+        (a busy node, or very many cores) therefore lowers the time resolution
+        of every trace without any error, which only shows up later as
+        unexpectedly coarse data.
+
+        Args:
+            gaps: Sample gaps in seconds, pooled across executions
+            configured: The configured sampling interval in seconds
+        """
+        if not gaps or not configured:
+            return
+        measured = statistics.median(gaps)
+        if measured > max(2 * configured, configured + 0.5):
+            self.logger.warning(
+                f"Resource samplers ran about every {measured:.2f} s (median over "
+                f"{len(gaps)} samples), much slower than the configured "
+                f"sampling_interval of {configured:g} s. Traces have that coarser "
+                f"time resolution; per-job totals and peaks are still valid."
+            )
 
     def _compute_trace_metrics(self, trace_files: List[Path]) -> Dict[str, Any]:
         """
@@ -896,6 +955,10 @@ class IOPSRunner(HasLogger):
         # Configured io_paths that had no countable storage behind them, collected
         # across executions so the warning is emitted once rather than per test
         unresolved_io_paths = {}
+        # Gaps between CPU and I/O samples, pooled across executions for the same
+        # reason (the GPU sampler is paced by nvidia-smi, not by this interval)
+        sample_gaps = []
+        sampling_interval = probes.sampling_interval if probes else self.cfg.benchmark.trace_interval
 
         # Group tests by execution_id to handle repetitions
         tests_by_exec = {}
@@ -932,6 +995,7 @@ class IOPSRunner(HasLogger):
                         has_data = True
                     except Exception as e:
                         self.logger.warning(f"Failed to aggregate CPU traces for exec_{exec_id} rep_{rep}: {e}")
+                    sample_gaps.extend(self._sample_intervals(trace_files))
 
             # GPU trace files
             if gpu_sampling:
@@ -957,6 +1021,7 @@ class IOPSRunner(HasLogger):
                         has_data = True
                     except Exception as e:
                         self.logger.warning(f"Failed to aggregate I/O traces for exec_{exec_id} rep_{rep}: {e}")
+                    sample_gaps.extend(self._sample_intervals(io_trace_files))
 
             if has_data:
                 rows.append(row)
@@ -970,6 +1035,8 @@ class IOPSRunner(HasLogger):
                     fieldnames.extend(k for k in row.keys() if k not in fieldnames)
             else:
                 self.logger.debug(f"No trace files found for exec_{exec_id} rep_{rep}")
+
+        self._warn_on_slow_sampling(sample_gaps, sampling_interval)
 
         if unresolved_io_paths:
             details = ", ".join(f"{path} ({fstype})" for path, fstype in sorted(unresolved_io_paths.items()))

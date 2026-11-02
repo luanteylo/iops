@@ -99,6 +99,12 @@ Other filesystems (Lustre, GPFS) are not yet read. They plug in as additional co
 
 All three samplers share the `sampling_interval` setting and support multi-node jobs on SLURM, OAR and PBS.
 
+### What the Interval Means
+
+A sampler sleeps for `sampling_interval`, takes a sample, and repeats, so the real gap between samples is the interval plus the time one sample takes. The CPU/memory and I/O samplers read their counters with shell builtins and start no process per sample other than `sleep` (and `date` on shells older than bash 5), so a sample takes a few milliseconds and the configured interval is what you get, even on nodes with many cores. The GPU sampler is paced by its `nvidia-smi` call.
+
+After a run, IOPS measures the actual gaps in the CPU/memory and I/O traces and logs a warning when their median is much longer than configured (more than twice the interval and more than 0.5 s above it). The traces then have that coarser time resolution. Per-job totals stay correct in that case, because CPU shares and I/O volumes are computed from counter deltas covering the whole gap.
+
 ## Output Files
 
 ### Per-Execution CPU/Memory Sample Files

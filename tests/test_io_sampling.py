@@ -18,17 +18,11 @@ import yaml
 from conftest import load_config
 
 
-# The sampler keeps its per-target labels in an associative array, so running it
-# needs bash 4+. macOS still ships bash 3.2, where `declare -A` is a syntax
-# error. Tests that only check the template's syntax or its target resolution
-# stay platform independent and are deliberately not marked.
-_BASH_HAS_ASSOC_ARRAYS = subprocess.run(
-    ["bash", "-c", "declare -A _probe"], capture_output=True
-).returncode == 0
-
-requires_bash_assoc_arrays = pytest.mark.skipif(
-    not _BASH_HAS_ASSOC_ARRAYS,
-    reason="sampler needs bash 4+ for `declare -A`; this system's bash is older",
+# Lifecycle tests run the sampler against the live kernel counters, which only
+# exist on Linux. Parsing tests use fixture files and run everywhere.
+requires_live_io_counters = pytest.mark.skipif(
+    not (pathlib.Path("/proc/diskstats").exists() or pathlib.Path("/proc/self/mountstats").exists()),
+    reason="needs /proc/diskstats or /proc/self/mountstats (Linux)",
 )
 
 
@@ -221,7 +215,6 @@ _iops_io_sample
         assert result.returncode == 0
         assert result.stdout.strip() == ""
 
-    @requires_bash_assoc_arrays
     def test_block_deltas_are_bytes(self, tmp_path):
         """Sectors are converted at the kernel's fixed 512 bytes per sector."""
         rows = _sample_twice(
@@ -235,7 +228,6 @@ _iops_io_sample
         assert block[0]["read_ops"] == 50
         assert block[0]["write_ops"] == 60
 
-    @requires_bash_assoc_arrays
     def test_virtual_devices_are_excluded(self, tmp_path):
         """loop and dm devices would double count the disks underneath them."""
         rows = _sample_twice(
@@ -266,7 +258,6 @@ echo "$_IOPS_IO_DEVICES"
         devices = result.stdout.split()
         assert devices == ["sda"]
 
-    @requires_bash_assoc_arrays
     def test_nfs_deltas_use_server_byte_counters(self, tmp_path):
         """
         Fields 5 and 6 of the bytes line are the bytes that crossed the wire.
@@ -281,7 +272,6 @@ echo "$_IOPS_IO_DEVICES"
         assert nfs[0]["read_bytes"] == 3000
         assert nfs[0]["write_bytes"] == 7000
 
-    @requires_bash_assoc_arrays
     def test_nfs_ops_ignore_similarly_named_operations(self, tmp_path):
         """READDIR must not be mistaken for READ."""
         rows = _sample_twice(
@@ -291,7 +281,6 @@ echo "$_IOPS_IO_DEVICES"
         assert nfs["read_ops"] == 10
         assert nfs["write_ops"] == 20
 
-    @requires_bash_assoc_arrays
     def test_non_nfs_mounts_are_ignored(self, tmp_path):
         """The ext4 mount in the fixture also has a bytes line."""
         rows = _sample_twice(
@@ -299,7 +288,6 @@ echo "$_IOPS_IO_DEVICES"
         )
         assert {r["device"] for r in rows if r["source"] == "nfs"} == {"server:/export"}
 
-    @requires_bash_assoc_arrays
     def test_counter_reset_clamps_to_zero(self, tmp_path):
         """A counter that goes backwards must not emit a negative burst."""
         rewound = DISKSTATS_BASE.replace(
@@ -314,7 +302,65 @@ echo "$_IOPS_IO_DEVICES"
         assert block["read_ops"] == 0
         assert block["write_ops"] == 0
 
-    @requires_bash_assoc_arrays
+    def test_process_count_per_sample_does_not_grow_with_devices(self, tmp_path):
+        """
+        Regression: every device cost an awk call per sample for its deltas,
+        on top of date, hostname and an awk for the elapsed time. Reading each
+        counter file takes one awk, so a sample may run exactly two, plus at
+        most one `date` (the clock fallback on bash older than 5).
+        """
+        import shutil
+
+        devices = [f"sd{c}" for c in "abcdefgh"]
+        sysblock = tmp_path / "sysblock"
+        for d in devices:
+            (sysblock / d).mkdir(parents=True)
+        n_samples = 4
+        for k in range(n_samples):
+            (tmp_path / f"ds.{k}").write_text("".join(
+                f"   8 {i} {d} {100 + k} 0 {1000 + k} 5 {200 + k} 0 {2000 + k} 8 0 0 0\n"
+                for i, d in enumerate(devices)
+            ))
+            (tmp_path / f"ms.{k}").write_text(MOUNTSTATS_BASE)
+
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        log = tmp_path / "calls.log"
+        for tool in ("awk", "grep", "sed", "cut", "tr", "hostname", "date", "cat"):
+            real = shutil.which(tool)
+            stub = bindir / tool
+            target = f'exec "{real}" "$@"' if real else "exit 0"
+            stub.write_text(f'#!/bin/sh\necho {tool} >> "{log}"\n{target}\n')
+            stub.chmod(0o755)
+
+        sampler = _render_sampler(tmp_path)
+        samples = "\n".join(
+            f'_IOPS_IO_DISKSTATS="{tmp_path}/ds.{k}"\n'
+            f'_IOPS_IO_MOUNTSTATS="{tmp_path}/ms.{k}"\n'
+            f'_iops_io_sample'
+            for k in range(n_samples)
+        )
+        driver = tmp_path / "driver.sh"
+        driver.write_text(f'''#!/bin/bash
+export IOPS_IO_DISKSTATS="{tmp_path}/absent"
+export IOPS_IO_MOUNTSTATS="{tmp_path}/absent"
+export IOPS_IO_SYSBLOCK="{sysblock}"
+source "{sampler}"
+_iops_io_resolve_targets
+export PATH="{bindir}:$PATH"
+{samples}
+''')
+        result = subprocess.run(["bash", str(driver)], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        rows = [ln for ln in result.stdout.strip().split("\n") if ln]
+        # 8 block devices plus the NFS mount, for every sample after the first
+        assert len(rows) == (len(devices) + 1) * (n_samples - 1)
+
+        calls = log.read_text().split()
+        assert calls.count("awk") == 2 * n_samples, calls
+        assert calls.count("date") <= n_samples
+        assert [c for c in calls if c not in ("awk", "date")] == [], calls
+
     def test_rows_carry_the_measured_interval(self, tmp_path):
         """Rates come from the measured elapsed time, not the configured one."""
         rows = _sample_twice(
@@ -500,7 +546,6 @@ echo "DEVICES:$_IOPS_IO_DEVICES"
         devices = result.stdout.split("DEVICES:")[1].split()
         assert sorted(devices) == ["sda", "sdb"]
 
-    @requires_bash_assoc_arrays
     def test_nfs_filter_selects_only_the_configured_export(self, tmp_path):
         """Rows for other NFS mounts on the node must not be emitted."""
         sysblock = tmp_path / "sysblock"
@@ -530,7 +575,7 @@ source "{sampler}"
 _IOPS_IO_FILTERED=1
 _IOPS_IO_DEVICES=" "
 _IOPS_IO_NFS_MOUNTS=" server:/export "
-_iops_io_labels["nfs|server:/export"]="/mnt/data"
+_iops_io_set_label "nfs|server:/export" "/mnt/data"
 _IOPS_IO_MOUNTSTATS="{tmp_path}/ms.1"
 _iops_io_sample > /dev/null
 sleep 0.2
@@ -590,7 +635,6 @@ _iops_io_sample
             f"a run scoped to a local path must not report NFS mounts, got {result.stdout}"
         )
 
-    @requires_bash_assoc_arrays
     def test_paths_sharing_a_device_are_counted_once(self, tmp_path):
         """
         Two directories on the same disk resolve to the same device. The device
@@ -623,7 +667,7 @@ export IOPS_IO_SYSCLASSBLOCK="{sysclass}"
 {path_env}source "{sampler}"
 _iops_io_resolve_targets
 echo "DEVICES:$_IOPS_IO_DEVICES"
-for k in "${{!_iops_io_labels[@]}}"; do echo "LABEL:$k=${{_iops_io_labels[$k]}}"; done
+for i in "${{!_iops_io_keys[@]}}"; do echo "LABEL:${{_iops_io_keys[i]}}=${{_iops_io_label_of[i]}}"; done
 ''')
         result = subprocess.run(
             ["bash", str(driver)], capture_output=True, text=True, timeout=30,
@@ -696,7 +740,7 @@ class TestIoSamplerLifecycle:
         assert "IOPS_ATTEMPT_ID" in IO_SAMPLER_TEMPLATE
         assert "OAR_JOB_ID" in IO_SAMPLER_TEMPLATE
 
-    @requires_bash_assoc_arrays
+    @requires_live_io_counters
     def test_sampler_terminates_when_sentinel_removed(self, tmp_path):
         from iops.execution.planner import (
             EXIT_HANDLER_TEMPLATE, IO_TRACE_FILENAME_PREFIX, IO_SAMPLER_SENTINEL_FILENAME,

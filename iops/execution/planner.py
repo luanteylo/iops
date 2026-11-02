@@ -331,6 +331,32 @@ SAMPLER_SENTINEL_FILENAME = "__iops_trace_running"
 # Filename for the resource trace output (written by sampler during execution)
 TRACE_FILENAME_PREFIX = "__iops_trace_"
 
+# Shell function shared by the CPU and I/O samplers: reads the clock without
+# starting a process. It is pasted into both templates (doubled braces, since the
+# templates go through str.format) so each script stays self-contained, and the
+# two definitions are identical, so sourcing both samplers into one job is fine.
+_SAMPLER_CLOCK_FUNCTION = '''
+# Current time without forking. Sets _IOPS_NOW ("seconds.micros", always with a
+# dot) and _IOPS_NOW_US (integer microseconds). bash 5 provides EPOCHREALTIME;
+# older shells fall back to one `date` call per sample. EPOCHREALTIME uses the
+# locale's decimal separator (a comma under fr_FR, for instance), so it is
+# normalized before being written to a CSV.
+_iops_clock() {{
+    local _t="${{EPOCHREALTIME:-}}"
+    [[ -n "$_t" ]] || _t=$(date +%s.%N 2>/dev/null || date +%s)
+    _t="${{_t/,/.}}"
+    local _s="${{_t%%.*}}" _f=""
+    [[ "$_t" == *.* ]] && _f="${{_t#*.}}"
+    # macOS date has no %N and prints it literally.
+    case "$_s" in ''|*[!0-9]*) _s=0 ;; esac
+    case "$_f" in *[!0-9]*) _f="" ;; esac
+    _f="${{_f}}000000"
+    _f="${{_f:0:6}}"
+    _IOPS_NOW="${{_s}}.${{_f}}"
+    _IOPS_NOW_US=$(( _s * 1000000 + 10#$_f ))
+}}
+'''
+
 # Resource sampler script template - runs in background during execution
 # Collects per-core CPU utilization and memory usage at configurable intervals
 #
@@ -342,6 +368,15 @@ TRACE_FILENAME_PREFIX = "__iops_trace_"
 # This script can be:
 # - Sourced by the main script (sets up launcher + registers cleanup)
 # - Executed standalone on a remote node (just runs the sampling loop)
+#
+# A sample must not start processes. Splitting each /proc/stat field with
+# `$(echo ... | awk ...)` cost about 650 process launches per sample on a
+# 36-core node, which stretched a 0.05 s interval to about 2 s and kept a core
+# busy on the node being measured. Fields are split with `read` and the
+# percentages use integer arithmetic, so the only process per sample is `sleep`
+# (plus one `date` on shells older than bash 5). Previous counters live in
+# indexed arrays keyed by core number, which also keeps the script runnable on
+# bash 3.2.
 RESOURCE_SAMPLER_TEMPLATE = '''#!/bin/bash
 # IOPS Resource Sampler - Collects CPU and memory utilization during execution
 # This file is auto-generated. It can be sourced (to set up and launch) or
@@ -356,77 +391,90 @@ _IOPS_EXEC_DIR="{execution_dir}"
 # of a job derives the same sentinel path. The $$ fallback only applies outside
 # a scheduler, where the job is single-node anyway.
 _IOPS_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
-_IOPS_TRACE_FILE="${{_IOPS_EXEC_DIR}}/{trace_prefix}$(hostname)_${{_IOPS_ATTEMPT_ID}}.csv"
+_IOPS_HOST="$(hostname 2>/dev/null || echo unknown)"
+_IOPS_TRACE_FILE="${{_IOPS_EXEC_DIR}}/{trace_prefix}${{_IOPS_HOST}}_${{_IOPS_ATTEMPT_ID}}.csv"
 _IOPS_INTERVAL={trace_interval}
 _IOPS_SENTINEL="${{_IOPS_EXEC_DIR}}/{sentinel_filename}.${{_IOPS_ATTEMPT_ID}}"
 
-# Previous CPU stats for delta calculation (associative array: cpu_id -> "user nice system idle iowait irq softirq")
-declare -A _iops_prev_cpu
+# Counter sources. Overridable so the parsing can be exercised against fixtures
+# instead of live kernel counters.
+_IOPS_PROC_STAT="${{IOPS_PROC_STAT:-/proc/stat}}"
+_IOPS_PROC_MEMINFO="${{IOPS_PROC_MEMINFO:-/proc/meminfo}}"
 
+# Previous CPU counters per core, indexed by core number:
+#   usr = user + nice, sys = system + irq + softirq, idl = idle + iowait
+_iops_prev_usr=()
+_iops_prev_sys=()
+_iops_prev_idl=()
+''' + _SAMPLER_CLOCK_FUNCTION + '''
+# Sets _IOPS_PCT to 100 * $1 / $2 with two decimals, rounded, using integers
+# only (printf %f would also follow the locale's decimal separator).
+_iops_pct() {{
+    local _v=$(( ($1 * 10000 + $2 / 2) / $2 ))
+    printf -v _IOPS_PCT '%d.%02d' $(( _v / 100 )) $(( _v % 100 ))
+}}
+
+# Sets _IOPS_MEM_TOTAL and _IOPS_MEM_AVAIL (kB) from /proc/meminfo.
+_iops_read_meminfo() {{
+    _IOPS_MEM_TOTAL=0
+    _IOPS_MEM_AVAIL=0
+    [[ -r "$_IOPS_PROC_MEMINFO" ]] || return 0
+    local _key _val _rest
+    while read -r _key _val _rest; do
+        case "$_key" in
+            MemTotal:) _IOPS_MEM_TOTAL=$_val ;;
+            MemAvailable:) _IOPS_MEM_AVAIL=$_val; break ;;
+        esac
+    done < "$_IOPS_PROC_MEMINFO"
+    case "$_IOPS_MEM_TOTAL" in ''|*[!0-9]*) _IOPS_MEM_TOTAL=0 ;; esac
+    case "$_IOPS_MEM_AVAIL" in ''|*[!0-9]*) _IOPS_MEM_AVAIL=0 ;; esac
+}}
+
+# Emit one CSV row per core with its utilization since the previous sample.
+# /proc/stat is read through a single open, which the kernel serves from one
+# snapshot, so every core in a sample is measured at the same instant.
 _iops_sample() {{
-    local ts=$(date +%s.%N 2>/dev/null || date +%s)
-    local host=$(hostname 2>/dev/null || echo "unknown")
+    _iops_clock
+    _iops_read_meminfo
+    [[ -r "$_IOPS_PROC_STAT" ]] || return 0
 
-    # Memory stats (single sample per iteration)
-    local mem_total=$(awk '/MemTotal/{{print $2}}' /proc/meminfo 2>/dev/null || echo 0)
-    local mem_avail=$(awk '/MemAvailable/{{print $2}}' /proc/meminfo 2>/dev/null || echo 0)
+    local cpu user nice system idle iowait irq softirq _rest
+    local core usr sys idl du ds di dt pu ps pi
+    while read -r cpu user nice system idle iowait irq softirq _rest; do
+        # Per-core lines only: the aggregate "cpu" line and the intr/ctxt/...
+        # lines that follow are skipped.
+        case "$cpu" in cpu[0-9]*) ;; *) continue ;; esac
+        # Arithmetic on a malformed value would abort the whole sampler.
+        case "${{user}}${{nice}}${{system}}${{idle}}${{iowait}}${{irq}}${{softirq}}" in
+            *[!0-9]*) continue ;;
+        esac
+        core=${{cpu#cpu}}
+        usr=$(( user + nice ))
+        sys=$(( system + irq + softirq ))
+        idl=$(( idle + iowait ))
 
-    # CPU stats per core (from /proc/stat)
-    while read -r line; do
-        # Parse lines like: cpu0 1234 567 890 12345 678 90 12 0 0 0
-        local cpu_id=$(echo "$line" | awk '{{print $1}}')
-        local user=$(echo "$line" | awk '{{print $2}}')
-        local nice=$(echo "$line" | awk '{{print $3}}')
-        local system=$(echo "$line" | awk '{{print $4}}')
-        local idle=$(echo "$line" | awk '{{print $5}}')
-        local iowait=$(echo "$line" | awk '{{print $6}}')
-        local irq=$(echo "$line" | awk '{{print $7}}')
-        local softirq=$(echo "$line" | awk '{{print $8}}')
-
-        # Skip if this is the aggregate "cpu" line (we want per-core)
-        [[ "$cpu_id" == "cpu" ]] && continue
-
-        # Extract core number (cpu0 -> 0, cpu1 -> 1, etc.)
-        local core="${{cpu_id#cpu}}"
-
-        # Get previous values
-        local prev="${{_iops_prev_cpu[$cpu_id]:-}}"
-
-        if [[ -n "$prev" ]]; then
-            # Calculate deltas
-            local prev_user=$(echo "$prev" | awk '{{print $1}}')
-            local prev_nice=$(echo "$prev" | awk '{{print $2}}')
-            local prev_system=$(echo "$prev" | awk '{{print $3}}')
-            local prev_idle=$(echo "$prev" | awk '{{print $4}}')
-            local prev_iowait=$(echo "$prev" | awk '{{print $5}}')
-            local prev_irq=$(echo "$prev" | awk '{{print $6}}')
-            local prev_softirq=$(echo "$prev" | awk '{{print $7}}')
-
-            local d_user=$((user - prev_user))
-            local d_nice=$((nice - prev_nice))
-            local d_system=$((system - prev_system))
-            local d_idle=$((idle - prev_idle))
-            local d_iowait=$((iowait - prev_iowait))
-            local d_irq=$((irq - prev_irq))
-            local d_softirq=$((softirq - prev_softirq))
-
-            local d_total=$((d_user + d_nice + d_system + d_idle + d_iowait + d_irq + d_softirq))
-
-            if [[ $d_total -gt 0 ]]; then
-                # Calculate percentages (using awk for floating point)
-                local cpu_user_pct=$(awk "BEGIN {{printf \\"%.2f\\", ($d_user + $d_nice) / $d_total * 100}}")
-                local cpu_system_pct=$(awk "BEGIN {{printf \\"%.2f\\", ($d_system + $d_irq + $d_softirq) / $d_total * 100}}")
-                local cpu_idle_pct=$(awk "BEGIN {{printf \\"%.2f\\", ($d_idle + $d_iowait) / $d_total * 100}}")
-
-                # Output CSV line
-                echo "$ts,$host,$core,$cpu_user_pct,$cpu_system_pct,$cpu_idle_pct,$mem_total,$mem_avail"
+        if [[ -n "${{_iops_prev_usr[core]:-}}" ]]; then
+            du=$(( usr - _iops_prev_usr[core] ))
+            ds=$(( sys - _iops_prev_sys[core] ))
+            di=$(( idl - _iops_prev_idl[core] ))
+            # Counters only grow; a negative delta means a reset (CPU hotplug).
+            (( du < 0 )) && du=0
+            (( ds < 0 )) && ds=0
+            (( di < 0 )) && di=0
+            dt=$(( du + ds + di ))
+            if (( dt > 0 )); then
+                _iops_pct "$du" "$dt"; pu=$_IOPS_PCT
+                _iops_pct "$ds" "$dt"; ps=$_IOPS_PCT
+                _iops_pct "$di" "$dt"; pi=$_IOPS_PCT
+                printf '%s,%s,%s,%s,%s,%s,%s,%s\\n' "$_IOPS_NOW" "$_IOPS_HOST" "$core" \\
+                    "$pu" "$ps" "$pi" "$_IOPS_MEM_TOTAL" "$_IOPS_MEM_AVAIL"
             fi
         fi
 
-        # Store current values for next iteration
-        _iops_prev_cpu[$cpu_id]="$user $nice $system $idle $iowait $irq $softirq"
-
-    done < <(grep '^cpu[0-9]' /proc/stat 2>/dev/null)
+        _iops_prev_usr[core]=$usr
+        _iops_prev_sys[core]=$sys
+        _iops_prev_idl[core]=$idl
+    done < "$_IOPS_PROC_STAT"
 }}
 
 _iops_sampler_loop() {{
@@ -452,6 +500,9 @@ _iops_stop_samplers() {{
 if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
     # Running standalone on a node - just run the sampling loop
     # The sentinel file and exit handler registration are done by the sourcing script
+    # Lower our own priority: remote nodes start this script directly, so the
+    # renice in the local fallback below never applies to them.
+    renice -n 19 -p $$ >/dev/null 2>&1 || true
     _iops_sampler_loop
 else
     # Being sourced - set up and launch the samplers
@@ -525,8 +576,9 @@ IO_SAMPLER_TEMPLATE = '''#!/bin/bash
 _IOPS_IO_EXEC_DIR="{execution_dir}"
 # Per-attempt id: see the note in the CPU sampler.
 _IOPS_IO_ATTEMPT_ID="${{IOPS_ATTEMPT_ID:-${{SLURM_JOB_ID:-${{OAR_JOB_ID:-${{PBS_JOBID:-$$}}}}}}}}"
-_IOPS_IO_TRACE_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_trace_prefix}$(hostname)_${{_IOPS_IO_ATTEMPT_ID}}.csv"
-_IOPS_IO_TARGETS_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_targets_prefix}$(hostname)_${{_IOPS_IO_ATTEMPT_ID}}.json"
+_IOPS_IO_HOST="$(hostname 2>/dev/null || echo unknown)"
+_IOPS_IO_TRACE_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_trace_prefix}${{_IOPS_IO_HOST}}_${{_IOPS_IO_ATTEMPT_ID}}.csv"
+_IOPS_IO_TARGETS_FILE="${{_IOPS_IO_EXEC_DIR}}/{io_targets_prefix}${{_IOPS_IO_HOST}}_${{_IOPS_IO_ATTEMPT_ID}}.json"
 _IOPS_IO_INTERVAL={io_trace_interval}
 _IOPS_IO_SENTINEL="${{_IOPS_IO_EXEC_DIR}}/{io_sentinel_filename}.${{_IOPS_IO_ATTEMPT_ID}}"
 
@@ -547,12 +599,40 @@ _IOPS_IO_SYSCLASSBLOCK="${{IOPS_IO_SYSCLASSBLOCK:-/sys/class/block}}"
 # regardless of the device's physical sector size.
 _IOPS_IO_SECTOR_BYTES=512
 
-# Previous counters for delta calculation (key: "source|device")
-declare -A _iops_io_prev
-# Maps a counter key back to the configured path it was resolved from, so each
-# row can say which target it belongs to.
-declare -A _iops_io_labels
-_IOPS_IO_PREV_TS=""
+# Per-counter state, one slot per "source|device" key. Parallel indexed arrays
+# with a linear lookup stand in for an associative array: a node has a handful
+# of counters, and this keeps the sampler runnable on bash 3.2.
+#   _iops_io_label_of: the configured path(s) the key was resolved from, so each
+#                      row can say which target it belongs to
+#   _iops_io_p*:       previous counters for the deltas (empty until sampled)
+_iops_io_keys=()
+_iops_io_label_of=()
+_iops_io_prb=()
+_iops_io_pwb=()
+_iops_io_pro=()
+_iops_io_pwo=()
+_IOPS_IO_PREV_US=""
+
+# Set _IOPS_IO_SLOT to the slot of key $1, creating the slot when it is new.
+_iops_io_slot() {{
+    local _i _n=${{#_iops_io_keys[@]}}
+    for (( _i = 0; _i < _n; _i++ )); do
+        if [[ "${{_iops_io_keys[_i]}}" == "$1" ]]; then
+            _IOPS_IO_SLOT=$_i
+            return 0
+        fi
+    done
+    _IOPS_IO_SLOT=$_n
+    _iops_io_keys[_n]="$1"
+    _iops_io_label_of[_n]=""
+}}
+
+# Set the label of key $1 to $2.
+_iops_io_set_label() {{
+    _iops_io_slot "$1"
+    _iops_io_label_of[_IOPS_IO_SLOT]="$2"
+}}
+''' + _SAMPLER_CLOCK_FUNCTION + '''
 
 # Space-delimited filters, set by _iops_io_resolve_targets.
 _IOPS_IO_DEVICES=""
@@ -664,10 +744,11 @@ _iops_io_resolve() {{
 _iops_io_add_target() {{
     local _key="$1" _path="$2"
     local _kind="${{_key%%|*}}" _name="${{_key#*|}}"
-    local _existing="${{_iops_io_labels[$_key]:-}}"
+    _iops_io_slot "$_key"
+    local _existing="${{_iops_io_label_of[_IOPS_IO_SLOT]}}"
 
     if [ -z "$_existing" ]; then
-        _iops_io_labels["$_key"]="$_path"
+        _iops_io_label_of[_IOPS_IO_SLOT]="$_path"
         case "$_kind" in
             block) _IOPS_IO_DEVICES="${{_IOPS_IO_DEVICES}} ${{_name}} " ;;
             nfs)   _IOPS_IO_NFS_MOUNTS="${{_IOPS_IO_NFS_MOUNTS}} ${{_name}} " ;;
@@ -675,7 +756,7 @@ _iops_io_add_target() {{
     else
         case ";$_existing;" in
             *";$_path;"*) ;;
-            *) _iops_io_labels["$_key"]="${{_existing}};${{_path}}" ;;
+            *) _iops_io_label_of[_IOPS_IO_SLOT]="${{_existing}};${{_path}}" ;;
         esac
     fi
 }}
@@ -786,42 +867,47 @@ _iops_io_available() {{
     [ -r "$_IOPS_IO_DISKSTATS" ] || [ -r "$_IOPS_IO_MOUNTSTATS" ]
 }}
 
+# Emit one CSV row per counter with its deltas since the previous sample.
+# Reading the two counter files takes one awk each; everything per counter
+# (the deltas, the elapsed time) is bash arithmetic, so the process count per
+# sample stays fixed however many devices the node has.
 _iops_io_sample() {{
-    local ts elapsed host key prev deltas label
-    ts=$(date +%s.%N 2>/dev/null || date +%s)
-    host=$(hostname 2>/dev/null || echo "unknown")
+    local elapsed src dev rb wb ro wo d_rb d_wb d_ro d_wo _us
+    _iops_clock
 
-    if [[ -z "$_IOPS_IO_PREV_TS" ]]; then
+    if [[ -z "$_IOPS_IO_PREV_US" ]]; then
         elapsed="0"
     else
-        elapsed=$(awk "BEGIN {{printf \\"%.3f\\", $ts - $_IOPS_IO_PREV_TS}}")
+        _us=$(( _IOPS_NOW_US - _IOPS_IO_PREV_US ))
+        (( _us < 0 )) && _us=0
+        printf -v elapsed '%d.%03d' $(( _us / 1000000 )) $(( _us % 1000000 / 1000 ))
     fi
 
     while read -r src dev rb wb ro wo; do
         [[ -z "$dev" ]] && continue
-        key="${{src}}|${{dev}}"
-        prev="${{_iops_io_prev[$key]:-}}"
-        label="${{_iops_io_labels[$key]:-}}"
+        # Arithmetic on a malformed value would abort the whole sampler.
+        case "$rb$wb$ro$wo" in ''|*[!0-9]*) continue ;; esac
+        _iops_io_slot "${{src}}|${{dev}}"
 
-        if [[ -n "$prev" ]]; then
+        if [[ -n "${{_iops_io_prb[_IOPS_IO_SLOT]:-}}" ]]; then
             # Counters are cumulative since boot. A negative delta means the
             # counter wrapped or the device was reset, so clamp it to zero
             # rather than emitting a nonsense burst.
-            deltas=$(awk -v p="$prev" -v c="$rb $wb $ro $wo" 'BEGIN {{
-                split(p, a, " "); split(c, b, " ")
-                for (i = 1; i <= 4; i++) {{
-                    v = b[i] - a[i]
-                    if (v < 0) v = 0
-                    printf "%.0f%s", v, (i < 4 ? "," : "")
-                }}
-            }}')
-            echo "$ts,$host,$src,$dev,$label,$elapsed,$deltas"
+            d_rb=$(( rb - _iops_io_prb[_IOPS_IO_SLOT] )); (( d_rb < 0 )) && d_rb=0
+            d_wb=$(( wb - _iops_io_pwb[_IOPS_IO_SLOT] )); (( d_wb < 0 )) && d_wb=0
+            d_ro=$(( ro - _iops_io_pro[_IOPS_IO_SLOT] )); (( d_ro < 0 )) && d_ro=0
+            d_wo=$(( wo - _iops_io_pwo[_IOPS_IO_SLOT] )); (( d_wo < 0 )) && d_wo=0
+            printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\\n' "$_IOPS_NOW" "$_IOPS_IO_HOST" "$src" "$dev" \\
+                "${{_iops_io_label_of[_IOPS_IO_SLOT]}}" "$elapsed" "$d_rb" "$d_wb" "$d_ro" "$d_wo"
         fi
 
-        _iops_io_prev[$key]="$rb $wb $ro $wo"
+        _iops_io_prb[_IOPS_IO_SLOT]=$rb
+        _iops_io_pwb[_IOPS_IO_SLOT]=$wb
+        _iops_io_pro[_IOPS_IO_SLOT]=$ro
+        _iops_io_pwo[_IOPS_IO_SLOT]=$wo
     done < <( {{ _iops_io_block_counters; _iops_io_nfs_counters; }} 2>/dev/null )
 
-    _IOPS_IO_PREV_TS="$ts"
+    _IOPS_IO_PREV_US="$_IOPS_NOW_US"
 }}
 
 _iops_io_sampler_loop() {{
@@ -848,6 +934,9 @@ if [[ "${{BASH_SOURCE[0]}}" == "${{0}}" ]]; then
     # Running standalone on a node - resolve this node's own mounts, then sample.
     # Mount tables differ across an allocation, so resolution cannot be inherited
     # from the head node.
+    # Lower our own priority: remote nodes start this script directly, so the
+    # renice in the local fallback below never applies to them.
+    renice -n 19 -p $$ >/dev/null 2>&1 || true
     _iops_io_resolve_targets
     _iops_io_sampler_loop
 else
