@@ -110,6 +110,8 @@ Script templates and parser code get language-aware editors: **bash** highlighti
 
 You can also **import** an existing YAML from the host (it is copied into Studio's library, leaving the original untouched).
 
+The file dialogs used to import, export, and choose a destination folder have a **Search** box: typing filters the current folder, and **Enter** (or **Search subfolders**) looks for matching folder and file names in every folder below it, nearest first. Click a folder in the results to open it, or a file to pick it. Matching ignores case, and `*` and `?` work as wildcards (`*.yaml`, `run_00?`). Hidden folders are searched only when **Hidden** is ticked, and folders such as `.git`, `node_modules`, and virtual environments are skipped. To stay responsive on large trees, the search stops after 200 matches, 20,000 folders, or 5 seconds and says so; start from a deeper folder to search further.
+
 ---
 
 ## Step 5 - Run it
