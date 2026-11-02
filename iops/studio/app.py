@@ -12,14 +12,12 @@ failure, the user can take over in the exact same context.
 
 import asyncio
 import base64
-import io
 import logging
 import os
 import re
 import shlex
 import shutil
 import subprocess
-import tarfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -57,10 +55,13 @@ from iops.studio.results import (
     DEFAULT_REPORT_CONFIG,
     REPORT_FILENAME,
     RUNS_SEARCH_DEPTH,
+    archive_command,
+    human_size,
     is_safe_remote_dir,
-    light_tar_command,
     list_runs_command,
+    local_archive_path,
     localize_report_html,
+    parse_archive_output,
     parse_run_list,
     parse_runs_folder,
     plotly_bundle_path,
@@ -822,8 +823,8 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
     cfgs = load_configs(saved.name)
     with ui.card().classes("studio-card w-full p-4 gap-2 mt-3"):
         ui.label("Results").classes("text-md font-semibold")
-        ui.label("View a run's report in Studio, or pull its results (CSVs, "
-                 "metadata, report) to the host.").classes("text-xs text-gray-500")
+        ui.label("View a run's report in Studio, or pull the run to the host as an "
+                 "archive (iops archive create).").classes("text-xs text-gray-500")
         with ui.row().classes("items-center gap-1 w-full no-wrap"):
             runs_dir_in = ui.input(
                 "Folder on the target to search for runs",
@@ -880,7 +881,7 @@ def _build_ready(session: TerminalSession, state: dict, saved: SetupConfig,
                             ui.button(icon="assessment", on_click=lambda r=rd: on_view_report(r)) \
                                 .props("flat round dense").tooltip("Generate & view report")
                             ui.button(icon="download", on_click=lambda r=rd: on_pull_results(r)) \
-                                .props("flat round dense").tooltip("Pull results to the host")
+                                .props("flat round dense").tooltip("Pull the run to the host as an archive")
 
     # ---- configs for this target ------------------------------------------- #
     home = state.get("home") or (str(Path.home()) if saved.target_kind == "local" else None)
@@ -1746,31 +1747,66 @@ def _page():
             ui.notify("Not connected to the target. Reattach a run, or re-select the "
                       "setup to connect.", type="warning")
             return
-        # Build a small, name-filtered tar on the target (never the raw scratch data).
-        tmp_remote = (f'{_shell_workdir(setup_cfg.workdir)}/.iops-studio/'
-                      f'results_{uuid.uuid4().hex[:8]}.tar.gz')
-        await sess.term.run(f'mkdir -p "{_shell_workdir(setup_cfg.workdir)}/.iops-studio"',
-                            display="prepare results bundle", timeout=30)
-        code, _ = await sess.term.run(light_tar_command(run_dir, tmp_remote),
-                                      display=f"bundle results {Path(run_dir).name}", timeout=180)
-        if code != 0:
-            ui.notify("Could not bundle results on the target (see terminal)", type="negative")
+        # Package the run with `iops archive create` on the target, so the host
+        # gets the same archive as the CLI (manifest, checksums), readable with
+        # `iops find` and `iops archive extract`.
+        ui.notify(f"Archiving {Path(run_dir).name} on the target...", type="info")
+        staging = f'{_shell_workdir(setup_cfg.workdir)}/.iops-studio'
+        code, out = await sess.term.run(
+            archive_command(setup_cfg.env_path, run_dir, staging,
+                            f"archive_{uuid.uuid4().hex[:8]}.tar.gz"),
+            display=f"iops archive create {Path(run_dir).name}", timeout=1800)
+        remote_archive, size = parse_archive_output(out)
+        if code != 0 or not remote_archive:
+            ui.notify("Could not archive the run on the target (see terminal)", type="negative")
             return
-        ui.notify("Transferring results to the host...", type="info")
-        tar_bytes = await _fetch_remote(sess, setup_cfg.target_kind, tmp_remote, timeout=600)
-        await sess.term.run(f'rm -f "{tmp_remote}"', display="clean up bundle", timeout=30)
-        if not tar_bytes:
-            ui.notify("Could not transfer the results bundle", type="negative")
+        dest = local_archive_path(Path(dest_parent),
+                                  _result_slug(f"{setup_cfg.name}_{Path(run_dir).name}"))
+        ui.notify(f"Transferring the archive ({human_size(size)}) to the host...", type="info")
+        error = await _fetch_archive(sess, setup_cfg, remote_archive, dest)
+        await sess.term.run(f'rm -f "{remote_archive}"', display="clean up archive", timeout=30)
+        if error:
+            ui.notify(f"Could not transfer the archive: {error}", type="negative")
             return
-        dest = Path(dest_parent) / _result_slug(f"{setup_cfg.name}_{Path(run_dir).name}")
+        ui.notify(f"Archive saved to {dest}", type="positive")
+
+    async def _fetch_archive(sess: StudioSession, setup_cfg: SetupConfig,
+                             remote_path: str, dest: Path) -> Optional[str]:
+        """Copy a run archive from the target to ``dest``; return an error or None.
+
+        The copy streams to disk (a plain copy for local targets, scp over the
+        terminal's master socket for SSH), since an archive can be far larger than
+        what the in-memory terminal channel suits. When scp is refused (a host
+        without connection sharing, for instance) it falls back to that channel.
+        The file is written under a temporary name and renamed when complete, so
+        an interrupted transfer never leaves a truncated archive behind.
+        """
+        part = dest.with_name(dest.name + ".part")
         try:
-            dest.mkdir(parents=True, exist_ok=True)
-            with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tf:
-                tf.extractall(dest, filter="data")  # path-traversal-safe (PEP 706)
-        except (OSError, tarfile.TarError) as e:
-            ui.notify(f"Could not extract results: {e}", type="negative")
-            return
-        ui.notify(f"Results saved to {dest}", type="positive")
+            conn = build_connection(setup_cfg.target_kind, setup_cfg.target_alias)
+        except ValueError as e:
+            return str(e)
+        result = await asyncio.to_thread(conn.fetch_file, remote_path, str(part), 3600)
+        error = None
+        if not result.ok:
+            error = (result.stderr or result.stdout).strip() or f"exit code {result.exit_code}"
+            if setup_cfg.target_kind == "ssh":
+                logger.info("scp failed (%s); falling back to the terminal channel", error)
+                data = await sess.term.pull_file(remote_path, timeout=3600)
+                if data:
+                    try:
+                        part.write_bytes(data)
+                        error = None
+                    except OSError as e:
+                        error = str(e)
+        if error is None:
+            try:
+                os.replace(part, dest)
+            except OSError as e:
+                error = str(e)
+        if error is not None:
+            part.unlink(missing_ok=True)
+        return error
 
     def show_wizard(sess: StudioSession):
         # Only paint the left pane if this wizard's tab is the focused one.

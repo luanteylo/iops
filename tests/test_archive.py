@@ -895,3 +895,41 @@ class TestFindWithArchive:
 
         # Directory (not a file)
         assert _is_archive(tmp_path) is False
+
+
+class TestArchiveCliExitCodes:
+    """
+    A failed create or extract used to log the error and exit with status 0,
+    so scripts (and Studio's pull) could not tell it from success.
+    """
+
+    def _iops(self, tmp_path, *args):
+        import subprocess
+        import sys
+        return subprocess.run(
+            [sys.executable, "-m", "iops", *args, "--no-log-terminal",
+             "--log-file", str(tmp_path / "cli.log")],
+            capture_output=True, text=True, cwd=tmp_path, timeout=120,
+        )
+
+    def test_create_from_a_non_run_exits_nonzero(self, tmp_path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        proc = self._iops(tmp_path, "archive", "create", str(empty), "-o", str(tmp_path / "x.tar.gz"))
+        assert proc.returncode == 1
+        assert not (tmp_path / "x.tar.gz").exists()
+
+    def test_create_from_a_missing_path_exits_nonzero(self, tmp_path):
+        proc = self._iops(tmp_path, "archive", "create", str(tmp_path / "nope"))
+        assert proc.returncode == 1
+
+    def test_extract_a_missing_archive_exits_nonzero(self, tmp_path):
+        proc = self._iops(tmp_path, "archive", "extract", str(tmp_path / "nope.tar.gz"))
+        assert proc.returncode == 1
+
+    def test_create_succeeds_with_status_zero(self, tmp_path, sample_run_dir):
+        out = tmp_path / "ok.tar.gz"
+        proc = self._iops(tmp_path, "archive", "create", str(sample_run_dir), "-o", str(out),
+                          "--no-progress")
+        assert proc.returncode == 0, proc.stderr
+        assert out.exists()

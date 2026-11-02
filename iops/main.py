@@ -894,14 +894,17 @@ def main():
                 logger.error(f"Source not found: {e}")
                 if args.verbose:
                     raise
+                return 1
             except ValueError as e:
                 logger.error(f"Archive creation failed: {e}")
                 if args.verbose:
                     raise
+                return 1
             except Exception as e:
                 logger.error(f"Unexpected error creating archive: {e}")
                 if args.verbose:
                     raise
+                return 1
             return
 
         elif args.archive_command == 'extract':
@@ -920,21 +923,24 @@ def main():
                 logger.error(f"Archive not found: {e}")
                 if args.verbose:
                     raise
+                return 1
             except ValueError as e:
                 logger.error(f"Extraction failed: {e}")
                 if args.verbose:
                     raise
+                return 1
             except Exception as e:
                 logger.error(f"Unexpected error extracting archive: {e}")
                 if args.verbose:
                     raise
+                return 1
             return
 
         else:
             # No subcommand provided
             logger.error("No archive subcommand specified. Use 'iops archive create' or 'iops archive extract'.")
             logger.info("Run 'iops archive --help' for more information.")
-            return
+            return 1
 
     # ---- cache command ----
     if args.command == 'cache':

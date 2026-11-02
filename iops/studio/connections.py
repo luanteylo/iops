@@ -15,6 +15,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -199,6 +200,17 @@ class Connection:
         """
         raise NotImplementedError
 
+    def fetch_file(self, remote_path: str, local_path: str,
+                   timeout: Optional[float] = None) -> CommandResult:
+        """Copy one file from the target to ``local_path`` on the host.
+
+        ``remote_path`` must be absolute: scp does not expand ``$HOME`` or
+        ``~``. Unlike the terminal's ``pull_file``, the file is streamed to disk
+        rather than buffered in memory, so it suits large files such as a run
+        archive.
+        """
+        raise NotImplementedError
+
     def test(self, timeout: float = 10.0) -> ConnectionTestResult:
         """Probe reachability and report the remote identity."""
         probe = (
@@ -241,6 +253,14 @@ class LocalConnection(Connection):
     def stage_dir(self, local_dir: str, remote_rel: str, timeout: Optional[float] = None) -> StagedDir:
         # Already local: use the directory in place, no copy needed.
         return StagedDir(True, local_dir)
+
+    def fetch_file(self, remote_path: str, local_path: str,
+                   timeout: Optional[float] = None) -> CommandResult:
+        try:
+            shutil.copyfile(remote_path, local_path)
+        except OSError as e:
+            return CommandResult(1, "", str(e))
+        return CommandResult(0, "", "")
 
 
 class SSHConnection(Connection):
@@ -298,6 +318,27 @@ class SSHConnection(Connection):
         if proc.returncode != 0:
             return StagedDir(False, remote_rel, proc.stderr or proc.stdout)
         return StagedDir(True, f'$HOME/{remote_rel}', proc.stdout)
+
+    def fetch_file(self, remote_path: str, local_path: str,
+                   timeout: Optional[float] = None) -> CommandResult:
+        # Joins the interactive terminal's master socket (see _control_opts), so
+        # no new authentication is needed; BatchMode makes it fail fast on hosts
+        # where that socket is unavailable, and the caller can fall back.
+        argv = [
+            "scp",
+            "-o", "BatchMode=yes",
+            "-o", f"ConnectTimeout={self.connect_timeout}",
+            *self._control_opts(),
+            f"{self.alias}:{remote_path}",
+            local_path,
+        ]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return CommandResult(124, "", "scp timed out")
+        except FileNotFoundError as e:
+            return CommandResult(127, "", f"Command not found: {e}")
+        return CommandResult(proc.returncode, proc.stdout, proc.stderr)
 
 
 def build_connection(kind: str, alias: Optional[str] = None) -> Connection:

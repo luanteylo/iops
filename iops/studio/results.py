@@ -2,13 +2,16 @@
 
 Studio runs benchmarks on a target and writes results under the run directory
 (the folder holding ``__iops_run_metadata.json``). This module builds the shell
-commands to enumerate those runs and to bundle their *small* artifacts (the
-report HTML, result CSVs, and ``__iops_*`` metadata) into a tarball, plus pure
-helpers to locate/patch the generated report so it renders inside Studio.
+commands to enumerate those runs and to package one with ``iops archive
+create``, plus pure helpers to locate/patch the generated report so it renders
+inside Studio.
 
-Deliberately excluded: raw scratch data (e.g. multi-GB ``testfile.ior``). A full
-``iops archive`` would include those, so Studio pulls a name-filtered light
-tarball instead, which stays streamable over the terminal channel (pull_file).
+Pulling a run produces the same archive as the CLI (manifest and checksums
+included), so the host can inspect it with ``iops find run.tar.gz`` or unpack it
+with ``iops archive extract``. The archive holds everything under the run
+directory: a study that writes raw data there (rather than to a scratch
+filesystem) makes it correspondingly large, which is why Studio copies it with
+scp instead of the in-memory terminal channel.
 
 All path arguments are already-safe remote shell paths (Studio builds them from
 its workdir setting); they are embedded inside double quotes here.
@@ -28,11 +31,6 @@ REPORT_FILENAME = "analysis_report.html"
 # `iops report <run_dir>` auto-detects this file in the run dir and uses it to
 # drive the report (sections, plots, ...). Editing it and re-running regenerates.
 REPORT_CONFIG_FILENAME = "report_config.yaml"
-
-# File types worth pulling back: results, metadata, report, configs, logs. Raw
-# benchmark data files (no matching suffix) are left on the target.
-_LIGHT_NAME_GLOBS = ("*.csv", "*.json", "*.html", "*.yaml", "*.yml",
-                     "*.log", "*.txt", "*.parquet")
 
 # The report loads Plotly from this CDN; we rewrite it to a locally served copy
 # so charts render without internet.
@@ -133,18 +131,75 @@ reporting:
 """
 
 
-def light_tar_command(run_dir: str, tmp_path: str) -> str:
-    """Shell to bundle a run's small artifacts into ``tmp_path`` (a .tar.gz).
+def archive_command(env_path: str, run_dir: str, staging_dir: str, name: str) -> str:
+    """Shell to package ``run_dir`` with ``iops archive create``.
 
-    Runs relative to ``run_dir`` so the tar stores clean relative paths, and
-    filters by name so only results/metadata/report/logs are included, never raw
-    scratch data. Exit code is the pipeline's (tar), so the caller can check it.
+    The archive is written to ``staging_dir/name``. On success the command
+    prints ``__IOPS_ARCHIVE=<absolute path>`` (scp needs an absolute path, and
+    ``staging_dir`` usually starts with ``$HOME``) and ``__IOPS_SIZE=<bytes>``,
+    for ``parse_archive_output``. As in ``list_runs_command``, the markers are
+    assembled by ``printf`` so the echoed command line never contains them. The
+    exit status is the archive command's.
+
+    ``iops archive create`` writes a log file to the current directory by
+    default; it is pointed into ``staging_dir`` and removed afterwards, so
+    pulling a run leaves nothing behind in the terminal's working directory.
     """
-    globs = " -o ".join(f"-name '{g}'" for g in _LIGHT_NAME_GLOBS)
+    out = f"{staging_dir}/{name}"
+    log = f"{out}.log"
     return (
-        f'cd "{run_dir}" && find . -type f \\( {globs} \\) -print0 '
-        f'| tar czf "{tmp_path}" --null -T -'
+        f'mkdir -p "{staging_dir}" && '
+        f'"{env_path}" -m iops archive create "{run_dir}" -o "{out}" '
+        f'--no-progress --log-file "{log}"; '
+        f'__iops_rc=$?; rm -f "{log}"; '
+        f'if [ $__iops_rc -eq 0 ] && [ -f "{out}" ]; then '
+        f'printf \'__IOPS_%s=%s\\n\' ARCHIVE "$(cd "{staging_dir}" && pwd)/{name}"; '
+        f'printf \'__IOPS_%s=%s\\n\' SIZE "$(( $(wc -c < "{out}") ))"; '
+        f'fi; [ $__iops_rc -eq 0 ]'
     )
+
+
+def parse_archive_output(output: str) -> tuple[Optional[str], Optional[int]]:
+    """From ``archive_command`` output: ``(absolute_archive_path, size_bytes)``.
+
+    Either is None when its marker is missing (the archive was not created).
+    """
+    path, size = None, None
+    for line in (output or "").splitlines():
+        line = line.strip()
+        if line.startswith("__IOPS_ARCHIVE="):
+            path = line[len("__IOPS_ARCHIVE="):] or None
+        elif line.startswith("__IOPS_SIZE="):
+            value = line[len("__IOPS_SIZE="):]
+            size = int(value) if value.isdigit() else None
+    return path, size
+
+
+def local_archive_path(dest_dir: Path, base: str) -> Path:
+    """Where to save a pulled archive in ``dest_dir`` without overwriting one.
+
+    ``base.tar.gz`` when free, otherwise ``base_2.tar.gz``, ``base_3.tar.gz``...
+    Pulling the same run twice keeps both copies, since the run may have changed
+    in between (a resumed study, a regenerated report).
+    """
+    candidate = dest_dir / f"{base}.tar.gz"
+    n = 2
+    while candidate.exists():
+        candidate = dest_dir / f"{base}_{n}.tar.gz"
+        n += 1
+    return candidate
+
+
+def human_size(num_bytes: Optional[int]) -> str:
+    """``1536`` -> ``"1.5 KiB"``; unknown sizes read as ``"unknown size"``."""
+    if num_bytes is None:
+        return "unknown size"
+    size = float(num_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GiB"
 
 
 def localize_report_html(html: bytes, plotly_url: str) -> bytes:

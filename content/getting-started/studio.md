@@ -153,7 +153,7 @@ For any run you can:
 ![Integrated report viewer](../../images/studio/studio-report.png)
 
 - **Edit report config** - from the report viewer, open the run's `report_config.yaml` in a YAML editor, tweak sections, plots or axes, and **Save & regenerate** to rebuild the report in place.
-- **Pull results** - bring a run's small artifacts (results CSV, metadata, report, logs) back to a folder on your machine. Raw scratch data is deliberately excluded, so the transfer stays small.
+- **Pull results** - package the run with `iops archive create` on the target and save the archive (`<setup>_<run>.tar.gz`) to a folder on your machine. It is the same archive the CLI produces, with a manifest and checksums, so `iops find <archive>` lists its executions without unpacking it and `iops archive extract <archive>` restores the run folder. An existing archive is never overwritten; pulling the same run again adds `_2`, `_3`, and so on. The archive holds everything under the run folder, so a study that writes its raw data there (rather than to a scratch filesystem) produces a correspondingly large archive. For SSH targets the archive is copied with `scp` over the terminal's existing connection, which suits large files; if the host refuses that, Studio falls back to the terminal channel.
 
 ---
 
