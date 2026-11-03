@@ -986,6 +986,19 @@ class ReportGenerator:
         except Exception as e:
             return None
 
+    def _section_enabled(self, name: str) -> bool:
+        """Whether ``reporting.sections.<name>`` is on (True when not configured).
+
+        Every toggle in ``reporting.sections`` has to be consulted somewhere:
+        test_summary, best_results, bayesian_evolution, and custom_plots used to be
+        accepted and written to report_config.yaml but never read, so turning
+        them off left the report unchanged.
+        """
+        sections = getattr(self.report_config, "sections", None) if self.report_config else None
+        if sections is None:
+            return True
+        return bool(getattr(sections, name, True))
+
     def generate_report(self, output_path: Optional[Path] = None) -> Path:
         """
         Generate complete HTML report with all plots.
@@ -1036,7 +1049,8 @@ class ReportGenerator:
         html_parts.append(self._generate_header())
 
         # Summary statistics first
-        html_parts.append(self._generate_summary_section(report_vars, metrics))
+        if self._section_enabled("test_summary"):
+            html_parts.append(self._generate_summary_section(report_vars, metrics))
 
         # System environment (if collected from compute nodes)
         sys_env_html = self._generate_system_environment_section()
@@ -1049,12 +1063,14 @@ class ReportGenerator:
             html_parts.append(versions_html)
 
         # Best configurations immediately after summary
-        html_parts.append(self._generate_best_configs_section(metrics, report_vars))
+        if self._section_enabled("best_results"):
+            html_parts.append(self._generate_best_configs_section(metrics, report_vars))
 
         # Add search evolution section
         search_method = self.metadata['benchmark'].get('search_method', '').lower()
         if search_method == 'bayesian':
-            html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
+            if self._section_enabled("bayesian_evolution"):
+                html_parts.append(self._generate_bayesian_optimization_section(metrics, report_vars))
         elif search_method == 'random':
             html_parts.append(self._generate_random_search_section(metrics, report_vars))
         elif search_method == 'adaptive':
@@ -1072,7 +1088,8 @@ class ReportGenerator:
             html_parts.append(resource_html)
 
         # Custom plots defined by user in reporting config
-        html_parts.append(self._generate_custom_plots_section(metrics, report_vars))
+        if self._section_enabled("custom_plots"):
+            html_parts.append(self._generate_custom_plots_section(metrics, report_vars))
 
         # Per-test image gallery (e.g. simulation thumbnails) defined in reporting.gallery
         gallery_html = self._generate_gallery_section(report_vars)

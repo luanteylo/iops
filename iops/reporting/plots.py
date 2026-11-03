@@ -403,6 +403,28 @@ class LinePlot(BasePlot):
 class ScatterPlot(BasePlot):
     """Scatter plot with optional color/size mapping."""
 
+    # Marker diameters (px) for the smallest and largest size_by value
+    SIZE_RANGE = (8.0, 28.0)
+
+    @classmethod
+    def _marker_sizes(cls, values: pd.Series) -> list:
+        """Map ``size_by`` values linearly onto ``SIZE_RANGE``.
+
+        Numeric values keep their order and relative spacing; anything else
+        (strings, booleans) is ranked by first appearance. A single distinct
+        value gets the middle of the range.
+        """
+        lo, hi = cls.SIZE_RANGE
+        if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
+            nums = values.astype(float)
+        else:
+            nums = pd.Series(pd.factorize(values)[0], index=values.index, dtype=float)
+        vmin, vmax = nums.min(), nums.max()
+        if pd.isna(vmin) or vmax == vmin:
+            return [round((lo + hi) / 2, 2)] * len(nums)
+        return [lo if pd.isna(v) else round(lo + (v - vmin) / (vmax - vmin) * (hi - lo), 2)
+                for v in nums]
+
     def generate(self) -> go.Figure:
         x_var = self.config.x_var
         y_var = self.config.y_var
@@ -427,12 +449,18 @@ class ScatterPlot(BasePlot):
         # Determine color column (can be variable or metric)
         color_col = self._get_column(color_by)
 
+        # Optional size column (variable or metric). A variable used for size
+        # becomes a grouping column like x and color, so each of its values gets
+        # its own point instead of being averaged away.
+        size_by = self.config.size_by
+        size_col = self._get_column(size_by) if size_by else None
+
         # Determine which columns are variables (for grouping)
         # and which are metrics (for aggregation)
         group_cols = []
         agg_cols = []
 
-        for col in [x_col, y_col, color_col]:
+        for col in [x_col, y_col, color_col] + ([size_col] if size_col else []):
             if col.startswith('vars.'):
                 if col not in group_cols:
                     group_cols.append(col)
@@ -452,16 +480,20 @@ class ScatterPlot(BasePlot):
             df_grouped = pd.DataFrame({col: [self.df[col].mean()] for col in agg_cols})
         else:
             # Shouldn't happen, but handle it
-            df_grouped = self.df[[x_col, y_col, color_col]].copy()
+            cols = [x_col, y_col, color_col] + ([size_col] if size_col else [])
+            df_grouped = self.df[list(dict.fromkeys(cols))].copy()
 
         # Create scatter plot
         fig = go.Figure()
 
         # Marker colors must be numeric for a colorscale. Map categorical
-        # (string) color columns to integer codes and label the colorbar
-        # ticks with the original category values.
+        # (string or boolean) color columns to integer codes and label the
+        # colorbar ticks with the original category values. Booleans count as
+        # categorical: pandas reports them as numeric, but Plotly cannot place
+        # True/False on a colorscale, so every marker came out the same color.
         color_values = df_grouped[color_col]
-        if pd.api.types.is_numeric_dtype(color_values):
+        if (pd.api.types.is_numeric_dtype(color_values)
+                and not pd.api.types.is_bool_dtype(color_values)):
             marker_color = self._to_list(color_values)
             colorbar = dict(title=color_by)
         else:
@@ -473,26 +505,29 @@ class ScatterPlot(BasePlot):
                 ticktext=[str(u) for u in uniques],
             )
 
+        marker_size = self._marker_sizes(df_grouped[size_col]) if size_col else 12
+
+        def _hover(row):
+            text = (f"{x_var}: {row[x_col]}<br>"
+                    f"{y_title}: {_format_hover_value(row[y_col])}<br>"
+                    f"{color_by}: {_format_hover_value(row[color_col])}")
+            if size_col:
+                text += f"<br>{size_by}: {_format_hover_value(row[size_col])}"
+            return text
+
         fig.add_trace(go.Scatter(
             x=self._to_list(df_grouped[x_col]),
             y=self._to_list(df_grouped[y_col]),
             mode='markers',
             marker=dict(
-                size=12,
+                size=marker_size,
                 color=marker_color,
                 colorscale=self.colorscale,
                 showscale=True,
                 colorbar=colorbar,
                 line=dict(width=1, color='white'),
             ),
-            text=df_grouped.apply(
-                lambda row: (
-                    f"{x_var}: {row[x_col]}<br>"
-                    f"{y_title}: {_format_hover_value(row[y_col])}<br>"
-                    f"{color_by}: {_format_hover_value(row[color_col])}"
-                ),
-                axis=1
-            ),
+            text=df_grouped.apply(_hover, axis=1),
             hovertemplate='%{text}<extra></extra>',
         ))
 

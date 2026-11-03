@@ -1659,7 +1659,11 @@ def _page():
         ui.notify("Generating the report on the target...", type="info")
         # Force the output path so the fetch below is deterministic regardless of
         # any output_dir/output_filename set in the run's report_config.yaml.
+        # The previous HTML is removed first: otherwise a failed regeneration
+        # (an invalid report_config.yaml, say) leaves the old report in place and
+        # Studio shows it as if the edit had been applied.
         await sess.term.run(
+            f'rm -f "{report_html_path(run_dir)}"; '
             f'"{setup_cfg.env_path}" -m iops report "{run_dir}" '
             f'--output "{report_html_path(run_dir)}"',
             display=f"iops report {Path(run_dir).name}", timeout=300)

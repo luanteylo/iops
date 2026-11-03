@@ -506,6 +506,71 @@ class TestScatterStringValues:
 
 
 # ============================================================================
+# Scatter size_by and boolean color_by
+# ============================================================================
+
+class TestScatterSizeAndBooleanColor:
+    """
+    size_by was accepted by the config but never used, so every marker had the
+    same size and the size variable was averaged away; boolean color_by values
+    reached Plotly as True/False, which a colorscale cannot place.
+    """
+
+    # 3 process counts x toto on/off x 3 request sizes, two repetitions each
+    DF = pd.DataFrame([
+        {"vars.total_procs": p, "vars.with_toto": t, "vars.requests_mb": r,
+         "metrics.bwMiB": 1000.0 * p + 100 * r + (50 if t else 0) + rep}
+        for p in (16, 64, 256) for t in (False, True) for r in (1, 8, 32) for rep in (0, 1)
+    ])
+
+    def _fig(self, **cfg):
+        plot = ScatterPlot(
+            df=self.DF,
+            metric="bwMiB",
+            plot_config=PlotConfig(type="scatter", x_var="total_procs", **cfg),
+            theme=ReportThemeConfig(),
+            var_column_fn=lambda v: f"vars.{v}",
+            metric_column_fn=lambda m: f"metrics.{m}",
+        )
+        return plot.generate()
+
+    def test_size_variable_gets_its_own_points(self):
+        trace = self._fig(color_by="with_toto", size_by="requests_mb").data[0]
+        # One point per (procs, toto, request size): repetitions are averaged,
+        # request sizes are not
+        assert len(trace.x) == 18
+        assert all("requests_mb: " in t for t in trace.text)
+
+    def test_sizes_follow_the_size_variable(self):
+        trace = self._fig(size_by="requests_mb").data[0]
+        lo, hi = ScatterPlot.SIZE_RANGE
+        sizes = list(trace.marker.size)
+        assert min(sizes) == lo and max(sizes) == hi
+        # Larger request size, larger marker
+        by_req = {}
+        for text, size in zip(trace.text, sizes):
+            req = int(text.split("requests_mb: ")[1].split("<")[0].split(".")[0])
+            by_req.setdefault(req, set()).add(size)
+        assert max(by_req[1]) < min(by_req[8]) < min(by_req[32])
+
+    def test_without_size_by_markers_keep_the_fixed_size(self):
+        trace = self._fig(color_by="with_toto").data[0]
+        assert trace.marker.size == 12
+        assert len(trace.x) == 6  # requests_mb is averaged when it is not plotted
+
+    def test_boolean_color_is_categorical(self):
+        trace = self._fig(color_by="with_toto").data[0]
+        assert set(trace.marker.color) == {0, 1}
+        assert list(trace.marker.colorbar.ticktext) == ["False", "True"]
+
+    def test_marker_sizes_edge_cases(self):
+        lo, hi = ScatterPlot.SIZE_RANGE
+        assert ScatterPlot._marker_sizes(pd.Series([5, 5, 5])) == [(lo + hi) / 2] * 3
+        assert ScatterPlot._marker_sizes(pd.Series(["a", "b", "a"])) == [lo, hi, lo]
+        assert ScatterPlot._marker_sizes(pd.Series([1.0, None, 3.0])) == [lo, lo, hi]
+
+
+# ============================================================================
 # Explicit axis limits
 # ============================================================================
 

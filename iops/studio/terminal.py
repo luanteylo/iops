@@ -159,6 +159,47 @@ class TerminalSession:
             except OSError:
                 pass
         self._fd = None
+        # The reader is gone, so nothing would ever resolve a pending command:
+        # fail it now, as on EOF, instead of leaving its awaiter to time out.
+        self._fail_inflight()
+
+    def _fail_inflight(self) -> None:
+        """Fail any in-flight run()/push_tar/pull_file so its awaiter returns now.
+
+        Called when the shell is gone, either because it exited (EOF) or because
+        Studio closed it (the browser tab that owned it disconnected), instead of
+        letting each awaiter block for its full timeout on a dead shell.
+        """
+        if self._active is not None:
+            fut = self._active["future"]
+            self._active = None
+            if not fut.done():
+                fut.set_result((-1, ""))
+        if self._transfer is not None:
+            for key in ("ready_future", "end_future"):
+                f = self._transfer[key]
+                if not f.done():
+                    f.set_result(-1 if key == "end_future" else False)
+            self._transfer = None
+        if self._pull is not None:
+            fut = self._pull["future"]
+            self._pull = None
+            if not fut.done():
+                fut.set_result((-1, b""))
+
+    def _restore_tty(self, saved_attrs) -> None:
+        """Put back the PTY mode saved before a command, if the PTY still exists.
+
+        The shell can be closed while a command is waiting (the browser tab that
+        owned it disconnected); ``_fd`` is then None and tcsetattr would raise
+        TypeError, which used to escape the command and crash the UI handler.
+        """
+        if saved_attrs is None or self._fd is None:
+            return
+        try:
+            termios.tcsetattr(self._fd, termios.TCSANOW, saved_attrs)
+        except (termios.error, OSError):
+            pass
 
     def restart(self) -> None:
         """Kill the current child and spawn a fresh local shell in its place.
@@ -194,24 +235,7 @@ class TerminalSession:
                     self._loop.remove_reader(self._fd)
                 except (ValueError, OSError):
                     pass
-            # Fail any in-flight run()/push_tar so its awaiter returns now instead
-            # of blocking for the full timeout on a shell that is gone.
-            if self._active is not None:
-                fut = self._active["future"]
-                self._active = None
-                if not fut.done():
-                    fut.set_result((-1, ""))
-            if self._transfer is not None:
-                for key in ("ready_future", "end_future"):
-                    f = self._transfer[key]
-                    if not f.done():
-                        f.set_result(-1 if key == "end_future" else False)
-                self._transfer = None
-            if self._pull is not None:
-                fut = self._pull["future"]
-                self._pull = None
-                if not fut.done():
-                    fut.set_result((-1, b""))
+            self._fail_inflight()
             logger.debug("shell EOF (%s)", "intentional close" if self._closing else "exited")
             if not self._closing and self._on_exit is not None:
                 self._on_exit()
@@ -410,11 +434,7 @@ class TerminalSession:
             return -1
         finally:
             self._transfer = None
-            if saved_attrs is not None:
-                try:
-                    termios.tcsetattr(self._fd, termios.TCSANOW, saved_attrs)
-                except (termios.error, OSError):
-                    pass
+            self._restore_tty(saved_attrs)
             self.input_locked = False
 
     async def push_tar(self, dest_rel: str, tar_gz: bytes, timeout: float = 1200.0) -> int:
@@ -558,11 +578,7 @@ class TerminalSession:
             return None
         finally:
             self._pull = None
-            if saved_attrs is not None:
-                try:
-                    termios.tcsetattr(self._fd, termios.TCSANOW, saved_attrs)
-                except (termios.error, OSError):
-                    pass
+            self._restore_tty(saved_attrs)
             self.input_locked = False
 
     async def _run_via_script(self, command: str, display: Optional[str],
@@ -655,11 +671,7 @@ class TerminalSession:
             return (-1, "")
         finally:
             self._active = None
-            if saved_attrs is not None:
-                try:
-                    termios.tcsetattr(self._fd, termios.TCSANOW, saved_attrs)
-                except (termios.error, OSError):
-                    pass
+            self._restore_tty(saved_attrs)
             self.input_locked = False
 
     # -- convenience ------------------------------------------------------- #
